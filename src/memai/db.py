@@ -1077,18 +1077,33 @@ def list_optimization_runs(conn: sqlite3.Connection) -> list[sqlite3.Row]:
     ).fetchall()
 
 
+def optimization_run_kind_counts(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    """Per-run, per-kind suggestion counts (total / pending) across all runs."""
+    return conn.execute(
+        """SELECT run_id, kind,
+                  COUNT(*) AS total,
+                  SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) AS pending
+           FROM optimization_suggestions
+           GROUP BY run_id, kind
+           ORDER BY run_id, kind"""
+    ).fetchall()
+
+
 def get_optimization_run(conn: sqlite3.Connection, run_id: int) -> sqlite3.Row | None:
     return conn.execute("SELECT * FROM optimization_runs WHERE id = ?", (run_id,)).fetchone()
 
 
 def get_optimization_suggestions(
-    conn: sqlite3.Connection, run_id: int, status: str = ""
+    conn: sqlite3.Connection, run_id: int, status: str = "", kind: str = ""
 ) -> list[sqlite3.Row]:
     sql = ["SELECT * FROM optimization_suggestions WHERE run_id = ?"]
     params: list = [run_id]
     if status:
         sql.append("AND status = ?")
         params.append(status)
+    if kind:
+        sql.append("AND kind = ?")
+        params.append(kind)
     sql.append("ORDER BY id ASC")
     return conn.execute(" ".join(sql), params).fetchall()
 
