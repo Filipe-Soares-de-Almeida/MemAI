@@ -497,6 +497,40 @@ def test_api_distill_card_sources_and_new_uid(client):
     assert all(x["status"] == "archived" for x in s["sources"])
 
 
+def test_api_runs_include_kind_breakdown(client):
+    uid = _new_memory(client)
+    with db.connect() as conn:
+        staged = db.stage_optimization(conn, "kinds run", [
+            {"kind": "retag", "target_uid": uid, "payload": {"tags": "x"}, "rationale": "r", "verified": "v"},
+            {"kind": "retag", "target_uid": uid, "payload": {"tags": "y"}, "rationale": "r", "verified": "v"},
+            {"kind": "set_confidence", "target_uid": uid, "payload": {"confidence": "confirmed"}, "rationale": "r", "verified": "v"},
+        ])
+    sugs = client.get(f"/api/optimization/suggestions?run={staged['run_id']}").json()["suggestions"]
+    retag_id = next(s["id"] for s in sugs if s["kind"] == "retag")
+    client.post("/api/optimization/apply", json={"id": retag_id})
+
+    run = client.get("/api/optimization/runs").json()["runs"][0]
+    kinds = {k["kind"]: k for k in run["kinds"]}
+    assert kinds["retag"] == {"kind": "retag", "total": 2, "pending": 1}
+    assert kinds["set_confidence"] == {"kind": "set_confidence", "total": 1, "pending": 1}
+
+
+def test_api_apply_all_filters_by_kind(client):
+    uid = _new_memory(client)
+    with db.connect() as conn:
+        staged = db.stage_optimization(conn, "kind filter", [
+            {"kind": "retag", "target_uid": uid, "payload": {"tags": "x"}, "rationale": "r", "verified": "v"},
+            {"kind": "set_confidence", "target_uid": uid, "payload": {"confidence": "confirmed"}, "rationale": "r", "verified": "v"},
+        ])
+    res = client.post("/api/optimization/apply-all",
+                      json={"run": staged["run_id"], "kind": "retag"}).json()
+    assert res["applied"] == 1 and not res["failed"]
+
+    sugs = client.get(f"/api/optimization/suggestions?run={staged['run_id']}").json()["suggestions"]
+    by_kind = {s["kind"]: s["status"] for s in sugs}
+    assert by_kind == {"retag": "applied", "set_confidence": "pending"}
+
+
 def test_api_apply_all_and_discard(client):
     uid = _new_memory(client)
     staged = _stage_via_db(uid, "set_confidence", {"confidence": "confirmed"})
