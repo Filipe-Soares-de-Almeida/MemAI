@@ -11,3 +11,6 @@ dist/
 *.db-wal
 *.db-shm
 /data/
+
+# local Claude Code config
+/.claude/
