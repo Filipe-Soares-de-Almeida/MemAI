@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import mimetypes
 import os
 import sqlite3
 from datetime import datetime, timezone
@@ -40,6 +41,11 @@ from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 
 from memai import db, embed
+
+# Windows' registry-derived mimetypes map serves .js as text/plain, which
+# browsers refuse to execute as an ES module. Force the correct types.
+mimetypes.add_type("text/javascript", ".js")
+mimetypes.add_type("text/css", ".css")
 
 WEBUI_DIR = Path(__file__).parent / "webui"
 SNIPPET_LIMIT = 280
@@ -729,7 +735,18 @@ def _suggestion_json(conn, row) -> dict:
 def optimization_runs(request, payload) -> dict:
     with db.connect() as conn:
         rows = db.list_optimization_runs(conn)
-    return {"runs": [dict(r) for r in rows]}
+        kind_rows = db.optimization_run_kind_counts(conn)
+    kinds_by_run: dict[int, list[dict]] = {}
+    for k in kind_rows:
+        kinds_by_run.setdefault(k["run_id"], []).append(
+            {"kind": k["kind"], "total": k["total"], "pending": k["pending"]}
+        )
+    runs = []
+    for r in rows:
+        d = dict(r)
+        d["kinds"] = kinds_by_run.get(r["id"], [])
+        runs.append(d)
+    return {"runs": runs}
 
 
 def optimization_suggestions(request, payload) -> dict:
@@ -791,11 +808,14 @@ def optimization_apply_all(request, payload) -> dict:
     run_id = payload.get("run")
     if not isinstance(run_id, int):
         raise ValueError("run (int) required")
+    kind = payload.get("kind", "")
+    if not isinstance(kind, str):
+        raise ValueError("kind must be a string")
     with db.connect() as conn:
         run = db.get_optimization_run(conn, run_id)
         if run is None:
             raise ValueError(f"unknown run: {run_id}")
-        pending = db.get_optimization_suggestions(conn, run_id, status="pending")
+        pending = db.get_optimization_suggestions(conn, run_id, status="pending", kind=kind)
     if not pending:
         return {"ok": True, "applied": 0, "failed": [], "backup": run["backup_path"]}
     backup = _ensure_run_backup(run_id)
