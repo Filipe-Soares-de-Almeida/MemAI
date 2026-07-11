@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import mimetypes
 import os
 import sqlite3
 from datetime import datetime, timezone
@@ -40,6 +41,11 @@ from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 
 from memai import db, embed
+
+# Windows' registry-derived mimetypes map serves .js as text/plain, which
+# browsers refuse to execute as an ES module. Force the correct types.
+mimetypes.add_type("text/javascript", ".js")
+mimetypes.add_type("text/css", ".css")
 
 WEBUI_DIR = Path(__file__).parent / "webui"
 SNIPPET_LIMIT = 280
