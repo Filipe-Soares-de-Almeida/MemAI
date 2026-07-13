@@ -1214,6 +1214,7 @@ class ForceGraph {
 
 async function renderDomains(view) {
   const domains = await getDomains(true);
+  const cfg = await api('/api/config').catch(() => ({ domain_case: 'preserve' }));
   const rows = domains.map(d => {
     const total = d.active + d.archived;
     const dots = TYPE_ORDER.filter(t => d.types[t]).map(t =>
@@ -1241,6 +1242,18 @@ async function renderDomains(view) {
       <h2 class="view-title">${t('do.title')}</h2>
       <div class="view-sub">${t('do.sub.count', { n: fmtInt(domains.length) })}${collisions ? ` · <span style="color:var(--warn)">${t('do.sub.collide', { n: collisions })}</span>` : ''}</div>
     </div>
+    <div class="panel" style="margin-bottom:14px">
+      <h3 class="panel-title">${t('do.case.title')}</h3>
+      <div style="font-size:11.5px;color:var(--ink-4);margin-bottom:10px">${t('do.case.desc')}</div>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <select id="caseMode">
+          ${['preserve', 'lower', 'upper'].map(m =>
+            `<option value="${m}"${cfg.domain_case === m ? ' selected' : ''}>${t('do.case.mode.' + m)}</option>`).join('')}
+        </select>
+        <button class="btn btn-solid" id="caseSave">${t('do.case.save')}</button>
+        <button class="btn" id="caseNorm">${t('do.case.normalize')}</button>
+      </div>
+    </div>
     <div class="panel">
       <table class="table">
         <thead><tr><th>${t('common.domain')}</th><th class="num">${t('do.th.active')}</th><th class="num">${t('do.th.archived')}</th><th>${t('do.th.types')}</th><th class="num">${t('common.lastActivity')}</th><th></th></tr></thead>
@@ -1256,6 +1269,51 @@ async function renderDomains(view) {
     b.addEventListener('click', () => openRenameModal(b.dataset.ren, domains)));
   view.querySelectorAll('[data-merge]').forEach(chip =>
     chip.addEventListener('click', () => openRenameModal(chip.dataset.merge, domains, chip.dataset.into)));
+
+  const modeSel = view.querySelector('#caseMode');
+  view.querySelector('#caseSave').onclick = async () => {
+    try {
+      await api('/api/config', { body: { domain_case: modeSel.value } });
+      toast(t('do.case.saved'), 'ok');
+    } catch (err) { toast(err.message, 'bad'); }
+  };
+  view.querySelector('#caseNorm').onclick = () => openNormalizeModal();
+}
+
+async function openNormalizeModal() {
+  let plan;
+  try {
+    plan = await api('/api/domains/normalize', { body: { dry_run: true } });
+  } catch (err) { toast(err.message, 'bad'); return; }
+  if (plan.mode === 'preserve') { toast(t('do.case.preserveHint'), ''); return; }
+  if (!plan.plan.length) { toast(t('do.case.none'), 'ok'); return; }
+  const rows = plan.plan.map(e => `<tr>
+    <td>${esc(e.from)}</td>
+    <td style="color:var(--ink)">${esc(e.to)}</td>
+    <td class="num">${fmtInt(e.count)}</td>
+    <td><span style="color:${e.action === 'merge' ? 'var(--warn)' : 'var(--ink-4)'}">${t('do.norm.act.' + e.action)}</span></td>
+  </tr>`).join('');
+  const modal = openModal({
+    title: t('do.norm.title'),
+    bodyHTML: `
+      <div style="font-size:12px;margin-bottom:8px">${t('do.norm.intro', { renames: plan.renames, merges: plan.merges, mode: t('do.case.mode.' + plan.mode) })}</div>
+      ${plan.merges ? `<div style="font-size:11.5px;color:var(--warn);margin-bottom:8px">${t('do.norm.mergeWarn')}</div>` : ''}
+      <table class="table"><thead><tr>
+        <th>${t('do.norm.th.from')}</th><th>${t('do.norm.th.to')}</th>
+        <th class="num">${t('do.norm.th.count')}</th><th>${t('do.norm.th.action')}</th>
+      </tr></thead><tbody>${rows}</tbody></table>`,
+    footHTML: `<button class="btn" data-x>${t('common.cancel')}</button><button class="btn btn-solid" data-ok>${t('do.norm.apply')}</button>`,
+  });
+  modal.querySelector('[data-x]').onclick = closeModal;
+  modal.querySelector('[data-ok]').onclick = async () => {
+    try {
+      const r = await api('/api/domains/normalize', { body: { dry_run: false } });
+      closeModal();
+      toast(t('do.norm.done', { n: r.moved, affected: r.affected }), 'ok');
+      _domainsCache = null;
+      refreshBehind();
+    } catch (err) { toast(err.message, 'bad'); }
+  };
 }
 
 function openRenameModal(from, domains, presetTo = '') {
