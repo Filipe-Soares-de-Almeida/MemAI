@@ -299,6 +299,8 @@ def edit_meta(request, payload) -> dict:
         row = db.get_memory(conn, uid)
         if row is None:
             raise ValueError(f"unknown memory: {uid}")
+        if "domain" in updates:
+            updates["domain"] = db.apply_domain_case(conn, updates["domain"])
         changed = {k: v for k, v in updates.items() if v != row[k]}
         if not changed:
             return {"ok": True, "changed": []}
@@ -485,6 +487,25 @@ def domains(request, payload) -> dict:
     return {"domains": result}
 
 
+def _rename_domain_rows(conn: sqlite3.Connection, src: str, dst: str) -> int:
+    """Move every memory from domain `src` to `dst`: UPDATE + audit + re-embed.
+
+    Domain is part of the embedding source, so each row is re-embedded.
+    If `dst` already has rows this is a merge. Returns the count moved.
+    """
+    rows = conn.execute(
+        "SELECT rowid_pk, uid, content, tags FROM memories WHERE domain = ?", (src,)).fetchall()
+    now = db.now_iso()
+    conn.execute(
+        "UPDATE memories SET domain = ?, updated_at = ? WHERE domain = ?", (dst, now, src))
+    for r in rows:
+        conn.execute(
+            "INSERT INTO edits (memory_uid, edited_at, prev_content, new_content, note) VALUES (?, ?, ?, ?, ?)",
+            (r["uid"], now, r["content"], r["content"], f"meta: domain '{src}' → '{dst}'"))
+        db._upsert_vector(conn, r["rowid_pk"], r["content"], r["tags"], dst)
+    return len(rows)
+
+
 def rename_domain(request, payload) -> dict:
     """Rename or merge a domain. Every affected row is re-embedded (domain
     is part of the embedding source) and audited in edits."""
@@ -497,21 +518,78 @@ def rename_domain(request, payload) -> dict:
     if src == dst:
         raise ValueError("source and target are the same")
     with db.connect() as conn:
-        rows = conn.execute(
-            "SELECT rowid_pk, uid, content, tags FROM memories WHERE domain = ?", (src,)).fetchall()
-        if not rows:
+        exists = conn.execute(
+            "SELECT COUNT(*) FROM memories WHERE domain = ?", (src,)).fetchone()[0] > 0
+        if not exists:
             raise ValueError(f"no memories in domain '{src}'")
         merged = conn.execute(
             "SELECT COUNT(*) FROM memories WHERE domain = ?", (dst,)).fetchone()[0] > 0
-        now = db.now_iso()
-        conn.execute(
-            "UPDATE memories SET domain = ?, updated_at = ? WHERE domain = ?", (dst, now, src))
-        for r in rows:
-            conn.execute(
-                "INSERT INTO edits (memory_uid, edited_at, prev_content, new_content, note) VALUES (?, ?, ?, ?, ?)",
-                (r["uid"], now, r["content"], r["content"], f"meta: domain '{src}' → '{dst}'"))
-            db._upsert_vector(conn, r["rowid_pk"], r["content"], r["tags"], dst)
-    return {"ok": True, "affected": len(rows), "merged": merged}
+        affected = _rename_domain_rows(conn, src, dst)
+    return {"ok": True, "affected": affected, "merged": merged}
+
+
+def _normalize_plan(mode: str, counts: dict[str, int]) -> list[dict]:
+    """Compute the per-domain moves that bring `counts` in line with `mode`.
+
+    Each entry: {from, to, count, action}. action is 'merge' when the
+    target already exists or more than one source collapses into it,
+    otherwise 'rename'. Domains that already conform are omitted.
+    """
+    existing = set(counts)
+    targets: dict[str, list[str]] = {}
+    for d in counts:
+        targets.setdefault(db.case_domain(mode, d), []).append(d)
+    plan: list[dict] = []
+    for target, srcs in targets.items():
+        changing = [s for s in srcs if s != target]
+        if not changing:
+            continue
+        merge = (target in existing) or len(srcs) > 1
+        for s in changing:
+            plan.append({
+                "from": s, "to": target, "count": counts[s],
+                "action": "merge" if merge else "rename",
+            })
+    return sorted(plan, key=lambda e: e["from"].lower())
+
+
+def normalize_domains(request, payload) -> dict:
+    """Bring already-stored domains in line with the casing policy.
+
+    dry_run (default true) returns the plan for preview -- what renames
+    and what merges -- without touching data. dry_run=false applies it,
+    reusing the rename/merge path (UPDATE + audit + re-embed). No-op when
+    the policy is 'preserve' or everything already conforms.
+    """
+    dry_run = bool(payload.get("dry_run", True))
+    with db.connect() as conn:
+        mode = db.get_domain_case(conn)
+        counts = {
+            r["domain"]: r["n"] for r in conn.execute(
+                "SELECT domain, COUNT(*) AS n FROM memories WHERE domain <> '' GROUP BY domain").fetchall()
+        }
+        plan = _normalize_plan(mode, counts)
+        if dry_run:
+            return {"mode": mode, "dry_run": True, "plan": plan,
+                    "renames": sum(1 for e in plan if e["action"] == "rename"),
+                    "merges": sum(1 for e in plan if e["action"] == "merge")}
+        affected = sum(_rename_domain_rows(conn, e["from"], e["to"]) for e in plan)
+    return {"ok": True, "mode": mode, "moved": len(plan), "affected": affected}
+
+
+# ------------------------------------------------------------------ config
+
+def get_config(request, payload) -> dict:
+    with db.connect() as conn:
+        return {"domain_case": db.get_domain_case(conn)}
+
+
+def set_config(request, payload) -> dict:
+    mode = payload.get("domain_case")
+    if mode is None:
+        raise ValueError("domain_case is required")
+    with db.connect() as conn:
+        return {"domain_case": db.set_domain_case(conn, mode)}
 
 
 # ------------------------------------------------------------- maintenance
@@ -886,8 +964,11 @@ routes = [
     Route("/api/relations", api(create_relation), methods=["POST"]),
     Route("/api/relations/{rel_id:int}", api(delete_relation), methods=["DELETE"]),
     Route("/api/graph", api(graph)),
+    Route("/api/config", api(get_config), methods=["GET"]),
+    Route("/api/config", api(set_config), methods=["POST"]),
     Route("/api/domains", api(domains)),
     Route("/api/domains/rename", api(rename_domain), methods=["POST"]),
+    Route("/api/domains/normalize", api(normalize_domains), methods=["POST"]),
     Route("/api/maintenance/health", api(health)),
     Route("/api/maintenance/fts-rebuild", api(fts_rebuild), methods=["POST"]),
     Route("/api/maintenance/reembed", api(reembed), methods=["POST"]),
