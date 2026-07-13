@@ -36,6 +36,13 @@ try:
 except Exception:  # pragma: no cover - extension unavailable
     sqlite_vec = None
 
+# Domain-casing policy. Stored in the `meta` table under DOMAIN_CASE_KEY and
+# enforced at every domain write path. 'preserve' keeps free-text casing (the
+# historical behaviour); 'lower'/'upper' coerce every stored domain.
+DOMAIN_CASE_KEY = "domain_case"
+DOMAIN_CASE_MODES = ("preserve", "lower", "upper")
+DOMAIN_CASE_DEFAULT = "preserve"
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS memories (
     rowid_pk        INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -185,6 +192,43 @@ def _set_meta(conn: sqlite3.Connection, key: str, value: str) -> None:
     )
 
 
+def get_domain_case(conn: sqlite3.Connection) -> str:
+    """The active domain-casing policy (one of DOMAIN_CASE_MODES)."""
+    mode = _get_meta(conn, DOMAIN_CASE_KEY)
+    return mode if mode in DOMAIN_CASE_MODES else DOMAIN_CASE_DEFAULT
+
+
+def set_domain_case(conn: sqlite3.Connection, mode: str) -> str:
+    """Persist the domain-casing policy. Returns the normalized value stored."""
+    mode = (mode or "").strip().lower()
+    if mode not in DOMAIN_CASE_MODES:
+        raise ValueError(f"domain_case must be one of {', '.join(DOMAIN_CASE_MODES)}")
+    _set_meta(conn, DOMAIN_CASE_KEY, mode)
+    return mode
+
+
+def case_domain(mode: str, domain: str) -> str:
+    """Apply a casing policy to one domain string. Idempotent; empty stays empty."""
+    if not domain:
+        return domain
+    if mode == "lower":
+        return domain.lower()
+    if mode == "upper":
+        return domain.upper()
+    return domain
+
+
+def coerce_domain(conn: sqlite3.Connection, domain: str) -> tuple[str, str]:
+    """Coerce a domain to the store's policy. Returns (coerced_domain, active_mode)."""
+    mode = get_domain_case(conn)
+    return case_domain(mode, domain), mode
+
+
+def apply_domain_case(conn: sqlite3.Connection, domain: str) -> str:
+    """Coerce a domain to the store's configured casing policy."""
+    return coerce_domain(conn, domain)[0]
+
+
 def _embed_source(content: str, tags: str, domain: str) -> str:
     """The text a memory's vector is computed from -- same fields FTS indexes."""
     return "\n".join(p for p in (content, tags, domain) if p)
@@ -270,6 +314,7 @@ def insert_memory(
 ) -> str:
     uid = new_uid()
     ts = created_at or now_iso()
+    domain = apply_domain_case(conn, domain)
     cur = conn.execute(
         """INSERT INTO memories
            (uid, type, domain, session, tags, content, status, confidence, created_at, updated_at)
@@ -1126,6 +1171,8 @@ def _update_meta_field(conn: sqlite3.Connection, uid: str, field: str, value: st
     `field` is only ever 'tags' or 'domain' (caller-controlled), so the
     f-string interpolation is not an injection surface.
     """
+    if field == "domain":
+        value = apply_domain_case(conn, value)
     row = get_memory(conn, uid)
     conn.execute(
         f"UPDATE memories SET {field} = ?, updated_at = ? WHERE uid = ?",

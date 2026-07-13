@@ -62,6 +62,19 @@ def _list_scoped(conn, domain: str, type: str, limit: int) -> list:
     return db.list_recent(conn, type=type, limit=limit)
 
 
+def _coerce_domain(conn, domain: str) -> tuple[str, dict | None]:
+    """Apply the store's casing policy to a domain before a write.
+
+    Returns (coerced_domain, warning). warning is None when the domain
+    already conforms; otherwise it describes the adjustment so the tool
+    can echo it back to the agent (coerce-and-warn, never reject).
+    """
+    coerced, mode = db.coerce_domain(conn, domain)
+    if coerced == domain:
+        return coerced, None
+    return coerced, {"from": domain, "to": coerced, "policy": mode}
+
+
 @mcp.tool()
 def note(content: str, domain: str = "", tags: str = "", session: str = "") -> dict:
     """Save a general long-term memory (fact, decision, finding). Stored as type='note'.
@@ -75,8 +88,12 @@ def note(content: str, domain: str = "", tags: str = "", session: str = "") -> d
     memory findable even when the vector side is unavailable.
     """
     with db.connect() as conn:
+        domain, warning = _coerce_domain(conn, domain)
         uid = db.insert_memory(conn, type=TYPE_NOTE, content=content, domain=domain, session=session, tags=tags)
-    return {"uid": uid}
+    result = {"uid": uid}
+    if warning:
+        result["domain_adjusted"] = warning
+    return result
 
 
 @mcp.tool()
@@ -101,11 +118,15 @@ def checkpoint(
         f"PURSUING: {pursuing}\nOPEN QUESTIONS: {open_questions}"
     )
     with db.connect() as conn:
+        domain, warning = _coerce_domain(conn, domain)
         uid = db.insert_memory(
             conn, type=TYPE_CHECKPOINT, content=content, domain=domain, session=session,
             tags="checkpoint",
         )
-    return {"uid": uid}
+    result = {"uid": uid}
+    if warning:
+        result["domain_adjusted"] = warning
+    return result
 
 
 @mcp.tool()
@@ -116,11 +137,15 @@ def anti_pattern(pattern: str, why_wrong: str, instead: str, domain: str = "", s
     """
     content = f"TEMPTATION: {pattern}\nWHY WRONG: {why_wrong}\nINSTEAD: {instead}"
     with db.connect() as conn:
+        domain, warning = _coerce_domain(conn, domain)
         uid = db.insert_memory(
             conn, type=TYPE_ANTI_PATTERN, content=content, domain=domain, session=session,
             tags="anti_pattern",
         )
-    return {"uid": uid}
+    result = {"uid": uid}
+    if warning:
+        result["domain_adjusted"] = warning
+    return result
 
 
 @mcp.tool()
@@ -131,8 +156,12 @@ def reasoning(content: str, domain: str = "", session: str = "") -> dict:
     type='reasoning' to get these back.
     """
     with db.connect() as conn:
+        domain, warning = _coerce_domain(conn, domain)
         uid = db.insert_memory(conn, type=TYPE_REASONING, content=content, domain=domain, session=session)
-    return {"uid": uid}
+    result = {"uid": uid}
+    if warning:
+        result["domain_adjusted"] = warning
+    return result
 
 
 @mcp.tool()
@@ -142,8 +171,12 @@ def handoff(content: str, domain: str = "", session: str = "") -> dict:
     Stored as type='handoff'; open ones for a domain are surfaced by pulse().
     """
     with db.connect() as conn:
+        domain, warning = _coerce_domain(conn, domain)
         uid = db.insert_memory(conn, type=TYPE_HANDOFF, content=content, domain=domain, session=session)
-    return {"uid": uid}
+    result = {"uid": uid}
+    if warning:
+        result["domain_adjusted"] = warning
+    return result
 
 
 @mcp.tool()
@@ -217,10 +250,42 @@ def list_domains() -> list[dict]:
     'PROJ-1042' vs 'proj-1042'), and pulse/list_by_domain match it
     exactly -- this surfaces the real strings so you target the right
     one instead of guessing. Ordered by most recent activity.
+
+    Casing may be enforced store-wide -- call get_domain_case() to see
+    the active policy before coining a new domain.
     """
     with db.connect() as conn:
         rows = db.list_domains(conn)
     return [_row_to_dict(r) for r in rows]
+
+
+@mcp.tool()
+def get_domain_case() -> dict:
+    """Report the store's domain-casing policy.
+
+    Returns {"mode": "preserve"|"lower"|"upper"}. 'preserve' stores
+    domains as written; 'lower'/'upper' coerce every domain to that case
+    on write (a non-conforming domain is adjusted, not rejected, and the
+    writer's result carries a `domain_adjusted` note). Read this before
+    coining a new domain so its casing matches what will be stored.
+    """
+    with db.connect() as conn:
+        return {"mode": db.get_domain_case(conn)}
+
+
+@mcp.tool()
+def set_domain_case(mode: str) -> dict:
+    """Set the store's domain-casing policy. mode: 'preserve' | 'lower' | 'upper'.
+
+    'preserve' keeps free-text casing; 'lower'/'upper' coerce every
+    domain written from now on to that case. This only governs new
+    writes -- to bring already-stored domains into line, run the
+    "Normalize domains" action in the admin dashboard (it previews
+    collisions before merging variant spellings). Returns the stored
+    {"mode": ...}.
+    """
+    with db.connect() as conn:
+        return {"mode": db.set_domain_case(conn, mode)}
 
 
 @mcp.tool()
@@ -562,6 +627,8 @@ _TOOLS = {
     "list_by_domain": list_by_domain,
     "list_recent": list_recent,
     "list_domains": list_domains,
+    "get_domain_case": get_domain_case,
+    "set_domain_case": set_domain_case,
     "pulse": pulse,
     "get_memory": get_memory,
     "edit_memory": edit_memory,
