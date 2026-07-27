@@ -411,6 +411,95 @@ def test_search_finds_a_diagram_by_a_node_label(conn):
     assert uid in [r["uid"] for r in hits]
 
 
+def test_search_finds_a_diagram_by_its_tags_and_summary(conn):
+    """Both are stored on the memory row / in the projection, so both index."""
+    uid = _mk(conn, tags="export,nightly,store-files", summary="Ships one file per store.")
+    for query in ("store-files", "Ships one file", "Nightly export routine"):
+        assert uid in [r["uid"] for r in db.search_memories(conn, query)], query
+
+
+def test_hybrid_puts_a_matching_diagram_first(conn):
+    """The flow is the source of truth the surrounding notes annotate."""
+    note = db.insert_memory(conn, type="note",
+                            content="The export window is inclusive on both ends.")
+    db.insert_memory(conn, type="checkpoint", content="INTENT: fix the export window")
+    uid = _mk(conn, summary="Reads the export window and ships one file per store.")
+
+    hits = db.search_hybrid(conn, "export window")
+    assert hits[0]["uid"] == uid
+    assert hits[0]["rank_reason"] == "diagram_first"
+    # the promotion is ordering only: the note is still there, still untagged
+    assert note in [h["uid"] for h in hits]
+    assert "rank_reason" not in [h for h in hits if h["uid"] == note][0]
+
+
+def test_promotion_survives_the_limit_cut(conn):
+    """Ranking after the slice would drop the diagrams worth promoting."""
+    for i in range(12):
+        db.insert_memory(conn, type="note", content=f"export window note number {i}")
+    uid = _mk(conn, summary="Reads the export window.")
+    hits = db.search_hybrid(conn, "export window", limit=3)
+    assert len(hits) == 3
+    assert hits[0]["uid"] == uid
+
+
+def test_contradicted_or_archived_diagrams_are_not_promoted(conn):
+    """A diagram that stopped being the truth must not be pushed to the top."""
+    db.insert_memory(conn, type="note", content="The export window is inclusive.")
+    bad = _mk(conn, summary="Reads the export window.")
+    db.set_confidence(conn, bad, "contradicted")
+    hits = db.search_hybrid(conn, "export window")
+    assert hits[0]["uid"] != bad
+    assert all("rank_reason" not in h for h in hits)
+
+    db.set_confidence(conn, bad, "unverified")
+    db.set_status(conn, bad, "archived")
+    hits = db.search_hybrid(conn, "export window", status="")
+    assert hits[0]["uid"] != bad
+
+
+def test_diagrams_first_can_be_switched_off(conn):
+    db.insert_memory(conn, type="note", content="The export window is inclusive on both ends.")
+    uid = _mk(conn, summary="Reads the export window.")
+    hits = db.search_hybrid(conn, "export window", diagrams_first=False)
+    assert uid in [h["uid"] for h in hits]
+    assert hits[0]["uid"] != uid
+    assert all("rank_reason" not in h for h in hits)
+
+
+def test_recall_never_promotes_a_diagram(conn):
+    """recall() is scoped to notes, so the type preference cannot apply."""
+    _mk(conn, summary="Reads the export window.")
+    note = db.insert_memory(conn, type="note", content="The export window is inclusive.")
+    hits = db.search_hybrid(conn, "export window", type="note")
+    assert [h["uid"] for h in hits] == [note]
+
+
+def test_promotion_works_on_the_vector_side_too(tmp_path, fake_embedder):
+    """The backfill runs both retrievers, so a semantic-only hit promotes."""
+    with db.connect(tmp_path / "vec.db") as conn:
+        db.insert_memory(conn, type="note", content="car maintenance schedule")
+        uid = _mk(conn, title="Car maintenance schedule", nodes=[
+            {"key": "start", "shape": "start", "label": "car maintenance"},
+            {"key": "done", "shape": "end", "label": "schedule the next service"},
+        ], edges=[{"from": "start", "to": "done"}])
+        # 'automobile' is a synonym of 'car' for the fake embedder and does
+        # not appear literally anywhere, so this can only match by vector
+        hits = db.search_hybrid(conn, "automobile maintenance")
+        assert hits[0]["uid"] == uid
+        assert hits[0]["rank_reason"] == "diagram_first"
+        assert hits[0]["match_source"] in ("vec", "both")
+
+
+def test_api_lookup_does_not_promote_diagrams(client):
+    """The picker is choosing any memory to attach; a type lift is noise there."""
+    client.post("/api/memories", json={
+        "type": "note", "content": "The export window is inclusive on both ends."})
+    _create(client, summary="Reads the export window.")
+    items = client.get("/api/lookup?q=export+window").json()["items"]
+    assert items and items[0]["type"] == "note"
+
+
 def test_diagrams_never_become_dedup_candidates(conn):
     """Their content is generated, so a prose merge could never be applied."""
     _mk(conn, title="Export routine one")
