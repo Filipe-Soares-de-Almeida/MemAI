@@ -175,6 +175,23 @@ def test_layout_spreads_siblings_across_a_row(conn):
     assert pos["write"]["x"] != pos["done"]["x"]
 
 
+def test_layout_leaves_more_room_than_the_boxes_take(conn):
+    """A box is 170x48 in these units; a packed flow is a wall of text.
+
+    Pinned as a gap, not as the constants themselves: whoever re-tightens
+    the layout has to argue with the reason, not just with two numbers.
+    """
+    uid = _mk(conn, edges=[
+        {"from": "start", "to": "load"},
+        {"from": "load", "to": "check"},
+        {"from": "check", "to": "write", "label": "yes"},
+        {"from": "check", "to": "done", "label": "no"},
+    ])
+    pos = _nodes(conn, uid)
+    assert abs(pos["write"]["x"] - pos["done"]["x"]) - 170 >= 100   # side by side
+    assert pos["load"]["y"] - pos["start"]["y"] - 48 >= 100         # one under the other
+
+
 def test_layout_survives_a_cycle(conn):
     """A retry loop is a legal flow; the back-edge must not hang layering."""
     uid = _mk(conn, title="Retry loop", nodes=[

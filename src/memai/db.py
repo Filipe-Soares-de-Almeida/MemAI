@@ -516,8 +516,15 @@ DIAGRAM_BODY_BUDGET = 12_000
 # re-arrange them. Layout is computed HERE so every consumer -- admin
 # canvas, a chat-side renderer, a future exporter -- draws the same
 # picture, including a diagram nobody has ever opened in the editor.
-LAYOUT_COL_W = 220.0
-LAYOUT_ROW_H = 140.0
+#
+# Generous on purpose: a box is 170x48 in these units, so the gaps are
+# wider than the boxes. A thirty-step routine packed shoulder to shoulder
+# is a wall of text -- the edges are what carry the sequence, so the boxes
+# can afford to sit apart. Raising these only affects diagrams created or
+# re-arranged afterwards; stored coordinates are never rewritten behind
+# the user's back (see relayout_diagram).
+LAYOUT_COL_W = 300.0
+LAYOUT_ROW_H = 200.0
 
 # Node keys double as mermaid node ids, so keep them to characters that
 # need no escaping on either side.

@@ -153,6 +153,60 @@ function promptModal({ title, body = '', label, placeholder = '', value = '',
   });
 }
 
+/* ─── context menu ───────────────────────────────────────────────────
+   A right-click menu, not a modal: it has no scrim and no focus trap,
+   because it must be dismissable by clicking the thing you actually
+   wanted. Items are `{label, run, danger}` or `{sep: true}`. */
+
+let ctxMenu = null, ctxDrop = null;
+
+function closeCtxMenu() {
+  ctxDrop?.();
+  ctxDrop = null;
+  ctxMenu?.remove();
+  ctxMenu = null;
+}
+
+function openCtxMenu(x, y, items) {
+  closeCtxMenu();
+  const live = items.filter(Boolean);
+  if (!live.some(i => !i.sep)) return;
+  const el = document.createElement('div');
+  el.className = 'ctx-menu';
+  el.innerHTML = live.map((it, i) => it.sep
+    ? '<div class="ctx-sep"></div>'
+    : `<button class="ctx-item${it.danger ? ' danger' : ''}" data-i="${i}">${esc(it.label)}</button>`
+  ).join('');
+  el.style.left = `${x}px`;
+  el.style.top = `${y}px`;
+  document.body.appendChild(el);
+  ctxMenu = el;
+  /* measured after it is in the document, then clamped both ends -- the
+     same reason tipShow does it that way */
+  const r = el.getBoundingClientRect();
+  el.style.left = `${Math.max(8, Math.min(x, innerWidth - r.width - 8))}px`;
+  el.style.top = `${Math.max(8, Math.min(y, innerHeight - r.height - 8))}px`;
+
+  el.querySelectorAll('[data-i]').forEach(b => b.addEventListener('click', () => {
+    const it = live[Number(b.dataset.i)];
+    closeCtxMenu();
+    it.run?.();
+  }));
+
+  /* dismissed by whatever you do next -- clicking elsewhere, Escape,
+     zooming the canvas. closeCtxMenu takes the listeners off with it. */
+  const away = e => { if (!el.contains(e.target)) closeCtxMenu(); };
+  const key = e => { if (e.key === 'Escape') closeCtxMenu(); };
+  addEventListener('mousedown', away, true);
+  addEventListener('keydown', key, true);
+  addEventListener('wheel', closeCtxMenu, true);
+  ctxDrop = () => {
+    removeEventListener('mousedown', away, true);
+    removeEventListener('keydown', key, true);
+    removeEventListener('wheel', closeCtxMenu, true);
+  };
+}
+
 /* ─── shared render bits ────────────────────────────────────────────── */
 
 const typeTag = t => `<span class="type-tag ${typeClass(t)}"><span class="dot"></span>${esc(t)}</span>`;
@@ -204,6 +258,7 @@ async function route() {
      the canvas but not those listeners, so tear them down here */
   graphEngine?.destroy(); graphEngine = null;
   diagramEngine?.destroy(); diagramEngine = null;
+  closeCtxMenu();   /* it lives on document.body, so the view swap misses it */
   const view = $('#view');
   view.innerHTML = '<div class="loading"><span class="spin"></span></div>';
   try {
@@ -1528,8 +1583,11 @@ async function renderDiagram(view, params) {
     });
   }
 
-  /* The condition written on a line, edited from the line itself or from the
-     connection rows in the inspector -- both land here. */
+  /* The condition written on a line, edited from the line itself, from the
+     right-click menu, or from the connection rows in the inspector. */
+  const saveEdgeLabel = (edge, label) => act(() => api(`/api/diagrams/${uid}/edge`, {
+    body: { from: edge.from, to: edge.to, label } }), t('dg.saved'));
+
   async function editEdgeLabel(edge) {
     const label = await promptModal({
       title: t('dg.edgeLabel.editTitle'),
@@ -1538,8 +1596,97 @@ async function renderDiagram(view, params) {
       value: edge.label || '', okLabel: t('common.save'),
     });
     if (label === null) return;
-    await act(() => api(`/api/diagrams/${uid}/edge`, {
-      body: { from: edge.from, to: edge.to, label } }), t('dg.saved'));
+    await saveEdgeLabel(edge, label);
+  }
+
+  const deleteEdge = edge => act(() => api(`/api/diagrams/${uid}/edge`, {
+    body: { from: edge.from, to: edge.to, delete: true } }), t('dg.disconnected'));
+
+  async function editStep(node) {
+    const out = await dgStepModal({
+      title: t('dg.editStep.title'), key: node.key,
+      label: node.label, shape: node.shape, lockKey: true,
+    });
+    if (!out) return;
+    /* note deliberately not sent: the API patches only what it receives,
+       and the note is edited in the inspector where there is room for it */
+    await act(() => api(`/api/diagrams/${uid}/node`, {
+      body: { key: node.key, label: out.label, shape: out.shape } }), t('dg.saved'));
+  }
+
+  async function deleteStep(key) {
+    const ok = await confirmModal({
+      title: t('dg.confirmDelete.title'),
+      body: t('dg.confirmDelete.body', { key: esc(key) }),
+      okLabel: t('dg.deleteStep'), danger: true });
+    if (!ok) return;
+    if (selected === key) selected = null;
+    await act(() => api(`/api/diagrams/${uid}/node`, {
+      body: { key, delete: true } }), t('dg.deleted'));
+  }
+
+  /* A step created where you right-clicked, rather than wherever a fresh
+     layout would drop it: two calls, because the server places a new node
+     from the graph and only then can it be moved. */
+  async function addStepAt(world) {
+    const step = await dgStepModal({ title: t('dg.newStep.title') });
+    if (!step) return;
+    try {
+      await api(`/api/diagrams/${uid}/node`, { body: step });
+      await api(`/api/diagrams/${uid}/layout`, { body: { positions: {
+        [step.key]: { x: Math.round(world.x), y: Math.round(world.y) } } } });
+      toast(t('dg.added'), 'ok');
+      await reload();
+      selected = step.key;
+      diagramEngine.select(step.key);
+      paintSide();
+    } catch (err) { toast(err.message, 'bad'); }
+  }
+
+  async function arrange() {
+    await act(() => api(`/api/diagrams/${uid}/relayout`, { body: {} }), t('dg.arranged'));
+    diagramEngine.fit();
+  }
+
+  /* Right-click. What is under the pointer decides the menu -- and picking
+     a line by the LINE is the only way to label one that has none yet, so
+     there is nothing to click for. */
+  function canvasMenu({ world, x, y, node, edge }) {
+    if (!editing) {
+      openCtxMenu(x, y, [
+        { label: t('dg.enableEditing'), run: () => { editing = true; applyMode(); } },
+        { label: t('dg.center'), run: () => diagramEngine.fit() },
+      ]);
+      return;
+    }
+    if (edge) {
+      openCtxMenu(x, y, [
+        { label: edge.label ? t('dg.ctx.edgeLabelEdit') : t('dg.ctx.edgeLabelAdd'),
+          run: () => editEdgeLabel(edge) },
+        edge.label && { label: t('dg.ctx.edgeLabelClear'), run: () => saveEdgeLabel(edge, '') },
+        { sep: true },
+        { label: t('dg.ctx.edgeDelete'), danger: true, run: () => deleteEdge(edge) },
+      ]);
+      return;
+    }
+    if (node) {
+      openCtxMenu(x, y, [
+        { label: t('dg.ctx.nodeConnect'),
+          /* the engine reports the pending end through onConnectProgress,
+             so the hint is already right -- only the button needs telling */
+          run: () => { diagramEngine.startConnectFrom(node.key);
+                       $('#dgConnect').classList.add('btn-solid'); } },
+        { label: t('dg.ctx.nodeEdit'), run: () => editStep(node) },
+        { sep: true },
+        { label: t('dg.deleteStep'), danger: true, run: () => deleteStep(node.key) },
+      ]);
+      return;
+    }
+    openCtxMenu(x, y, [
+      { label: t('dg.ctx.addHere'), run: () => addStepAt(world) },
+      { label: t('dg.arrange'), run: arrange },
+      { label: t('dg.center'), run: () => diagramEngine.fit() },
+    ]);
   }
 
   function openMetaModal() {
@@ -1676,21 +1823,11 @@ async function renderDiagram(view, params) {
       key: node.key, label: $('#dgLabel').value,
       shape: $('#dgShape').value, note: $('#dgNote').value } }), t('dg.saved'));
 
-    $('#dgDel').onclick = async () => {
-      const ok = await confirmModal({
-        title: t('dg.confirmDelete.title'),
-        body: t('dg.confirmDelete.body', { key: esc(node.key) }),
-        okLabel: t('dg.deleteStep'), danger: true });
-      if (!ok) return;
-      selected = null;
-      await act(() => api(`/api/diagrams/${uid}/node`, {
-        body: { key: node.key, delete: true } }), t('dg.deleted'));
-    };
+    $('#dgDel').onclick = () => deleteStep(node.key);
 
     side.querySelectorAll('[data-deledge]').forEach(b => b.onclick = () => {
       const [from, to] = b.dataset.deledge.split('|');
-      act(() => api(`/api/diagrams/${uid}/edge`, {
-        body: { from, to, delete: true } }), t('dg.disconnected'));
+      deleteEdge({ from, to });
     });
     side.querySelectorAll('[data-editedge]').forEach(b => b.onclick = () => {
       const [from, to] = b.dataset.editedge.split('|');
@@ -1741,6 +1878,7 @@ async function renderDiagram(view, params) {
     readOnly: true,
     routing,
     onEditEdgeLabel: editEdgeLabel,
+    onContextMenu: canvasMenu,
     onSelect: node => { selected = node ? node.key : null; paintSide(); },
     onMove: positions => { Object.assign(pending, positions); flushLayout(); },
     onConnectProgress: from => paintHint(from),
@@ -1771,10 +1909,7 @@ async function renderDiagram(view, params) {
     $('#dgConnect').classList.toggle('btn-solid', diagramEngine.connectMode);
     paintHint();
   };
-  $('#dgArrange').onclick = async () => {
-    await act(() => api(`/api/diagrams/${uid}/relayout`, { body: {} }), t('dg.arranged'));
-    diagramEngine.fit();
-  };
+  $('#dgArrange').onclick = arrange;
   $('#dgFit').onclick = () => diagramEngine.fit();
   $('#dgRecord').onclick = () => openRecord(uid);
   $('#dgRouting').onclick = () => {
