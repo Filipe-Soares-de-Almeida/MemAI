@@ -32,7 +32,13 @@ export const NODE_SHAPES = ['start', 'step', 'decision', 'io', 'end'];
 const NODE_W = 170;
 const NODE_H = 48;
 const DECISION_H = 66;
+const IO_SKEW = 14;          /* the lean on an input/output parallelogram */
 const LABEL_LINES = 2;
+const ARROW_GAP = 5;         /* air between the box edge and the arrow tip */
+const ORTH_STUB = 26;        /* how far a right-angled edge leaves its box */
+const ORTH_RADIUS = 11;      /* corner rounding on a right-angled edge */
+
+export const ROUTINGS = ['orthogonal', 'curved'];
 /* Label metrics live in world units alongside the box metrics above, so a
    label occupies the same fraction of its box at every zoom level. */
 const LABEL_PX = 12;
@@ -69,6 +75,8 @@ export class DiagramEditor {
        and a stray drag while reading silently rewrites a stored position
        everyone else sees -- panning, zooming and selecting stay available. */
     this.readOnly = hooks.readOnly !== false;
+    this.routing = ROUTINGS.includes(hooks.routing) ? hooks.routing : 'orthogonal';
+    this.hoverLabel = null;
 
     this.readTheme();
     /* resize() before the first fit(): fit needs the canvas size, and a
@@ -249,6 +257,11 @@ export class DiagramEditor {
 
   /* ── interaction ───────────────────────────────────────────────── */
 
+  setRouting(mode) {
+    this.routing = ROUTINGS.includes(mode) ? mode : 'orthogonal';
+    this.requestDraw();
+  }
+
   setReadOnly(on) {
     this.readOnly = on;
     if (on) {
@@ -291,9 +304,14 @@ export class DiagramEditor {
       this.requestDraw();
       return;
     }
-    const n = this.nodeAt(this.toWorld(e));
-    if (n !== this.hover) { this.hover = n; this.requestDraw(); }
+    const world = this.toWorld(e);
+    const n = this.nodeAt(world);
+    const lab = (!n && !this.readOnly) ? this.labelAt(world) : null;
+    if (n !== this.hover || lab !== this.hoverLabel) {
+      this.hover = n; this.hoverLabel = lab; this.requestDraw();
+    }
     this.cv.style.cursor = this.connectMode ? 'crosshair'
+      : lab ? 'text'
       : n ? (this.readOnly ? 'pointer' : 'grab') : 'grab';
     if (n && n.note) {
       this.hooks.tipShow?.(
@@ -328,7 +346,14 @@ export class DiagramEditor {
 
   onClick(e) {
     if (this.moved) { this.moved = false; return; }
-    const n = this.nodeAt(this.toWorld(e));
+    const world = this.toWorld(e);
+    const n = this.nodeAt(world);
+    /* the condition written on a line is edited by clicking that text --
+       checked before the nodes, since a label never sits inside a box */
+    if (!n && !this.readOnly && !this.connectMode) {
+      const lab = this.labelAt(world);
+      if (lab) { this.hooks.onEditEdgeLabel?.(lab); return; }
+    }
     if (this.connectMode) {
       if (!n) return;
       if (!this.connectFrom) {
@@ -377,12 +402,117 @@ export class DiagramEditor {
     });
   }
 
-  /* Where a straight line from the node's centre leaves its box. */
-  static exit(n, dx, dy) {
-    const sx = dx === 0 ? Infinity : (n.w / 2 + 4) / Math.abs(dx);
-    const sy = dy === 0 ? Infinity : (n.h / 2 + 4) / Math.abs(dy);
-    const s = Math.min(sx, sy);
-    return { x: n.x + dx * s, y: n.y + dy * s };
+  /* The four points an edge may attach to: the centre of each side.
+     Per shape, because the old approach -- clip a ray from the centre to
+     the bounding rectangle -- lands in empty space beside a diamond,
+     whose sides do not follow that rectangle at all. */
+  static anchors(n) {
+    const hw = n.w / 2, hh = n.h / 2;
+    if (n.shape === 'io') {
+      /* the parallelogram leans, so its horizontal edges are offset and
+         its slanted sides meet the middle half a lean in */
+      const s = IO_SKEW / 2;
+      return {
+        top: { x: n.x + s, y: n.y - hh }, bottom: { x: n.x - s, y: n.y + hh },
+        left: { x: n.x - hw + s, y: n.y }, right: { x: n.x + hw - s, y: n.y },
+      };
+    }
+    /* rectangle, stadium and diamond all attach at the middle of a side --
+       and for a diamond that middle IS its vertex */
+    return {
+      top: { x: n.x, y: n.y - hh }, bottom: { x: n.x, y: n.y + hh },
+      left: { x: n.x - hw, y: n.y }, right: { x: n.x + hw, y: n.y },
+    };
+  }
+
+  /* Which side each end leaves from, taken from where the boxes sit
+     relative to each other: mostly-vertical runs use top/bottom, mostly
+     horizontal ones left/right. A loop closer leaves and re-enters on the
+     side its lane runs down, so it never crosses its own boxes. */
+  static sides(a, b, laneSign) {
+    if (laneSign) {
+      const side = laneSign > 0 ? 'right' : 'left';
+      return [side, side];
+    }
+    const dx = b.x - a.x, dy = b.y - a.y;
+    if (Math.abs(dy) >= Math.abs(dx)) return dy >= 0 ? ['bottom', 'top'] : ['top', 'bottom'];
+    return dx >= 0 ? ['right', 'left'] : ['left', 'right'];
+  }
+
+  /* Push an anchor outwards so the arrow tip stops short of the box. */
+  static offset(p, side, by) {
+    if (side === 'top') return { x: p.x, y: p.y - by };
+    if (side === 'bottom') return { x: p.x, y: p.y + by };
+    if (side === 'left') return { x: p.x - by, y: p.y };
+    return { x: p.x + by, y: p.y };
+  }
+
+  /* The polyline an edge follows, ends included. */
+  route(e) {
+    const a = this.byKey[e.from], b = this.byKey[e.to];
+    const laneSign = e.back ? Math.sign(e.bow || 1) : 0;
+    const [sideFrom, sideTo] = DiagramEditor.sides(a, b, laneSign);
+    const start = DiagramEditor.anchors(a)[sideFrom];
+    const end = DiagramEditor.anchors(b)[sideTo];
+    const p = DiagramEditor.offset(start, sideFrom, 0);
+    const q = DiagramEditor.offset(end, sideTo, ARROW_GAP);
+
+    if (this.routing === 'curved') return { pts: [p, q], curve: this.curveCtrl(p, q, e) };
+
+    const out = [p];
+    if (laneSign) {
+      /* out to the lane, up it, and back in on the same side */
+      const laneX = (laneSign > 0
+        ? Math.max(p.x, q.x) + Math.abs(e.bow || ORTH_STUB)
+        : Math.min(p.x, q.x) - Math.abs(e.bow || ORTH_STUB));
+      out.push({ x: laneX, y: p.y }, { x: laneX, y: q.y }, q);
+      return { pts: out, curve: null };
+    }
+    const vertical = sideFrom === 'top' || sideFrom === 'bottom';
+    if (vertical) {
+      if (Math.abs(p.x - q.x) < 1) { out.push(q); return { pts: out, curve: null }; }
+      if (sideTo === 'top' || sideTo === 'bottom') {
+        const midY = (p.y + q.y) / 2;              /* Z: down, across, down */
+        out.push({ x: p.x, y: midY }, { x: q.x, y: midY });
+      } else {
+        out.push({ x: p.x, y: q.y });               /* L: down, then across */
+      }
+    } else {
+      if (Math.abs(p.y - q.y) < 1) { out.push(q); return { pts: out, curve: null }; }
+      if (sideTo === 'left' || sideTo === 'right') {
+        const midX = (p.x + q.x) / 2;              /* Z: across, down, across */
+        out.push({ x: midX, y: p.y }, { x: midX, y: q.y });
+      } else {
+        out.push({ x: q.x, y: p.y });               /* L: across, then down */
+      }
+    }
+    out.push(q);
+    return { pts: out, curve: null };
+  }
+
+  curveCtrl(p, q, e) {
+    const mx = (p.x + q.x) / 2, my = (p.y + q.y) / 2;
+    return e.back ? { x: mx + (e.bow || 0), y: my } : null;
+  }
+
+  /* Point half way along a polyline, for placing the label. */
+  static midpoint(pts) {
+    let total = 0;
+    const segs = [];
+    for (let i = 1; i < pts.length; i++) {
+      const len = Math.hypot(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y);
+      segs.push(len); total += len;
+    }
+    let walked = 0;
+    for (let i = 0; i < segs.length; i++) {
+      if (walked + segs[i] >= total / 2) {
+        const f = segs[i] ? (total / 2 - walked) / segs[i] : 0;
+        return { x: pts[i].x + (pts[i + 1].x - pts[i].x) * f,
+                 y: pts[i].y + (pts[i + 1].y - pts[i].y) * f };
+      }
+      walked += segs[i];
+    }
+    return pts[0];
   }
 
   /* `grow` inflates the outline, which is how the selection ring is drawn
@@ -399,7 +529,7 @@ export class DiagramEditor {
       cx.lineTo(n.x - hw, n.y);
       cx.closePath();
     } else if (n.shape === 'io') {
-      const skew = 14;
+      const skew = IO_SKEW;   /* shared with anchors(), so the two cannot drift */
       cx.moveTo(n.x - hw + skew, n.y - hh);
       cx.lineTo(n.x + hw, n.y - hh);
       cx.lineTo(n.x + hw - skew, n.y + hh);
@@ -454,50 +584,75 @@ export class DiagramEditor {
     const { cx } = this;
     const a = this.byKey[e.from], b = this.byKey[e.to];
     if (!a || !b) return;
-    const back = e.back;       /* points up the canvas: a loop closer */
-    const bow = e.bow || 0;    /* its lane, assigned in laneBackEdges */
-    const from = DiagramEditor.exit(a, b.x - a.x, b.y - a.y);
-    const to = DiagramEditor.exit(b, a.x - b.x, a.y - b.y);
-    const mx = (from.x + to.x) / 2, my = (from.y + to.y) / 2;
-    const ctrl = { x: mx + bow, y: my };
+    const back = e.back;                 /* points up the canvas: a loop closer */
+    const { pts, curve } = this.route(e);
+    const from = pts[0], to = pts[pts.length - 1];
 
     cx.strokeStyle = back ? this.colWarn : this.colLine;
-    cx.lineWidth = (back ? 1.3 : 1.6) / this.scale;
+    cx.lineWidth = (back ? 1.4 : 1.7) / this.scale;
     if (back) cx.setLineDash([5 / this.scale, 4 / this.scale]);
     cx.beginPath();
     cx.moveTo(from.x, from.y);
-    if (bow) cx.quadraticCurveTo(ctrl.x, ctrl.y, to.x, to.y);
-    else cx.lineTo(to.x, to.y);
+    if (curve) {
+      cx.quadraticCurveTo(curve.x, curve.y, to.x, to.y);
+    } else if (pts.length === 2) {
+      cx.lineTo(to.x, to.y);
+    } else {
+      /* arcTo rounds each corner for us, so a right-angled run reads as a
+         drawn line rather than a staircase of hard pixels */
+      for (let i = 1; i < pts.length - 1; i++) {
+        cx.arcTo(pts[i].x, pts[i].y, pts[i + 1].x, pts[i + 1].y, ORTH_RADIUS);
+      }
+      cx.lineTo(to.x, to.y);
+    }
     cx.stroke();
     cx.setLineDash([]);
 
-    /* arrowhead along the incoming tangent */
-    const tanX = bow ? to.x - ctrl.x : to.x - from.x;
-    const tanY = bow ? to.y - ctrl.y : to.y - from.y;
+    /* arrowhead along whatever the last stretch was heading */
+    const prev = curve || pts[pts.length - 2];
+    const tanX = to.x - prev.x, tanY = to.y - prev.y;
     const d = Math.hypot(tanX, tanY) || 1;
     const ux = tanX / d, uy = tanY / d;
-    const s = 8 / Math.sqrt(this.scale);
+    const s = 9;
     cx.beginPath();
     cx.moveTo(to.x, to.y);
-    cx.lineTo(to.x - ux * s - uy * s * 0.5, to.y - uy * s + ux * s * 0.5);
-    cx.lineTo(to.x - ux * s + uy * s * 0.5, to.y - uy * s - ux * s * 0.5);
+    cx.lineTo(to.x - ux * s - uy * s * 0.45, to.y - uy * s + ux * s * 0.45);
+    cx.lineTo(to.x - ux * s + uy * s * 0.45, to.y - uy * s - ux * s * 0.45);
     cx.closePath();
     cx.fillStyle = back ? this.colWarn : this.colInk2;
     cx.fill();
 
-    if (e.label && this.scale > 0.4) {
-      const lx = bow ? (from.x + 2 * ctrl.x + to.x) / 4 : mx;
-      const ly = bow ? (from.y + 2 * ctrl.y + to.y) / 4 : my;
-      cx.font = `10px ${FONT_MONO}`;   /* world units, same reason as labels */
-      const text = e.label.length > 34 ? `${e.label.slice(0, 33)}…` : e.label;
-      const wide = cx.measureText(text).width;
-      cx.fillStyle = this.colSurface;
-      cx.fillRect(lx - wide / 2 - 3, ly - 7, wide + 6, 14);
-      cx.fillStyle = back ? this.colWarn : this.colInk2;
-      cx.textAlign = 'center';
-      cx.textBaseline = 'middle';
-      cx.fillText(text, lx, ly);
+    e.hit = null;
+    if (!e.label || this.scale <= 0.4) return;
+    const at = curve
+      ? { x: (from.x + 2 * curve.x + to.x) / 4, y: (from.y + 2 * curve.y + to.y) / 4 }
+      : DiagramEditor.midpoint(pts);
+    cx.font = `10px ${FONT_MONO}`;       /* world units, same reason as labels */
+    const text = e.label.length > 34 ? `${e.label.slice(0, 33)}…` : e.label;
+    const wide = cx.measureText(text).width;
+    const box = { x: at.x - wide / 2 - 4, y: at.y - 8, w: wide + 8, h: 16 };
+    cx.fillStyle = this.colSurface;
+    cx.fillRect(box.x, box.y, box.w, box.h);
+    if (!this.readOnly) {
+      /* an outline says the text itself is the thing you click to change */
+      cx.strokeStyle = e === this.hoverLabel ? this.colAccent : this.colLine;
+      cx.lineWidth = 1 / this.scale;
+      cx.strokeRect(box.x, box.y, box.w, box.h);
     }
+    cx.fillStyle = back ? this.colWarn : this.colInk2;
+    cx.textAlign = 'center';
+    cx.textBaseline = 'middle';
+    cx.fillText(text, at.x, at.y);
+    e.hit = box;                         /* for labelAt(), see onClick */
+  }
+
+  /* The edge whose label sits under a world point, if any. */
+  labelAt(p) {
+    for (const e of this.edges) {
+      const h = e.hit;
+      if (h && p.x >= h.x && p.x <= h.x + h.w && p.y >= h.y && p.y <= h.y + h.h) return e;
+    }
+    return null;
   }
 
   drawNode(n, orphan) {
