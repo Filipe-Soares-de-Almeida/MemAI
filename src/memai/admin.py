@@ -51,7 +51,7 @@ WEBUI_DIR = Path(__file__).parent / "webui"
 SNIPPET_LIMIT = 280
 DEDUP_SNIPPET = 480
 
-KNOWN_TYPES = ("note", "checkpoint", "anti_pattern", "reasoning", "handoff")
+KNOWN_TYPES = ("note", "checkpoint", "anti_pattern", "reasoning", "handoff", "diagram")
 CONFIDENCES = ("unverified", "confirmed", "contradicted")
 STATUSES = ("active", "archived")
 
@@ -248,6 +248,12 @@ def memory_detail(request, payload) -> dict:
         result["relations"] = rels
         if result.get("superseded_by"):
             result["superseded_by_peer"] = _peer_card(conn, result["superseded_by"])
+        if row["type"] == db.DIAGRAM_TYPE:
+            result["diagram"] = _diagram_json(conn, uid)
+        else:
+            result["referenced_by_diagrams"] = [
+                dict(r) for r in db.diagrams_referencing(conn, uid)
+            ]
     return result
 
 
@@ -257,6 +263,12 @@ def create_memory(request, payload) -> dict:
     confidence = payload.get("confidence") or "unverified"
     if not type_:
         raise ValueError("type is required")
+    if type_ not in KNOWN_TYPES:
+        raise ValueError(f"type must be one of {KNOWN_TYPES}")
+    if type_ == db.DIAGRAM_TYPE:
+        # a diagram row with no graph behind it is a broken half-state: its
+        # content is generated, so there would be nothing to generate from
+        raise ValueError("create a diagram through POST /api/diagrams -- it needs a graph")
     if not content:
         raise ValueError("content is required")
     if confidence not in CONFIDENCES:
@@ -278,6 +290,12 @@ def edit_content(request, payload) -> dict:
     if not content.strip():
         raise ValueError("content cannot be empty")
     with db.connect() as conn:
+        if db.is_diagram(conn, uid):
+            raise ValueError(
+                "this memory is a diagram: its content is generated from the graph, "
+                "so a hand-written version would be overwritten by the next change. "
+                "Edit the flow instead."
+            )
         ok = db.update_memory_content(conn, uid, content, note=payload.get("note", ""))
     if not ok:
         raise ValueError(f"unknown memory: {uid}")
@@ -295,10 +313,18 @@ def edit_meta(request, payload) -> dict:
         raise ValueError(f"nothing to update (fields: {allowed})")
     if "type" in updates and not updates["type"]:
         raise ValueError("type cannot be empty")
+    if "type" in updates and updates["type"] not in KNOWN_TYPES:
+        raise ValueError(f"type must be one of {KNOWN_TYPES}")
     with db.connect() as conn:
         row = db.get_memory(conn, uid)
         if row is None:
             raise ValueError(f"unknown memory: {uid}")
+        if "type" in updates and updates["type"] != row["type"] and (
+            db.DIAGRAM_TYPE in (updates["type"], row["type"])
+        ):
+            # retyping away from 'diagram' orphans the graph; retyping into
+            # it claims a generated content field with nothing generating it
+            raise ValueError("a diagram's type cannot be changed")
         if "domain" in updates:
             updates["domain"] = db.apply_domain_case(conn, updates["domain"])
         changed = {k: v for k, v in updates.items() if v != row[k]}
@@ -455,6 +481,162 @@ def graph(request, payload) -> dict:
         "created_at": r["created_at"],
     } for r in rows]
     return {"nodes": nodes, "edges": edges}
+
+
+# ---------------------------------------------------------------- diagrams
+
+def _require(result: tuple) -> object:
+    """The db diagram writers return (value, errors); an error becomes a 400.
+
+    Keeps every handler below down to one line of real work, and routes
+    validation messages through the same ValueError channel the rest of
+    this module uses.
+    """
+    value, errors = result
+    if errors:
+        raise ValueError("; ".join(errors))
+    return value
+
+
+def _diagram_json(conn: sqlite3.Connection, uid: str) -> dict | None:
+    """A diagram plus a memory card per node link, ready for the editor."""
+    data = db.get_diagram(conn, uid)
+    if data is None:
+        return None
+    for link in data["links"]:
+        link["peer"] = _peer_card(conn, link["target_uid"]) or {
+            "uid": link["target_uid"], "missing": True,
+        }
+        link.pop("target_content", None)  # the peer card already carries a snippet
+    data["mermaid"] = db.render_diagram_mermaid(conn, uid)
+    return data
+
+
+def _diagram_or_400(conn: sqlite3.Connection, uid: str) -> None:
+    if db.get_diagram_row(conn, uid) is None:
+        raise ValueError(f"unknown diagram: {uid}")
+
+
+def diagram_detail(request, payload) -> dict:
+    uid = request.path_params["uid"]
+    with db.connect() as conn:
+        data = _diagram_json(conn, uid)
+    if data is None:
+        raise ValueError(f"unknown diagram: {uid}")
+    return data
+
+
+def diagram_create(request, payload) -> dict:
+    with db.connect() as conn:
+        uid = _require(db.insert_diagram(
+            conn,
+            title=(payload.get("title") or "").strip(),
+            nodes=payload.get("nodes") or [],
+            edges=payload.get("edges") or [],
+            summary=(payload.get("summary") or "").strip(),
+            kind=(payload.get("kind") or "flowchart").strip(),
+            domain=(payload.get("domain") or "").strip(),
+            session=(payload.get("session") or "").strip(),
+            tags=(payload.get("tags") or "").strip(),
+        ))
+    return {"uid": uid}
+
+
+def diagram_graph(request, payload) -> dict:
+    """Replace the whole graph; surviving nodes keep their positions."""
+    uid = request.path_params["uid"]
+    with db.connect() as conn:
+        _require(db.replace_diagram_graph(
+            conn, uid, payload.get("nodes") or [], payload.get("edges") or []))
+    return {"ok": True}
+
+
+def diagram_meta(request, payload) -> dict:
+    uid = request.path_params["uid"]
+    if not {"title", "summary"} & set(payload):
+        raise ValueError("nothing to update (fields: title, summary)")
+    with db.connect() as conn:
+        _require(db.set_diagram_meta(
+            conn, uid,
+            title=payload.get("title") if "title" in payload else None,
+            summary=payload.get("summary") if "summary" in payload else None,
+        ))
+    return {"ok": True}
+
+
+def diagram_node(request, payload) -> dict:
+    uid = request.path_params["uid"]
+    key = (payload.get("key") or "").strip()
+    if not key:
+        raise ValueError("key is required")
+    with db.connect() as conn:
+        if payload.get("delete"):
+            _require(db.delete_diagram_node(conn, uid, key))
+        else:
+            _require(db.upsert_diagram_node(
+                conn, uid, key, label=payload.get("label"),
+                shape=payload.get("shape"), note=payload.get("note")))
+    return {"ok": True, "key": key}
+
+
+def diagram_edge(request, payload) -> dict:
+    uid = request.path_params["uid"]
+    from_key = (payload.get("from") or payload.get("from_key") or "").strip()
+    to_key = (payload.get("to") or payload.get("to_key") or "").strip()
+    if not (from_key and to_key):
+        raise ValueError("from and to are required")
+    with db.connect() as conn:
+        if payload.get("delete"):
+            _require(db.delete_diagram_edge(conn, uid, from_key, to_key))
+        else:
+            _require(db.upsert_diagram_edge(
+                conn, uid, from_key, to_key, label=payload.get("label") or ""))
+    return {"ok": True}
+
+
+def diagram_layout(request, payload) -> dict:
+    """Persist dragged positions -- and nothing else about the memory."""
+    uid = request.path_params["uid"]
+    positions = payload.get("positions")
+    if not isinstance(positions, dict):
+        raise ValueError("positions must be an object of {node_key: {x, y}}")
+    with db.connect() as conn:
+        _diagram_or_400(conn, uid)
+        moved = db.set_node_positions(conn, uid, positions)
+    return {"ok": True, "moved": moved}
+
+
+def diagram_relayout(request, payload) -> dict:
+    """Throw away hand-dragged positions and rebuild the layered arrangement."""
+    uid = request.path_params["uid"]
+    with db.connect() as conn:
+        _diagram_or_400(conn, uid)
+        moved = db.relayout_diagram(conn, uid)
+    return {"ok": True, "moved": moved}
+
+
+def diagram_link(request, payload) -> dict:
+    uid = request.path_params["uid"]
+    node_key = (payload.get("node_key") or "").strip()
+    target_uid = (payload.get("target_uid") or "").strip()
+    if not (node_key and target_uid):
+        raise ValueError("node_key and target_uid are required")
+    with db.connect() as conn:
+        if payload.get("delete"):
+            if not db.delete_node_link(conn, uid, node_key, target_uid):
+                raise ValueError(f"no link from node '{node_key}' to {target_uid}")
+        else:
+            _require(db.add_node_link(
+                conn, uid, node_key, target_uid,
+                (payload.get("relation_type") or "explains").strip()))
+    return {"ok": True}
+
+
+def diagram_mermaid(request, payload) -> dict:
+    uid = request.path_params["uid"]
+    with db.connect() as conn:
+        _diagram_or_400(conn, uid)
+        return {"uid": uid, "mermaid": db.render_diagram_mermaid(conn, uid)}
 
 
 # ---------------------------------------------------------------- domains
@@ -701,8 +883,16 @@ def clean_orphans(request, payload) -> dict:
                  AND target_uid IS NOT NULL
                  AND target_uid NOT IN (SELECT uid FROM memories)""")
         sugs = cur.rowcount
+        cur = conn.execute(
+            """DELETE FROM diagram_node_links
+               WHERE memory_uid NOT IN (SELECT uid FROM memories)
+                  OR target_uid NOT IN (SELECT uid FROM memories)
+                  OR node_key NOT IN (
+                        SELECT node_key FROM diagram_nodes
+                        WHERE diagram_nodes.memory_uid = diagram_node_links.memory_uid)""")
+        links = cur.rowcount
     return {"ok": True, "relations_removed": rels, "vectors_removed": vecs,
-            "suggestions_removed": sugs}
+            "suggestions_removed": sugs, "node_links_removed": links}
 
 
 def vacuum(request, payload) -> dict:
@@ -964,6 +1154,16 @@ routes = [
     Route("/api/relations", api(create_relation), methods=["POST"]),
     Route("/api/relations/{rel_id:int}", api(delete_relation), methods=["DELETE"]),
     Route("/api/graph", api(graph)),
+    Route("/api/diagrams", api(diagram_create), methods=["POST"]),
+    Route("/api/diagrams/{uid}", api(diagram_detail), methods=["GET"]),
+    Route("/api/diagrams/{uid}/graph", api(diagram_graph), methods=["POST"]),
+    Route("/api/diagrams/{uid}/meta", api(diagram_meta), methods=["POST"]),
+    Route("/api/diagrams/{uid}/node", api(diagram_node), methods=["POST"]),
+    Route("/api/diagrams/{uid}/edge", api(diagram_edge), methods=["POST"]),
+    Route("/api/diagrams/{uid}/layout", api(diagram_layout), methods=["POST"]),
+    Route("/api/diagrams/{uid}/relayout", api(diagram_relayout), methods=["POST"]),
+    Route("/api/diagrams/{uid}/link", api(diagram_link), methods=["POST"]),
+    Route("/api/diagrams/{uid}/mermaid", api(diagram_mermaid), methods=["GET"]),
     Route("/api/config", api(get_config), methods=["GET"]),
     Route("/api/config", api(set_config), methods=["POST"]),
     Route("/api/domains", api(domains)),
