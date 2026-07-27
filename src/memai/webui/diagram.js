@@ -514,6 +514,10 @@ export class DiagramEditor {
   }
 
   onUp() {
+    /* Clearing state is not enough: the last frame painted was the one WITH
+       the alignment guides on it, and nothing else here asks for a repaint,
+       so a guide stayed drawn across the whole canvas after the drag ended. */
+    const painted = !!this.guides?.length;
     if (this.drag) {
       const { node } = this.drag;
       this.drag = null;
@@ -530,8 +534,10 @@ export class DiagramEditor {
         x: Math.round(node.x), y: Math.round(node.y),
         w: Math.round(node.w), h: Math.round(node.h) } });
     }
+    this.guides = null;
     this.pan = null;
     this.cv.classList.remove('dragging');
+    if (painted) this.requestDraw();
   }
 
   /* Alignment snap. A dragged card pulls onto another card's centre line
@@ -705,6 +711,42 @@ export class DiagramEditor {
     return dx >= 0 ? ['right', 'left'] : ['left', 'right'];
   }
 
+  /* How far along its own side an anchor may be nudged, as [lo, hi] in the
+     axis that side runs along -- or null for a side that cannot take one.
+
+     This exists because "the middle of the side" and "in line with the card
+     below" are not the same point. A parallelogram leans, so the middle of
+     its bottom edge sits half a skew off its centre line, and a run into the
+     card underneath came out a couple of degrees off vertical: a visibly
+     crooked line in a drawing where everything else is square. A diamond's
+     vertex is one point and cannot move; a stadium's left and right are the
+     apex of a curve, so those cannot either. */
+  static slideSpan(n, side) {
+    const hw = n.w / 2, hh = n.h / 2, inset = 12;
+    const vertical = side === 'top' || side === 'bottom';
+    if (n.shape === 'decision') return null;
+    if (n.shape === 'io') {
+      if (!vertical) return null;                 /* the slanted sides */
+      const lo = side === 'top' ? n.x - hw + IO_SKEW : n.x - hw;
+      const hi = side === 'top' ? n.x + hw : n.x + hw - IO_SKEW;
+      return [lo + inset, hi - inset];
+    }
+    const round = n.shape === 'start' || n.shape === 'end' ? hh : 10;
+    if (vertical) return [n.x - hw + round + inset, n.x + hw - round - inset];
+    if (round === hh) return null;                /* a stadium's round cap */
+    return [n.y - hh + round + inset, n.y + hh - round - inset];
+  }
+
+  /* The anchor's coordinate moved towards `to` along its side, if the side
+     allows it and the move stays small. null when it cannot line up. */
+  static slide(n, side, from, to) {
+    const span = DiagramEditor.slideSpan(n, side);
+    if (!span || span[0] >= span[1]) return null;
+    if (Math.abs(to - from) > ORTH_SNAP) return null;
+    const landed = Math.min(span[1], Math.max(span[0], to));
+    return Math.abs(landed - to) < 0.01 ? landed : null;
+  }
+
   /* Push an anchor outwards so the arrow tip stops short of the box. */
   static offset(p, side, by) {
     if (side === 'top') return { x: p.x, y: p.y - by };
@@ -748,6 +790,18 @@ export class DiagramEditor {
       return { pts: out, curve: null };
     }
     const vertical = sideFrom === 'top' || sideFrom === 'bottom';
+    /* Nearly in line? Slide one anchor along its own side so the run is
+       EXACTLY straight, instead of drawing the near-miss as a slant. Either
+       end will do, so try the tail first and fall back to the head. */
+    const axis = vertical ? 'x' : 'y';
+    if (Math.abs(p[axis] - q[axis]) > 0.01) {
+      const tail = DiagramEditor.slide(a, sideFrom, p[axis], q[axis]);
+      if (tail !== null) p[axis] = tail;
+      else {
+        const head = DiagramEditor.slide(b, sideTo, q[axis], p[axis]);
+        if (head !== null) q[axis] = head;
+      }
+    }
     const across = vertical ? Math.abs(p.x - q.x) : Math.abs(p.y - q.y);
     const along = vertical ? Math.abs(p.y - q.y) : Math.abs(p.x - q.x);
     /* Straight through when the offset is too small to read as a detour, or
