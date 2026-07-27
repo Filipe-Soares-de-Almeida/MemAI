@@ -17,13 +17,21 @@ embedder out, so retrieval runs FTS-only unless a test opts in.
 from __future__ import annotations
 
 import pytest
+from starlette.testclient import TestClient
 
-from memai import db
+from memai import admin, db
 
 
 @pytest.fixture
 def conn(tmp_path):
     with db.connect(tmp_path / "test.db") as c:
+        yield c
+
+
+@pytest.fixture
+def client(tmp_path, monkeypatch):
+    monkeypatch.setenv("MEMAI_HOME", str(tmp_path))
+    with TestClient(admin.app) as c:
         yield c
 
 
@@ -553,3 +561,190 @@ def test_every_registered_tool_is_documented_by_help(mcp):
     # help() splits the summary on the first newline; it has to stand alone
     for name in mcp._TOOLS:
         assert mcp.help(command=name)["doc"].split("\n", 1)[0].strip()
+
+
+# ------------------------------------------------------------------ admin api
+
+def _create(client, **kw):
+    body = {"title": "Nightly export routine", "nodes": NODES, "edges": EDGES, **kw}
+    res = client.post("/api/diagrams", json=body)
+    assert res.status_code == 200, res.json()
+    return res.json()["uid"]
+
+
+def test_api_creates_and_reads_a_diagram(client):
+    uid = _create(client, domain="proj-1042", summary="One file per store.")
+    data = client.get(f"/api/diagrams/{uid}").json()
+    assert data["title"] == "Nightly export routine"
+    assert [n["key"] for n in data["nodes"]] == [n["key"] for n in NODES]
+    assert "flowchart TD" in data["mermaid"]
+    assert all(isinstance(n["x"], float) for n in data["nodes"])
+
+
+def test_api_rejects_a_broken_graph_with_400(client):
+    res = client.post("/api/diagrams", json={
+        "title": "T", "nodes": [{"key": "a", "label": "x"}], "edges": [],
+    })
+    assert res.status_code == 400
+    assert "no 'start' node" in res.json()["error"]
+
+
+def test_api_unknown_diagram_is_400(client):
+    for path in ("", "/mermaid"):
+        assert client.get(f"/api/diagrams/nope{path}").status_code == 400
+    assert client.post("/api/diagrams/nope/relayout", json={}).status_code == 400
+
+
+def test_api_node_and_edge_roundtrip(client):
+    uid = _create(client)
+    assert client.post(f"/api/diagrams/{uid}/node", json={
+        "key": "audit", "label": "Append to the audit log"}).status_code == 200
+    assert client.post(f"/api/diagrams/{uid}/edge", json={
+        "from": "write", "to": "audit"}).status_code == 200
+
+    data = client.get(f"/api/diagrams/{uid}").json()
+    assert "audit" in {n["key"] for n in data["nodes"]}
+
+    assert client.post(f"/api/diagrams/{uid}/edge", json={
+        "from": "write", "to": "audit", "delete": True}).status_code == 200
+    assert client.post(f"/api/diagrams/{uid}/node", json={
+        "key": "audit", "delete": True}).status_code == 200
+    assert "audit" not in {n["key"] for n in client.get(f"/api/diagrams/{uid}").json()["nodes"]}
+
+
+def test_api_node_requires_a_key(client):
+    uid = _create(client)
+    assert client.post(f"/api/diagrams/{uid}/node", json={"label": "x"}).status_code == 400
+    assert client.post(f"/api/diagrams/{uid}/edge", json={"from": "write"}).status_code == 400
+
+
+def test_api_layout_persists_a_drag(client):
+    uid = _create(client)
+    res = client.post(f"/api/diagrams/{uid}/layout", json={
+        "positions": {"load": {"x": 42, "y": 84}}})
+    assert res.json() == {"ok": True, "moved": 1}
+
+    node = next(n for n in client.get(f"/api/diagrams/{uid}").json()["nodes"] if n["key"] == "load")
+    assert (node["x"], node["y"]) == (42.0, 84.0)
+
+    # ...and a reload sees the same thing, which is the whole point
+    again = next(n for n in client.get(f"/api/diagrams/{uid}").json()["nodes"] if n["key"] == "load")
+    assert (again["x"], again["y"]) == (42.0, 84.0)
+
+
+def test_api_layout_needs_a_positions_object(client):
+    uid = _create(client)
+    assert client.post(f"/api/diagrams/{uid}/layout", json={}).status_code == 400
+    assert client.post(f"/api/diagrams/{uid}/layout",
+                       json={"positions": [["load", 1, 2]]}).status_code == 400
+
+
+def test_api_relayout_resets_a_drag(client):
+    uid = _create(client)
+    client.post(f"/api/diagrams/{uid}/layout", json={"positions": {"load": {"x": 900, "y": 900}}})
+    assert client.post(f"/api/diagrams/{uid}/relayout", json={}).json()["moved"] == len(NODES)
+    node = next(n for n in client.get(f"/api/diagrams/{uid}").json()["nodes"] if n["key"] == "load")
+    assert (node["x"], node["y"]) != (900.0, 900.0)
+
+
+def test_api_graph_replace_keeps_positions(client):
+    uid = _create(client)
+    client.post(f"/api/diagrams/{uid}/layout", json={"positions": {"load": {"x": 11, "y": 22}}})
+    res = client.post(f"/api/diagrams/{uid}/graph", json={
+        "nodes": [n for n in NODES if n["key"] != "write"],
+        "edges": [{"from": "start", "to": "load"}, {"from": "load", "to": "check"},
+                  {"from": "check", "to": "done"}],
+    })
+    assert res.status_code == 200
+    node = next(n for n in client.get(f"/api/diagrams/{uid}").json()["nodes"] if n["key"] == "load")
+    assert (node["x"], node["y"]) == (11.0, 22.0)
+
+
+def test_api_meta_update(client):
+    uid = _create(client)
+    assert client.post(f"/api/diagrams/{uid}/meta", json={"title": "Nightly export"}).status_code == 200
+    assert client.get(f"/api/diagrams/{uid}").json()["title"] == "Nightly export"
+    assert client.post(f"/api/diagrams/{uid}/meta", json={}).status_code == 400
+    assert client.post(f"/api/diagrams/{uid}/meta", json={"title": " "}).status_code == 400
+
+
+def test_api_link_carries_a_peer_card(client):
+    uid = _create(client)
+    note = client.post("/api/memories", json={"type": "note", "content": "a fact"}).json()["uid"]
+    assert client.post(f"/api/diagrams/{uid}/link", json={
+        "node_key": "load", "target_uid": note}).status_code == 200
+
+    link = client.get(f"/api/diagrams/{uid}").json()["links"][0]
+    assert link["peer"]["uid"] == note and link["peer"]["type"] == "note"
+    assert "target_content" not in link  # the card already carries a snippet
+
+    # and the note's own detail view knows which flows depend on it
+    detail = client.get(f"/api/memories/{note}").json()
+    assert detail["referenced_by_diagrams"][0]["node_key"] == "load"
+
+    assert client.post(f"/api/diagrams/{uid}/link", json={
+        "node_key": "load", "target_uid": note, "delete": True}).status_code == 200
+    assert client.post(f"/api/diagrams/{uid}/link", json={
+        "node_key": "load", "target_uid": note, "delete": True}).status_code == 400
+
+
+def test_api_memory_detail_embeds_the_graph(client):
+    uid = _create(client)
+    detail = client.get(f"/api/memories/{uid}").json()
+    assert detail["type"] == "diagram"
+    assert [n["key"] for n in detail["diagram"]["nodes"]] == [n["key"] for n in NODES]
+
+
+def test_api_refuses_a_hand_written_diagram_content(client):
+    uid = _create(client)
+    res = client.post(f"/api/memories/{uid}/content", json={"content": "hand written"})
+    assert res.status_code == 400
+    assert "generated from the graph" in res.json()["error"]
+
+
+def test_api_refuses_creating_a_diagram_as_a_plain_memory(client):
+    """It would leave a memory whose content nothing regenerates."""
+    res = client.post("/api/memories", json={"type": "diagram", "content": "x"})
+    assert res.status_code == 400
+    assert "POST /api/diagrams" in res.json()["error"]
+
+
+def test_api_type_allowlist_is_enforced(client):
+    assert client.post("/api/memories", json={"type": "wat", "content": "x"}).status_code == 400
+    uid = client.post("/api/memories", json={"type": "note", "content": "x"}).json()["uid"]
+    assert client.post(f"/api/memories/{uid}/meta", json={"type": "wat"}).status_code == 400
+    assert client.post(f"/api/memories/{uid}/meta", json={"type": "reasoning"}).status_code == 200
+
+
+def test_api_refuses_retyping_across_the_diagram_boundary(client):
+    uid = _create(client)
+    res = client.post(f"/api/memories/{uid}/meta", json={"type": "note"})
+    assert res.status_code == 400 and "cannot be changed" in res.json()["error"]
+
+    note = client.post("/api/memories", json={"type": "note", "content": "x"}).json()["uid"]
+    assert client.post(f"/api/memories/{note}/meta", json={"type": "diagram"}).status_code == 400
+
+
+def test_api_purge_clears_the_graph(client):
+    uid = _create(client)
+    res = client.post(f"/api/memories/{uid}/purge", json={"confirm": f"DELETE {uid}"})
+    assert res.status_code == 200
+    assert client.get(f"/api/diagrams/{uid}").status_code == 400
+
+
+def test_api_clean_orphans_drops_a_link_to_a_missing_node(client):
+    uid = _create(client)
+    note = client.post("/api/memories", json={"type": "note", "content": "a fact"}).json()["uid"]
+    client.post(f"/api/diagrams/{uid}/link", json={"node_key": "load", "target_uid": note})
+
+    # forge the desync a crash mid-delete could leave behind
+    with db.connect() as conn:
+        conn.execute("DELETE FROM diagram_nodes WHERE memory_uid = ? AND node_key = 'load'", (uid,))
+
+    assert client.post("/api/maintenance/clean-orphans", json={}).json()["node_links_removed"] == 1
+    assert client.get(f"/api/diagrams/{uid}").json()["links"] == []
+
+
+def test_api_overview_counts_the_new_type(client):
+    _create(client)
+    assert client.get("/api/overview").json()["by_type"].get("diagram") == 1
