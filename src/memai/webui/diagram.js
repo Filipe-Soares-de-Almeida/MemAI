@@ -80,7 +80,18 @@ export class DiagramEditor {
     canvas.addEventListener('wheel', this._wheel, { passive: false });
     canvas.addEventListener('click', this._click);
     addEventListener('mouseup', this._up);
+
+    /* Three overlapping triggers, on purpose. The stage changes size
+       without the window ever resizing -- a vertical scrollbar appearing
+       takes ~10px off it -- so a window-only listener misses that; but a
+       ResizeObserver is the only one of the three that cannot be verified
+       in a headless pane, so it is not relied on alone. The check inside
+       requestDraw is the backstop that needs no events at all. */
     addEventListener('resize', this._resize);
+    if (typeof ResizeObserver === 'function') {
+      this._ro = new ResizeObserver(this._resize);
+      this._ro.observe(canvas.parentElement);
+    }
 
     this.requestDraw();
   }
@@ -94,6 +105,7 @@ export class DiagramEditor {
     this.cv.removeEventListener('click', this._click);
     removeEventListener('mouseup', this._up);
     removeEventListener('resize', this._resize);
+    this._ro?.disconnect();
   }
 
   readTheme() {
@@ -158,12 +170,15 @@ export class DiagramEditor {
   /* ── viewport ──────────────────────────────────────────────────── */
 
   resize() {
-    const r = this.cv.parentElement.getBoundingClientRect();
+    /* clientWidth/Height, not getBoundingClientRect: the canvas is
+       inset:0 inside the stage, so it fills the PADDING box -- measuring
+       the border box would size it a border wider than the space it has. */
+    const stage = this.cv.parentElement;
     const dpr = devicePixelRatio || 1;
-    this.w = r.width;
-    this.h = r.height;
-    this.cv.width = r.width * dpr;
-    this.cv.height = r.height * dpr;
+    this.w = stage.clientWidth;
+    this.h = stage.clientHeight;
+    this.cv.width = this.w * dpr;
+    this.cv.height = this.h * dpr;
     this.cx.setTransform(dpr, 0, 0, dpr, 0, 0);
   }
 
@@ -310,7 +325,13 @@ export class DiagramEditor {
     if (this.destroyed || this._frame) return;
     this._frame = requestAnimationFrame(() => {
       this._frame = 0;
-      if (!this.destroyed) this.draw();
+      if (this.destroyed) return;
+      /* self-heal: re-measure if the stage moved under us since the last
+         draw, so a missed observer tick costs one blurry frame at worst
+         instead of leaving the backing store permanently wrong */
+      const stage = this.cv.parentElement;
+      if (stage.clientWidth !== this.w || stage.clientHeight !== this.h) this.resize();
+      this.draw();
     });
   }
 

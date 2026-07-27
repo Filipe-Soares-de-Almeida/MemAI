@@ -1016,7 +1016,16 @@ textarea { resize: vertical; min-height: 110px; width: 100%; font-family: var(--
     var(--bg);
   overflow: hidden;
 }
-.dg-stage canvas { position: absolute; inset: 0; cursor: grab; }
+/* width/height 100% on purpose: a canvas's width/height ATTRIBUTES act as
+   a CSS width, so without this the displayed size is whatever the last
+   resize() wrote and any drift shows up as a clipped strip. Pinning the
+   CSS size to the stage leaves the attributes doing only their real job,
+   sizing the backing store. */
+.dg-stage canvas {
+  position: absolute; inset: 0;
+  width: 100%; height: 100%;
+  cursor: grab;
+}
 .dg-stage canvas.dragging { cursor: grabbing; }
 .dg-stage canvas.linkmode { cursor: crosshair; }
 
@@ -1038,13 +1047,18 @@ textarea { resize: vertical; min-height: 110px; width: 100%; font-family: var(--
 .dg-side {
   display: grid; gap: 12px;
   position: sticky; top: 12px;
+  min-width: 0;
 }
 .dg-panel {
   background: var(--surface);
   border: 1px solid var(--line-soft);
   border-radius: var(--radius);
   padding: 13px 14px;
+  /* same guard as .dgl-card: a grid item defaults to min-width:auto and
+     would widen past this fixed column rather than clip a long chip */
+  min-width: 0;
 }
+.dg-panel > * { min-width: 0; }
 .dg-panel > h3 {
   margin: 0 0 10px;
   font: 600 10.5px var(--font-m);
@@ -1105,7 +1119,13 @@ textarea { resize: vertical; min-height: 110px; width: 100%; font-family: var(--
   border-left: 3px solid var(--t-diagram);
   border-radius: var(--radius);
   padding: 13px 15px;
+  min-width: 0;
 }
+/* Grid and flex items default to min-width:auto, so they refuse to shrink
+   below their min-content and spill out of the painted card -- a long
+   title alone was enough. Every row here is meant to clip or wrap to the
+   card, never to widen it. */
+.dgl-card > * { min-width: 0; }
 /* structural problems are the reason this view exists — make them visible
    from across the grid, not only once a card is read */
 .dgl-card.has-issues { border-left-color: var(--warn); }
@@ -1119,7 +1139,14 @@ textarea { resize: vertical; min-height: 110px; width: 100%; font-family: var(--
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .dgl-title:hover { color: var(--accent); }
-.dgl-summary { font-size: 12px; color: var(--ink-2); line-height: 1.5; }
+/* a real routine's summary runs to a paragraph; clamp it so one verbose
+   flow cannot stretch its card past every other card in the row */
+.dgl-summary {
+  font-size: 12px; color: var(--ink-2); line-height: 1.5;
+  display: -webkit-box; -webkit-box-orient: vertical;
+  -webkit-line-clamp: 4; line-clamp: 4;
+  overflow: hidden;
+}
 
 .dgl-stats {
   display: flex; flex-wrap: wrap; gap: 4px 12px;

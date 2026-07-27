@@ -1337,10 +1337,10 @@ async function renderDiagrams(view, params) {
       (a, b) => ISSUE_ORDER.indexOf(a.kind) - ISSUE_ORDER.indexOf(b.kind));
     return `<div class="dgl-card${issues.length ? ' has-issues' : ''}">
       <div class="dgl-top">
-        <span class="dgl-title" data-edit="${esc(d.uid)}">${esc(d.title || '—')}</span>
+        <span class="dgl-title" data-edit="${esc(d.uid)}" title="${esc(d.title)}">${esc(d.title || '—')}</span>
         ${statusTag(d.status)} ${confPill(d.confidence)}
       </div>
-      ${d.summary ? `<div class="dgl-summary">${esc(d.summary)}</div>` : ''}
+      ${d.summary ? `<div class="dgl-summary" title="${esc(d.summary)}">${esc(d.summary)}</div>` : ''}
       <div class="dgl-stats">
         <span>${t('dgl.steps', { n: d.nodes })}</span>
         <span>${t('dgl.conns', { n: d.edges })}</span>
