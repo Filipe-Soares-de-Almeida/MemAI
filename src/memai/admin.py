@@ -957,8 +957,10 @@ def lookup(request, payload) -> dict:
             rows = [dict(r) for r in db.list_recent(conn, limit=10, status="")]
         else:
             exact = db.get_memory(conn, q)
+            # pure relevance here: the operator is choosing *any* memory to
+            # attach, so lifting diagrams to the top would only be noise
             rows = [dict(exact)] if exact is not None else \
-                db.search_hybrid(conn, q, status="", limit=10)
+                db.search_hybrid(conn, q, status="", limit=10, diagrams_first=False)
     items = [{
         "uid": r["uid"], "type": r["type"], "domain": r["domain"],
         "status": r["status"], "snippet": _snip(r["content"], 110),

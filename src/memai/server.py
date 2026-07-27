@@ -374,9 +374,19 @@ def search(query: str, domain: str = "", type: str = "", limit: int = 30) -> lis
     model is unavailable. Content is snippet-truncated per result --
     call get_memory(uid) for the full record.
 
+    Matching diagrams come back FIRST, carrying
+    rank_reason='diagram_first'. A diagram documents a whole routine end
+    to end, so it is the thing to read before the partial notes around
+    it -- read it first, then use the notes as annotations on the steps.
+    That tag means "a type preference put this at the top", NOT "this
+    matched best": a promoted diagram may be a weaker match than the
+    untagged rows below it, so still judge relevance yourself. Diagrams
+    marked contradicted are never promoted.
+
     type filters (one writer each): 'note', 'reasoning', 'checkpoint',
-    'anti_pattern', 'handoff'. To recall note()'d knowledge
-    specifically, recall() is the sugar for search(type='note').
+    'anti_pattern', 'handoff', 'diagram'. To recall note()'d knowledge
+    specifically, recall() is the sugar for search(type='note') -- which
+    also means recall() never surfaces a diagram; use search() for that.
     """
     with db.connect() as conn:
         results = db.search_hybrid(conn, query, domain=domain, type=type, limit=limit)

@@ -1366,6 +1366,25 @@ def search_semantic(
     return conn.execute(" ".join(sql), params).fetchall()
 
 
+def _diagram_first_tier(row: dict) -> int:
+    """0 sorts ahead of everything else, 1 is the normal band.
+
+    A diagram states a whole routine end to end, so inside one candidate
+    set it is worth reading before the partial notes scattered around it:
+    the flow is the source of truth those notes annotate.
+
+    A contradicted or archived diagram gets no promotion -- it has stopped
+    being that source of truth, and pushing it to the top would invert the
+    only reason for promoting diagrams in the first place.
+    """
+    promote = (
+        row.get("type") == DIAGRAM_TYPE
+        and row.get("confidence") != "contradicted"
+        and row.get("status") == "active"
+    )
+    return 0 if promote else 1
+
+
 def search_hybrid(
     conn: sqlite3.Connection,
     query: str,
@@ -1374,6 +1393,7 @@ def search_hybrid(
     type: str = "",
     status: str = "active",
     limit: int = 30,
+    diagrams_first: bool = True,
 ) -> list[dict]:
     """FTS BM25 + vector KNN, merged by reciprocal rank fusion.
 
@@ -1382,32 +1402,67 @@ def search_hybrid(
     (cosine, lower = closer) so the agent can judge each candidate.
     Ordering is RRF, but it's a candidate ordering, not a verdict --
     the agent decides relevance, same as FTS-only did.
-    """
-    fts_rows = search_memories(conn, query, domain=domain, type=type, status=status, limit=limit)
-    vec_rows = search_semantic(conn, query, domain=domain, type=type, status=status, limit=limit)
 
+    `diagrams_first` (default on) lifts matching diagrams above the rest
+    of the candidate set -- see _diagram_first_tier for which ones and
+    why. Three deliberate properties:
+
+    * promoting requires LOOKING for them. Both retrievers apply `limit`
+      themselves, so a diagram that lost the global top-N never reaches
+      the merge and no amount of re-ordering can rescue it. A second
+      retrieval scoped to type='diagram' backfills the pool with the best
+      diagrams for this query, whatever else crowded them out.
+    * the backfill only adds uids the global passes missed, so nothing
+      gets a second RRF contribution for appearing in two passes.
+    * RRF scores are never altered, only the ordering, and every promoted
+      row is tagged `rank_reason='diagram_first'`. Position 1 can mean "a
+      type preference put it there" rather than "it matched best", and a
+      reader that cannot tell the difference has been misled -- so the
+      row says which it was.
+
+    Pass diagrams_first=False where type preference is noise rather than
+    help, e.g. a picker that is choosing any memory to link.
+    """
     K = 60  # standard RRF damping constant
     merged: dict[str, dict] = {}
-    for i, row in enumerate(fts_rows):
-        d = dict(row)
-        d["fts_rank"] = d.pop("rank")
-        d["match_source"] = "fts"
-        d["_rrf"] = 1.0 / (K + i + 1)
-        merged[d["uid"]] = d
-    for i, row in enumerate(vec_rows):
-        uid = row["uid"]
-        if uid in merged:
-            merged[uid]["vec_distance"] = row["vec_distance"]
-            merged[uid]["match_source"] = "both"
-            merged[uid]["_rrf"] += 1.0 / (K + i + 1)
-        else:
-            d = dict(row)
-            d["match_source"] = "vec"
-            d["_rrf"] = 1.0 / (K + i + 1)
-            merged[uid] = d
-    results = sorted(merged.values(), key=lambda d: d["_rrf"], reverse=True)[:limit]
+
+    def fold(rows, source: str, backfill: bool = False) -> None:
+        for i, row in enumerate(rows):
+            uid = row["uid"]
+            contribution = 1.0 / (K + i + 1)
+            seen = merged.get(uid)
+            if seen is None:
+                d = dict(row)
+                if source == "fts":
+                    d["fts_rank"] = d.pop("rank")
+                d["match_source"] = source
+                d["_rrf"] = contribution
+                merged[uid] = d
+            elif not backfill:
+                if source == "fts":
+                    seen["fts_rank"] = row["rank"]
+                else:
+                    seen["vec_distance"] = row["vec_distance"]
+                seen["match_source"] = "both"
+                seen["_rrf"] += contribution
+
+    fold(search_memories(conn, query, domain=domain, type=type, status=status, limit=limit), "fts")
+    fold(search_semantic(conn, query, domain=domain, type=type, status=status, limit=limit), "vec")
+
+    # only with no type filter: an explicit type='note' means the caller
+    # asked for notes, and backfilling diagrams would break that contract
+    # (recall() is exactly that call, and must never surface one)
+    if diagrams_first and not type:
+        scoped = dict(domain=domain, type=DIAGRAM_TYPE, status=status, limit=limit)
+        fold(search_memories(conn, query, **scoped), "fts", backfill=True)
+        fold(search_semantic(conn, query, **scoped), "vec", backfill=True)
+
+    tier = _diagram_first_tier if diagrams_first else (lambda d: 1)
+    results = sorted(merged.values(), key=lambda d: (tier(d), -d["_rrf"]))[:limit]
     for d in results:
         del d["_rrf"]
+        if tier(d) == 0:
+            d["rank_reason"] = "diagram_first"
     return results
 
 
