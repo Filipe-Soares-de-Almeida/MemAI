@@ -7,7 +7,7 @@
    diagram.js. */
 
 import { I18N, t } from './i18n.js';
-import { DiagramEditor, NODE_SHAPES } from './diagram.js';
+import { DiagramEditor, NODE_SHAPES, ROUTINGS } from './diagram.js';
 
 /* ─── constants ─────────────────────────────────────────────────────── */
 
@@ -134,13 +134,14 @@ function confirmModal({ title, body, okLabel = t('common.confirm'), danger = fal
   });
 }
 
-function promptModal({ title, body = '', label, placeholder = '', okLabel = t('common.confirm'), danger = false }) {
+function promptModal({ title, body = '', label, placeholder = '', value = '',
+                      okLabel = t('common.confirm'), danger = false }) {
   return new Promise(resolve => {
     const m = openModal({
       title,
       bodyHTML: `${body ? `<div>${body}</div>` : ''}
         <div class="field"><label>${esc(label)}</label>
-        <input type="text" data-in placeholder="${esc(placeholder)}"></div>`,
+        <input type="text" data-in value="${esc(value)}" placeholder="${esc(placeholder)}"></div>`,
       footHTML: `<button class="btn" data-x>${t('common.cancel')}</button>
                  <button class="btn ${danger ? 'btn-danger' : 'btn-solid'}" data-ok>${esc(okLabel)}</button>`,
     });
@@ -1441,6 +1442,10 @@ async function renderDiagram(view, params) {
   /* Read-only until asked otherwise: reading a flow is the common case, and
      a stray drag while reading rewrites a position every other reader sees. */
   let editing = false;
+  /* how edges are drawn is a reading preference, not diagram data, so it
+     lives in the browser rather than in the store */
+  let routing = localStorage.getItem('memai.diagram.routing');
+  if (!ROUTINGS.includes(routing)) routing = 'orthogonal';
 
   view.innerHTML = `<div class="anim">
     <div class="view-head">
@@ -1455,6 +1460,7 @@ async function renderDiagram(view, params) {
           <button class="btn btn-sm" id="dgAdd" data-editonly>${t('dg.add')}</button>
           <button class="btn btn-sm" id="dgConnect" data-editonly>${t('dg.connect')}</button>
           <button class="btn btn-sm" id="dgArrange" data-editonly>${t('dg.arrange')}</button>
+          <button class="btn btn-sm" id="dgRouting"></button>
           <button class="btn btn-sm" id="dgFit">${t('dg.center')}</button>
           <button class="btn btn-sm" id="dgMermaid">${t('dg.mermaid')}</button>
           <button class="btn btn-sm" id="dgRecord">${t('dg.record')}</button>
@@ -1522,6 +1528,20 @@ async function renderDiagram(view, params) {
     });
   }
 
+  /* The condition written on a line, edited from the line itself or from the
+     connection rows in the inspector -- both land here. */
+  async function editEdgeLabel(edge) {
+    const label = await promptModal({
+      title: t('dg.edgeLabel.editTitle'),
+      body: t('dg.edgeLabel.body', { from: esc(edge.from), to: esc(edge.to) }),
+      label: t('dg.edgeLabel.label'), placeholder: t('dg.edgeLabel.ph'),
+      value: edge.label || '', okLabel: t('common.save'),
+    });
+    if (label === null) return;
+    await act(() => api(`/api/diagrams/${uid}/edge`, {
+      body: { from: edge.from, to: edge.to, label } }), t('dg.saved'));
+  }
+
   function openMetaModal() {
     const m = openModal({
       title: t('dg.meta'),
@@ -1539,6 +1559,12 @@ async function renderDiagram(view, params) {
       closeModal();
       await act(() => api(`/api/diagrams/${uid}/meta`, { body }), t('dg.saved'));
     };
+  }
+
+  function paintRouting() {
+    const b = $('#dgRouting');
+    b.textContent = t(`dg.routing.${routing}`);
+    b.title = t('dg.routing.switch');
   }
 
   /* ── read-only vs editing ───────────────────────────────────────────── */
@@ -1581,7 +1607,9 @@ async function renderDiagram(view, params) {
         <span class="dg-key">${esc(dir === 'out' ? e.to : e.from)}</span>
         ${e.label ? `<span class="dg-label" title="${esc(e.label)}">${esc(e.label)}</span>` : ''}
         <span class="spacer"></span>
-        ${editing ? `<button class="icon-btn danger" data-deledge="${esc(e.from)}|${esc(e.to)}"
+        ${editing ? `<button class="icon-btn" data-editedge="${esc(e.from)}|${esc(e.to)}"
+                title="${t('dg.edge.editLabel')}">✎</button>
+          <button class="icon-btn danger" data-deledge="${esc(e.from)}|${esc(e.to)}"
                 title="${t('dg.edge.remove')}">✕</button>` : ''}
       </div>`;
     const links = data.links.filter(l => l.node_key === node.key);
@@ -1664,6 +1692,10 @@ async function renderDiagram(view, params) {
       act(() => api(`/api/diagrams/${uid}/edge`, {
         body: { from, to, delete: true } }), t('dg.disconnected'));
     });
+    side.querySelectorAll('[data-editedge]').forEach(b => b.onclick = () => {
+      const [from, to] = b.dataset.editedge.split('|');
+      editEdgeLabel(data.edges.find(e => e.from === from && e.to === to) || { from, to });
+    });
 
     /* links */
     side.querySelectorAll('[data-dellink]').forEach(b => b.onclick = () =>
@@ -1707,6 +1739,8 @@ async function renderDiagram(view, params) {
   diagramEngine = new DiagramEditor($('#dgCanvas'), data, {
     tipShow, tipHide,
     readOnly: true,
+    routing,
+    onEditEdgeLabel: editEdgeLabel,
     onSelect: node => { selected = node ? node.key : null; paintSide(); },
     onMove: positions => { Object.assign(pending, positions); flushLayout(); },
     onConnectProgress: from => paintHint(from),
@@ -1743,10 +1777,17 @@ async function renderDiagram(view, params) {
   };
   $('#dgFit').onclick = () => diagramEngine.fit();
   $('#dgRecord').onclick = () => openRecord(uid);
+  $('#dgRouting').onclick = () => {
+    routing = routing === 'orthogonal' ? 'curved' : 'orthogonal';
+    localStorage.setItem('memai.diagram.routing', routing);
+    diagramEngine.setRouting(routing);
+    paintRouting();
+  };
   $('#dgMode').onclick = () => { editing = !editing; applyMode(); };
   /* the heading and the summary panel are where you reach for these, so both
      open the same editor -- the toolbar is no longer the only way in */
   $('#dgTitle').onclick = () => { if (editing) openMetaModal(); };
+  paintRouting();
   applyMode();
   $('#dgMermaid').onclick = async () => {
     let src = '';
