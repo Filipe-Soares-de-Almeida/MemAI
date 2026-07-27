@@ -117,7 +117,8 @@ CREATE TABLE IF NOT EXISTS diagrams (
     memory_uid  TEXT PRIMARY KEY REFERENCES memories(uid),
     kind        TEXT NOT NULL DEFAULT 'flowchart',
     title       TEXT NOT NULL DEFAULT '',
-    summary     TEXT NOT NULL DEFAULT ''
+    summary     TEXT NOT NULL DEFAULT '',
+    font_scale  REAL NOT NULL DEFAULT 1          -- how big the text is drawn
 );
 
 CREATE TABLE IF NOT EXISTS diagram_nodes (
@@ -129,7 +130,9 @@ CREATE TABLE IF NOT EXISTS diagram_nodes (
     note        TEXT NOT NULL DEFAULT '',       -- optional long explanation
     seq         INTEGER NOT NULL DEFAULT 0,     -- authoring order
     x           REAL NOT NULL,                  -- always set: server-computed
-    y           REAL NOT NULL                   -- layout, overwritten by drags
+    y           REAL NOT NULL,                  -- layout, overwritten by drags
+    w           REAL,                           -- NULL = the shape's default
+    h           REAL                            -- NULL = the shape's default
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_diagram_nodes_key
@@ -286,6 +289,29 @@ def _embed_source(content: str, tags: str, domain: str) -> str:
     return "\n".join(p for p in (content, tags, domain) if p)
 
 
+# Columns added to a table that already exists in someone's store.
+# `CREATE TABLE IF NOT EXISTS` -- how everything else here migrates -- is
+# free for a new TABLE and does nothing at all for a new COLUMN, so a
+# store created before the column would keep failing on every query that
+# names it. Each entry must be nullable or carry a default: ADD COLUMN
+# fills existing rows with it.
+_ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
+    ("diagrams", "font_scale", "REAL NOT NULL DEFAULT 1"),
+    ("diagram_nodes", "w", "REAL"),
+    ("diagram_nodes", "h", "REAL"),
+)
+
+
+def _ensure_columns(conn: sqlite3.Connection) -> None:
+    """Add any column in _ADDED_COLUMNS the store does not have yet."""
+    for table, column, decl in _ADDED_COLUMNS:
+        have = {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}
+        if not have:
+            continue  # table itself is new; the schema above already has it
+        if column not in have:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
+
+
 def _ensure_vec(conn: sqlite3.Connection) -> None:
     """Create/migrate the vector table and backfill missing vectors.
 
@@ -344,6 +370,7 @@ def connect(db_path: Path | None = None):
     conn.execute("PRAGMA synchronous=NORMAL;")
     conn.execute("PRAGMA foreign_keys=ON;")
     conn.executescript(SCHEMA)
+    _ensure_columns(conn)
     if vec_loaded:
         _ensure_vec(conn)
     try:
@@ -517,14 +544,44 @@ DIAGRAM_BODY_BUDGET = 12_000
 # canvas, a chat-side renderer, a future exporter -- draws the same
 # picture, including a diagram nobody has ever opened in the editor.
 #
-# Generous on purpose: a box is 170x48 in these units, so the gaps are
-# wider than the boxes. A thirty-step routine packed shoulder to shoulder
-# is a wall of text -- the edges are what carry the sequence, so the boxes
-# can afford to sit apart. Raising these only affects diagrams created or
-# re-arranged afterwards; stored coordinates are never rewritten behind
-# the user's back (see relayout_diagram).
-LAYOUT_COL_W = 300.0
-LAYOUT_ROW_H = 200.0
+# The default box, which a renderer MUST draw a node at when the node
+# carries no size of its own. Duplicated in the canvas (diagram.js) for
+# the same reason the shapes are: the two have to agree or a stored
+# arrangement stops matching what is drawn on it.
+NODE_DEFAULT_W = 170.0
+NODE_DEFAULT_H = 48.0
+DECISION_DEFAULT_H = 66.0        # a diamond needs the extra height to read
+# What a resize is allowed to reach. Wide enough for a long routine name,
+# bounded so one card cannot swallow the canvas.
+NODE_MIN_W, NODE_MAX_W = 110.0, 560.0
+NODE_MIN_H, NODE_MAX_H = 34.0, 340.0
+FONT_SCALE_MIN, FONT_SCALE_MAX = 0.7, 2.5
+
+# Air between boxes, on top of whatever the boxes measure. Generous on
+# purpose: the gaps end up wider than a default box. A thirty-step routine
+# packed shoulder to shoulder is a wall of text -- the edges are what carry
+# the sequence, so the boxes can afford to sit apart. Changing these only
+# affects diagrams created or re-arranged afterwards; stored coordinates
+# are never rewritten behind the user's back (see relayout_diagram).
+LAYOUT_GAP_X = 130.0
+LAYOUT_GAP_Y = 152.0
+LAYOUT_COL_W = NODE_DEFAULT_W + LAYOUT_GAP_X   # 300, the pitch for default boxes
+LAYOUT_ROW_H = NODE_DEFAULT_H + LAYOUT_GAP_Y   # 200
+
+
+def node_box(node: dict, font_scale: float = 1.0) -> tuple[float, float]:
+    """The size a node is drawn at: its own, or its shape's default.
+
+    A default box grows with the diagram's font scale, because otherwise
+    asking for bigger text just truncates the label -- the card it has to
+    fit in never changed. A box the user sized by hand is left alone: they
+    chose that size while looking at that text.
+    """
+    default_h = DECISION_DEFAULT_H if node.get("shape") == "decision" else NODE_DEFAULT_H
+    scale = max(FONT_SCALE_MIN, min(FONT_SCALE_MAX, float(font_scale or 1)))
+    w = node.get("w") or NODE_DEFAULT_W * scale
+    h = node.get("h") or default_h * scale
+    return float(w), float(h)
 
 # Node keys double as mermaid node ids, so keep them to characters that
 # need no escaping on either side.
@@ -690,7 +747,26 @@ def _back_edges(adj: dict[str, list[str]], roots: list[str]) -> set[tuple[str, s
     return back
 
 
-def _layout_graph(nodes: list[dict], edges: list[dict]) -> dict[str, tuple[float, float]]:
+def loop_edges(nodes: list[dict], edges: list[dict]) -> set[tuple[str, str]]:
+    """Which edges close a cycle -- a retry, a return to a menu.
+
+    A property of the GRAPH, computed the same way the layout computes it,
+    so a renderer can mark a loop closer without guessing. The canvas used
+    to guess from the coordinates (does this edge point up the page?),
+    which made a normal edge look like a loop as soon as someone dragged
+    its target above its source.
+    """
+    keys = [n["key"] for n in nodes]
+    known = set(keys)
+    adj = {k: [t for t in v if t in known] for k, v in _adjacency(edges).items()}
+    starts = [n["key"] for n in nodes if n["shape"] == "start"]
+    roots = [r for r in (starts or keys[:1]) if r in known]
+    return _back_edges(adj, roots)
+
+
+def _layout_graph(
+    nodes: list[dict], edges: list[dict], font_scale: float = 1.0,
+) -> dict[str, tuple[float, float]]:
     """Deterministic layered layout: the row is a node's longest path from start.
 
     A pure function of the graph, so the same flow always arranges the
@@ -772,11 +848,18 @@ def _layout_graph(nodes: list[dict], edges: list[dict]) -> dict[str, tuple[float
     for k in order + [k for k in stragglers if k not in seen]:
         rows.setdefault(depth[k], []).append(k)
 
+    # The pitch follows the biggest box in the diagram, so resizing a card
+    # -- or scaling the text every default box is sized from -- does not
+    # make the next auto-arrange overlap it with its neighbours.
+    boxes = [node_box(n, font_scale) for n in nodes]
+    col_w = max(LAYOUT_COL_W, max(w for w, _ in boxes) + LAYOUT_GAP_X)
+    row_h = max(LAYOUT_ROW_H, max(h for _, h in boxes) + LAYOUT_GAP_Y)
+
     pos: dict[str, tuple[float, float]] = {}
     for d, row in rows.items():
         span = (len(row) - 1) / 2.0
         for i, k in enumerate(row):
-            pos[k] = ((i - span) * LAYOUT_COL_W, d * LAYOUT_ROW_H)
+            pos[k] = ((i - span) * col_w, d * row_h)
     return pos
 
 
@@ -870,6 +953,12 @@ def get_diagram_row(conn: sqlite3.Connection, uid: str) -> sqlite3.Row | None:
     return conn.execute("SELECT * FROM diagrams WHERE memory_uid = ?", (uid,)).fetchone()
 
 
+def _font_scale(conn: sqlite3.Connection, uid: str) -> float:
+    """The diagram's text scale, which every default box is sized from."""
+    row = get_diagram_row(conn, uid)
+    return float((row["font_scale"] if row is not None else 1) or 1)
+
+
 def is_diagram(conn: sqlite3.Connection, uid: str) -> bool:
     """True for a diagram memory.
 
@@ -885,7 +974,8 @@ def _load_graph(conn: sqlite3.Connection, uid: str) -> tuple[list[dict], list[di
     """A stored diagram's nodes/edges as the same dicts the writers accept."""
     nodes = [
         {"key": r["node_key"], "label": r["label"], "shape": r["shape"],
-         "note": r["note"], "seq": r["seq"], "x": r["x"], "y": r["y"]}
+         "note": r["note"], "seq": r["seq"], "x": r["x"], "y": r["y"],
+         "w": r["w"], "h": r["h"]}
         for r in conn.execute(
             "SELECT * FROM diagram_nodes WHERE memory_uid = ? ORDER BY seq, id", (uid,)
         )
@@ -1000,7 +1090,7 @@ def replace_diagram_graph(
         return False, errors
     old_nodes, _ = _load_graph(conn, uid)
     kept = {o["key"]: (o["x"], o["y"]) for o in old_nodes}
-    fresh = _layout_graph(n, e)
+    fresh = _layout_graph(n, e, _font_scale(conn, uid))
     positions = {node["key"]: kept.get(node["key"], fresh[node["key"]]) for node in n}
     _write_nodes(conn, uid, n, positions)
     _write_edges(conn, uid, e)
@@ -1052,7 +1142,8 @@ def upsert_diagram_node(
             (candidate["label"], candidate["shape"], candidate["note"], uid, node_key),
         )
     else:
-        x, y = _layout_graph(nodes + [candidate], edges)[candidate["key"]]
+        x, y = _layout_graph(
+            nodes + [candidate], edges, _font_scale(conn, uid))[candidate["key"]]
         conn.execute(
             """INSERT INTO diagram_nodes (memory_uid, node_key, shape, label, note, seq, x, y)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
@@ -1124,9 +1215,16 @@ def delete_diagram_edge(
 
 
 def set_diagram_meta(
-    conn: sqlite3.Connection, uid: str, *, title: str | None = None, summary: str | None = None
+    conn: sqlite3.Connection, uid: str, *, title: str | None = None,
+    summary: str | None = None, font_scale: object = None,
 ) -> tuple[bool, list[str]]:
-    """Rename a diagram or rewrite its summary; both feed the projection."""
+    """Rename a diagram, rewrite its summary, or set how big its text draws.
+
+    Title and summary feed the projection; font_scale does not -- it is how
+    the flow is drawn, not what it says. It is stored rather than kept in
+    the browser because a card sized to fit its text at one scale is the
+    wrong size at another, and the sizes ARE stored.
+    """
     d = get_diagram_row(conn, uid)
     if d is None:
         return False, [f"{uid} is not a diagram"]
@@ -1134,24 +1232,49 @@ def set_diagram_meta(
     new_summary = d["summary"] if summary is None else str(summary).strip()
     if not new_title:
         return False, ["diagram needs a title"]
+    was = float(d["font_scale"] or 1)
+    scale = was
+    if font_scale is not None:
+        scale = _clamp(font_scale, FONT_SCALE_MIN, FONT_SCALE_MAX)
+        if scale is None:
+            return False, ["font_scale must be a number"]
     conn.execute(
-        "UPDATE diagrams SET title = ?, summary = ? WHERE memory_uid = ?",
-        (new_title, new_summary, uid),
+        "UPDATE diagrams SET title = ?, summary = ?, font_scale = ? WHERE memory_uid = ?",
+        (new_title, new_summary, scale, uid),
     )
+    if scale != was:
+        # Every default box just changed size, so the arrangement has to
+        # come with it: scaling the coordinates by the same factor keeps a
+        # hand-arranged flow arranged, instead of leaving cards overlapping
+        # until someone re-arranges the whole thing. A box someone sized by
+        # hand keeps that size -- they picked it looking at that text.
+        conn.execute(
+            "UPDATE diagram_nodes SET x = x * ?, y = y * ? WHERE memory_uid = ?",
+            (scale / was, scale / was, uid),
+        )
     _refresh_diagram_content(conn, uid)
     return True, []
 
 
+def _clamp(value: object, low: float, high: float) -> float | None:
+    try:
+        return min(high, max(low, float(value)))  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
+
+
 def set_node_positions(conn: sqlite3.Connection, uid: str, positions: object) -> int:
-    """Persist dragged coordinates. Layout is not content.
+    """Persist a dragged or resized box. Geometry is not content.
 
     Deliberately touches nothing else: no content re-render, no `edits`
     row, no re-embed, not even memories.updated_at -- moving a box on a
     canvas must not read as an edit or reorder list_recent().
 
-    Accepts {key: (x, y)} or {key: {"x": .., "y": ..}}; unknown keys and
-    unparseable coordinates are skipped, and the count of rows actually
-    moved comes back.
+    Accepts {key: (x, y)} or {key: {"x": .., "y": .., "w": .., "h": ..}}.
+    x/y are required; w/h are optional and clamped, so a card can be
+    resized through the same call that moves it. Unknown keys and
+    unparseable numbers are skipped, and the count of rows actually
+    written comes back.
     """
     written = 0
     for key, raw in (positions or {}).items():  # type: ignore[union-attr]
@@ -1160,12 +1283,42 @@ def set_node_positions(conn: sqlite3.Connection, uid: str, positions: object) ->
             x, y = float(pair[0]), float(pair[1])
         except (TypeError, ValueError, IndexError, KeyError):
             continue
+        sets, params = ["x = ?", "y = ?"], [x, y]
+        if isinstance(raw, dict):
+            w = _clamp(raw.get("w"), NODE_MIN_W, NODE_MAX_W) if raw.get("w") is not None else None
+            h = _clamp(raw.get("h"), NODE_MIN_H, NODE_MAX_H) if raw.get("h") is not None else None
+            if w is not None:
+                sets.append("w = ?")
+                params.append(w)
+            if h is not None:
+                sets.append("h = ?")
+                params.append(h)
+        params += [uid, key]
         cur = conn.execute(
-            "UPDATE diagram_nodes SET x = ?, y = ? WHERE memory_uid = ? AND node_key = ?",
-            (x, y, uid, key),
+            f"UPDATE diagram_nodes SET {', '.join(sets)} WHERE memory_uid = ? AND node_key = ?",
+            params,
         )
         written += cur.rowcount
     return written
+
+
+def reset_node_boxes(conn: sqlite3.Connection, uid: str, keys: object = None) -> int:
+    """Drop stored sizes so the shapes' defaults apply again.
+
+    The way back from a resize, per card or for the whole flow -- the same
+    role relayout_diagram plays for positions.
+    """
+    if keys:
+        rows = 0
+        for key in keys:  # type: ignore[union-attr]
+            rows += conn.execute(
+                "UPDATE diagram_nodes SET w = NULL, h = NULL "
+                "WHERE memory_uid = ? AND node_key = ?", (uid, key),
+            ).rowcount
+        return rows
+    return conn.execute(
+        "UPDATE diagram_nodes SET w = NULL, h = NULL WHERE memory_uid = ?", (uid,)
+    ).rowcount
 
 
 def relayout_diagram(conn: sqlite3.Connection, uid: str) -> int:
@@ -1177,7 +1330,8 @@ def relayout_diagram(conn: sqlite3.Connection, uid: str) -> int:
     if get_diagram_row(conn, uid) is None:
         return 0
     nodes, edges = _load_graph(conn, uid)
-    return set_node_positions(conn, uid, _layout_graph(nodes, edges))
+    return set_node_positions(
+        conn, uid, _layout_graph(nodes, edges, _font_scale(conn, uid)))
 
 
 def add_node_link(
@@ -1253,13 +1407,17 @@ def get_diagram(conn: sqlite3.Connection, uid: str) -> dict | None:
     if d is None:
         return None
     nodes, edges = _load_graph(conn, uid)
+    loops = loop_edges(nodes, edges)
     return {
         "uid": uid,
         "kind": d["kind"],
         "title": d["title"],
         "summary": d["summary"],
+        "font_scale": float(d["font_scale"] or 1),
         "nodes": nodes,
-        "edges": edges,
+        # `loops` is derived, never stored: it says the edge closes a cycle,
+        # which is why it is drawn dashed and pointing back
+        "edges": [dict(e, loops=(e["from"], e["to"]) in loops) for e in edges],
         "links": [dict(r) for r in get_node_links(conn, uid)],
     }
 

@@ -175,6 +175,43 @@ def test_layout_spreads_siblings_across_a_row(conn):
     assert pos["write"]["x"] != pos["done"]["x"]
 
 
+def test_store_predating_the_size_columns_is_migrated(tmp_path):
+    """The columns arrived after the tables did, in a live store.
+
+    `CREATE TABLE IF NOT EXISTS` -- how every other change here migrates --
+    is a no-op once the table exists, so a column added later needs the
+    explicit pass. This builds the older table shape by hand and checks
+    that opening it repairs and then works.
+    """
+    import sqlite3
+
+    path = tmp_path / "old.db"
+    raw = sqlite3.connect(path)
+    raw.executescript("""
+        CREATE TABLE diagrams (
+            memory_uid TEXT PRIMARY KEY, kind TEXT NOT NULL DEFAULT 'flowchart',
+            title TEXT NOT NULL DEFAULT '', summary TEXT NOT NULL DEFAULT '');
+        CREATE TABLE diagram_nodes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, memory_uid TEXT NOT NULL,
+            node_key TEXT NOT NULL, shape TEXT NOT NULL DEFAULT 'step',
+            label TEXT NOT NULL, note TEXT NOT NULL DEFAULT '',
+            seq INTEGER NOT NULL DEFAULT 0, x REAL NOT NULL, y REAL NOT NULL);
+    """)
+    raw.commit()
+    raw.close()
+
+    with db.connect(path) as c:
+        cols = lambda t: {r["name"] for r in c.execute(f"PRAGMA table_info({t})")}
+        assert "font_scale" in cols("diagrams")
+        assert {"w", "h"} <= cols("diagram_nodes")
+        uid = _mk(c)
+        assert db.get_diagram(c, uid)["font_scale"] == 1.0
+        assert _nodes(c, uid)["load"]["w"] is None
+
+    with db.connect(path) as c:      # idempotent: opening it again is fine
+        assert db.get_diagram(c, uid)["title"] == "Nightly export routine"
+
+
 def test_layout_leaves_more_room_than_the_boxes_take(conn):
     """A box is 170x48 in these units; a packed flow is a wall of text.
 
@@ -232,6 +269,129 @@ def test_drag_accepts_a_dict_pair_and_skips_junk(conn):
     })
     assert moved == 1
     assert (_nodes(conn, uid)["load"]["x"], _nodes(conn, uid)["load"]["y"]) == (5.0, 6.0)
+
+
+def test_resize_rides_the_same_call_and_is_clamped(conn):
+    """A card resized from a corner moves its centre too, so both go together."""
+    uid = _mk(conn)
+    assert db.set_node_positions(conn, uid, {
+        "load": {"x": 10, "y": 20, "w": 300, "h": 120}}) == 1
+    load = _nodes(conn, uid)["load"]
+    assert (load["w"], load["h"]) == (300.0, 120.0)
+
+    db.set_node_positions(conn, uid, {"load": {"x": 10, "y": 20, "w": 9999, "h": 1}})
+    load = _nodes(conn, uid)["load"]
+    assert (load["w"], load["h"]) == (db.NODE_MAX_W, db.NODE_MIN_H)
+
+    # and a plain move leaves the size alone
+    db.set_node_positions(conn, uid, {"load": (1.0, 2.0)})
+    assert _nodes(conn, uid)["load"]["w"] == db.NODE_MAX_W
+
+
+def test_resizing_is_not_an_edit_either(conn):
+    uid = _mk(conn)
+    before = db.get_memory(conn, uid)
+    db.set_node_positions(conn, uid, {"load": {"x": 1, "y": 2, "w": 260, "h": 90}})
+    after = db.get_memory(conn, uid)
+    assert (after["content"], after["updated_at"]) == (before["content"], before["updated_at"])
+
+
+def test_reset_boxes_restores_the_shape_defaults(conn):
+    uid = _mk(conn)
+    db.set_node_positions(conn, uid, {
+        "load": {"x": 1, "y": 2, "w": 260, "h": 90},
+        "check": {"x": 3, "y": 4, "w": 300, "h": 120}})
+    assert db.reset_node_boxes(conn, uid, ["load"]) == 1
+    assert _nodes(conn, uid)["load"]["w"] is None
+    assert _nodes(conn, uid)["check"]["w"] == 300.0
+
+    assert db.reset_node_boxes(conn, uid) == len(NODES)
+    assert all(n["w"] is None and n["h"] is None for n in _nodes(conn, uid).values())
+
+
+def test_default_box_follows_the_shape(conn):
+    assert db.node_box({"shape": "step"}) == (db.NODE_DEFAULT_W, db.NODE_DEFAULT_H)
+    assert db.node_box({"shape": "decision"}) == (db.NODE_DEFAULT_W, db.DECISION_DEFAULT_H)
+    assert db.node_box({"shape": "step", "w": 400, "h": 200}) == (400.0, 200.0)
+
+
+def test_a_wide_card_widens_the_arrangement(conn):
+    """Otherwise the next auto-arrange drops a resized card on its neighbour."""
+    uid = _mk(conn, edges=[
+        {"from": "start", "to": "load"},
+        {"from": "load", "to": "check"},
+        {"from": "check", "to": "write", "label": "yes"},
+        {"from": "check", "to": "done", "label": "no"},
+    ])
+    narrow = abs(_nodes(conn, uid)["write"]["x"] - _nodes(conn, uid)["done"]["x"])
+    db.set_node_positions(conn, uid, {"write": {"x": 0, "y": 0, "w": db.NODE_MAX_W}})
+    db.relayout_diagram(conn, uid)
+    wide = abs(_nodes(conn, uid)["write"]["x"] - _nodes(conn, uid)["done"]["x"])
+    assert wide >= narrow + (db.NODE_MAX_W - db.NODE_DEFAULT_W)
+
+
+def test_font_scale_is_stored_clamped_and_is_not_content(conn):
+    uid = _mk(conn)
+    before = db.get_memory(conn, uid)["content"]
+    assert db.get_diagram(conn, uid)["font_scale"] == 1.0
+
+    assert db.set_diagram_meta(conn, uid, font_scale=1.6) == (True, [])
+    assert db.get_diagram(conn, uid)["font_scale"] == 1.6
+    assert db.get_memory(conn, uid)["content"] == before      # how it looks, not what it says
+    assert db.get_diagram(conn, uid)["title"] == "Nightly export routine"
+
+    db.set_diagram_meta(conn, uid, font_scale=99)
+    assert db.get_diagram(conn, uid)["font_scale"] == db.FONT_SCALE_MAX
+    assert "font_scale" in db.set_diagram_meta(conn, uid, font_scale="huge")[1][0]
+
+
+def test_bigger_text_grows_the_default_boxes_and_the_arrangement(conn):
+    """Otherwise 'bigger font' just truncates every label in an unchanged card."""
+    assert db.node_box({"shape": "step"}, 2) == (db.NODE_DEFAULT_W * 2, db.NODE_DEFAULT_H * 2)
+    # a hand-sized box is the user's choice and stays put
+    assert db.node_box({"shape": "step", "w": 400, "h": 200}, 2) == (400.0, 200.0)
+
+    # a branch, so 'write' and 'done' are side by side and the pitch is visible
+    uid = _mk(conn, edges=[
+        {"from": "start", "to": "load"},
+        {"from": "load", "to": "check"},
+        {"from": "check", "to": "write", "label": "yes"},
+        {"from": "check", "to": "done", "label": "no"},
+    ])
+    before = _nodes(conn, uid)
+    narrow = abs(before["write"]["x"] - before["done"]["x"])
+
+    db.set_diagram_meta(conn, uid, font_scale=2)
+    after = _nodes(conn, uid)
+    # the whole arrangement scales with it, so a hand-arranged flow stays arranged
+    for key, node in before.items():
+        assert after[key]["x"] == pytest.approx(node["x"] * 2)
+        assert after[key]["y"] == pytest.approx(node["y"] * 2)
+
+    db.relayout_diagram(conn, uid)
+    assert abs(_nodes(conn, uid)["write"]["x"] - _nodes(conn, uid)["done"]["x"]) > narrow
+
+
+def test_loop_closers_come_from_the_graph_not_the_coordinates(conn):
+    """Dashed means 'closes a cycle'. Dragging a card must not change that."""
+    uid = _mk(conn, nodes=[
+        {"key": "start", "shape": "start", "label": "Receive the trigger"},
+        {"key": "call", "label": "Call the endpoint"},
+        {"key": "ok", "shape": "decision", "label": "Accepted?"},
+        {"key": "done", "shape": "end", "label": "Report the run"},
+    ], edges=[
+        {"from": "start", "to": "call"},
+        {"from": "call", "to": "ok"},
+        {"from": "ok", "to": "call", "label": "no, retry"},
+        {"from": "ok", "to": "done", "label": "yes"},
+    ])
+    loops = {(e["from"], e["to"]) for e in db.get_diagram(conn, uid)["edges"] if e["loops"]}
+    assert loops == {("ok", "call")}
+
+    # drag 'done' above 'start': the flow is unchanged, so the marks are too
+    db.set_node_positions(conn, uid, {"done": (0.0, -5000.0)})
+    again = {(e["from"], e["to"]) for e in db.get_diagram(conn, uid)["edges"] if e["loops"]}
+    assert again == loops
 
 
 def test_relayout_discards_dragged_positions(conn):
@@ -743,6 +903,34 @@ def test_api_layout_needs_a_positions_object(client):
     assert client.post(f"/api/diagrams/{uid}/layout", json={}).status_code == 400
     assert client.post(f"/api/diagrams/{uid}/layout",
                        json={"positions": [["load", 1, 2]]}).status_code == 400
+
+
+def test_api_layout_carries_a_resize_and_can_undo_it(client):
+    uid = _create(client)
+    res = client.post(f"/api/diagrams/{uid}/layout", json={
+        "positions": {"check": {"x": 0, "y": 0, "w": 320, "h": 140}}})
+    assert res.json() == {"ok": True, "moved": 1}
+    node = lambda: next(n for n in client.get(f"/api/diagrams/{uid}").json()["nodes"]
+                        if n["key"] == "check")
+    assert (node()["w"], node()["h"]) == (320.0, 140.0)
+
+    assert client.post(f"/api/diagrams/{uid}/layout",
+                       json={"reset_boxes": ["check"]}).json()["moved"] == 1
+    assert (node()["w"], node()["h"]) == (None, None)
+
+
+def test_api_meta_sets_the_font_scale(client):
+    uid = _create(client)
+    assert client.post(f"/api/diagrams/{uid}/meta", json={"font_scale": 1.25}).status_code == 200
+    assert client.get(f"/api/diagrams/{uid}").json()["font_scale"] == 1.25
+    assert client.post(f"/api/diagrams/{uid}/meta", json={"font_scale": "big"}).status_code == 400
+
+
+def test_api_marks_which_edges_close_a_loop(client):
+    uid = _create(client)
+    client.post(f"/api/diagrams/{uid}/edge", json={"from": "done", "to": "load"})
+    edges = client.get(f"/api/diagrams/{uid}").json()["edges"]
+    assert {(e["from"], e["to"]) for e in edges if e["loops"]} == {("done", "load")}
 
 
 def test_api_relayout_resets_a_drag(client):
