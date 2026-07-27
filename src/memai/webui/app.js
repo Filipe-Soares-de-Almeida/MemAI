@@ -106,6 +106,11 @@ function copyUid(uid) {
 
 function openModal({ title, bodyHTML, footHTML }) {
   closeModal();
+  /* A hover tip outlives the pointer that summoned it -- open a modal from
+     the canvas (or from a context menu over a card) and the tip is left
+     floating on top of the dialog, because nothing moved off the card to
+     dismiss it. Whatever is opening now owns the screen. */
+  tipHide();
   const scrim = document.createElement('div');
   scrim.className = 'modal-scrim';
   scrim.innerHTML = `<div class="modal" role="dialog" aria-label="${esc(title)}">
@@ -169,6 +174,7 @@ function closeCtxMenu() {
 
 function openCtxMenu(x, y, items) {
   closeCtxMenu();
+  tipHide();            /* same reason as openModal */
   const live = items.filter(Boolean);
   if (!live.some(i => !i.sep)) return;
   const el = document.createElement('div');
@@ -1510,7 +1516,7 @@ async function renderDiagram(view, params) {
     <div class="dg-shell">
       <div class="dg-stage" id="dgStage">
         <canvas id="dgCanvas"></canvas>
-        <div class="dg-tools">
+        <div class="dg-tools" id="dgTools">
           <button class="btn btn-sm" id="dgMode"></button>
           <button class="btn btn-sm" id="dgAdd" data-editonly>${t('dg.add')}</button>
           <button class="btn btn-sm" id="dgConnect" data-editonly>${t('dg.connect')}</button>
@@ -1616,6 +1622,29 @@ async function renderDiagram(view, params) {
       body: { key: node.key, label: out.label, shape: out.shape } }), t('dg.saved'));
   }
 
+  /* The long half of a step. Reachable from the inspector, and from the card
+     itself -- the marker that used to advertise a note is gone, and hovering
+     only reads it. */
+  function editNote(node) {
+    const stored = data.nodes.find(n => n.key === node.key) || node;
+    const m = openModal({
+      title: t('dg.note.title', { key: esc(node.key) }),
+      bodyHTML: `<div class="field"><label>${t('dg.note')}</label>
+          <textarea id="dgnNote" rows="9" style="min-height:210px"
+                    placeholder="${t('dg.notePh')}">${esc(stored.note || '')}</textarea></div>
+        <div class="dg-empty" style="margin-top:9px">${t('dg.note.hint')}</div>`,
+      footHTML: `<button class="btn" data-x>${t('common.cancel')}</button>
+                 <button class="btn btn-solid" data-ok>${t('common.save')}</button>`,
+    });
+    m.querySelector('[data-x]').onclick = closeModal;
+    m.querySelector('[data-ok]').onclick = async () => {
+      const note = $('#dgnNote').value;
+      closeModal();
+      await act(() => api(`/api/diagrams/${uid}/node`, {
+        body: { key: node.key, note } }), t('dg.saved'));
+    };
+  }
+
   async function deleteStep(key) {
     const ok = await confirmModal({
       title: t('dg.confirmDelete.title'),
@@ -1674,14 +1703,16 @@ async function renderDiagram(view, params) {
     if (node) {
       const stored = data.nodes.find(n => n.key === node.key);
       openCtxMenu(x, y, [
-        (stored?.w != null || stored?.h != null)
-          && { label: t('dg.ctx.resetSize'), run: () => resetCardSize(node.key) },
+        { label: t('dg.ctx.nodeEdit'), run: () => editStep(node) },
+        { label: stored?.note ? t('dg.ctx.nodeNoteEdit') : t('dg.ctx.nodeNoteAdd'),
+          run: () => editNote(node) },
         { label: t('dg.ctx.nodeConnect'),
           /* the engine reports the pending end through onConnectProgress,
              so the hint is already right -- only the button needs telling */
           run: () => { diagramEngine.startConnectFrom(node.key);
                        $('#dgConnect').classList.add('btn-solid'); } },
-        { label: t('dg.ctx.nodeEdit'), run: () => editStep(node) },
+        (stored?.w != null || stored?.h != null)
+          && { label: t('dg.ctx.resetSize'), run: () => resetCardSize(node.key) },
         { sep: true },
         { label: t('dg.deleteStep'), danger: true, run: () => deleteStep(node.key) },
       ]);
@@ -1791,7 +1822,7 @@ async function renderDiagram(view, params) {
     side.innerHTML = `
       <div class="dg-panel">
         <h3>${t('dg.step')} <span class="dg-key">${esc(node.key)}</span></h3>
-        ${editing ? '' : `<div class="dg-empty" style="margin-bottom:9px">${t('dg.readOnlyNote')}</div>`}
+        ${editing ? '' : `<div class="dg-empty">${t('dg.readOnlyNote')}</div>`}
         <div class="field"><label>${t('dg.label')}</label>
           <input type="text" id="dgLabel" value="${esc(node.label)}"${ro}></div>
         <div class="field"><label>${t('dg.shape')}</label>
@@ -1814,7 +1845,7 @@ async function renderDiagram(view, params) {
 
       <div class="dg-panel">
         <h3>${t('dg.links')}</h3>
-        <div class="dg-empty" style="margin-bottom:8px">${t('dg.linksHint')}</div>
+        <div class="dg-empty">${t('dg.linksHint')}</div>
         <div class="dg-links">
           ${links.map(l => `
             <div class="dg-link">
@@ -1825,7 +1856,7 @@ async function renderDiagram(view, params) {
                       title="${t('dg.link.remove')}">✕</button>` : ''}
             </div>`).join('') || `<div class="dg-empty">${t('dg.links.empty')}</div>`}
         </div>
-        ${editing ? `<div class="rel-add" style="margin-top:10px">
+        ${editing ? `<div class="rel-add">
           <div class="picker">
             <input type="text" id="dgTarget" placeholder="${t('dg.link.target')}" autocomplete="off">
             <div class="picker-results" id="dgResults" hidden></div>
@@ -1905,6 +1936,12 @@ async function renderDiagram(view, params) {
     routing,
     onEditEdgeLabel: editEdgeLabel,
     onContextMenu: canvasMenu,
+    /* the floating toolbar and hint strip cover part of the canvas; the fit
+       has to stay out from under them */
+    insets: () => ({
+      top: ($('#dgTools')?.offsetHeight || 0) + 18,
+      bottom: $('#dgHint')?.hidden === false ? ($('#dgHint').offsetHeight || 0) + 18 : 0,
+    }),
     onSelect: node => { selected = node ? node.key : null; paintSide(); },
     onMove: positions => { Object.assign(pending, positions); flushLayout(); },
     onConnectProgress: from => paintHint(from),

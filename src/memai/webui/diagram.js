@@ -117,6 +117,13 @@ export class DiagramEditor {
     this._wheel = e => this.onWheel(e);
     this._click = e => this.onClick(e);
     this._context = e => this.onContext(e);
+    /* the pointer can leave the canvas without a last mousemove inside it --
+       straight onto the inspector, or onto a dialog -- and the hover tip has
+       nothing left to dismiss it */
+    this._leave = () => {
+      this.hooks.tipHide?.();
+      if (this.hover || this.hoverLabel) { this.hover = null; this.hoverLabel = null; this.requestDraw(); }
+    };
     this._resize = () => { this.resize(); this.requestDraw(); };
 
     canvas.addEventListener('mousedown', this._down);
@@ -124,6 +131,7 @@ export class DiagramEditor {
     canvas.addEventListener('wheel', this._wheel, { passive: false });
     canvas.addEventListener('click', this._click);
     canvas.addEventListener('contextmenu', this._context);
+    canvas.addEventListener('mouseleave', this._leave);
     addEventListener('mouseup', this._up);
 
     /* Three overlapping triggers, on purpose. The stage changes size
@@ -149,6 +157,7 @@ export class DiagramEditor {
     this.cv.removeEventListener('wheel', this._wheel);
     this.cv.removeEventListener('click', this._click);
     this.cv.removeEventListener('contextmenu', this._context);
+    this.cv.removeEventListener('mouseleave', this._leave);
     removeEventListener('mouseup', this._up);
     removeEventListener('resize', this._resize);
     this._ro?.disconnect();
@@ -357,6 +366,11 @@ export class DiagramEditor {
     this.cx.setTransform(dpr, 0, 0, dpr, 0, 0);
   }
 
+  /* Fit into the part of the stage that is actually free. The toolbar and
+     the hint strip float ON the canvas, so a plain centre-and-scale parks
+     the first row of a re-arranged flow behind the buttons -- the caller
+     reports how much room they take (hooks.insets) and the fit centres in
+     what is left, not in the whole stage. */
   fit() {
     if (!this.nodes.length || !this.w) return;
     const xs = this.nodes.flatMap(n => [n.x - n.w / 2, n.x + n.w / 2]);
@@ -364,12 +378,15 @@ export class DiagramEditor {
     if (this.laneSpan) xs.push(this.laneSpan.left, this.laneSpan.right);
     const minX = Math.min(...xs), maxX = Math.max(...xs);
     const minY = Math.min(...ys), maxY = Math.max(...ys);
-    const pad = 48;
-    this.scale = Math.min(1.4, Math.min(
-      this.w / (maxX - minX + pad * 2),
-      this.h / (maxY - minY + pad * 2)));
-    this.tx = this.w / 2 - (minX + maxX) / 2 * this.scale;
-    this.ty = this.h / 2 - (minY + maxY) / 2 * this.scale;
+    const pad = 22;
+    const ins = this.hooks.insets?.() || {};
+    const top = pad + (ins.top || 0), bottom = pad + (ins.bottom || 0);
+    const left = pad + (ins.left || 0), right = pad + (ins.right || 0);
+    const roomW = Math.max(40, this.w - left - right);
+    const roomH = Math.max(40, this.h - top - bottom);
+    this.scale = Math.min(1.4, Math.min(roomW / (maxX - minX), roomH / (maxY - minY)));
+    this.tx = left + roomW / 2 - (minX + maxX) / 2 * this.scale;
+    this.ty = top + roomH / 2 - (minY + maxY) / 2 * this.scale;
     this.requestDraw();
   }
 
@@ -1080,10 +1097,11 @@ export class DiagramEditor {
     const top = n.y - (lines.length - 1) * lh / 2;
     lines.forEach((line, i) => cx.fillText(line, n.x, top + i * lh));
 
-    /* a step that explains itself carries a marker, so the notes and
-       links attached to it are discoverable without clicking every box */
-    const badges = (n.note ? '𝒊' : '') + (this.linkCount[n.key] ? ` ⇱${this.linkCount[n.key]}` : '');
-    if (badges.trim() && this.scale > 0.45) {
+    /* Attached memories carry a marker, because nothing else on the canvas
+       hints at them. A note does NOT: hovering the card shows it, and a
+       glyph on most of the cards of a documented flow is just noise. */
+    const badges = this.linkCount[n.key] ? `⇱${this.linkCount[n.key]}` : '';
+    if (badges && this.scale > 0.45) {
       const bpx = BADGE_PX * this.fontScale;
       cx.font = `${bpx}px ${FONT_MONO}`;
       cx.fillStyle = terminal ? 'rgba(0,0,0,.6)' : this.colInk2;
@@ -1092,7 +1110,7 @@ export class DiagramEditor {
          corner of the box is empty space on a diamond and outside the
          curve on a stadium, which is where this used to land */
       const dy = -n.h / 2 + bpx * 0.9;
-      cx.fillText(badges.trim(), n.x + DiagramEditor.halfWidthAt(n, dy) - 5, n.y + dy + bpx / 2);
+      cx.fillText(badges, n.x + DiagramEditor.halfWidthAt(n, dy) - 5, n.y + dy + bpx / 2);
     }
 
     if (this.resizable(n)) this.drawHandles(n);

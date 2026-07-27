@@ -1032,8 +1032,10 @@ textarea { resize: vertical; min-height: 110px; width: 100%; font-family: var(--
 
 .dg-shell {
   display: grid;
-  grid-template-columns: 1fr 320px;
-  gap: 12px;
+  /* the inspector holds a step's whole note, so it gets real width -- at
+     320px the note was a four-word column with a scrollbar */
+  grid-template-columns: minmax(0, 1fr) clamp(360px, 26vw, 460px);
+  gap: 14px;
   align-items: start;
 }
 .dg-stage {
@@ -1081,26 +1083,35 @@ textarea { resize: vertical; min-height: 110px; width: 100%; font-family: var(--
 .dg-editable:hover { color: var(--accent); }
 
 .dg-side {
-  display: grid; gap: 12px;
+  display: grid; gap: 14px;
   position: sticky; top: 12px;
   min-width: 0;
 }
 .dg-panel {
+  /* a grid with one gap, rather than margins per child: the panel stacks a
+     heading, hints, fields and a button row, and every one of those used to
+     carry its own spacing (or none, which is how a label ended up sitting
+     on the input above it) */
+  display: grid; gap: 12px; align-content: start;
   background: var(--surface);
   border: 1px solid var(--line-soft);
   border-radius: var(--radius);
-  padding: 13px 14px;
+  padding: 15px 16px 16px;
   /* same guard as .dgl-card: a grid item defaults to min-width:auto and
      would widen past this fixed column rather than clip a long chip */
   min-width: 0;
 }
 .dg-panel > * { min-width: 0; }
 .dg-panel > h3 {
-  margin: 0 0 10px;
+  margin: 0;
+  display: flex; align-items: center; gap: 8px;
   font: 600 10.5px var(--font-m);
   letter-spacing: .09em; text-transform: uppercase;
   color: var(--ink-3);
 }
+.dg-panel .field > label { margin-bottom: 1px; }
+/* the note is the long-form half of a step, so give it room to be read */
+.dg-side textarea { min-height: 210px; line-height: 1.65; }
 .dg-empty { font-size: 11.5px; color: var(--ink-3); line-height: 1.6; }
 .dg-key {
   font: 500 11px var(--font-m);
@@ -1109,7 +1120,7 @@ textarea { resize: vertical; min-height: 110px; width: 100%; font-family: var(--
   border: 1px solid var(--line-soft);
   border-radius: 4px; padding: 1px 7px;
 }
-.dg-edges { display: grid; gap: 5px; margin-top: 4px; }
+.dg-edges { display: grid; gap: 5px; }
 .dg-edge {
   display: flex; align-items: center; gap: 6px;
   font-size: 11.5px; color: var(--ink-2);
@@ -1135,7 +1146,9 @@ textarea { resize: vertical; min-height: 110px; width: 100%; font-family: var(--
 .dg-link .snippet.clickable { cursor: pointer; }
 .dg-link .snippet.clickable:hover { color: var(--ink); }
 
-@media (max-width: 1100px) {
+/* the inspector's minimum plus a usable canvas needs this much window; below
+   it the two stack rather than squeezing the flow into a slot */
+@media (max-width: 1180px) {
   .dg-shell { grid-template-columns: 1fr; }
   .dg-side { position: static; }
   .dg-stage { height: 58vh; }
