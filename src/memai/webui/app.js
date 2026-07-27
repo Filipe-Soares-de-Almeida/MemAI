@@ -1,16 +1,20 @@
 /* MemAI admin SPA (vanilla JS ES module, no build step).
    Talks to the JSON API in memai/admin.py. Hash-routed views; the
-   memory record lives in a right-hand drawer; the graph is a small
-   canvas force-layout (O(n²) repulsion is fine at memory-store scale). */
+   memory record lives in a right-hand drawer; the relations graph is a
+   small canvas force-layout (O(n²) repulsion is fine at memory-store
+   scale). The diagram editor is the deliberate opposite -- its
+   coordinates come from the store, so it has no layout of its own; see
+   diagram.js. */
 
 import { I18N, t } from './i18n.js';
+import { DiagramEditor, NODE_SHAPES } from './diagram.js';
 
 /* ─── constants ─────────────────────────────────────────────────────── */
 
 const cssVar = name =>
   getComputedStyle(document.documentElement).getPropertyValue(name).trim();
 
-const TYPE_ORDER = ['note', 'checkpoint', 'anti_pattern', 'reasoning', 'handoff'];
+const TYPE_ORDER = ['note', 'checkpoint', 'anti_pattern', 'reasoning', 'handoff', 'diagram'];
 /* type colors live in admin.css (--t-*) — single source of truth */
 const TYPES = Object.fromEntries(
   TYPE_ORDER.map(t => [t, { color: cssVar(`--t-${t}`) || '#9e9e9e' }]));
@@ -174,8 +178,8 @@ async function getDomains(force = false) {
 /* ─── router ────────────────────────────────────────────────────────── */
 
 const VIEWS = { overview: renderOverview, memories: renderMemories,
-                graph: renderGraph, domains: renderDomains, maintenance: renderMaintenance,
-                optimization: renderOptimization };
+                graph: renderGraph, diagram: renderDiagram, domains: renderDomains,
+                maintenance: renderMaintenance, optimization: renderOptimization };
 let currentView = '';
 
 function parseHash() {
@@ -192,6 +196,10 @@ async function route() {
   currentView = name;
   document.querySelectorAll('.nav a').forEach(a =>
     a.classList.toggle('active', a.dataset.view === name));
+  /* both canvas engines listen on window; the innerHTML swap below drops
+     the canvas but not those listeners, so tear them down here */
+  graphEngine?.destroy(); graphEngine = null;
+  diagramEngine?.destroy(); diagramEngine = null;
   const view = $('#view');
   view.innerHTML = '<div class="loading"><span class="spin"></span></div>';
   try {
@@ -547,6 +555,12 @@ async function openRecord(uid) {
   try { m = await api(`/api/memories/${uid}`); }
   catch (err) { drawer.innerHTML = `<div class="empty">${esc(err.message)}</div>`; return; }
 
+  /* a diagram's content is generated from its graph, so the drawer shows
+     it read-only and sends editing to the canvas; every other type gets
+     the reverse view -- which flows have a step pointing at it */
+  const isDiagram = m.type === 'diagram';
+  const refs = m.referenced_by_diagrams || [];
+
   const rels = m.relations.map(r => `
     <div class="rel-row">
       <span class="rel-dir" title="${r.direction === 'out' ? t('dr.rel.out.title') : t('dr.rel.in.title')}">${r.direction === 'out' ? '→' : '←'}</span>
@@ -584,9 +598,12 @@ async function openRecord(uid) {
 
       <div class="section">
         <div class="section-label">${t('dr.content')}
-          <button class="btn btn-sm" id="dEdit">${t('common.edit')}</button>
+          ${isDiagram
+            ? `<button class="btn btn-sm btn-solid" id="dOpenEditor">${t('dr.openEditor')}</button>`
+            : `<button class="btn btn-sm" id="dEdit">${t('common.edit')}</button>`}
         </div>
         <pre class="content-pre" id="dContent">${esc(m.content)}</pre>
+        ${isDiagram ? `<div class="dg-empty" style="margin-top:8px">${t('dr.generated')}</div>` : `
         <div id="dEditBox" hidden style="display:grid;gap:9px;margin-top:10px">
           <textarea id="dEditText" rows="10"></textarea>
           <input type="text" id="dEditNote" placeholder="${t('dr.editNote.placeholder')}">
@@ -595,8 +612,19 @@ async function openRecord(uid) {
             <button class="btn" id="dEditCancel">${t('common.cancel')}</button>
             <span style="font-size:11px;color:var(--ink-4)">${t('dr.prevKept')}</span>
           </div>
-        </div>
+        </div>`}
       </div>
+      ${refs.length ? `
+      <div class="section">
+        <div class="section-label">${t('dr.inDiagrams')} <span style="letter-spacing:0;text-transform:none">(${refs.length})</span></div>
+        <div class="dg-links">
+          ${refs.map(r => `
+            <div class="dg-link">
+              <span class="dg-key">${esc(r.node_key)}</span>
+              <span class="snippet clickable" data-open="${esc(r.memory_uid)}">${esc(r.title)}${r.label ? ` · ${esc(r.label)}` : ''}</span>
+            </div>`).join('')}
+        </div>
+      </div>` : ''}
 
       <div class="section">
         <div class="section-label">${t('dr.metadata')}
@@ -670,20 +698,24 @@ async function openRecord(uid) {
   drawer.querySelectorAll('[data-fsession]').forEach(el =>
     el.addEventListener('click', () => { closeDrawer(); go('memories', { session: el.dataset.fsession, status: '' }); }));
 
-  /* edit content */
-  $('#dEdit').addEventListener('click', () => {
-    const box = $('#dEditBox');
-    box.hidden = !box.hidden;
-    if (!box.hidden) { $('#dEditText').value = m.content; $('#dEditText').focus(); }
-  });
-  $('#dEditCancel').addEventListener('click', () => { $('#dEditBox').hidden = true; });
-  $('#dEditSave').addEventListener('click', async () => {
-    try {
-      await api(`/api/memories/${uid}/content`, { body: { content: $('#dEditText').value, note: $('#dEditNote').value } });
-      toast(t('dr.contentUpdated'), 'ok');
-      openRecord(uid); refreshBehind();
-    } catch (err) { toast(err.message, 'bad'); }
-  });
+  /* edit content — a diagram is edited on its canvas instead */
+  if (isDiagram) {
+    $('#dOpenEditor').addEventListener('click', () => { closeDrawer(); go('diagram', { uid }); });
+  } else {
+    $('#dEdit').addEventListener('click', () => {
+      const box = $('#dEditBox');
+      box.hidden = !box.hidden;
+      if (!box.hidden) { $('#dEditText').value = m.content; $('#dEditText').focus(); }
+    });
+    $('#dEditCancel').addEventListener('click', () => { $('#dEditBox').hidden = true; });
+    $('#dEditSave').addEventListener('click', async () => {
+      try {
+        await api(`/api/memories/${uid}/content`, { body: { content: $('#dEditText').value, note: $('#dEditNote').value } });
+        toast(t('dr.contentUpdated'), 'ok');
+        openRecord(uid); refreshBehind();
+      } catch (err) { toast(err.message, 'bad'); }
+    });
+  }
 
   /* edit metadata */
   $('#dMeta').addEventListener('click', () => openMetaModal(m));
@@ -1208,6 +1240,351 @@ class ForceGraph {
     this.draw();
     requestAnimationFrame(this.loop);
   }
+}
+
+/* ═══ VIEW · diagram editor ═════════════════════════════════════════ */
+
+let diagramEngine = null;
+
+const shapeOptions = sel => NODE_SHAPES.map(s =>
+  `<option value="${s}"${s === sel ? ' selected' : ''}>${t(`dg.shape.${s}`)}</option>`).join('');
+
+/* One modal for "new step" and for retyping an existing one. Resolves to
+   {key, label, shape} or null. */
+function dgStepModal({ title, key = '', label = '', shape = 'step', lockKey = false }) {
+  return new Promise(resolve => {
+    const m = openModal({
+      title,
+      bodyHTML: `
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+          <div class="field"><label>${t('dg.key')}</label>
+            <input type="text" id="dgsKey" value="${esc(key)}" placeholder="${t('dg.keyPh')}"
+                   ${lockKey ? 'disabled' : ''} autocomplete="off"></div>
+          <div class="field"><label>${t('dg.shape')}</label>
+            <select id="dgsShape">${shapeOptions(shape)}</select></div>
+        </div>
+        <div class="field"><label>${t('dg.label')}</label>
+          <input type="text" id="dgsLabel" value="${esc(label)}" placeholder="${t('dg.labelPh')}"></div>
+        <div class="dg-empty">${t('dg.labelHint')}</div>`,
+      footHTML: `<button class="btn" data-x>${t('common.cancel')}</button>
+                 <button class="btn btn-solid" data-ok>${t('common.save')}</button>`,
+    });
+    m.querySelector('[data-x]').onclick = () => { closeModal(); resolve(null); };
+    m.querySelector('[data-ok]').onclick = () => {
+      const out = {
+        key: (lockKey ? key : $('#dgsKey').value).trim(),
+        label: $('#dgsLabel').value.trim(),
+        shape: $('#dgsShape').value,
+      };
+      closeModal();
+      resolve(out);
+    };
+  });
+}
+
+async function renderDiagram(view, params) {
+  const uid = params.get('uid') || '';
+  if (!uid) {
+    view.innerHTML = `<div class="empty">${t('dg.noUid')}</div>`;
+    return;
+  }
+  const mem = await api(`/api/memories/${uid}`);
+  if (mem.type !== 'diagram' || !mem.diagram) {
+    view.innerHTML = `<div class="empty">${t('dg.notDiagram')}</div>`;
+    return;
+  }
+  let data = mem.diagram;
+  let selected = null;
+
+  view.innerHTML = `<div class="anim">
+    <div class="view-head">
+      <h2 class="view-title" id="dgTitle">${esc(data.title)}</h2>
+      <div class="view-sub" id="dgSub"></div>
+    </div>
+    <div class="dg-shell">
+      <div class="dg-stage" id="dgStage">
+        <canvas id="dgCanvas"></canvas>
+        <div class="dg-tools">
+          <button class="btn btn-sm btn-solid" id="dgAdd">${t('dg.add')}</button>
+          <button class="btn btn-sm" id="dgConnect">${t('dg.connect')}</button>
+          <button class="btn btn-sm" id="dgArrange">${t('dg.arrange')}</button>
+          <button class="btn btn-sm" id="dgFit">${t('dg.center')}</button>
+          <button class="btn btn-sm" id="dgMeta">${t('dg.meta')}</button>
+          <button class="btn btn-sm" id="dgMermaid">${t('dg.mermaid')}</button>
+          <button class="btn btn-sm" id="dgRecord">${t('dg.record')}</button>
+        </div>
+        <div class="dg-hint" id="dgHint"></div>
+      </div>
+      <div class="dg-side" id="dgSide"></div>
+    </div>
+  </div>`;
+
+  /* ── layout persistence: optimistic on the canvas, batched to the API ── */
+  const pending = {};
+  const flushLayout = debounce(async () => {
+    const batch = { ...pending };
+    Object.keys(pending).forEach(k => delete pending[k]);
+    if (!Object.keys(batch).length) return;
+    try {
+      await api(`/api/diagrams/${uid}/layout`, { body: { positions: batch } });
+    } catch (err) {
+      /* the canvas is now lying about where things are; take the store's word */
+      toast(err.message, 'bad');
+      reload();
+    }
+  }, 450);
+
+  async function reload({ fit = false } = {}) {
+    data = await api(`/api/diagrams/${uid}`);
+    diagramEngine.setData(data, { fit });
+    if (selected && !data.nodes.some(n => n.key === selected)) selected = null;
+    if (selected) diagramEngine.select(selected);
+    paintSide();
+    paintHint();
+    $('#dgTitle').textContent = data.title;
+  }
+
+  const act = async (fn, okMsg) => {
+    try { await fn(); if (okMsg) toast(okMsg, 'ok'); await reload(); }
+    catch (err) { toast(err.message, 'bad'); }
+  };
+
+  /* ── hint strip: connect-mode state, else unreachable steps ─────────── */
+  function paintHint(connectFrom) {
+    const el = $('#dgHint');
+    const orphans = diagramEngine ? [...diagramEngine.orphans] : [];
+    if (diagramEngine?.connectMode) {
+      el.className = 'dg-hint';
+      el.textContent = connectFrom
+        ? t('dg.hint.connectTarget', { key: connectFrom.key })
+        : t('dg.hint.connectSource');
+    } else if (orphans.length) {
+      el.className = 'dg-hint warn';
+      el.textContent = t('dg.hint.orphans', { keys: orphans.join(', ') });
+    } else {
+      el.className = 'dg-hint';
+      el.textContent = t('dg.hint.idle');
+    }
+    $('#dgSub').textContent = t('dg.sub', {
+      n: data.nodes.length, m: data.edges.length, l: data.links.length,
+    });
+  }
+
+  /* ── inspector ─────────────────────────────────────────────────────── */
+  function paintSide() {
+    const side = $('#dgSide');
+    const node = data.nodes.find(n => n.key === selected);
+    if (!node) {
+      side.innerHTML = `<div class="dg-panel">
+        <h3>${t('dg.step')}</h3>
+        <div class="dg-empty">${t('dg.selectPrompt')}</div>
+      </div>
+      ${data.summary ? `<div class="dg-panel"><h3>${t('dg.summary')}</h3>
+        <div class="dg-empty">${esc(data.summary)}</div></div>` : ''}`;
+      return;
+    }
+    const out = data.edges.filter(e => e.from === node.key);
+    const inc = data.edges.filter(e => e.to === node.key);
+    const edgeRow = (e, dir) => `
+      <div class="dg-edge">
+        <span class="dg-arrow">${dir === 'out' ? '→' : '←'}</span>
+        <span class="dg-key">${esc(dir === 'out' ? e.to : e.from)}</span>
+        ${e.label ? `<span class="dg-label">${esc(e.label)}</span>` : ''}
+        <span class="spacer"></span>
+        <button class="icon-btn danger" data-deledge="${esc(e.from)}|${esc(e.to)}"
+                title="${t('dg.edge.remove')}">✕</button>
+      </div>`;
+    const links = data.links.filter(l => l.node_key === node.key);
+
+    side.innerHTML = `
+      <div class="dg-panel">
+        <h3>${t('dg.step')} <span class="dg-key">${esc(node.key)}</span></h3>
+        <div class="field"><label>${t('dg.label')}</label>
+          <input type="text" id="dgLabel" value="${esc(node.label)}"></div>
+        <div class="field"><label>${t('dg.shape')}</label>
+          <select id="dgShape">${shapeOptions(node.shape)}</select></div>
+        <div class="field"><label>${t('dg.note')}</label>
+          <textarea id="dgNote" rows="5" placeholder="${t('dg.notePh')}">${esc(node.note)}</textarea></div>
+        <div class="act-row">
+          <button class="btn btn-solid btn-sm" id="dgSave">${t('common.save')}</button>
+          <button class="btn btn-danger btn-sm" id="dgDel">${t('dg.deleteStep')}</button>
+        </div>
+      </div>
+
+      <div class="dg-panel">
+        <h3>${t('dg.edges')}</h3>
+        <div class="dg-edges">
+          ${[...out.map(e => edgeRow(e, 'out')), ...inc.map(e => edgeRow(e, 'in'))].join('')
+            || `<div class="dg-empty">${t('dg.edges.empty')}</div>`}
+        </div>
+      </div>
+
+      <div class="dg-panel">
+        <h3>${t('dg.links')}</h3>
+        <div class="dg-empty" style="margin-bottom:8px">${t('dg.linksHint')}</div>
+        <div class="dg-links">
+          ${links.map(l => `
+            <div class="dg-link">
+              <span class="type-tag ${typeClass(l.peer.type)}" style="flex:none"><span class="dot"></span>${esc(l.peer.type || '?')}</span>
+              <span class="snippet clickable" data-open="${esc(l.target_uid)}">${esc(l.peer.snippet || l.target_uid)}</span>
+              <button class="icon-btn danger" data-dellink="${esc(l.target_uid)}"
+                      title="${t('dg.link.remove')}">✕</button>
+            </div>`).join('') || `<div class="dg-empty">${t('dg.links.empty')}</div>`}
+        </div>
+        <div class="rel-add" style="margin-top:10px">
+          <div class="picker">
+            <input type="text" id="dgTarget" placeholder="${t('dg.link.target')}" autocomplete="off">
+            <div class="picker-results" id="dgResults" hidden></div>
+          </div>
+          <div class="act-row">
+            <input type="text" id="dgRelType" list="dgRelDL" value="explains" style="flex:1">
+            <button class="btn btn-sm" id="dgAttach">${t('dg.link.attach')}</button>
+          </div>
+          <datalist id="dgRelDL">
+            ${['explains', 'contradicts', 'relates_to'].map(r => `<option value="${r}">`).join('')}
+          </datalist>
+        </div>
+      </div>`;
+
+    /* node fields */
+    $('#dgSave').onclick = () => act(() => api(`/api/diagrams/${uid}/node`, { body: {
+      key: node.key, label: $('#dgLabel').value,
+      shape: $('#dgShape').value, note: $('#dgNote').value } }), t('dg.saved'));
+
+    $('#dgDel').onclick = async () => {
+      const ok = await confirmModal({
+        title: t('dg.confirmDelete.title'),
+        body: t('dg.confirmDelete.body', { key: esc(node.key) }),
+        okLabel: t('dg.deleteStep'), danger: true });
+      if (!ok) return;
+      selected = null;
+      await act(() => api(`/api/diagrams/${uid}/node`, {
+        body: { key: node.key, delete: true } }), t('dg.deleted'));
+    };
+
+    side.querySelectorAll('[data-deledge]').forEach(b => b.onclick = () => {
+      const [from, to] = b.dataset.deledge.split('|');
+      act(() => api(`/api/diagrams/${uid}/edge`, {
+        body: { from, to, delete: true } }), t('dg.disconnected'));
+    });
+
+    /* links */
+    side.querySelectorAll('[data-open]').forEach(el =>
+      el.onclick = () => openRecord(el.dataset.open));
+    side.querySelectorAll('[data-dellink]').forEach(b => b.onclick = () =>
+      act(() => api(`/api/diagrams/${uid}/link`, { body: {
+        node_key: node.key, target_uid: b.dataset.dellink, delete: true } }), t('dg.unlinked')));
+
+    let pick = null;
+    const input = $('#dgTarget'), results = $('#dgResults');
+    const lookup = debounce(async () => {
+      try {
+        const r = await api(`/api/lookup?q=${encodeURIComponent(input.value.trim())}&exclude=${uid}`);
+        results.innerHTML = r.items.map(it => `
+          <div class="picker-item" data-pick="${esc(it.uid)}">
+            <span class="dot" style="--c:${typeColor(it.type)}"></span>
+            <span class="uid-chip" style="cursor:inherit">${esc(it.uid)}</span>
+            <span class="snippet">${esc(it.snippet)}</span>
+          </div>`).join('') || `<div class="picker-item">${t('lookup.empty')}</div>`;
+        results.hidden = false;
+        results.querySelectorAll('[data-pick]').forEach(it => it.addEventListener('mousedown', () => {
+          pick = it.dataset.pick;
+          input.value = pick;
+          results.hidden = true;
+        }));
+      } catch { /* lookup is best-effort */ }
+    }, 280);
+    input.addEventListener('input', () => { pick = null; lookup(); });
+    input.addEventListener('focus', lookup);
+    input.addEventListener('blur', () => setTimeout(() => { results.hidden = true; }, 180));
+
+    $('#dgAttach').onclick = () => {
+      const target = pick || input.value.trim();
+      if (!target) { toast(t('dg.link.pickTarget'), 'bad'); return; }
+      act(() => api(`/api/diagrams/${uid}/link`, { body: {
+        node_key: node.key, target_uid: target,
+        relation_type: $('#dgRelType').value.trim() } }), t('dg.linked'));
+    };
+  }
+
+  /* ── engine ────────────────────────────────────────────────────────── */
+  diagramEngine?.destroy();
+  diagramEngine = new DiagramEditor($('#dgCanvas'), data, {
+    tipShow, tipHide,
+    onSelect: node => { selected = node ? node.key : null; paintSide(); },
+    onMove: positions => { Object.assign(pending, positions); flushLayout(); },
+    onConnectProgress: from => paintHint(from),
+    onConnect: async (from, to) => {
+      const label = await promptModal({
+        title: t('dg.edgeLabel.title'),
+        body: t('dg.edgeLabel.body', { from: esc(from), to: esc(to) }),
+        label: t('dg.edgeLabel.label'), placeholder: t('dg.edgeLabel.ph'),
+        okLabel: t('dg.connectOk'),
+      });
+      if (label === null) { paintHint(); return; }
+      await act(() => api(`/api/diagrams/${uid}/edge`, {
+        body: { from, to, label } }), t('dg.connected'));
+    },
+  });
+
+  paintSide();
+  paintHint();
+
+  /* ── toolbar ───────────────────────────────────────────────────────── */
+  $('#dgAdd').onclick = async () => {
+    const step = await dgStepModal({ title: t('dg.newStep.title') });
+    if (!step) return;
+    await act(() => api(`/api/diagrams/${uid}/node`, { body: step }), t('dg.added'));
+    selected = step.key;
+    diagramEngine.select(step.key);
+    paintSide();
+  };
+  $('#dgConnect').onclick = () => {
+    diagramEngine.toggleConnectMode();
+    $('#dgConnect').classList.toggle('btn-solid', diagramEngine.connectMode);
+    paintHint();
+  };
+  $('#dgArrange').onclick = async () => {
+    await act(() => api(`/api/diagrams/${uid}/relayout`, { body: {} }), t('dg.arranged'));
+    diagramEngine.fit();
+  };
+  $('#dgFit').onclick = () => diagramEngine.fit();
+  $('#dgRecord').onclick = () => openRecord(uid);
+  $('#dgMeta').onclick = () => {
+    const m = openModal({
+      title: t('dg.meta'),
+      bodyHTML: `
+        <div class="field"><label>${t('dg.meta.name')}</label>
+          <input type="text" id="dgmTitle" value="${esc(data.title)}"></div>
+        <div class="field"><label>${t('dg.meta.summary')}</label>
+          <textarea id="dgmSummary" rows="4" placeholder="${t('dg.meta.summaryPh')}">${esc(data.summary)}</textarea></div>`,
+      footHTML: `<button class="btn" data-x>${t('common.cancel')}</button>
+                 <button class="btn btn-solid" data-ok>${t('common.save')}</button>`,
+    });
+    m.querySelector('[data-x]').onclick = closeModal;
+    m.querySelector('[data-ok]').onclick = async () => {
+      const body = { title: $('#dgmTitle').value, summary: $('#dgmSummary').value };
+      closeModal();
+      await act(() => api(`/api/diagrams/${uid}/meta`, { body }), t('dg.saved'));
+    };
+  };
+  $('#dgMermaid').onclick = async () => {
+    let src = '';
+    try { src = (await api(`/api/diagrams/${uid}/mermaid`)).mermaid; }
+    catch (err) { toast(err.message, 'bad'); return; }
+    const m = openModal({
+      title: t('dg.mermaid.title'),
+      bodyHTML: `<div class="dg-empty" style="margin-bottom:9px">${t('dg.mermaid.hint')}</div>
+        <pre class="content-pre" style="max-height:340px">${esc(src)}</pre>`,
+      footHTML: `<button class="btn" data-x>${t('common.close')}</button>
+                 <button class="btn btn-solid" data-ok>${t('dg.mermaid.copy')}</button>`,
+    });
+    m.querySelector('[data-x]').onclick = closeModal;
+    m.querySelector('[data-ok]').onclick = () => {
+      navigator.clipboard?.writeText(src).then(() => toast(t('dg.mermaid.copied'), 'ok'));
+      closeModal();
+    };
+  };
 }
 
 /* ═══ VIEW · domains ════════════════════════════════════════════════ */
@@ -1881,13 +2258,43 @@ async function openNewMemory() {
         <datalist id="nmDomainsDL">${domains.map(d => `<option value="${esc(d.domain)}">`).join('')}</datalist></div>
       <div class="field"><label>${t('nm.tags')}</label>
         <input type="text" id="nmTags" placeholder="${t('nm.tagsPh')}"></div>
-      <div class="field"><label>${t('nm.content')}</label>
-        <textarea id="nmContent" rows="7" placeholder="${t('nm.contentPh')}"></textarea></div>`,
+      <div class="field" id="nmContentField"><label>${t('nm.content')}</label>
+        <textarea id="nmContent" rows="7" placeholder="${t('nm.contentPh')}"></textarea></div>
+      <div class="field" id="nmTitleField" hidden><label>${t('dg.meta.name')}</label>
+        <input type="text" id="nmTitle" placeholder="${t('nm.titlePh')}">
+        <div class="dg-empty" style="margin-top:7px">${t('nm.diagramHint')}</div></div>`,
     footHTML: `<button class="btn" data-x>${t('common.cancel')}</button><button class="btn btn-solid" data-ok>${t('nm.create')}</button>`,
   });
+
+  /* a diagram is created from a graph, not from content: the modal asks
+     for a title and seeds a start→end skeleton to edit on the canvas */
+  const isDiagram = () => $('#nmType').value === 'diagram';
+  const sync = () => {
+    $('#nmContentField').hidden = isDiagram();
+    $('#nmTitleField').hidden = !isDiagram();
+    $('#nmConf').disabled = isDiagram();
+  };
+  $('#nmType').addEventListener('change', sync);
+  sync();
+
   modal.querySelector('[data-x]').onclick = closeModal;
   modal.querySelector('[data-ok]').onclick = async () => {
     try {
+      if (isDiagram()) {
+        const r = await api('/api/diagrams', { body: {
+          title: $('#nmTitle').value,
+          domain: $('#nmDomain').value, tags: $('#nmTags').value,
+          nodes: [
+            { key: 'start', shape: 'start', label: t('dg.skeleton.start') },
+            { key: 'finish', shape: 'end', label: t('dg.skeleton.end') },
+          ],
+          edges: [{ from: 'start', to: 'finish' }] } });
+        closeModal();
+        toast(t('nm.created', { uid: r.uid }), 'ok');
+        _domainsCache = null;
+        go('diagram', { uid: r.uid });
+        return;
+      }
       const r = await api('/api/memories', { body: {
         type: $('#nmType').value, confidence: $('#nmConf').value,
         domain: $('#nmDomain').value, tags: $('#nmTags').value,

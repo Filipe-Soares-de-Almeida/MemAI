@@ -748,3 +748,25 @@ def test_api_clean_orphans_drops_a_link_to_a_missing_node(client):
 def test_api_overview_counts_the_new_type(client):
     _create(client)
     assert client.get("/api/overview").json()["by_type"].get("diagram") == 1
+
+
+def test_editor_module_is_served(client):
+    """app.js imports it as an ES module, so a 404 would break the whole SPA."""
+    res = client.get("/static/diagram.js")
+    assert res.status_code == 200
+    assert "text/javascript" in res.headers["content-type"]
+
+
+def test_locale_catalogs_stay_in_parity():
+    """A key present in only one catalog silently falls back to English."""
+    import json
+    from pathlib import Path
+
+    i18n = Path(admin.WEBUI_DIR) / "i18n"
+    en = json.loads((i18n / "en.json").read_text(encoding="utf-8"))["strings"]
+    pt = json.loads((i18n / "pt-BR.json").read_text(encoding="utf-8"))["strings"]
+    assert set(en) == set(pt)
+    for key in ("type.diagram", "dg.step", "dg.hint.orphans", "dr.openEditor"):
+        assert en.get(key) and pt.get(key)
+    for shape in db.NODE_SHAPES:
+        assert f"dg.shape.{shape}" in en
