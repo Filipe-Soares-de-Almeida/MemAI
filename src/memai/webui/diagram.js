@@ -27,8 +27,9 @@ const cssVar = name =>
 export const NODE_SHAPES = ['start', 'step', 'decision', 'io', 'end'];
 
 /* Box geometry, in the same abstract units the server lays out with
-   (LAYOUT_COL_W 220 / LAYOUT_ROW_H 140), so a stored arrangement has
-   room to breathe without any scaling here. */
+   (LAYOUT_COL_W 300 / LAYOUT_ROW_H 200), so a stored arrangement has
+   room to breathe without any scaling here. Deliberately smaller than one
+   layout cell: the air between boxes is what keeps a long flow readable. */
 const NODE_W = 170;
 const NODE_H = 48;
 const DECISION_H = 66;
@@ -37,6 +38,13 @@ const LABEL_LINES = 2;
 const ARROW_GAP = 5;         /* air between the box edge and the arrow tip */
 const ORTH_STUB = 26;        /* how far a right-angled edge leaves its box */
 const ORTH_RADIUS = 11;      /* corner rounding on a right-angled edge */
+/* Two boxes almost -- but not exactly -- in line used to get a full Z
+   detour for an offset of a few units, and two rounded corners that close
+   together bow into an S. Below this offset the run is drawn as one
+   segment: a couple of degrees off vertical reads as straight, a wiggle
+   reads as a mistake. */
+const ORTH_SNAP = 18;
+const EDGE_PICK_PX = 11;     /* how near the pointer must be to grab a line */
 
 export const ROUTINGS = ['orthogonal', 'curved'];
 /* Label metrics live in world units alongside the box metrics above, so a
@@ -89,12 +97,14 @@ export class DiagramEditor {
     this._up = () => this.onUp();
     this._wheel = e => this.onWheel(e);
     this._click = e => this.onClick(e);
+    this._context = e => this.onContext(e);
     this._resize = () => { this.resize(); this.requestDraw(); };
 
     canvas.addEventListener('mousedown', this._down);
     canvas.addEventListener('mousemove', this._move);
     canvas.addEventListener('wheel', this._wheel, { passive: false });
     canvas.addEventListener('click', this._click);
+    canvas.addEventListener('contextmenu', this._context);
     addEventListener('mouseup', this._up);
 
     /* Three overlapping triggers, on purpose. The stage changes size
@@ -119,6 +129,7 @@ export class DiagramEditor {
     this.cv.removeEventListener('mousemove', this._move);
     this.cv.removeEventListener('wheel', this._wheel);
     this.cv.removeEventListener('click', this._click);
+    this.cv.removeEventListener('contextmenu', this._context);
     removeEventListener('mouseup', this._up);
     removeEventListener('resize', this._resize);
     this._ro?.disconnect();
@@ -162,28 +173,85 @@ export class DiagramEditor {
     /* structural, so compute once here rather than per frame -- dragging
        redraws on every mousemove and cannot change reachability */
     this.orphans = new Set(this.orphanKeys());
+    /* before the first fit, not only per draw: fit has to know how far the
+       lanes reach or it frames the boxes and cuts the corridors off */
+    this.laneEdges();
     if (fit) this.fit();
     this.requestDraw();
   }
 
-  /* Give every loop closer its own lane, alternating sides and swinging
-     clear of the node columns. Sharing one bow direction and magnitude --
-     what this used to do -- stacks several loops of a real routine on top
-     of each other and across the forward path they return to. */
-  laneBackEdges() {
+  /* Lanes: corridors down the side of the diagram, for edges that cannot be
+     drawn between their ends without running over what sits in between.
+
+     Every loop closer needs one by definition -- it travels back up the
+     page. So does any long forward edge: a branch that dead-ends into the
+     terminal step eight rows below was drawn straight down the middle
+     column, through eight boxes and along every other line in that column,
+     which is most of what "the arrows are tangled" looks like.
+
+     Alternating sides and stacking lanes matters: one shared bow direction
+     and magnitude piles a routine's loops on top of each other. */
+  laneEdges() {
     const maxX = Math.max(...this.nodes.map(n => n.x + n.w / 2), 0);
     const minX = Math.min(...this.nodes.map(n => n.x - n.w / 2), 0);
     let taken = 0;
-    for (const e of this.edges) {
+    let outRight = 0, outLeft = 0;
+    const assign = e => {
       const a = this.byKey[e.from], b = this.byKey[e.to];
-      e.back = b.y <= a.y;
-      if (!e.back) { e.bow = 0; continue; }
       const side = taken % 2 === 0 ? 1 : -1;
       const lane = Math.floor(taken / 2);
       const clearance = side > 0 ? maxX - Math.max(a.x, b.x) : Math.min(a.x, b.x) - minX;
-      e.bow = side * (Math.max(clearance, 0) + 70 + lane * 45);
+      const reach = 70 + lane * 45;
+      e.lane = side;
+      e.bow = side * (Math.max(clearance, 0) + reach);
+      if (side > 0) outRight = Math.max(outRight, reach);
+      else outLeft = Math.max(outLeft, reach);
       taken++;
+    };
+
+    for (const e of this.edges) {
+      const a = this.byKey[e.from], b = this.byKey[e.to];
+      e.lane = 0;
+      e.bow = 0;
+      e.back = b.y <= a.y;
     }
+    /* loop closers first, so their lanes stay nearest the diagram: a reader
+       looking for the retry path finds it in the same place every time */
+    for (const e of this.edges) if (e.back) assign(e);
+    for (const e of this.edges) if (!e.back && this.routeHitsABox(e)) assign(e);
+
+    /* what fit() has to leave room for, so a lane is not drawn off-screen */
+    this.laneSpan = { left: minX - outLeft, right: maxX + outRight };
+  }
+
+  /* Would this edge, routed between its ends, be drawn over a box that is
+     not one of those ends? Sampled rather than solved: a bounding-box
+     reject throws out almost every pair, and a handful of points along
+     what survives is enough to catch a run down an occupied column. */
+  routeHitsABox(e) {
+    const { pts, curve } = this.route(e);
+    const flat = DiagramEditor.flatten(pts, curve);
+    for (const n of this.nodes) {
+      if (n.key === e.from || n.key === e.to) continue;
+      for (let i = 1; i < flat.length; i++) {
+        if (DiagramEditor.segHitsBox(flat[i - 1], flat[i], n)) return true;
+      }
+    }
+    return false;
+  }
+
+  static segHitsBox(p, q, n, pad = 6) {
+    const x0 = n.x - n.w / 2 - pad, x1 = n.x + n.w / 2 + pad;
+    const y0 = n.y - n.h / 2 - pad, y1 = n.y + n.h / 2 + pad;
+    if (Math.max(p.x, q.x) < x0 || Math.min(p.x, q.x) > x1) return false;
+    if (Math.max(p.y, q.y) < y0 || Math.min(p.y, q.y) > y1) return false;
+    const steps = 24;
+    for (let i = 0; i <= steps; i++) {
+      const t = i / steps;
+      const x = p.x + (q.x - p.x) * t, y = p.y + (q.y - p.y) * t;
+      if (x >= x0 && x <= x1 && y >= y0 && y <= y1) return true;
+    }
+    return false;
   }
 
   /* Steps the flow cannot reach from its start. Almost always a missing
@@ -222,6 +290,7 @@ export class DiagramEditor {
     if (!this.nodes.length || !this.w) return;
     const xs = this.nodes.flatMap(n => [n.x - n.w / 2, n.x + n.w / 2]);
     const ys = this.nodes.flatMap(n => [n.y - n.h / 2, n.y + n.h / 2]);
+    if (this.laneSpan) xs.push(this.laneSpan.left, this.laneSpan.right);
     const minX = Math.min(...xs), maxX = Math.max(...xs);
     const minY = Math.min(...ys), maxY = Math.max(...ys);
     const pad = 48;
@@ -372,6 +441,35 @@ export class DiagramEditor {
     this.hooks.onSelect?.(n || null);
   }
 
+  /* Right-click. Whatever is under the pointer decides what the menu can
+     offer, so app.js gets the hit and not the coordinates alone. A line
+     is picked by the LINE, not by its label -- which is the only way to
+     reach an edge that has no label yet. */
+  onContext(e) {
+    if (!this.hooks.onContextMenu) return;
+    e.preventDefault();
+    const world = this.toWorld(e);
+    const node = this.nodeAt(world);
+    const edge = node ? null : (this.labelAt(world) || this.edgeAt(world));
+    if (node && node.key !== this.selected) {
+      this.selected = node.key;
+      this.requestDraw();
+      this.hooks.onSelect?.(node);
+    }
+    this.hooks.onContextMenu({ world, x: e.clientX, y: e.clientY, node, edge });
+  }
+
+  /* Begin a connection with one end already chosen (the context menu route
+     in; the toolbar button leaves both ends to be clicked). */
+  startConnectFrom(key) {
+    const n = this.byKey[key];
+    if (this.readOnly || !n) return;
+    this.toggleConnectMode(true);
+    this.connectFrom = n;
+    this.hooks.onConnectProgress?.(n);
+    this.requestDraw();
+  }
+
   toggleConnectMode(on = !this.connectMode) {
     if (this.readOnly) on = false;
     this.connectMode = on;
@@ -427,14 +525,13 @@ export class DiagramEditor {
 
   /* Which side each end leaves from, taken from where the boxes sit
      relative to each other: mostly-vertical runs use top/bottom, mostly
-     horizontal ones left/right. A loop closer leaves and re-enters on the
-     side its lane runs down, so it never crosses its own boxes. */
+     horizontal ones left/right. A lane edge always leaves and enters
+     vertically -- it turns sideways in the gap BETWEEN two rows, where
+     there is nothing to run over, rather than out of the side of a box
+     across whatever else shares that row. */
   static sides(a, b, laneSign) {
-    if (laneSign) {
-      const side = laneSign > 0 ? 'right' : 'left';
-      return [side, side];
-    }
     const dx = b.x - a.x, dy = b.y - a.y;
+    if (laneSign) return dy >= 0 ? ['bottom', 'top'] : ['top', 'bottom'];
     if (Math.abs(dy) >= Math.abs(dx)) return dy >= 0 ? ['bottom', 'top'] : ['top', 'bottom'];
     return dx >= 0 ? ['right', 'left'] : ['left', 'right'];
   }
@@ -450,7 +547,7 @@ export class DiagramEditor {
   /* The polyline an edge follows, ends included. */
   route(e) {
     const a = this.byKey[e.from], b = this.byKey[e.to];
-    const laneSign = e.back ? Math.sign(e.bow || 1) : 0;
+    const laneSign = e.lane || 0;
     const [sideFrom, sideTo] = DiagramEditor.sides(a, b, laneSign);
     const start = DiagramEditor.anchors(a)[sideFrom];
     const end = DiagramEditor.anchors(b)[sideTo];
@@ -461,30 +558,38 @@ export class DiagramEditor {
 
     const out = [p];
     if (laneSign) {
-      /* out to the lane, up it, and back in on the same side */
+      /* clear of the box, sideways in the row gap, along the lane, and back
+         into the far end the same way -- five legs, all axis-aligned */
       const laneX = (laneSign > 0
         ? Math.max(p.x, q.x) + Math.abs(e.bow || ORTH_STUB)
         : Math.min(p.x, q.x) - Math.abs(e.bow || ORTH_STUB));
-      out.push({ x: laneX, y: p.y }, { x: laneX, y: q.y }, q);
+      const leave = DiagramEditor.offset(p, sideFrom, ORTH_STUB);
+      const enter = DiagramEditor.offset(q, sideTo, ORTH_STUB);
+      out.push(leave, { x: laneX, y: leave.y }, { x: laneX, y: enter.y }, enter, q);
       return { pts: out, curve: null };
     }
     const vertical = sideFrom === 'top' || sideFrom === 'bottom';
+    const across = vertical ? Math.abs(p.x - q.x) : Math.abs(p.y - q.y);
+    const along = vertical ? Math.abs(p.y - q.y) : Math.abs(p.x - q.x);
+    /* Straight through when the offset is too small to read as a detour, or
+       when the run is too short to fit corners in -- both otherwise produce
+       the same wiggle. */
+    if (across <= ORTH_SNAP || along <= ORTH_RADIUS * 2) {
+      out.push(q);
+      return { pts: out, curve: null };
+    }
     if (vertical) {
-      if (Math.abs(p.x - q.x) < 1) { out.push(q); return { pts: out, curve: null }; }
       if (sideTo === 'top' || sideTo === 'bottom') {
         const midY = (p.y + q.y) / 2;              /* Z: down, across, down */
         out.push({ x: p.x, y: midY }, { x: q.x, y: midY });
       } else {
         out.push({ x: p.x, y: q.y });               /* L: down, then across */
       }
+    } else if (sideTo === 'left' || sideTo === 'right') {
+      const midX = (p.x + q.x) / 2;                /* Z: across, down, across */
+      out.push({ x: midX, y: p.y }, { x: midX, y: q.y });
     } else {
-      if (Math.abs(p.y - q.y) < 1) { out.push(q); return { pts: out, curve: null }; }
-      if (sideTo === 'left' || sideTo === 'right') {
-        const midX = (p.x + q.x) / 2;              /* Z: across, down, across */
-        out.push({ x: midX, y: p.y }, { x: midX, y: q.y });
-      } else {
-        out.push({ x: q.x, y: p.y });               /* L: across, then down */
-      }
+      out.push({ x: q.x, y: p.y });                 /* L: across, then down */
     }
     out.push(q);
     return { pts: out, curve: null };
@@ -492,7 +597,50 @@ export class DiagramEditor {
 
   curveCtrl(p, q, e) {
     const mx = (p.x + q.x) / 2, my = (p.y + q.y) / 2;
-    return e.back ? { x: mx + (e.bow || 0), y: my } : null;
+    /* the same edges that get a lane in right-angled mode get the bow here:
+       a straight chord through six boxes is no better drawn as a curve */
+    return e.lane ? { x: mx + (e.bow || 0), y: my } : null;
+  }
+
+  /* A quadratic sampled into a polyline, so hit-testing and measuring work
+     the same whether an edge was drawn curved or right-angled. */
+  static flatten(pts, curve) {
+    if (!curve) return pts;
+    const [p, q] = pts;
+    const out = [];
+    for (let i = 0; i <= 12; i++) {
+      const t = i / 12, u = 1 - t;
+      out.push({
+        x: u * u * p.x + 2 * u * t * curve.x + t * t * q.x,
+        y: u * u * p.y + 2 * u * t * curve.y + t * t * q.y,
+      });
+    }
+    return out;
+  }
+
+  static distToSeg(p, a, b) {
+    const vx = b.x - a.x, vy = b.y - a.y;
+    const len2 = vx * vx + vy * vy;
+    const t = len2 ? Math.max(0, Math.min(1, ((p.x - a.x) * vx + (p.y - a.y) * vy) / len2)) : 0;
+    return Math.hypot(p.x - (a.x + vx * t), p.y - (a.y + vy * t));
+  }
+
+  /* The edge whose LINE passes under a world point. Routed fresh rather
+     than read off the last frame, so a line can be picked at the position
+     it is actually drawn at even mid-drag. */
+  edgeAt(p) {
+    const tol = EDGE_PICK_PX / this.scale;
+    let best = null, bestD = Infinity;
+    for (const e of this.edges) {
+      if (!this.byKey[e.from] || !this.byKey[e.to]) continue;
+      const { pts, curve } = this.route(e);
+      const flat = DiagramEditor.flatten(pts, curve);
+      for (let i = 1; i < flat.length; i++) {
+        const d = DiagramEditor.distToSeg(p, flat[i - 1], flat[i]);
+        if (d < bestD) { bestD = d; best = e; }
+      }
+    }
+    return bestD <= tol ? best : null;
   }
 
   /* Point half way along a polyline, for placing the label. */
@@ -580,16 +728,23 @@ export class DiagramEditor {
     return `${cut}…`;
   }
 
-  drawEdge(e) {
+  /* `hot` is an edge of the selected step -- drawn over the others, in the
+     selection colour, with its condition readable at any zoom. A step with
+     six lines through it is unreadable otherwise: this is what says which
+     of them are its own. `dim` is everything else while that lasts. */
+  drawEdge(e, { hot = false, dim = false } = {}) {
     const { cx } = this;
     const a = this.byKey[e.from], b = this.byKey[e.to];
-    if (!a || !b) return;
+    if (!a || !b) { e.hit = null; return; }
     const back = e.back;                 /* points up the canvas: a loop closer */
     const { pts, curve } = this.route(e);
     const from = pts[0], to = pts[pts.length - 1];
+    const strong = back ? this.colWarn : (hot ? this.colAccent : this.colInk2);
 
-    cx.strokeStyle = back ? this.colWarn : this.colLine;
-    cx.lineWidth = (back ? 1.4 : 1.7) / this.scale;
+    cx.save();
+    if (dim) cx.globalAlpha = 0.3;
+    cx.strokeStyle = hot ? strong : (back ? this.colWarn : this.colLine);
+    cx.lineWidth = (hot ? 2.6 : back ? 1.4 : 1.7) / this.scale;
     if (back) cx.setLineDash([5 / this.scale, 4 / this.scale]);
     cx.beginPath();
     cx.moveTo(from.x, from.y);
@@ -599,9 +754,15 @@ export class DiagramEditor {
       cx.lineTo(to.x, to.y);
     } else {
       /* arcTo rounds each corner for us, so a right-angled run reads as a
-         drawn line rather than a staircase of hard pixels */
+         drawn line rather than a staircase of hard pixels. The radius is
+         capped at half of each neighbouring leg: a fixed radius on a short
+         leg eats past the next corner and bows the whole run. */
       for (let i = 1; i < pts.length - 1; i++) {
-        cx.arcTo(pts[i].x, pts[i].y, pts[i + 1].x, pts[i + 1].y, ORTH_RADIUS);
+        const prev = pts[i - 1], here = pts[i], next = pts[i + 1];
+        const r = Math.min(ORTH_RADIUS,
+          Math.hypot(here.x - prev.x, here.y - prev.y) / 2,
+          Math.hypot(next.x - here.x, next.y - here.y) / 2);
+        cx.arcTo(here.x, here.y, next.x, next.y, Math.max(0, r));
       }
       cx.lineTo(to.x, to.y);
     }
@@ -613,36 +774,44 @@ export class DiagramEditor {
     const tanX = to.x - prev.x, tanY = to.y - prev.y;
     const d = Math.hypot(tanX, tanY) || 1;
     const ux = tanX / d, uy = tanY / d;
-    const s = 9;
+    const s = hot ? 11 : 9;
     cx.beginPath();
     cx.moveTo(to.x, to.y);
     cx.lineTo(to.x - ux * s - uy * s * 0.45, to.y - uy * s + ux * s * 0.45);
     cx.lineTo(to.x - ux * s + uy * s * 0.45, to.y - uy * s - ux * s * 0.45);
     cx.closePath();
-    cx.fillStyle = back ? this.colWarn : this.colInk2;
+    cx.fillStyle = strong;
     cx.fill();
 
     e.hit = null;
-    if (!e.label || this.scale <= 0.4) return;
+    /* a selected step's own conditions stay legible even zoomed out, which
+       is the whole point of the highlight */
+    if (!e.label || (this.scale <= 0.4 && !hot)) { cx.restore(); return; }
     const at = curve
       ? { x: (from.x + 2 * curve.x + to.x) / 4, y: (from.y + 2 * curve.y + to.y) / 4 }
       : DiagramEditor.midpoint(pts);
-    cx.font = `10px ${FONT_MONO}`;       /* world units, same reason as labels */
+    /* world units, same reason as node labels -- except on a highlighted
+       edge, which is sized to stay readable at whatever zoom you are at */
+    const px = hot ? Math.max(10, 11 / this.scale) : 10;
+    cx.font = `${px}px ${FONT_MONO}`;
     const text = e.label.length > 34 ? `${e.label.slice(0, 33)}…` : e.label;
     const wide = cx.measureText(text).width;
-    const box = { x: at.x - wide / 2 - 4, y: at.y - 8, w: wide + 8, h: 16 };
+    const pad = px * 0.4;
+    const box = { x: at.x - wide / 2 - pad, y: at.y - px * 0.8,
+                  w: wide + pad * 2, h: px * 1.6 };
     cx.fillStyle = this.colSurface;
     cx.fillRect(box.x, box.y, box.w, box.h);
-    if (!this.readOnly) {
+    if (!this.readOnly || hot) {
       /* an outline says the text itself is the thing you click to change */
-      cx.strokeStyle = e === this.hoverLabel ? this.colAccent : this.colLine;
+      cx.strokeStyle = (e === this.hoverLabel || hot) ? this.colAccent : this.colLine;
       cx.lineWidth = 1 / this.scale;
       cx.strokeRect(box.x, box.y, box.w, box.h);
     }
-    cx.fillStyle = back ? this.colWarn : this.colInk2;
+    cx.fillStyle = hot ? this.colInk : (back ? this.colWarn : this.colInk2);
     cx.textAlign = 'center';
     cx.textBaseline = 'middle';
     cx.fillText(text, at.x, at.y);
+    cx.restore();
     e.hit = box;                         /* for labelAt(), see onClick */
   }
 
@@ -711,9 +880,16 @@ export class DiagramEditor {
     cx.scale(this.scale, this.scale);
 
     /* per draw, not per load: dragging a step can turn a forward edge into
-       a loop closer and back again, and the lanes have to follow */
-    this.laneBackEdges();
-    for (const e of this.edges) this.drawEdge(e);
+       a loop closer, or park it over a box it now runs through, and the
+       lanes have to follow */
+    this.laneEdges();
+    /* the selected step's lines go last, so they sit over the ones they
+       cross instead of disappearing under them */
+    const sel = this.selected;
+    const isHot = e => !!sel && (e.from === sel || e.to === sel);
+    const cool = sel ? this.edges.filter(e => !isHot(e)) : this.edges;
+    for (const e of cool) this.drawEdge(e, { dim: !!sel });
+    if (sel) for (const e of this.edges.filter(isHot)) this.drawEdge(e, { hot: true });
     for (const n of this.nodes) this.drawNode(n, this.orphans.has(n.key));
 
     cx.restore();

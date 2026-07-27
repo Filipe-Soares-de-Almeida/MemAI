@@ -985,6 +985,31 @@ textarea { resize: vertical; min-height: 110px; width: 100%; font-family: var(--
 }
 .tip b { color: var(--accent); font-family: var(--font-m); }
 
+/* right-click menu. Above the tip, because the pointer is over the canvas
+   and a hovered step's note would otherwise sit on top of the menu. */
+.ctx-menu {
+  position: fixed; z-index: 96;
+  min-width: 190px; max-width: min(300px, calc(100vw - 24px));
+  padding: 5px;
+  background: var(--overlay);
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  box-shadow: var(--shadow-pop);
+  animation: rise .13s both;
+}
+.ctx-item {
+  display: block; width: 100%;
+  padding: 7px 10px;
+  border: 0; border-radius: 5px;
+  background: none; text-align: left;
+  font: 400 12.5px var(--font-ui); color: var(--ink);
+  cursor: pointer;
+}
+.ctx-item:hover { background: rgba(255, 255, 255, .06); color: var(--accent); }
+.ctx-item.danger { color: var(--bad); }
+.ctx-item.danger:hover { background: rgba(207, 102, 121, .12); color: var(--bad); }
+.ctx-sep { height: 1px; margin: 4px 6px; background: var(--line); }
+
 .empty {
   padding: 46px 20px; text-align: center;
   color: var(--ink-3);
