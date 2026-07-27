@@ -7,7 +7,7 @@
    diagram.js. */
 
 import { I18N, t } from './i18n.js';
-import { DiagramEditor, NODE_SHAPES, ROUTINGS } from './diagram.js';
+import { DiagramEditor, NODE_SHAPES, ROUTINGS, FONT_SCALES } from './diagram.js';
 
 /* ─── constants ─────────────────────────────────────────────────────── */
 
@@ -1516,6 +1516,7 @@ async function renderDiagram(view, params) {
           <button class="btn btn-sm" id="dgConnect" data-editonly>${t('dg.connect')}</button>
           <button class="btn btn-sm" id="dgArrange" data-editonly>${t('dg.arrange')}</button>
           <button class="btn btn-sm" id="dgRouting"></button>
+          <button class="btn btn-sm" id="dgFont" data-editonly></button>
           <button class="btn btn-sm" id="dgFit">${t('dg.center')}</button>
           <button class="btn btn-sm" id="dgMermaid">${t('dg.mermaid')}</button>
           <button class="btn btn-sm" id="dgRecord">${t('dg.record')}</button>
@@ -1548,6 +1549,7 @@ async function renderDiagram(view, params) {
     if (selected) diagramEngine.select(selected);
     paintSide();
     paintHint();
+    paintFont();
     $('#dgTitle').textContent = data.title;
   }
 
@@ -1670,7 +1672,10 @@ async function renderDiagram(view, params) {
       return;
     }
     if (node) {
+      const stored = data.nodes.find(n => n.key === node.key);
       openCtxMenu(x, y, [
+        (stored?.w != null || stored?.h != null)
+          && { label: t('dg.ctx.resetSize'), run: () => resetCardSize(node.key) },
         { label: t('dg.ctx.nodeConnect'),
           /* the engine reports the pending end through onConnectProgress,
              so the hint is already right -- only the button needs telling */
@@ -1713,6 +1718,27 @@ async function renderDiagram(view, params) {
     b.textContent = t(`dg.routing.${routing}`);
     b.title = t('dg.routing.switch');
   }
+
+  /* Text size is stored on the diagram, not in the browser: a card resized
+     to fit its label at one size is the wrong size at another, and the card
+     sizes ARE stored. So this is an edit, and it needs editing on. */
+  function paintFont() {
+    const b = $('#dgFont');
+    b.textContent = `Aa ${Math.round((data.font_scale || 1) * 100)}%`;
+    b.title = t('dg.font.switch');
+  }
+
+  function openFontMenu(ev) {
+    const r = ev.currentTarget.getBoundingClientRect();
+    openCtxMenu(r.left, r.bottom + 4, FONT_SCALES.map(s => ({
+      label: `${Math.round(s * 100)}%${s === 1 ? ` · ${t('dg.font.default')}` : ''}`,
+      run: () => act(() => api(`/api/diagrams/${uid}/meta`, {
+        body: { font_scale: s } }), t('dg.saved')),
+    })));
+  }
+
+  const resetCardSize = key => act(() => api(`/api/diagrams/${uid}/layout`, {
+    body: { reset_boxes: [key] } }), t('dg.sizeReset'));
 
   /* ── read-only vs editing ───────────────────────────────────────────── */
   function applyMode() {
@@ -1918,11 +1944,13 @@ async function renderDiagram(view, params) {
     diagramEngine.setRouting(routing);
     paintRouting();
   };
+  $('#dgFont').onclick = openFontMenu;
   $('#dgMode').onclick = () => { editing = !editing; applyMode(); };
   /* the heading and the summary panel are where you reach for these, so both
      open the same editor -- the toolbar is no longer the only way in */
   $('#dgTitle').onclick = () => { if (editing) openMetaModal(); };
   paintRouting();
+  paintFont();
   applyMode();
   $('#dgMermaid').onclick = async () => {
     let src = '';

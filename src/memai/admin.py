@@ -570,13 +570,14 @@ def diagram_graph(request, payload) -> dict:
 
 def diagram_meta(request, payload) -> dict:
     uid = request.path_params["uid"]
-    if not {"title", "summary"} & set(payload):
-        raise ValueError("nothing to update (fields: title, summary)")
+    if not {"title", "summary", "font_scale"} & set(payload):
+        raise ValueError("nothing to update (fields: title, summary, font_scale)")
     with db.connect() as conn:
         _require(db.set_diagram_meta(
             conn, uid,
             title=payload.get("title") if "title" in payload else None,
             summary=payload.get("summary") if "summary" in payload else None,
+            font_scale=payload.get("font_scale") if "font_scale" in payload else None,
         ))
     return {"ok": True}
 
@@ -612,14 +613,21 @@ def diagram_edge(request, payload) -> dict:
 
 
 def diagram_layout(request, payload) -> dict:
-    """Persist dragged positions -- and nothing else about the memory."""
+    """Persist dragged positions and resized boxes -- nothing else.
+
+    `reset_boxes` is the way back: a list of node keys, or true for the
+    whole flow, drops the stored sizes so the shapes' defaults apply.
+    """
     uid = request.path_params["uid"]
     positions = payload.get("positions")
-    if not isinstance(positions, dict):
-        raise ValueError("positions must be an object of {node_key: {x, y}}")
+    reset = payload.get("reset_boxes")
+    if not isinstance(positions, dict) and reset is None:
+        raise ValueError("positions must be an object of {node_key: {x, y, w?, h?}}")
     with db.connect() as conn:
         _diagram_or_400(conn, uid)
-        moved = db.set_node_positions(conn, uid, positions)
+        moved = db.set_node_positions(conn, uid, positions) if positions else 0
+        if reset is not None:
+            moved += db.reset_node_boxes(conn, uid, reset if isinstance(reset, list) else None)
     return {"ok": True, "moved": moved}
 
 
