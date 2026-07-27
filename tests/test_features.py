@@ -57,9 +57,9 @@ def test_set_status_without_reason_leaves_no_edit(conn):
 
 def test_search_hybrid_type_filter_scopes_to_notes(conn):
     # recall() is search(type='note'); the filter must exclude other types
-    note = db.insert_memory(conn, type="note", content="funrural rule detail")
-    db.insert_memory(conn, type="checkpoint", content="funrural checkpoint state")
-    results = db.search_hybrid(conn, "funrural", type="note")
+    note = db.insert_memory(conn, type="note", content="x100 rule detail")
+    db.insert_memory(conn, type="checkpoint", content="x100 checkpoint state")
+    results = db.search_hybrid(conn, "x100", type="note")
     assert [r["uid"] for r in results] == [note]
 
 
