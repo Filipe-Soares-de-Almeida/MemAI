@@ -1249,6 +1249,114 @@ def get_diagram(conn: sqlite3.Connection, uid: str) -> dict | None:
     }
 
 
+def _graph_issues(nodes: list[dict], edges: list[dict]) -> list[dict]:
+    """The structural defects of one flow, worst first.
+
+    Diagram upkeep is not memory curation: what goes wrong in a flow is
+    shape, not confidence, and none of it is visible to the dedup or
+    optimization passes built for prose. All of these are reachable
+    through the incremental writers, which skip the whole-graph rules on
+    purpose so a flow can be built across several calls -- so something
+    has to report them afterwards.
+    """
+    if not nodes:
+        return [{"kind": "empty", "keys": []}]
+    keys = [n["key"] for n in nodes]
+    starts = [n["key"] for n in nodes if n["shape"] == "start"]
+    ends = [n["key"] for n in nodes if n["shape"] == "end"]
+    outgoing: dict[str, list[dict]] = {}
+    for e in edges:
+        outgoing.setdefault(e["from"], []).append(e)
+
+    issues: list[dict] = []
+    if not starts:
+        issues.append({"kind": "no_start", "keys": []})
+    elif len(starts) > 1:
+        issues.append({"kind": "many_starts", "keys": sorted(starts)})
+    else:
+        orphans = sorted(set(keys) - _reachable(starts[0], edges))
+        if orphans:
+            issues.append({"kind": "unreachable", "keys": orphans})
+
+    # a step the flow just stops at, without saying it ended
+    dead = sorted(n["key"] for n in nodes
+                  if n["shape"] != "end" and not outgoing.get(n["key"]))
+    if dead:
+        issues.append({"kind": "dead_end", "keys": dead})
+
+    # a fork whose arrows do not say which condition takes which arrow
+    ambiguous = sorted(n["key"] for n in nodes
+                       if len(outgoing.get(n["key"], [])) > 1
+                       and any(not e["label"] for e in outgoing[n["key"]]))
+    if ambiguous:
+        issues.append({"kind": "unlabeled_branch", "keys": ambiguous})
+
+    if not ends:
+        issues.append({"kind": "no_end", "keys": []})
+    return issues
+
+
+def diagram_overview(
+    conn: sqlite3.Connection, *, domain: str = "", status: str = "active"
+) -> list[dict]:
+    """One card per diagram: its size, its links and what is structurally wrong.
+
+    Batched on purpose -- nodes, edges and links come back in one query
+    each and are grouped in memory, so N diagrams still cost four queries
+    instead of 3N+1.
+    """
+    sql = [
+        """SELECT d.memory_uid AS uid, d.kind, d.title, d.summary,
+                  m.domain, m.status, m.confidence, m.tags,
+                  m.created_at, m.updated_at
+           FROM diagrams d JOIN memories m ON m.uid = d.memory_uid"""
+    ]
+    params: list = []
+    where = []
+    if domain:
+        where.append("m.domain = ?")
+        params.append(domain)
+    if status:
+        where.append("m.status = ?")
+        params.append(status)
+    if where:
+        sql.append("WHERE " + " AND ".join(where))
+    sql.append("ORDER BY m.updated_at DESC")
+    rows = conn.execute(" ".join(sql), params).fetchall()
+
+    nodes_by: dict[str, list[dict]] = {}
+    for r in conn.execute(
+        "SELECT memory_uid, node_key, shape, label, note FROM diagram_nodes ORDER BY memory_uid, seq, id"
+    ):
+        nodes_by.setdefault(r["memory_uid"], []).append(
+            {"key": r["node_key"], "shape": r["shape"], "label": r["label"], "note": r["note"]})
+    edges_by: dict[str, list[dict]] = {}
+    for r in conn.execute(
+        "SELECT memory_uid, from_key, to_key, label, seq FROM diagram_edges ORDER BY memory_uid, seq, id"
+    ):
+        edges_by.setdefault(r["memory_uid"], []).append(
+            {"from": r["from_key"], "to": r["to_key"], "label": r["label"], "seq": r["seq"]})
+    links_by: dict[str, int] = {}
+    for r in conn.execute("SELECT memory_uid, COUNT(*) AS n FROM diagram_node_links GROUP BY memory_uid"):
+        links_by[r["memory_uid"]] = r["n"]
+
+    out = []
+    for r in rows:
+        nodes = nodes_by.get(r["uid"], [])
+        edges = edges_by.get(r["uid"], [])
+        issues = _graph_issues(nodes, edges)
+        out.append({
+            **dict(r),
+            "nodes": len(nodes),
+            "edges": len(edges),
+            "links": links_by.get(r["uid"], 0),
+            "documented": sum(1 for n in nodes if n["note"]),
+            "issues": issues,
+            "issue_count": sum(max(1, len(i["keys"])) for i in issues),
+        })
+    return out
+
+
 def render_diagram_text(conn: sqlite3.Connection, uid: str) -> str:
     d = get_diagram_row(conn, uid)
     if d is None:
