@@ -115,6 +115,24 @@ kbd {
   outline: none;
 }
 .view > * { max-width: 1340px; margin-left: auto; margin-right: auto; }
+/* Reading width is right for prose and lists; a canvas is worth every pixel
+   it can get, so the diagram editor opts out of the cap -- and, on a window
+   wide enough for the two-column layout, fills the height instead of being
+   sized by a guess at everything stacked above it. */
+/* the auto margins that centre a capped view would, in the flex column
+   below, shrink it back to its content width instead of filling */
+.view.wide > * { max-width: none; margin-left: 0; margin-right: 0; }
+@media (min-width: 1181px) {
+  .view.wide {
+    padding-bottom: 18px;
+    overflow: hidden;
+    display: flex; flex-direction: column;
+  }
+  .view.wide > .anim { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+  .view.wide .dg-shell { flex: 1; min-height: 0; align-items: stretch; }
+  .view.wide .dg-side { align-content: start; overflow-y: auto; }
+  .view.wide .dg-stage { height: auto; min-height: 320px; }
+}
 
 .anim > * { animation: rise .32s cubic-bezier(.2, .7, .3, 1) both; }
 .anim > *:nth-child(1) { animation-delay: .02s; }

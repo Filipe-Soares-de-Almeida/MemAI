@@ -266,6 +266,8 @@ async function route() {
   diagramEngine?.destroy(); diagramEngine = null;
   closeCtxMenu();   /* it lives on document.body, so the view swap misses it */
   const view = $('#view');
+  /* the diagram editor runs full-bleed: see .view.wide */
+  view.classList.toggle('wide', name === 'diagram');
   view.innerHTML = '<div class="loading"><span class="spin"></span></div>';
   try {
     await VIEWS[name](view, params);
