@@ -1,10 +1,11 @@
 """SQLite-backed store for memai.
 
 Single WAL-mode file holds memory rows, an FTS5 index, a sqlite-vec
-vector table, edit history, and a relations graph together under one
-set of ACID transactions -- vectors live INSIDE the transactional
-store, not beside it, so there is nothing that can desync from the
-metadata on a hard-kill.
+vector table, edit history, a relations graph, and the node/edge tables
+behind type='diagram' memories together under one set of ACID
+transactions -- vectors live INSIDE the transactional store, not beside
+it, so there is nothing that can desync from the metadata on a
+hard-kill.
 
 Retrieval is hybrid: FTS5 BM25 keyword search plus brute-force KNN over
 model2vec embeddings, merged by reciprocal rank fusion. Both sides only
@@ -107,6 +108,57 @@ CREATE TABLE IF NOT EXISTS relations (
 
 CREATE INDEX IF NOT EXISTS idx_relations_from ON relations(from_uid);
 CREATE INDEX IF NOT EXISTS idx_relations_to ON relations(to_uid);
+
+-- A type='diagram' memory keeps its structure here instead of in
+-- `content`: one row per step, so a step can carry its own note and its
+-- own links. `memories.content` still holds a generated prose rendering
+-- of the same graph, which is what FTS and the embedder see.
+CREATE TABLE IF NOT EXISTS diagrams (
+    memory_uid  TEXT PRIMARY KEY REFERENCES memories(uid),
+    kind        TEXT NOT NULL DEFAULT 'flowchart',
+    title       TEXT NOT NULL DEFAULT '',
+    summary     TEXT NOT NULL DEFAULT ''
+);
+
+CREATE TABLE IF NOT EXISTS diagram_nodes (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    memory_uid  TEXT NOT NULL REFERENCES memories(uid),
+    node_key    TEXT NOT NULL,                  -- stable id the edges refer to
+    shape       TEXT NOT NULL DEFAULT 'step',   -- start|step|decision|io|end
+    label       TEXT NOT NULL,                  -- objective: what happens here
+    note        TEXT NOT NULL DEFAULT '',       -- optional long explanation
+    seq         INTEGER NOT NULL DEFAULT 0,     -- authoring order
+    x           REAL NOT NULL,                  -- always set: server-computed
+    y           REAL NOT NULL                   -- layout, overwritten by drags
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_diagram_nodes_key
+    ON diagram_nodes(memory_uid, node_key);
+
+CREATE TABLE IF NOT EXISTS diagram_edges (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    memory_uid  TEXT NOT NULL REFERENCES memories(uid),
+    from_key    TEXT NOT NULL,
+    to_key      TEXT NOT NULL,
+    label       TEXT NOT NULL DEFAULT '',       -- branch condition
+    seq         INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE INDEX IF NOT EXISTS idx_diagram_edges_mem ON diagram_edges(memory_uid);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_diagram_edges_pair
+    ON diagram_edges(memory_uid, from_key, to_key);
+
+CREATE TABLE IF NOT EXISTS diagram_node_links (
+    memory_uid     TEXT NOT NULL REFERENCES memories(uid),  -- the diagram
+    node_key       TEXT NOT NULL,
+    target_uid     TEXT NOT NULL REFERENCES memories(uid),  -- linked memory
+    relation_type  TEXT NOT NULL DEFAULT 'explains',
+    created_at     TEXT NOT NULL,
+    PRIMARY KEY (memory_uid, node_key, target_uid)
+);
+
+CREATE INDEX IF NOT EXISTS idx_diagram_links_target
+    ON diagram_node_links(target_uid);
 
 CREATE TABLE IF NOT EXISTS meta (
     key    TEXT PRIMARY KEY,
@@ -400,6 +452,11 @@ def purge_memory(conn: sqlite3.Connection, uid: str) -> bool:
     DELETE. Callers must gate this behind explicit user confirmation --
     forget() (soft-delete/archive) is the default and should be used
     unless the user specifically asked for permanent removal.
+
+    Diagram tables cascade both ways: the graph of a purged diagram goes,
+    and so does any OTHER diagram's node link that pointed at this memory
+    -- otherwise a purged note leaves a node link dangling at a uid that
+    no longer resolves.
     """
     row = get_memory(conn, uid)
     if row is None:
@@ -407,6 +464,12 @@ def purge_memory(conn: sqlite3.Connection, uid: str) -> bool:
     conn.execute("DELETE FROM edits WHERE memory_uid = ?", (uid,))
     conn.execute("DELETE FROM relations WHERE from_uid = ? OR to_uid = ?", (uid, uid))
     conn.execute("DELETE FROM optimization_suggestions WHERE target_uid = ?", (uid,))
+    conn.execute(
+        "DELETE FROM diagram_node_links WHERE memory_uid = ? OR target_uid = ?", (uid, uid)
+    )
+    conn.execute("DELETE FROM diagram_nodes WHERE memory_uid = ?", (uid,))
+    conn.execute("DELETE FROM diagram_edges WHERE memory_uid = ?", (uid,))
+    conn.execute("DELETE FROM diagrams WHERE memory_uid = ?", (uid,))
     if _vec_ready(conn):
         conn.execute("DELETE FROM memories_vec WHERE rowid = ?", (row["rowid_pk"],))
     conn.execute("DELETE FROM memories WHERE uid = ?", (uid,))
@@ -428,6 +491,778 @@ def get_relations(conn: sqlite3.Connection, uid: str) -> list[sqlite3.Row]:
         "SELECT * FROM relations WHERE from_uid = ? OR to_uid = ? ORDER BY created_at ASC",
         (uid, uid),
     ).fetchall()
+
+
+# -------------------------------------------------------------------- diagrams
+#
+# A diagram documents what a routine does, start to end, as a graph: one
+# row per step so a step can carry its own note and its own links to
+# other memories. The graph is the source of truth; memories.content
+# holds a generated prose rendering of it (see _render_text), which is
+# what FTS indexes and the embedder vectorizes. Nothing hand-writes that
+# content -- the free-text editors refuse a diagram for exactly that
+# reason (see is_diagram).
+
+DIAGRAM_TYPE = "diagram"
+DIAGRAM_KINDS = ("flowchart",)
+NODE_SHAPES = ("start", "step", "decision", "io", "end")
+
+# Cap on a rendered body handed back to an agent, so one big flow cannot
+# eat a whole context window. Same intent as CORPUS_SNIPPET_LEN; the
+# stored content is never truncated, only what a tool returns.
+DIAGRAM_BODY_BUDGET = 12_000
+
+# Abstract canvas units. Renderers pan and zoom these; they never
+# re-arrange them. Layout is computed HERE so every consumer -- admin
+# canvas, a chat-side renderer, a future exporter -- draws the same
+# picture, including a diagram nobody has ever opened in the editor.
+LAYOUT_COL_W = 220.0
+LAYOUT_ROW_H = 140.0
+
+# Node keys double as mermaid node ids, so keep them to characters that
+# need no escaping on either side.
+_NODE_KEY_RE = re.compile(r"^[A-Za-z0-9_-]+$")
+
+
+def _as_int(value: object, fallback: int) -> int:
+    try:
+        return int(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return fallback
+
+
+def _norm_nodes(nodes: object) -> list[dict]:
+    """Coerce whatever came over MCP/HTTP into the one node shape used below."""
+    out: list[dict] = []
+    for i, n in enumerate(nodes or []):  # type: ignore[arg-type]
+        if not isinstance(n, dict):
+            continue
+        out.append({
+            "key": str(n.get("key", "")).strip(),
+            "label": str(n.get("label", "")).strip(),
+            "shape": str(n.get("shape", "")).strip() or "step",
+            "note": str(n.get("note", "")).strip(),
+            "seq": _as_int(n.get("seq"), i),
+        })
+    return out
+
+
+def _norm_edges(edges: object) -> list[dict]:
+    """Same for edges; accepts from/to or the from_key/to_key column names."""
+    out: list[dict] = []
+    for i, e in enumerate(edges or []):  # type: ignore[arg-type]
+        if not isinstance(e, dict):
+            continue
+        out.append({
+            "from": str(e.get("from", e.get("from_key", ""))).strip(),
+            "to": str(e.get("to", e.get("to_key", ""))).strip(),
+            "label": str(e.get("label", "")).strip(),
+            "seq": _as_int(e.get("seq"), i),
+        })
+    return out
+
+
+def _node_field_errors(n: dict) -> list[str]:
+    """Rules that hold for a single node in isolation."""
+    errors: list[str] = []
+    key = n["key"] or "?"
+    if not n["key"]:
+        errors.append("node is missing a key")
+    elif not _NODE_KEY_RE.match(n["key"]):
+        errors.append(f"invalid node key {n['key']!r}: use letters, digits, '_' or '-'")
+    if not n["label"]:
+        errors.append(f"node {key!r} has an empty label")
+    if n["shape"] not in NODE_SHAPES:
+        errors.append(
+            f"node {key!r} has unknown shape {n['shape']!r}; use one of: {', '.join(NODE_SHAPES)}"
+        )
+    return errors
+
+
+def _adjacency(edges: list[dict]) -> dict[str, list[str]]:
+    """Successors per node in edge order -- what keeps the layout deterministic."""
+    adj: dict[str, list[str]] = {}
+    for e in sorted(edges, key=lambda x: x["seq"]):
+        adj.setdefault(e["from"], []).append(e["to"])
+    return adj
+
+
+def _reachable(start: str, edges: list[dict]) -> set[str]:
+    adj = _adjacency(edges)
+    seen = {start}
+    queue = [start]
+    while queue:
+        for nxt in adj.get(queue.pop(0), []):
+            if nxt not in seen:
+                seen.add(nxt)
+                queue.append(nxt)
+    return seen
+
+
+def _validate_graph(nodes: list[dict], edges: list[dict]) -> list[str]:
+    """Reject a graph that cannot be a flow, before anything is written.
+
+    One gatekeeper for both the MCP tool and the HTTP API. The structural
+    rules here (exactly one start, everything reachable) only make sense
+    for a WHOLE graph -- the incremental single-node/single-edge writers
+    deliberately skip them, because "add a node, then wire it up" has to
+    be expressible in two calls.
+
+    Cycles are legal: a retry loop is a real flow, not a mistake.
+    """
+    if not nodes:
+        return ["graph has no nodes"]
+    errors: list[str] = []
+    keys: set[str] = set()
+    for n in nodes:
+        errors.extend(_node_field_errors(n))
+        if n["key"] in keys:
+            errors.append(f"duplicate node key: {n['key']!r}")
+        keys.add(n["key"])
+
+    starts = [n["key"] for n in nodes if n["shape"] == "start"]
+    if not starts:
+        errors.append("graph has no 'start' node")
+    elif len(starts) > 1:
+        errors.append(
+            f"graph has {len(starts)} 'start' nodes, expected exactly one: {', '.join(starts)}"
+        )
+
+    pairs: set[tuple[str, str]] = set()
+    for e in edges:
+        if not e["from"] or not e["to"]:
+            errors.append("edge is missing an endpoint")
+            continue
+        for endpoint in (e["from"], e["to"]):
+            if endpoint not in keys:
+                errors.append(f"edge endpoint {endpoint!r} is not a node key")
+        if e["from"] == e["to"]:
+            errors.append(
+                f"self-loop on {e['from']!r}: model a retry with an explicit decision node"
+            )
+        if (e["from"], e["to"]) in pairs:
+            errors.append(f"duplicate edge {e['from']!r} -> {e['to']!r}")
+        pairs.add((e["from"], e["to"]))
+
+    # only worth reporting once the basics hold, else the list is noise
+    if not errors:
+        orphans = sorted(keys - _reachable(starts[0], edges))
+        if orphans:
+            errors.append("unreachable from start: " + ", ".join(orphans))
+    return errors
+
+
+def _back_edges(adj: dict[str, list[str]], roots: list[str]) -> set[tuple[str, str]]:
+    """The loop-closing edges: those pointing back into the path being walked.
+
+    A flow may legitimately cycle (a retry), but layering needs a DAG.
+    Removing exactly the back-edges leaves the forward skeleton to layer;
+    the loop closer is still drawn, just pointing back up the canvas.
+    """
+    back: set[tuple[str, str]] = set()
+    state: dict[str, int] = {}  # 1 = on the current path, 2 = finished
+    for root in roots:
+        if state.get(root):
+            continue
+        state[root] = 1
+        stack = [(root, iter(adj.get(root, ())))]
+        while stack:
+            node, successors = stack[-1]
+            descended = False
+            for nxt in successors:
+                if state.get(nxt) == 1:
+                    back.add((node, nxt))
+                elif not state.get(nxt):
+                    state[nxt] = 1
+                    stack.append((nxt, iter(adj.get(nxt, ()))))
+                    descended = True
+                    break
+            if not descended:
+                state[node] = 2
+                stack.pop()
+    return back
+
+
+def _layout_graph(nodes: list[dict], edges: list[dict]) -> dict[str, tuple[float, float]]:
+    """Deterministic layered layout: the row is a node's longest path from start.
+
+    A pure function of the graph, so the same flow always arranges the
+    same way and the result is testable without a browser.
+
+    Longest path, not first-visit depth: a step sits one row below its
+    DEEPEST predecessor, so a terminal step lands under every branch that
+    reaches it rather than level with whichever branch was walked first.
+    Cycles cannot make this hang -- back-edges are dropped before
+    layering (see _back_edges) and drawn as edges that point back up.
+
+    Deliberately simple otherwise: dense graphs will still produce
+    crossing edges. The user drags, and the drag persists, so
+    crossing-minimisation can stay a later refinement of this one
+    function.
+    """
+    if not nodes:
+        return {}
+    keys = [n["key"] for n in nodes]
+    known = set(keys)
+    adj = {k: [t for t in v if t in known] for k, v in _adjacency(edges).items()}
+    starts = [n["key"] for n in nodes if n["shape"] == "start"]
+    roots = [r for r in (starts or keys[:1]) if r in known]
+    back = _back_edges(adj, roots)
+
+    def forward(node: str) -> list[str]:
+        return [t for t in adj.get(node, []) if (node, t) not in back]
+
+    # BFS over the forward skeleton: reachability, plus a stable
+    # discovery order that decides left-to-right placement within a row
+    order: list[str] = []
+    seen = set(roots)
+    queue = list(roots)
+    while queue:
+        cur = queue.pop(0)
+        order.append(cur)
+        for nxt in forward(cur):
+            if nxt not in seen:
+                seen.add(nxt)
+                queue.append(nxt)
+
+    # Kahn over the same skeleton, relaxing depth upward as we go: one
+    # pass is enough for longest-path layering because a node is only
+    # released once every predecessor has been placed
+    indeg = {k: 0 for k in order}
+    for k in order:
+        for nxt in forward(k):
+            if nxt in indeg:
+                indeg[nxt] += 1
+    ready = [k for k in order if indeg[k] == 0]
+    depth = {k: 0 for k in ready}
+    while ready:
+        cur = ready.pop(0)
+        for nxt in forward(cur):
+            if nxt not in indeg:
+                continue
+            depth[nxt] = max(depth.get(nxt, 0), depth[cur] + 1)
+            indeg[nxt] -= 1
+            if indeg[nxt] == 0:
+                ready.append(nxt)
+
+    # Anything with no depth yet parks in a row of its own: nodes the flow
+    # cannot reach (possible via the incremental writers, which skip the
+    # reachability rule) and, defensively, any node a residual cycle kept
+    # from being released above.
+    floor = max(depth.values()) + 1 if depth else 0
+    stragglers = [k for k in keys if k not in depth]
+    for k in stragglers:
+        depth[k] = floor
+
+    rows: dict[int, list[str]] = {}
+    for k in order + [k for k in stragglers if k not in seen]:
+        rows.setdefault(depth[k], []).append(k)
+    pos: dict[str, tuple[float, float]] = {}
+    for d, row in rows.items():
+        span = (len(row) - 1) / 2.0
+        for i, k in enumerate(row):
+            pos[k] = ((i - span) * LAYOUT_COL_W, d * LAYOUT_ROW_H)
+    return pos
+
+
+def _flow_order(nodes: list[dict], edges: list[dict]) -> list[str]:
+    """Node keys in reading order: down the rows, left to right within one."""
+    pos = _layout_graph(nodes, edges)
+    return sorted((n["key"] for n in nodes), key=lambda k: (pos[k][1], pos[k][0], k))
+
+
+def _render_text(title: str, summary: str, kind: str, nodes: list[dict], edges: list[dict]) -> str:
+    """The prose projection stored in memories.content.
+
+    Generated, never hand-written: this is what FTS indexes and the
+    embedder vectorizes, so a diagram is findable by what the routine
+    actually does rather than by its title alone. One line per node in
+    flow order keeps the edit-history diff readable.
+    """
+    by_key = {n["key"]: n for n in nodes}
+    out = [f"DIAGRAM: {title}", f"KIND: {kind}"]
+    if summary:
+        out.append(f"SUMMARY: {summary}")
+    out += ["", "FLOW:"]
+    outgoing: dict[str, list[tuple[str, str]]] = {}
+    for e in sorted(edges, key=lambda x: x["seq"]):
+        outgoing.setdefault(e["from"], []).append((e["to"], e["label"]))
+    ordered = _flow_order(nodes, edges)
+    for k in ordered:
+        n = by_key[k]
+        out.append(f"{k} [{n['shape']}]: {n['label']}")
+        for to, label in outgoing.get(k, []):
+            out.append(f"  -> {to}" + (f" [{label}]" if label else ""))
+    notes = [(k, by_key[k]["note"]) for k in ordered if by_key[k]["note"]]
+    if notes:
+        out += ["", "NOTES:"]
+        out += [f"{k}: {note}" for k, note in notes]
+    return "\n".join(out)
+
+
+def _mermaid_escape(text: str) -> str:
+    """Quotes and newlines would break out of a mermaid node label."""
+    return text.replace('"', "#quot;").replace("\n", " ")
+
+
+# Mermaid keywords that cannot appear bare as a node id. `end` is the
+# dangerous one: it closes a subgraph, so a node keyed 'end' -- the
+# obvious key for a terminal step -- silently breaks the whole diagram.
+_MERMAID_RESERVED = frozenset({
+    "end", "graph", "subgraph", "flowchart", "class", "classdef",
+    "click", "style", "linkstyle", "direction",
+})
+
+
+def _mermaid_id(key: str) -> str:
+    return f"n_{key}" if key.lower() in _MERMAID_RESERVED else key
+
+
+def _mermaid_node(key: str, shape: str, label: str) -> str:
+    node_id = _mermaid_id(key)
+    text = _mermaid_escape(label)
+    if shape in ("start", "end"):
+        return f'{node_id}(["{text}"])'
+    if shape == "decision":
+        return f'{node_id}{{"{text}"}}'
+    if shape == "io":
+        return f'{node_id}[/"{text}"/]'
+    return f'{node_id}["{text}"]'
+
+
+def _render_mermaid(title: str, nodes: list[dict], edges: list[dict]) -> str:
+    """Mermaid source, for a host that can render a fenced diagram inline.
+
+    Mermaid always applies its own layout, so this is the one renderer
+    that ignores the stored coordinates -- the price of a one-line render
+    in a chat client. Consumers that want the exact admin arrangement read
+    the coordinates from get_diagram() instead.
+    """
+    by_key = {n["key"]: n for n in nodes}
+    lines = []
+    if title:
+        lines += ["---", f"title: {_mermaid_escape(title)}", "---"]
+    lines.append("flowchart TD")
+    for k in _flow_order(nodes, edges):
+        lines.append("    " + _mermaid_node(k, by_key[k]["shape"], by_key[k]["label"]))
+    for e in sorted(edges, key=lambda x: x["seq"]):
+        label = f'|"{_mermaid_escape(e["label"])}"|' if e["label"] else ""
+        lines.append(f'    {_mermaid_id(e["from"])} -->{label} {_mermaid_id(e["to"])}')
+    return "\n".join(lines)
+
+
+def get_diagram_row(conn: sqlite3.Connection, uid: str) -> sqlite3.Row | None:
+    return conn.execute("SELECT * FROM diagrams WHERE memory_uid = ?", (uid,)).fetchone()
+
+
+def is_diagram(conn: sqlite3.Connection, uid: str) -> bool:
+    """True for a diagram memory.
+
+    The guard the free-text content editors use: hand-editing a diagram's
+    content would desync it from the graph that generates it, so they
+    refuse and point at the diagram writers instead.
+    """
+    row = get_memory(conn, uid)
+    return row is not None and row["type"] == DIAGRAM_TYPE
+
+
+def _load_graph(conn: sqlite3.Connection, uid: str) -> tuple[list[dict], list[dict]]:
+    """A stored diagram's nodes/edges as the same dicts the writers accept."""
+    nodes = [
+        {"key": r["node_key"], "label": r["label"], "shape": r["shape"],
+         "note": r["note"], "seq": r["seq"], "x": r["x"], "y": r["y"]}
+        for r in conn.execute(
+            "SELECT * FROM diagram_nodes WHERE memory_uid = ? ORDER BY seq, id", (uid,)
+        )
+    ]
+    edges = [
+        {"from": r["from_key"], "to": r["to_key"], "label": r["label"], "seq": r["seq"]}
+        for r in conn.execute(
+            "SELECT * FROM diagram_edges WHERE memory_uid = ? ORDER BY seq, id", (uid,)
+        )
+    ]
+    return nodes, edges
+
+
+def _write_nodes(
+    conn: sqlite3.Connection, uid: str, nodes: list[dict],
+    positions: dict[str, tuple[float, float]],
+) -> None:
+    conn.execute("DELETE FROM diagram_nodes WHERE memory_uid = ?", (uid,))
+    conn.executemany(
+        """INSERT INTO diagram_nodes (memory_uid, node_key, shape, label, note, seq, x, y)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+        [(uid, n["key"], n["shape"], n["label"], n["note"], i,
+          positions[n["key"]][0], positions[n["key"]][1])
+         for i, n in enumerate(nodes)],
+    )
+
+
+def _write_edges(conn: sqlite3.Connection, uid: str, edges: list[dict]) -> None:
+    conn.execute("DELETE FROM diagram_edges WHERE memory_uid = ?", (uid,))
+    conn.executemany(
+        "INSERT INTO diagram_edges (memory_uid, from_key, to_key, label, seq) VALUES (?, ?, ?, ?, ?)",
+        [(uid, e["from"], e["to"], e["label"], i) for i, e in enumerate(edges)],
+    )
+
+
+def _refresh_diagram_content(conn: sqlite3.Connection, uid: str, note: str = "") -> None:
+    """Re-generate memories.content after a structural change.
+
+    Routed through update_memory_content so the change lands in the audit
+    log and the vector is refreshed -- the same path a hand edit of any
+    other type takes. A change that leaves the projection identical (an
+    edge label rewritten to itself, say) writes nothing.
+    """
+    d = get_diagram_row(conn, uid)
+    row = get_memory(conn, uid)
+    if d is None or row is None:
+        return
+    nodes, edges = _load_graph(conn, uid)
+    content = _render_text(d["title"], d["summary"], d["kind"], nodes, edges)
+    if content == row["content"]:
+        return
+    update_memory_content(conn, uid, content, note=note)
+
+
+def insert_diagram(
+    conn: sqlite3.Connection,
+    *,
+    title: str,
+    nodes: object,
+    edges: object,
+    summary: str = "",
+    kind: str = "flowchart",
+    domain: str = "",
+    session: str = "",
+    tags: str = "",
+) -> tuple[str | None, list[str]]:
+    """Create a type='diagram' memory from a whole graph.
+
+    Returns (uid, errors). On any validation error nothing at all is
+    written and uid is None -- a half-written flow is worse than no flow.
+    """
+    if kind not in DIAGRAM_KINDS:
+        return None, [f"unknown diagram kind {kind!r}; use one of: {', '.join(DIAGRAM_KINDS)}"]
+    title = str(title).strip()
+    if not title:
+        return None, ["diagram needs a title"]
+    n = _norm_nodes(nodes)
+    e = _norm_edges(edges)
+    errors = _validate_graph(n, e)
+    if errors:
+        return None, errors
+    summary = str(summary).strip()
+    uid = insert_memory(
+        conn, type=DIAGRAM_TYPE, content=_render_text(title, summary, kind, n, e),
+        domain=domain, session=session, tags=tags or DIAGRAM_TYPE,
+    )
+    conn.execute(
+        "INSERT INTO diagrams (memory_uid, kind, title, summary) VALUES (?, ?, ?, ?)",
+        (uid, kind, title, summary),
+    )
+    _write_nodes(conn, uid, n, _layout_graph(n, e))
+    _write_edges(conn, uid, e)
+    return uid, []
+
+
+def replace_diagram_graph(
+    conn: sqlite3.Connection, uid: str, nodes: object, edges: object
+) -> tuple[bool, list[str]]:
+    """Swap a diagram's whole graph, keeping the positions of surviving nodes.
+
+    A node the user dragged keeps its coordinates across a rewrite; only
+    keys that are new to the graph get layout coordinates. Call
+    relayout_diagram() for a clean arrangement. Node links pointing at
+    keys the rewrite dropped go with them.
+    """
+    if get_diagram_row(conn, uid) is None:
+        return False, [f"{uid} is not a diagram"]
+    n = _norm_nodes(nodes)
+    e = _norm_edges(edges)
+    errors = _validate_graph(n, e)
+    if errors:
+        return False, errors
+    old_nodes, _ = _load_graph(conn, uid)
+    kept = {o["key"]: (o["x"], o["y"]) for o in old_nodes}
+    fresh = _layout_graph(n, e)
+    positions = {node["key"]: kept.get(node["key"], fresh[node["key"]]) for node in n}
+    _write_nodes(conn, uid, n, positions)
+    _write_edges(conn, uid, e)
+    live = [node["key"] for node in n]
+    conn.execute(
+        "DELETE FROM diagram_node_links WHERE memory_uid = ? "
+        f"AND node_key NOT IN ({','.join('?' * len(live))})",
+        (uid, *live),
+    )
+    _refresh_diagram_content(conn, uid)
+    return True, []
+
+
+def upsert_diagram_node(
+    conn: sqlite3.Connection,
+    uid: str,
+    node_key: str,
+    *,
+    label: str | None = None,
+    shape: str | None = None,
+    note: str | None = None,
+) -> tuple[bool, list[str]]:
+    """Create or patch one node; only the fields passed are touched.
+
+    Structural rules are NOT enforced here -- see _validate_graph. A new
+    node gets its coordinates from a fresh layout of the resulting graph,
+    but only its OWN coordinate is applied: every existing node keeps
+    wherever the user dragged it.
+    """
+    if get_diagram_row(conn, uid) is None:
+        return False, [f"{uid} is not a diagram"]
+    nodes, edges = _load_graph(conn, uid)
+    existing = next((n for n in nodes if n["key"] == node_key), None)
+    prev = existing or {}
+    candidate = {
+        "key": str(node_key).strip(),
+        "label": str(prev.get("label", "") if label is None else label).strip(),
+        "shape": str(prev.get("shape", "step") if shape is None else shape).strip() or "step",
+        "note": str(prev.get("note", "") if note is None else note).strip(),
+        "seq": prev.get("seq", len(nodes)),
+    }
+    errors = _node_field_errors(candidate)
+    if errors:
+        return False, errors
+    if existing is not None:
+        conn.execute(
+            """UPDATE diagram_nodes SET label = ?, shape = ?, note = ?
+               WHERE memory_uid = ? AND node_key = ?""",
+            (candidate["label"], candidate["shape"], candidate["note"], uid, node_key),
+        )
+    else:
+        x, y = _layout_graph(nodes + [candidate], edges)[candidate["key"]]
+        conn.execute(
+            """INSERT INTO diagram_nodes (memory_uid, node_key, shape, label, note, seq, x, y)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            (uid, candidate["key"], candidate["shape"], candidate["label"],
+             candidate["note"], candidate["seq"], x, y),
+        )
+    _refresh_diagram_content(conn, uid)
+    return True, []
+
+
+def delete_diagram_node(
+    conn: sqlite3.Connection, uid: str, node_key: str
+) -> tuple[bool, list[str]]:
+    """Remove a node together with its edges and its memory links."""
+    if get_diagram_row(conn, uid) is None:
+        return False, [f"{uid} is not a diagram"]
+    cur = conn.execute(
+        "DELETE FROM diagram_nodes WHERE memory_uid = ? AND node_key = ?", (uid, node_key)
+    )
+    if cur.rowcount == 0:
+        return False, [f"no node {node_key!r} in {uid}"]
+    conn.execute(
+        "DELETE FROM diagram_edges WHERE memory_uid = ? AND (from_key = ? OR to_key = ?)",
+        (uid, node_key, node_key),
+    )
+    conn.execute(
+        "DELETE FROM diagram_node_links WHERE memory_uid = ? AND node_key = ?", (uid, node_key)
+    )
+    _refresh_diagram_content(conn, uid)
+    return True, []
+
+
+def upsert_diagram_edge(
+    conn: sqlite3.Connection, uid: str, from_key: str, to_key: str, label: str = ""
+) -> tuple[bool, list[str]]:
+    """Wire two nodes, or relabel an existing wire between them."""
+    if get_diagram_row(conn, uid) is None:
+        return False, [f"{uid} is not a diagram"]
+    nodes, edges = _load_graph(conn, uid)
+    keys = {n["key"] for n in nodes}
+    errors = [f"edge endpoint {k!r} is not a node key" for k in (from_key, to_key) if k not in keys]
+    if from_key == to_key:
+        errors.append(f"self-loop on {from_key!r}: model a retry with an explicit decision node")
+    if errors:
+        return False, errors
+    conn.execute(
+        """INSERT INTO diagram_edges (memory_uid, from_key, to_key, label, seq)
+           VALUES (?, ?, ?, ?, ?)
+           ON CONFLICT(memory_uid, from_key, to_key) DO UPDATE SET label = excluded.label""",
+        (uid, from_key, to_key, str(label).strip(), len(edges)),
+    )
+    _refresh_diagram_content(conn, uid)
+    return True, []
+
+
+def delete_diagram_edge(
+    conn: sqlite3.Connection, uid: str, from_key: str, to_key: str
+) -> tuple[bool, list[str]]:
+    if get_diagram_row(conn, uid) is None:
+        return False, [f"{uid} is not a diagram"]
+    cur = conn.execute(
+        "DELETE FROM diagram_edges WHERE memory_uid = ? AND from_key = ? AND to_key = ?",
+        (uid, from_key, to_key),
+    )
+    if cur.rowcount == 0:
+        return False, [f"no edge {from_key!r} -> {to_key!r} in {uid}"]
+    _refresh_diagram_content(conn, uid)
+    return True, []
+
+
+def set_diagram_meta(
+    conn: sqlite3.Connection, uid: str, *, title: str | None = None, summary: str | None = None
+) -> tuple[bool, list[str]]:
+    """Rename a diagram or rewrite its summary; both feed the projection."""
+    d = get_diagram_row(conn, uid)
+    if d is None:
+        return False, [f"{uid} is not a diagram"]
+    new_title = d["title"] if title is None else str(title).strip()
+    new_summary = d["summary"] if summary is None else str(summary).strip()
+    if not new_title:
+        return False, ["diagram needs a title"]
+    conn.execute(
+        "UPDATE diagrams SET title = ?, summary = ? WHERE memory_uid = ?",
+        (new_title, new_summary, uid),
+    )
+    _refresh_diagram_content(conn, uid)
+    return True, []
+
+
+def set_node_positions(conn: sqlite3.Connection, uid: str, positions: object) -> int:
+    """Persist dragged coordinates. Layout is not content.
+
+    Deliberately touches nothing else: no content re-render, no `edits`
+    row, no re-embed, not even memories.updated_at -- moving a box on a
+    canvas must not read as an edit or reorder list_recent().
+
+    Accepts {key: (x, y)} or {key: {"x": .., "y": ..}}; unknown keys and
+    unparseable coordinates are skipped, and the count of rows actually
+    moved comes back.
+    """
+    written = 0
+    for key, raw in (positions or {}).items():  # type: ignore[union-attr]
+        try:
+            pair = (raw.get("x"), raw.get("y")) if isinstance(raw, dict) else (raw[0], raw[1])
+            x, y = float(pair[0]), float(pair[1])
+        except (TypeError, ValueError, IndexError, KeyError):
+            continue
+        cur = conn.execute(
+            "UPDATE diagram_nodes SET x = ?, y = ? WHERE memory_uid = ? AND node_key = ?",
+            (x, y, uid, key),
+        )
+        written += cur.rowcount
+    return written
+
+
+def relayout_diagram(conn: sqlite3.Connection, uid: str) -> int:
+    """Discard stored coordinates and recompute the whole arrangement.
+
+    The escape hatch for a diagram dragged into a mess. Content is
+    untouched: the projection never mentions coordinates.
+    """
+    if get_diagram_row(conn, uid) is None:
+        return 0
+    nodes, edges = _load_graph(conn, uid)
+    return set_node_positions(conn, uid, _layout_graph(nodes, edges))
+
+
+def add_node_link(
+    conn: sqlite3.Connection, uid: str, node_key: str, target_uid: str,
+    relation_type: str = "explains",
+) -> tuple[bool, list[str]]:
+    """Point one step of a flow at another memory that explains it.
+
+    This is what makes a diagram an index of its domain: the flow says
+    what happens, and the linked note/anti_pattern says why that step is
+    the way it is.
+    """
+    if get_diagram_row(conn, uid) is None:
+        return False, [f"{uid} is not a diagram"]
+    node = conn.execute(
+        "SELECT 1 FROM diagram_nodes WHERE memory_uid = ? AND node_key = ?", (uid, node_key)
+    ).fetchone()
+    if node is None:
+        return False, [f"no node {node_key!r} in {uid}"]
+    if target_uid == uid:
+        return False, ["a diagram cannot link a node back to itself"]
+    if get_memory(conn, target_uid) is None:
+        return False, [f"unknown target memory {target_uid!r}"]
+    conn.execute(
+        """INSERT INTO diagram_node_links (memory_uid, node_key, target_uid, relation_type, created_at)
+           VALUES (?, ?, ?, ?, ?)
+           ON CONFLICT(memory_uid, node_key, target_uid)
+           DO UPDATE SET relation_type = excluded.relation_type""",
+        (uid, node_key, target_uid, str(relation_type).strip() or "explains", now_iso()),
+    )
+    return True, []
+
+
+def delete_node_link(
+    conn: sqlite3.Connection, uid: str, node_key: str, target_uid: str
+) -> bool:
+    cur = conn.execute(
+        "DELETE FROM diagram_node_links WHERE memory_uid = ? AND node_key = ? AND target_uid = ?",
+        (uid, node_key, target_uid),
+    )
+    return cur.rowcount > 0
+
+
+def get_node_links(conn: sqlite3.Connection, uid: str) -> list[sqlite3.Row]:
+    """A diagram's node links, joined to the linked memory's own columns."""
+    return conn.execute(
+        """SELECT l.node_key, l.target_uid, l.relation_type, l.created_at,
+                  m.type AS target_type, m.domain AS target_domain,
+                  m.status AS target_status, m.confidence AS target_confidence,
+                  m.content AS target_content
+           FROM diagram_node_links l JOIN memories m ON m.uid = l.target_uid
+           WHERE l.memory_uid = ? ORDER BY l.node_key, l.created_at""",
+        (uid,),
+    ).fetchall()
+
+
+def diagrams_referencing(conn: sqlite3.Connection, target_uid: str) -> list[sqlite3.Row]:
+    """Which diagrams point a node at this memory -- the reverse of a node link."""
+    return conn.execute(
+        """SELECT l.memory_uid, l.node_key, l.relation_type, d.title, n.label
+           FROM diagram_node_links l
+           JOIN diagrams d ON d.memory_uid = l.memory_uid
+           LEFT JOIN diagram_nodes n
+                  ON n.memory_uid = l.memory_uid AND n.node_key = l.node_key
+           WHERE l.target_uid = ? ORDER BY d.title, l.node_key""",
+        (target_uid,),
+    ).fetchall()
+
+
+def get_diagram(conn: sqlite3.Connection, uid: str) -> dict | None:
+    """Everything one diagram is made of, ready to render."""
+    d = get_diagram_row(conn, uid)
+    if d is None:
+        return None
+    nodes, edges = _load_graph(conn, uid)
+    return {
+        "uid": uid,
+        "kind": d["kind"],
+        "title": d["title"],
+        "summary": d["summary"],
+        "nodes": nodes,
+        "edges": edges,
+        "links": [dict(r) for r in get_node_links(conn, uid)],
+    }
+
+
+def render_diagram_text(conn: sqlite3.Connection, uid: str) -> str:
+    d = get_diagram_row(conn, uid)
+    if d is None:
+        return ""
+    nodes, edges = _load_graph(conn, uid)
+    return _render_text(d["title"], d["summary"], d["kind"], nodes, edges)
+
+
+def render_diagram_mermaid(conn: sqlite3.Connection, uid: str) -> str:
+    d = get_diagram_row(conn, uid)
+    if d is None:
+        return ""
+    nodes, edges = _load_graph(conn, uid)
+    return _render_mermaid(d["title"], nodes, edges)
 
 
 def _fts_query(raw: str) -> str:
@@ -681,9 +1516,14 @@ def dedup_candidates(
     pairs involving checkpoints rank below note/reasoning pairs of equal
     score -- real merges live in durable types. The returned score is
     never altered, only the ordering.
+
+    Diagrams never enter the candidate pool: their content is a generated
+    projection of a graph, so two similar flows are not a prose merge
+    anybody could apply -- proposing one would only produce a suggestion
+    that cannot be carried out.
     """
-    sql = ["SELECT * FROM memories WHERE status = 'active'"]
-    params: list = []
+    sql = ["SELECT * FROM memories WHERE status = 'active' AND type != ?"]
+    params: list = [DIAGRAM_TYPE]
     if domain:
         sql.append("AND domain = ?")
         params.append(domain)

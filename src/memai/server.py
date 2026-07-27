@@ -1,17 +1,21 @@
 """memai MCP server.
 
 Tools for long-term agent memory: note/checkpoint/anti_pattern/
-reasoning/handoff to write, search/recall/list_by_domain/list_recent/
-list_domains/pulse to read, plus edit history, a relations graph, a
-dedup-candidate scanner, confidence/status tracking, and help() for
-self-documentation straight from these docstrings. Retrieval is hybrid
-FTS5 (BM25) + local model2vec vectors in sqlite-vec, all in one ACID
-SQLite file -- both retrievers only narrow candidates, the calling
+reasoning/handoff/diagram to write, search/recall/list_by_domain/
+list_recent/list_domains/pulse to read, plus edit history, a relations
+graph, a dedup-candidate scanner, confidence/status tracking, and help()
+for self-documentation straight from these docstrings. Retrieval is
+hybrid FTS5 (BM25) + local model2vec vectors in sqlite-vec, all in one
+ACID SQLite file -- both retrievers only narrow candidates, the calling
 agent judges relevance.
 
 Writer tool names match the `type` value they store (note stores
 type='note', reasoning stores type='reasoning', ...), so what an agent
 calls is exactly what search/list_* filter on.
+
+diagram is the one type whose body is not prose: it stores a graph, one
+row per step, and generates the prose the retrieval side indexes. Its
+graph is edited through diagram_* and read back through get_diagram().
 """
 
 from __future__ import annotations
@@ -32,6 +36,7 @@ def _row_to_dict(row) -> dict:
 
 SNIPPET_LIMIT = 400
 PULSE_NOTES = 5  # recent note()'d facts surfaced as warm-up breadcrumbs
+PULSE_DIAGRAMS = 5  # documented flows named, never inlined -- see pulse()
 
 # Memory type tag per writer -- the retrieval tools filter on these exact
 # strings (search/recall/list_*(type=...)). Each writer tool is named
@@ -41,6 +46,7 @@ TYPE_CHECKPOINT = "checkpoint"      # checkpoint()
 TYPE_ANTI_PATTERN = "anti_pattern"  # anti_pattern()
 TYPE_REASONING = "reasoning"        # reasoning()
 TYPE_HANDOFF = "handoff"            # handoff()
+TYPE_DIAGRAM = "diagram"            # diagram()
 
 
 def _snippet_dict(d: dict) -> dict:
@@ -179,6 +185,182 @@ def handoff(content: str, domain: str = "", session: str = "") -> dict:
     return result
 
 
+def _errors(errors: list[str]) -> dict:
+    return {"ok": False, "errors": errors}
+
+
+def _capped(body: str) -> str:
+    """Keep one rendered diagram from eating a whole context window."""
+    budget = db.DIAGRAM_BODY_BUDGET
+    if len(body) <= budget:
+        return body
+    return body[:budget].rstrip() + (
+        f"\n... [+{len(body) - budget} chars; open the admin dashboard for the full diagram]"
+    )
+
+
+@mcp.tool()
+def diagram(
+    title: str,
+    nodes: list[dict],
+    edges: list[dict],
+    summary: str = "",
+    domain: str = "",
+    session: str = "",
+    tags: str = "",
+    kind: str = "flowchart",
+) -> dict:
+    """Document what a routine does, start to end, as a graph. Stored as type='diagram'.
+
+    For a PROCESS, not a fact: note() records what is true, checkpoint()
+    where the work stands, this one how a routine runs. Every step is a
+    separate object that can carry its own explanation and its own links
+    to other memories, which is what makes a diagram the source of truth
+    for its domain instead of one more wall of prose.
+
+    Keep every `label` objective -- what happens at that step, nothing
+    more. The reasoning, caveats and history belong in that node's
+    `note`, where they explain without cluttering the flow.
+
+    nodes: [{"key": "load", "label": "Read the export window",
+             "shape": "step", "note": "optional long explanation"}]
+    edges: [{"from": "load", "to": "check", "label": "optional branch"}]
+
+    key: stable id the edges refer to; letters, digits, '_' or '-'.
+    shape: start|step|decision|io|end. Exactly one 'start' is required
+    and every node must be reachable from it. Cycles are allowed -- a
+    retry loop is a real flow, not a mistake.
+
+    Returns {"uid": ...}, or {"ok": False, "errors": [...]} with nothing
+    written at all. Node positions are computed and stored server-side,
+    so the flow renders identically for every reader -- see get_diagram().
+    """
+    with db.connect() as conn:
+        domain, warning = _coerce_domain(conn, domain)
+        uid, errors = db.insert_diagram(
+            conn, title=title, nodes=nodes, edges=edges, summary=summary,
+            kind=kind, domain=domain, session=session, tags=tags,
+        )
+    if errors:
+        return _errors(errors)
+    result = {"uid": uid}
+    if warning:
+        result["domain_adjusted"] = warning
+    return result
+
+
+@mcp.tool()
+def diagram_node(
+    uid: str,
+    key: str,
+    label: str | None = None,
+    shape: str | None = None,
+    note: str | None = None,
+    delete: bool = False,
+) -> dict:
+    """Add, patch or remove one step of a diagram.
+
+    Only the arguments you pass are touched, so patching a note leaves
+    the label alone; pass note="" to clear one. delete=True removes the
+    step together with its edges and its memory links.
+
+    The whole-graph rules are relaxed here on purpose: a step may sit
+    unattached until you add its edges, which is what lets a flow be
+    built up across several calls. diagram() enforces them.
+    """
+    with db.connect() as conn:
+        if delete:
+            ok, errors = db.delete_diagram_node(conn, uid, key)
+        else:
+            ok, errors = db.upsert_diagram_node(conn, uid, key, label=label, shape=shape, note=note)
+    return {"ok": True, "node_key": key} if ok else _errors(errors)
+
+
+@mcp.tool()
+def diagram_edge(
+    uid: str, from_key: str, to_key: str, label: str = "", delete: bool = False
+) -> dict:
+    """Wire two steps of a diagram together, relabel that wire, or remove it.
+
+    label carries the condition on a branch out of a decision node
+    ('yes', 'no', 'on timeout'). Calling again with the same endpoints
+    updates the label instead of adding a second edge between them.
+    """
+    with db.connect() as conn:
+        if delete:
+            ok, errors = db.delete_diagram_edge(conn, uid, from_key, to_key)
+        else:
+            ok, errors = db.upsert_diagram_edge(conn, uid, from_key, to_key, label=label)
+    return {"ok": True} if ok else _errors(errors)
+
+
+@mcp.tool()
+def diagram_link(
+    uid: str, node_key: str, target_uid: str,
+    relation_type: str = "explains", delete: bool = False,
+) -> dict:
+    """Attach another memory to one specific step of a diagram.
+
+    What turns a diagram into an index of its domain: the step states
+    what happens, the linked note/anti_pattern/reasoning states why it is
+    that way. Point at the step the memory actually concerns -- for an
+    edge to the diagram as a whole use link_memories() instead.
+
+    get_memory() on the linked memory reports the diagrams that reference
+    it, so the connection is visible from both ends.
+    """
+    with db.connect() as conn:
+        if delete:
+            ok = db.delete_node_link(conn, uid, node_key, target_uid)
+            errors = [] if ok else [f"no link from node {node_key!r} to {target_uid!r}"]
+        else:
+            ok, errors = db.add_node_link(conn, uid, node_key, target_uid, relation_type)
+    return {"ok": True} if ok else _errors(errors)
+
+
+@mcp.tool()
+def diagram_relayout(uid: str) -> dict:
+    """Recompute a diagram's stored node positions from scratch.
+
+    Positions live in the store, not in a viewer, so every reader sees
+    the same picture and positions hand-adjusted in the admin dashboard
+    persist. This discards those adjustments and rebuilds the layered
+    arrangement -- the fix for a diagram dragged into a mess.
+    """
+    with db.connect() as conn:
+        moved = db.relayout_diagram(conn, uid)
+    return {"ok": moved > 0, "nodes": moved}
+
+
+@mcp.tool()
+def get_diagram(uid: str, format: str = "mermaid") -> dict:
+    """Read a diagram back. format: 'mermaid' | 'text' | 'json'.
+
+    'mermaid' returns source ready to render as a fenced mermaid block --
+    the fastest way to show a flow in a chat client that can draw one.
+    Mermaid always applies its own layout, so it ignores stored positions.
+    'text' returns the same prose projection kept as the memory's content:
+    readable anywhere, no renderer required.
+    'json' returns the full graph including each node's stored x/y and its
+    links -- for a renderer that must reproduce the exact admin
+    arrangement, and the only format that round-trips back through
+    diagram_node/diagram_edge.
+    """
+    if format not in ("mermaid", "text", "json"):
+        return _errors([f"unknown format {format!r}; use 'mermaid', 'text' or 'json'"])
+    with db.connect() as conn:
+        data = db.get_diagram(conn, uid)
+        if data is None:
+            return _errors([f"{uid} is not a diagram"])
+        if format == "json":
+            return {"format": "json", **data}
+        body = (
+            db.render_diagram_text(conn, uid) if format == "text"
+            else db.render_diagram_mermaid(conn, uid)
+        )
+    return {"uid": uid, "title": data["title"], "format": format, "body": _capped(body)}
+
+
 @mcp.tool()
 def search(query: str, domain: str = "", type: str = "", limit: int = 30) -> list[dict]:
     """Hybrid search over memory content+tags+domain: BM25 keywords + local-model vectors.
@@ -302,12 +484,25 @@ def pulse(domain: str = "") -> dict:
     facts, as recency breadcrumbs -- for relevance-ranked recall use
     recall()/search(). Those three lists are snippet-truncated -- call
     get_memory(uid) for one in full.
+
+    diagrams lists the documented flows by title only, never inlined:
+    a whole graph would swamp a warm-up. Read one with get_diagram(uid)
+    when the work actually touches that routine.
     """
     with db.connect() as conn:
         latest_checkpoint = db.latest_by_type(conn, TYPE_CHECKPOINT, domain=domain)
         handoffs = _list_scoped(conn, domain, TYPE_HANDOFF, 5)
         anti_patterns = _list_scoped(conn, domain, TYPE_ANTI_PATTERN, 10)
         recent_notes = _list_scoped(conn, domain, TYPE_NOTE, PULSE_NOTES)
+        diagram_rows = _list_scoped(conn, domain, TYPE_DIAGRAM, PULSE_DIAGRAMS)
+        diagrams = []
+        for r in diagram_rows:
+            meta = db.get_diagram_row(conn, r["uid"])
+            diagrams.append({
+                "uid": r["uid"],
+                "domain": r["domain"],
+                "title": meta["title"] if meta else "",
+            })
         checkpoint_dict = _row_to_dict(latest_checkpoint)
         if checkpoint_dict:
             checkpoint_dict["relations"] = [_row_to_dict(r) for r in db.get_relations(conn, checkpoint_dict["uid"])]
@@ -316,19 +511,33 @@ def pulse(domain: str = "") -> dict:
         "handoffs": [_snippet_dict(_row_to_dict(r)) for r in handoffs],
         "anti_patterns": [_snippet_dict(_row_to_dict(r)) for r in anti_patterns],
         "recent_notes": [_snippet_dict(_row_to_dict(r)) for r in recent_notes],
+        "diagrams": diagrams,
     }
 
 
 @mcp.tool()
 def get_memory(uid: str) -> dict:
-    """Fetch a single memory's full record, including its edit history and relations."""
+    """Fetch a single memory's full record, including its edit history and relations.
+
+    A diagram also comes back with its mermaid source and its per-node
+    links; any other memory comes back with `referenced_by_diagrams`, the
+    flows that point a step at it -- so a note tells you which processes
+    depend on it without a second lookup.
+    """
     with db.connect() as conn:
         row = db.get_memory(conn, uid)
         if row is None:
             return {}
         edits = db.get_edit_history(conn, uid)
         rels = db.get_relations(conn, uid)
-    result = _row_to_dict(row)
+        result = _row_to_dict(row)
+        if row["type"] == TYPE_DIAGRAM:
+            result["mermaid"] = _capped(db.render_diagram_mermaid(conn, uid))
+            result["node_links"] = [_row_to_dict(r) for r in db.get_node_links(conn, uid)]
+        else:
+            result["referenced_by_diagrams"] = [
+                _row_to_dict(r) for r in db.diagrams_referencing(conn, uid)
+            ]
     result["edit_history"] = [_row_to_dict(e) for e in edits]
     result["relations"] = [_row_to_dict(r) for r in rels]
     return result
@@ -341,8 +550,17 @@ def edit_memory(uid: str, new_content: str, note: str = "") -> dict:
     Corrections are common in append-only memory stores that only
     support delete, not edit; this preserves the old content instead
     of losing it.
+
+    Refuses a diagram: its content is generated from the graph, so a
+    hand-written replacement would be silently overwritten by the next
+    structural change. Edit the flow through diagram_node/diagram_edge.
     """
     with db.connect() as conn:
+        if db.is_diagram(conn, uid):
+            return _errors([
+                f"{uid} is a diagram: its content is generated from the graph. "
+                "Use diagram_node/diagram_edge to change the flow."
+            ])
         ok = db.update_memory_content(conn, uid, new_content, note=note)
     return {"ok": ok}
 
@@ -622,6 +840,12 @@ _TOOLS = {
     "anti_pattern": anti_pattern,
     "reasoning": reasoning,
     "handoff": handoff,
+    "diagram": diagram,
+    "diagram_node": diagram_node,
+    "diagram_edge": diagram_edge,
+    "diagram_link": diagram_link,
+    "diagram_relayout": diagram_relayout,
+    "get_diagram": get_diagram,
     "search": search,
     "recall": recall,
     "list_by_domain": list_by_domain,

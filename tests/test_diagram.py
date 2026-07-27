@@ -1,0 +1,555 @@
+"""Tests for the diagram memory type.
+
+A diagram stores a graph -- one row per step -- and generates the prose
+that FTS and the embedder index. Two invariants get most of the attention
+here, because everything else leans on them:
+
+* the generated projection is the only thing that ever writes
+  memories.content, so a hand edit has to be refused;
+* node coordinates are authoritative in the store, so a node always has
+  them, a drag never looks like an edit, and no renderer needs a layout
+  algorithm of its own.
+
+Same hermetic setup as the rest of the suite: conftest keeps the real
+embedder out, so retrieval runs FTS-only unless a test opts in.
+"""
+
+from __future__ import annotations
+
+import pytest
+
+from memai import db
+
+
+@pytest.fixture
+def conn(tmp_path):
+    with db.connect(tmp_path / "test.db") as c:
+        yield c
+
+
+# A branch that rejoins: 'done' is reachable from 'check' directly AND
+# through 'write', which is what makes it a longest-path layering case.
+NODES = [
+    {"key": "start", "shape": "start", "label": "Receive the schedule trigger"},
+    {"key": "load", "label": "Read the export window", "note": "Inclusive on both ends."},
+    {"key": "check", "shape": "decision", "label": "Any rows in the window?"},
+    {"key": "write", "shape": "io", "label": "Write one file per store"},
+    {"key": "done", "shape": "end", "label": "Report the run as finished"},
+]
+EDGES = [
+    {"from": "start", "to": "load"},
+    {"from": "load", "to": "check"},
+    {"from": "check", "to": "done", "label": "no"},
+    {"from": "check", "to": "write", "label": "yes"},
+    {"from": "write", "to": "done"},
+]
+
+
+def _mk(conn, **kw):
+    kw.setdefault("title", "Nightly export routine")
+    kw.setdefault("nodes", NODES)
+    kw.setdefault("edges", EDGES)
+    uid, errors = db.insert_diagram(conn, **kw)
+    assert errors == []
+    return uid
+
+
+def _nodes(conn, uid):
+    return {n["key"]: n for n in db.get_diagram(conn, uid)["nodes"]}
+
+
+# ------------------------------------------------------------------ structure
+
+def test_insert_persists_graph_and_generates_projection(conn):
+    uid = _mk(conn, summary="Ships one file per store.", domain="proj-1042")
+    d = db.get_diagram(conn, uid)
+    assert (d["title"], d["kind"]) == ("Nightly export routine", "flowchart")
+    assert [n["key"] for n in d["nodes"]] == [n["key"] for n in NODES]
+    assert len(d["edges"]) == len(EDGES)
+
+    row = db.get_memory(conn, uid)
+    assert row["type"] == "diagram"
+    # the projection, not the raw graph, is what search indexes
+    assert row["content"] == db.render_diagram_text(conn, uid)
+    assert "DIAGRAM: Nightly export routine" in row["content"]
+    assert "SUMMARY: Ships one file per store." in row["content"]
+    assert "check [decision]: Any rows in the window?" in row["content"]
+    assert "  -> write [yes]" in row["content"]
+    assert "load: Inclusive on both ends." in row["content"]
+
+
+def test_projection_reads_in_flow_order(conn):
+    uid = _mk(conn)
+    flow = db.get_memory(conn, uid)["content"]
+    # node lines start at column 0; the '  -> target' arrows are indented
+    order = [line.split(" ", 1)[0] for line in flow.splitlines()
+             if " [" in line and not line.startswith(" ")]
+    assert order == ["start", "load", "check", "write", "done"]
+
+
+def test_tags_default_to_the_type_so_fts_can_find_it(conn):
+    assert db.get_memory(conn, _mk(conn))["tags"] == "diagram"
+    assert db.get_memory(conn, _mk(conn, tags="export,nightly"))["tags"] == "export,nightly"
+
+
+# ------------------------------------------------------------------ validation
+
+@pytest.mark.parametrize("nodes, edges, expected", [
+    ([], [], "no nodes"),
+    ([{"key": "a", "label": "x"}], [], "no 'start' node"),
+    ([{"key": "s", "shape": "start", "label": "x"},
+      {"key": "t", "shape": "start", "label": "y"}], [{"from": "s", "to": "t"}], "'start' nodes"),
+    ([{"key": "s", "shape": "start", "label": "x"},
+      {"key": "s", "shape": "step", "label": "y"}], [], "duplicate node key"),
+    ([{"key": "s", "shape": "start", "label": ""}], [], "empty label"),
+    ([{"key": "s", "shape": "start", "label": "x"},
+      {"key": "b", "shape": "weird", "label": "y"}], [{"from": "s", "to": "b"}], "unknown shape"),
+    ([{"key": "s", "shape": "start", "label": "x"}], [{"from": "s", "to": "ghost"}], "not a node key"),
+    ([{"key": "s", "shape": "start", "label": "x"},
+      {"key": "b", "label": "y"}], [], "unreachable from start"),
+    ([{"key": "s p", "shape": "start", "label": "x"}], [], "invalid node key"),
+    ([{"key": "s", "shape": "start", "label": "x"}], [{"from": "s", "to": "s"}], "self-loop"),
+])
+def test_validation_rejects_broken_graphs(conn, nodes, edges, expected):
+    uid, errors = db.insert_diagram(conn, title="T", nodes=nodes, edges=edges)
+    assert uid is None
+    assert any(expected in e for e in errors), errors
+
+
+def test_failed_validation_writes_nothing(conn):
+    before = conn.execute("SELECT COUNT(*) FROM memories").fetchone()[0]
+    uid, errors = db.insert_diagram(conn, title="T", nodes=NODES, edges=[{"from": "start", "to": "ghost"}])
+    assert (uid, bool(errors)) == (None, True)
+    assert conn.execute("SELECT COUNT(*) FROM memories").fetchone()[0] == before
+    assert conn.execute("SELECT COUNT(*) FROM diagram_nodes").fetchone()[0] == 0
+
+
+def test_title_and_kind_are_checked(conn):
+    assert "title" in db.insert_diagram(conn, title="  ", nodes=NODES, edges=EDGES)[1][0]
+    assert "kind" in db.insert_diagram(conn, title="T", nodes=NODES, edges=EDGES, kind="er")[1][0]
+
+
+# ---------------------------------------------------------------------- layout
+
+def test_every_node_has_coordinates_without_a_client(conn):
+    """Nothing may depend on the editor having been opened once."""
+    for n in db.get_diagram(conn, _mk(conn))["nodes"]:
+        assert isinstance(n["x"], float) and isinstance(n["y"], float)
+
+
+def test_layout_is_deterministic(conn):
+    nodes, edges = db._load_graph(conn, _mk(conn))
+    assert db._layout_graph(nodes, edges) == db._layout_graph(nodes, edges)
+
+
+def test_layout_sinks_a_rejoining_node_below_every_branch(conn):
+    """Longest path, not first-visit depth: 'done' sits under 'write'.
+
+    'check -> done' comes first in EDGES, so first-visit depth would put
+    the terminal step level with 'write' instead of after it.
+    """
+    pos = _nodes(conn, _mk(conn))
+    assert pos["done"]["y"] > pos["write"]["y"] > pos["check"]["y"]
+
+
+def test_layout_spreads_siblings_across_a_row(conn):
+    pos = _nodes(conn, _mk(conn))
+    assert pos["start"]["y"] < pos["load"]["y"]
+    # the two branch targets of one decision are in different columns
+    uid = _mk(conn, edges=[
+        {"from": "start", "to": "load"},
+        {"from": "load", "to": "check"},
+        {"from": "check", "to": "write", "label": "yes"},
+        {"from": "check", "to": "done", "label": "no"},
+    ])
+    pos = _nodes(conn, uid)
+    assert pos["write"]["y"] == pos["done"]["y"]
+    assert pos["write"]["x"] != pos["done"]["x"]
+
+
+def test_layout_survives_a_cycle(conn):
+    """A retry loop is a legal flow; the back-edge must not hang layering."""
+    uid = _mk(conn, title="Retry loop", nodes=[
+        {"key": "start", "shape": "start", "label": "Begin"},
+        {"key": "call", "label": "Call the endpoint"},
+        {"key": "ok", "shape": "decision", "label": "Succeeded?"},
+        {"key": "done", "shape": "end", "label": "Finish"},
+    ], edges=[
+        {"from": "start", "to": "call"},
+        {"from": "call", "to": "ok"},
+        {"from": "ok", "to": "call", "label": "no, retry"},
+        {"from": "ok", "to": "done", "label": "yes"},
+    ])
+    pos = _nodes(conn, uid)
+    assert pos["start"]["y"] < pos["call"]["y"] < pos["ok"]["y"] < pos["done"]["y"]
+
+
+def test_drag_is_not_an_edit(conn):
+    uid = _mk(conn)
+    before = db.get_memory(conn, uid)
+    edits = len(db.get_edit_history(conn, uid))
+
+    assert db.set_node_positions(conn, uid, {"load": (999.0, 111.0)}) == 1
+
+    after = db.get_memory(conn, uid)
+    assert after["content"] == before["content"]
+    assert after["updated_at"] == before["updated_at"]
+    assert len(db.get_edit_history(conn, uid)) == edits
+    assert (_nodes(conn, uid)["load"]["x"], _nodes(conn, uid)["load"]["y"]) == (999.0, 111.0)
+
+
+def test_drag_accepts_a_dict_pair_and_skips_junk(conn):
+    uid = _mk(conn)
+    moved = db.set_node_positions(conn, uid, {
+        "load": {"x": 5, "y": 6},   # what a JSON body looks like
+        "ghost": (1, 2),            # unknown key
+        "check": ("left", "up"),    # unparseable
+    })
+    assert moved == 1
+    assert (_nodes(conn, uid)["load"]["x"], _nodes(conn, uid)["load"]["y"]) == (5.0, 6.0)
+
+
+def test_relayout_discards_dragged_positions(conn):
+    uid = _mk(conn)
+    original = _nodes(conn, uid)["load"]["x"]
+    db.set_node_positions(conn, uid, {"load": (999.0, 999.0)})
+    assert db.relayout_diagram(conn, uid) == len(NODES)
+    assert _nodes(conn, uid)["load"]["x"] == original
+
+
+def test_relayout_leaves_content_untouched(conn):
+    uid = _mk(conn)
+    before = db.get_memory(conn, uid)["content"]
+    db.set_node_positions(conn, uid, {"load": (999.0, 999.0)})
+    db.relayout_diagram(conn, uid)
+    assert db.get_memory(conn, uid)["content"] == before
+
+
+# ----------------------------------------------------------- incremental edits
+
+def test_a_new_node_may_sit_unattached_then_be_wired(conn):
+    """Two-call authoring has to be legal, so reachability is not enforced here."""
+    uid = _mk(conn)
+    ok, errors = db.upsert_diagram_node(conn, uid, "audit", label="Append to the audit log")
+    assert (ok, errors) == (True, [])
+    assert "audit [step]: Append to the audit log" in db.get_memory(conn, uid)["content"]
+    assert db.upsert_diagram_edge(conn, uid, "write", "audit") == (True, [])
+
+
+def test_a_new_node_gets_coordinates_and_the_others_keep_theirs(conn):
+    uid = _mk(conn)
+    db.set_node_positions(conn, uid, {"load": (777.0, 888.0)})
+    db.upsert_diagram_node(conn, uid, "audit", label="Append to the audit log")
+    pos = _nodes(conn, uid)
+    assert isinstance(pos["audit"]["x"], float)
+    assert (pos["load"]["x"], pos["load"]["y"]) == (777.0, 888.0)
+
+
+def test_patching_one_field_leaves_the_others_alone(conn):
+    uid = _mk(conn)
+    assert db.upsert_diagram_node(conn, uid, "load", note="Rewritten.") == (True, [])
+    load = _nodes(conn, uid)["load"]
+    assert (load["label"], load["note"]) == ("Read the export window", "Rewritten.")
+    assert db.upsert_diagram_node(conn, uid, "load", note="") == (True, [])
+    assert _nodes(conn, uid)["load"]["note"] == ""
+
+
+def test_node_edit_lands_in_the_audit_log(conn):
+    uid = _mk(conn)
+    edits = len(db.get_edit_history(conn, uid))
+    db.upsert_diagram_node(conn, uid, "load", label="Read the window from config")
+    assert len(db.get_edit_history(conn, uid)) == edits + 1
+
+
+def test_a_no_op_edit_writes_no_audit_row(conn):
+    uid = _mk(conn)
+    edits = len(db.get_edit_history(conn, uid))
+    db.upsert_diagram_node(conn, uid, "load", label="Read the export window")
+    assert len(db.get_edit_history(conn, uid)) == edits
+
+
+def test_edge_upsert_relabels_instead_of_duplicating(conn):
+    uid = _mk(conn)
+    before = len(db.get_diagram(conn, uid)["edges"])
+    assert db.upsert_diagram_edge(conn, uid, "check", "write", label="rows found") == (True, [])
+    edges = db.get_diagram(conn, uid)["edges"]
+    assert len(edges) == before
+    assert next(e for e in edges if e["to"] == "write")["label"] == "rows found"
+
+
+def test_incremental_writers_still_check_endpoints(conn):
+    uid = _mk(conn)
+    assert "not a node key" in db.upsert_diagram_edge(conn, uid, "check", "ghost")[1][0]
+    assert "self-loop" in db.upsert_diagram_edge(conn, uid, "check", "check")[1][0]
+    assert "unknown shape" in db.upsert_diagram_node(conn, uid, "x", label="y", shape="blob")[1][0]
+
+
+def test_writers_refuse_a_uid_that_is_not_a_diagram(conn):
+    note = db.insert_memory(conn, type="note", content="a fact")
+    assert "not a diagram" in db.upsert_diagram_node(conn, note, "a", label="b")[1][0]
+    assert "not a diagram" in db.upsert_diagram_edge(conn, note, "a", "b")[1][0]
+    assert "not a diagram" in db.replace_diagram_graph(conn, note, NODES, EDGES)[1][0]
+    assert db.relayout_diagram(conn, note) == 0
+    assert db.get_diagram(conn, note) is None
+
+
+def test_deleting_a_node_takes_its_edges_and_links_with_it(conn):
+    uid = _mk(conn)
+    note = db.insert_memory(conn, type="note", content="a fact")
+    assert db.add_node_link(conn, uid, "write", note) == (True, [])
+
+    assert db.delete_diagram_node(conn, uid, "write") == (True, [])
+    d = db.get_diagram(conn, uid)
+    assert "write" not in {n["key"] for n in d["nodes"]}
+    assert not [e for e in d["edges"] if "write" in (e["from"], e["to"])]
+    assert d["links"] == []
+    assert "no node" in db.delete_diagram_node(conn, uid, "write")[1][0]
+
+
+def test_replace_keeps_surviving_positions_and_drops_stale_links(conn):
+    uid = _mk(conn)
+    note = db.insert_memory(conn, type="note", content="a fact")
+    db.add_node_link(conn, uid, "write", note)
+    db.set_node_positions(conn, uid, {"load": (321.0, 654.0)})
+
+    trimmed = [n for n in NODES if n["key"] != "write"]
+    ok, errors = db.replace_diagram_graph(conn, uid, trimmed, [
+        {"from": "start", "to": "load"},
+        {"from": "load", "to": "check"},
+        {"from": "check", "to": "done"},
+    ])
+    assert (ok, errors) == (True, [])
+    pos = _nodes(conn, uid)
+    assert (pos["load"]["x"], pos["load"]["y"]) == (321.0, 654.0)  # drag survived
+    assert db.get_diagram(conn, uid)["links"] == []                # link went with 'write'
+
+
+def test_replace_rejects_a_broken_graph_without_touching_the_stored_one(conn):
+    uid = _mk(conn)
+    before = db.get_diagram(conn, uid)
+    ok, errors = db.replace_diagram_graph(conn, uid, [{"key": "a", "label": "x"}], [])
+    assert (ok, bool(errors)) == (False, True)
+    assert db.get_diagram(conn, uid)["nodes"] == before["nodes"]
+
+
+def test_set_diagram_meta_regenerates_the_projection(conn):
+    uid = _mk(conn)
+    assert db.set_diagram_meta(conn, uid, title="Nightly export", summary="One file per store.") == (True, [])
+    content = db.get_memory(conn, uid)["content"]
+    assert content.startswith("DIAGRAM: Nightly export\n")
+    assert "SUMMARY: One file per store." in content
+    assert "title" in db.set_diagram_meta(conn, uid, title="")[1][0]
+
+
+# ----------------------------------------------------------------- node links
+
+def test_node_links_resolve_both_ways(conn):
+    uid = _mk(conn)
+    note = db.insert_memory(conn, type="note", content="a fact", domain="proj-1042")
+    assert db.add_node_link(conn, uid, "load", note, "explains") == (True, [])
+
+    link = db.get_node_links(conn, uid)[0]
+    assert (link["node_key"], link["target_uid"], link["target_type"]) == ("load", note, "note")
+
+    back = db.diagrams_referencing(conn, note)[0]
+    assert (back["memory_uid"], back["node_key"], back["label"]) == (uid, "load", "Read the export window")
+
+
+def test_node_link_upsert_replaces_the_relation_type(conn):
+    uid = _mk(conn)
+    note = db.insert_memory(conn, type="note", content="a fact")
+    db.add_node_link(conn, uid, "load", note, "explains")
+    db.add_node_link(conn, uid, "load", note, "contradicts")
+    links = db.get_node_links(conn, uid)
+    assert len(links) == 1 and links[0]["relation_type"] == "contradicts"
+
+
+def test_node_link_endpoints_are_validated(conn):
+    uid = _mk(conn)
+    note = db.insert_memory(conn, type="note", content="a fact")
+    assert "no node" in db.add_node_link(conn, uid, "ghost", note)[1][0]
+    assert "unknown target" in db.add_node_link(conn, uid, "load", "nope")[1][0]
+    assert "itself" in db.add_node_link(conn, uid, "load", uid)[1][0]
+    assert db.delete_node_link(conn, uid, "load", note) is False
+
+
+# --------------------------------------------------------------------- cascade
+
+def test_purge_clears_every_diagram_table(conn):
+    uid = _mk(conn)
+    note = db.insert_memory(conn, type="note", content="a fact")
+    db.add_node_link(conn, uid, "load", note)
+
+    assert db.purge_memory(conn, uid) is True
+    for table in ("diagrams", "diagram_nodes", "diagram_edges", "diagram_node_links"):
+        assert conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] == 0
+
+
+def test_purging_a_linked_memory_leaves_no_dangling_node_link(conn):
+    uid = _mk(conn)
+    note = db.insert_memory(conn, type="note", content="a fact")
+    db.add_node_link(conn, uid, "load", note)
+
+    assert db.purge_memory(conn, note) is True
+    assert db.get_diagram(conn, uid)["links"] == []
+    assert conn.execute("SELECT COUNT(*) FROM diagram_nodes").fetchone()[0] == len(NODES)
+
+
+# ------------------------------------------------------------------- retrieval
+
+def test_search_finds_a_diagram_by_a_node_label(conn):
+    uid = _mk(conn, domain="proj-1042")
+    hits = db.search_memories(conn, "export window")
+    assert uid in [r["uid"] for r in hits]
+
+
+def test_diagrams_never_become_dedup_candidates(conn):
+    """Their content is generated, so a prose merge could never be applied."""
+    _mk(conn, title="Export routine one")
+    _mk(conn, title="Export routine two")
+    assert db.dedup_candidates(conn, threshold=0.1) == []
+    assert db.dedup_candidates(conn, type="diagram", threshold=0.1) == []
+
+
+def test_semantic_search_reaches_a_diagram(tmp_path, fake_embedder):
+    with db.connect(tmp_path / "vec.db") as conn:
+        uid = _mk(conn, title="Car maintenance schedule", nodes=[
+            {"key": "start", "shape": "start", "label": "car maintenance schedule"},
+            {"key": "done", "shape": "end", "label": "database tuning"},
+        ], edges=[{"from": "start", "to": "done"}])
+        hits = db.search_semantic(conn, "automobile maintenance", limit=5)
+        assert uid in [r["uid"] for r in hits]
+
+
+# --------------------------------------------------------------------- mermaid
+
+def test_mermaid_uses_a_shape_per_node_kind(conn):
+    src = db.render_diagram_mermaid(conn, _mk(conn))
+    assert "flowchart TD" in src
+    assert 'start(["Receive the schedule trigger"])' in src
+    assert 'load["Read the export window"]' in src
+    assert 'check{"Any rows in the window?"}' in src
+    assert 'write[/"Write one file per store"/]' in src
+    assert 'check -->|"yes"| write' in src
+    assert "    start --> load" in src
+
+
+def test_mermaid_renames_a_node_keyed_with_a_reserved_word(conn):
+    """'end' closes a subgraph -- left bare it breaks the whole diagram."""
+    uid = _mk(conn, nodes=[
+        {"key": "start", "shape": "start", "label": "Begin"},
+        {"key": "end", "shape": "end", "label": "Finish"},
+    ], edges=[{"from": "start", "to": "end"}])
+    src = db.render_diagram_mermaid(conn, uid)
+    assert 'n_end(["Finish"])' in src
+    assert "start --> n_end" in src
+    assert "\n    end(" not in src
+
+
+def test_mermaid_escapes_a_quote_in_a_label(conn):
+    uid = _mk(conn, nodes=[
+        {"key": "start", "shape": "start", "label": 'Read the "window" setting'},
+    ], edges=[])
+    assert '#quot;window#quot;' in db.render_diagram_mermaid(conn, uid)
+
+
+def test_renderers_return_empty_for_a_non_diagram(conn):
+    note = db.insert_memory(conn, type="note", content="a fact")
+    assert db.render_diagram_text(conn, note) == ""
+    assert db.render_diagram_mermaid(conn, note) == ""
+
+
+# ------------------------------------------------------------------ mcp layer
+
+@pytest.fixture
+def mcp(tmp_path, monkeypatch):
+    """The MCP tools call db.connect() with no path, so point MEMAI_HOME at tmp."""
+    monkeypatch.setenv("MEMAI_HOME", str(tmp_path))
+    from memai import server
+    return server
+
+
+def test_mcp_builds_a_diagram_across_several_calls(mcp):
+    uid = mcp.diagram(
+        title="Nightly export routine", nodes=NODES[:3], edges=EDGES[:2], domain="proj-1042",
+    )["uid"]
+    assert mcp.diagram_node(uid, "write", label="Write one file per store", shape="io") == {
+        "ok": True, "node_key": "write",
+    }
+    assert mcp.diagram_edge(uid, "check", "write", label="yes") == {"ok": True}
+    assert mcp.diagram_node(uid, "write", delete=True) == {"ok": True, "node_key": "write"}
+    assert "write" not in mcp.get_diagram(uid, format="text")["body"]
+
+
+def test_mcp_reports_validation_errors_instead_of_raising(mcp):
+    res = mcp.diagram(title="T", nodes=[{"key": "a", "label": "x"}], edges=[])
+    assert res["ok"] is False and "no 'start' node" in res["errors"][0]
+    assert "not a diagram" in mcp.get_diagram("nope")["errors"][0]
+    assert "unknown format" in mcp.get_diagram("nope", format="svg")["errors"][0]
+
+
+def test_mcp_get_diagram_formats(mcp):
+    uid = mcp.diagram(title="Nightly export routine", nodes=NODES, edges=EDGES)["uid"]
+
+    assert mcp.get_diagram(uid, format="mermaid")["body"].splitlines()[0] == "---"
+    assert mcp.get_diagram(uid, format="text")["body"].startswith("DIAGRAM:")
+
+    data = mcp.get_diagram(uid, format="json")
+    assert data["format"] == "json"
+    # json is the one format carrying the stored arrangement
+    assert all(isinstance(n["x"], float) for n in data["nodes"])
+
+
+def test_mcp_refuses_a_hand_written_diagram_content(mcp):
+    uid = mcp.diagram(title="Nightly export routine", nodes=NODES, edges=EDGES)["uid"]
+    res = mcp.edit_memory(uid, "hand written")
+    assert res["ok"] is False and "generated from the graph" in res["errors"][0]
+    assert mcp.get_memory(uid)["content"].startswith("DIAGRAM:")
+
+
+def test_mcp_get_memory_shows_the_link_from_both_ends(mcp):
+    uid = mcp.diagram(title="Nightly export routine", nodes=NODES, edges=EDGES)["uid"]
+    note = mcp.note(content="Export window is inclusive on both ends.")["uid"]
+    assert mcp.diagram_link(uid, "load", note) == {"ok": True}
+
+    diagram_view = mcp.get_memory(uid)
+    assert "flowchart TD" in diagram_view["mermaid"]
+    assert diagram_view["node_links"][0]["target_uid"] == note
+
+    note_view = mcp.get_memory(note)
+    assert note_view["referenced_by_diagrams"][0]["memory_uid"] == uid
+    assert mcp.diagram_link(uid, "load", note, delete=True) == {"ok": True}
+    assert mcp.diagram_link(uid, "load", note, delete=True)["ok"] is False
+
+
+def test_mcp_pulse_names_diagrams_without_inlining_them(mcp):
+    uid = mcp.diagram(
+        title="Nightly export routine", nodes=NODES, edges=EDGES, domain="proj-1042",
+    )["uid"]
+    entry = mcp.pulse(domain="proj-1042")["diagrams"][0]
+    assert entry == {"uid": uid, "domain": "proj-1042", "title": "Nightly export routine"}
+    assert "content" not in entry  # a whole graph would swamp a warm-up
+
+
+def test_mcp_relayout_reports_what_it_moved(mcp):
+    uid = mcp.diagram(title="Nightly export routine", nodes=NODES, edges=EDGES)["uid"]
+    assert mcp.diagram_relayout(uid) == {"ok": True, "nodes": len(NODES)}
+    assert mcp.diagram_relayout("nope") == {"ok": False, "nodes": 0}
+
+
+def test_capped_body_points_at_the_dashboard(mcp):
+    assert mcp._capped("x" * 10) == "x" * 10
+    long = mcp._capped("x" * (db.DIAGRAM_BODY_BUDGET + 500))
+    assert len(long) < db.DIAGRAM_BODY_BUDGET + 200
+    assert "admin dashboard" in long
+
+
+def test_every_registered_tool_is_documented_by_help(mcp):
+    """help() reads _TOOLS, so a tool missing from it is invisible to agents."""
+    registered = set(mcp.mcp._tool_manager._tools)
+    assert registered - set(mcp._TOOLS) == set()
+    assert {"diagram", "diagram_node", "diagram_edge",
+            "diagram_link", "diagram_relayout", "get_diagram"} <= set(mcp.help()["tools"])
+    # help() splits the summary on the first newline; it has to stand alone
+    for name in mcp._TOOLS:
+        assert mcp.help(command=name)["doc"].split("\n", 1)[0].strip()
