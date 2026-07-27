@@ -1335,7 +1335,7 @@ async function promptNewDiagram(domain = '') {
 }
 
 const ISSUE_ORDER = ['empty', 'no_start', 'many_starts', 'unreachable',
-                     'dead_end', 'unlabeled_branch', 'no_end'];
+                     'dead_end', 'no_end'];
 
 function issueChip(issue) {
   const label = t(`dg.issue.${issue.kind}`);
@@ -1514,8 +1514,9 @@ async function renderDiagram(view, params) {
       <div class="view-sub"><a href="#/diagrams" class="dgl-back">${t('dgl.title')}</a> · <span id="dgSub"></span></div>
     </div>
     <div class="dg-shell">
-      <div class="dg-stage" id="dgStage">
-        <canvas id="dgCanvas"></canvas>
+      <div class="dg-main">
+        <!-- above the canvas, not floating on it: a card dragged to the top
+             of the flow used to slide under the buttons -->
         <div class="dg-tools" id="dgTools">
           <button class="btn btn-sm" id="dgMode"></button>
           <button class="btn btn-sm" id="dgAdd" data-editonly>${t('dg.add')}</button>
@@ -1527,7 +1528,10 @@ async function renderDiagram(view, params) {
           <button class="btn btn-sm" id="dgMermaid">${t('dg.mermaid')}</button>
           <button class="btn btn-sm" id="dgRecord">${t('dg.record')}</button>
         </div>
-        <div class="dg-hint" id="dgHint" hidden></div>
+        <div class="dg-stage" id="dgStage">
+          <canvas id="dgCanvas"></canvas>
+          <div class="dg-hint" id="dgHint" hidden></div>
+        </div>
       </div>
       <div class="dg-side" id="dgSide"></div>
     </div>
@@ -1936,10 +1940,9 @@ async function renderDiagram(view, params) {
     routing,
     onEditEdgeLabel: editEdgeLabel,
     onContextMenu: canvasMenu,
-    /* the floating toolbar and hint strip cover part of the canvas; the fit
-       has to stay out from under them */
+    /* the toolbar has its own row now; the hint strip still floats on the
+       canvas, so the fit stays out from under that one */
     insets: () => ({
-      top: ($('#dgTools')?.offsetHeight || 0) + 18,
       bottom: $('#dgHint')?.hidden === false ? ($('#dgHint').offsetHeight || 0) + 18 : 0,
     }),
     onSelect: node => { selected = node ? node.key : null; paintSide(); },
