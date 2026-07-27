@@ -975,7 +975,13 @@ textarea { resize: vertical; min-height: 110px; width: 100%; font-family: var(--
   padding: 6px 10px;
   font-size: 11.5px; color: var(--ink);
   box-shadow: var(--shadow-pop);
-  white-space: nowrap;
+  /* Wrap, and never grow past the window. This used to be nowrap with no
+     bound, so any long content -- a step's note, a full memory snippet --
+     became one endless line running off the screen. */
+  max-width: min(420px, calc(100vw - 32px));
+  white-space: normal;
+  overflow-wrap: anywhere;
+  line-height: 1.5;
 }
 .tip b { color: var(--accent); font-family: var(--font-m); }
 
@@ -1043,6 +1049,11 @@ textarea { resize: vertical; min-height: 110px; width: 100%; font-family: var(--
   font-size: 11px; color: var(--ink-2);
 }
 .dg-hint.warn { border-color: var(--warn); color: var(--warn); }
+
+/* the heading doubles as the way into the title/summary editor, but only
+   once editing is on -- otherwise it must not look clickable at all */
+.dg-editable { cursor: text; }
+.dg-editable:hover { color: var(--accent); }
 
 .dg-side {
   display: grid; gap: 12px;

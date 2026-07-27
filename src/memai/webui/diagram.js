@@ -33,6 +33,10 @@ const NODE_W = 170;
 const NODE_H = 48;
 const DECISION_H = 66;
 const LABEL_LINES = 2;
+/* Label metrics live in world units alongside the box metrics above, so a
+   label occupies the same fraction of its box at every zoom level. */
+const LABEL_PX = 12;
+const LABEL_LH = 14;
 
 /* canvas `font` takes a literal font stack -- it does not resolve the
    CSS custom properties the rest of the UI styles with */
@@ -61,6 +65,10 @@ export class DiagramEditor {
     this.connectFrom = null;
     this.destroyed = false;
     this._frame = 0;
+    /* Read-only until asked otherwise. Reading a flow is the common case,
+       and a stray drag while reading silently rewrites a stored position
+       everyone else sees -- panning, zooming and selecting stay available. */
+    this.readOnly = hooks.readOnly !== false;
 
     this.readTheme();
     /* resize() before the first fit(): fit needs the canvas size, and a
@@ -150,6 +158,26 @@ export class DiagramEditor {
     this.requestDraw();
   }
 
+  /* Give every loop closer its own lane, alternating sides and swinging
+     clear of the node columns. Sharing one bow direction and magnitude --
+     what this used to do -- stacks several loops of a real routine on top
+     of each other and across the forward path they return to. */
+  laneBackEdges() {
+    const maxX = Math.max(...this.nodes.map(n => n.x + n.w / 2), 0);
+    const minX = Math.min(...this.nodes.map(n => n.x - n.w / 2), 0);
+    let taken = 0;
+    for (const e of this.edges) {
+      const a = this.byKey[e.from], b = this.byKey[e.to];
+      e.back = b.y <= a.y;
+      if (!e.back) { e.bow = 0; continue; }
+      const side = taken % 2 === 0 ? 1 : -1;
+      const lane = Math.floor(taken / 2);
+      const clearance = side > 0 ? maxX - Math.max(a.x, b.x) : Math.min(a.x, b.x) - minX;
+      e.bow = side * (Math.max(clearance, 0) + 70 + lane * 45);
+      taken++;
+    }
+  }
+
   /* Steps the flow cannot reach from its start. Almost always a missing
      edge, so the canvas marks them instead of leaving them looking normal. */
   orphanKeys() {
@@ -221,13 +249,25 @@ export class DiagramEditor {
 
   /* ── interaction ───────────────────────────────────────────────── */
 
+  setReadOnly(on) {
+    this.readOnly = on;
+    if (on) {
+      this.connectMode = false;
+      this.connectFrom = null;
+      this.drag = null;
+      this.cv.classList.remove('linkmode');
+    }
+    this.requestDraw();
+  }
+
   onDown(e) {
     if (this.connectMode) return;
-    const n = this.nodeAt(this.toWorld(e));
+    const n = this.readOnly ? null : this.nodeAt(this.toWorld(e));
     if (n) {
       const p = this.toWorld(e);
       this.drag = { node: n, dx: n.x - p.x, dy: n.y - p.y };
     } else {
+      /* still pannable while read-only: moving the view is not editing */
       this.pan = { x: e.clientX - this.tx, y: e.clientY - this.ty };
       this.cv.classList.add('dragging');
     }
@@ -253,7 +293,8 @@ export class DiagramEditor {
     }
     const n = this.nodeAt(this.toWorld(e));
     if (n !== this.hover) { this.hover = n; this.requestDraw(); }
-    this.cv.style.cursor = this.connectMode ? 'crosshair' : n ? 'pointer' : 'grab';
+    this.cv.style.cursor = this.connectMode ? 'crosshair'
+      : n ? (this.readOnly ? 'pointer' : 'grab') : 'grab';
     if (n && n.note) {
       this.hooks.tipShow?.(
         `<b>${esc(n.key)}</b><br>${esc(n.note.slice(0, 220))}`, e.clientX, e.clientY);
@@ -307,6 +348,7 @@ export class DiagramEditor {
   }
 
   toggleConnectMode(on = !this.connectMode) {
+    if (this.readOnly) on = false;
     this.connectMode = on;
     this.connectFrom = null;
     this.cv.classList.toggle('linkmode', on);
@@ -387,31 +429,36 @@ export class DiagramEditor {
     }
     if (lines.length < maxLines && line) lines.push(line);
     if (lines.length === maxLines) {
-      /* trim the tail until the ellipsis fits, so nothing spills out */
-      let last = lines[maxLines - 1];
       const consumed = lines.join(' ').length;
       if (consumed < String(text).trim().length) {
-        while (last && cx.measureText(`${last}…`).width > maxWidth) {
-          last = last.slice(0, -1);
-        }
-        lines[maxLines - 1] = `${last}…`;
+        lines[maxLines - 1] = this.clamp(`${lines[maxLines - 1]}…`, maxWidth);
       }
     }
-    return lines;
+    /* A single word with no break opportunity is forced onto its line
+       above, so it can still be wider than the box -- and a routine or
+       function name is exactly that: one long CamelCase token. Clamp
+       every line by character, not just the last one. */
+    return lines.map(l => this.clamp(l, maxWidth));
+  }
+
+  /* Shorten one line by characters until it fits, ellipsis included. */
+  clamp(line, maxWidth) {
+    const { cx } = this;
+    if (cx.measureText(line).width <= maxWidth) return line;
+    let cut = line.replace(/…$/, '');
+    while (cut && cx.measureText(`${cut}…`).width > maxWidth) cut = cut.slice(0, -1);
+    return `${cut}…`;
   }
 
   drawEdge(e) {
     const { cx } = this;
     const a = this.byKey[e.from], b = this.byKey[e.to];
     if (!a || !b) return;
-    const back = b.y <= a.y;   /* points up the canvas: a loop closer */
+    const back = e.back;       /* points up the canvas: a loop closer */
+    const bow = e.bow || 0;    /* its lane, assigned in laneBackEdges */
     const from = DiagramEditor.exit(a, b.x - a.x, b.y - a.y);
     const to = DiagramEditor.exit(b, a.x - b.x, a.y - b.y);
-
-    /* Bow a back-edge sideways so a retry loop does not sit on top of
-       the forward path it returns to. */
     const mx = (from.x + to.x) / 2, my = (from.y + to.y) / 2;
-    const bow = back ? Math.max(70, Math.abs(from.y - to.y) * 0.45) : 0;
     const ctrl = { x: mx + bow, y: my };
 
     cx.strokeStyle = back ? this.colWarn : this.colLine;
@@ -440,15 +487,16 @@ export class DiagramEditor {
 
     if (e.label && this.scale > 0.4) {
       const lx = bow ? (from.x + 2 * ctrl.x + to.x) / 4 : mx;
-      cx.font = `${11 / this.scale}px ${FONT_MONO}`;
-      const wide = cx.measureText(e.label).width;
+      const ly = bow ? (from.y + 2 * ctrl.y + to.y) / 4 : my;
+      cx.font = `10px ${FONT_MONO}`;   /* world units, same reason as labels */
+      const text = e.label.length > 34 ? `${e.label.slice(0, 33)}…` : e.label;
+      const wide = cx.measureText(text).width;
       cx.fillStyle = this.colSurface;
-      cx.fillRect(lx - wide / 2 - 4 / this.scale, my - 8 / this.scale,
-                  wide + 8 / this.scale, 15 / this.scale);
+      cx.fillRect(lx - wide / 2 - 3, ly - 7, wide + 6, 14);
       cx.fillStyle = back ? this.colWarn : this.colInk2;
       cx.textAlign = 'center';
       cx.textBaseline = 'middle';
-      cx.fillText(e.label, lx, my);
+      cx.fillText(text, lx, ly);
     }
   }
 
@@ -475,23 +523,28 @@ export class DiagramEditor {
     }
 
     if (this.scale < 0.3) return;
-    cx.font = `${11.5 / this.scale}px ${FONT_UI}`;
+    /* World units, NOT 11.5/scale. The boxes are in world units, so a font
+       sized to stay constant on screen grows relative to its box as you
+       zoom out and the label spills over the edges -- which is exactly
+       what happened. Scaling with the box keeps text inside it at every
+       zoom, at the cost of small text when zoomed far out (hence the
+       early return above). */
+    cx.font = `${LABEL_PX}px ${FONT_UI}`;
     cx.fillStyle = terminal ? '#000' : this.colInk;
     cx.textAlign = 'center';
     cx.textBaseline = 'middle';
     const lines = this.wrap(n.label, n.w - (n.shape === 'decision' ? 54 : 20), LABEL_LINES);
-    const lh = 13 / this.scale;
-    const top = n.y - (lines.length - 1) * lh / 2;
-    lines.forEach((line, i) => cx.fillText(line, n.x, top + i * lh));
+    const top = n.y - (lines.length - 1) * LABEL_LH / 2;
+    lines.forEach((line, i) => cx.fillText(line, n.x, top + i * LABEL_LH));
 
     /* a step that explains itself carries a marker, so the notes and
        links attached to it are discoverable without clicking every box */
     const badges = (n.note ? '𝒊' : '') + (this.linkCount[n.key] ? ` ⇱${this.linkCount[n.key]}` : '');
     if (badges.trim() && this.scale > 0.45) {
-      cx.font = `${10 / this.scale}px ${FONT_MONO}`;
+      cx.font = `10px ${FONT_MONO}`;
       cx.fillStyle = terminal ? 'rgba(0,0,0,.6)' : this.colInk2;
       cx.textAlign = 'right';
-      cx.fillText(badges.trim(), n.x + n.w / 2 - 6 / this.scale, n.y - n.h / 2 + 9 / this.scale);
+      cx.fillText(badges.trim(), n.x + n.w / 2 - 6, n.y - n.h / 2 + 11);
     }
   }
 
@@ -502,6 +555,9 @@ export class DiagramEditor {
     cx.translate(this.tx, this.ty);
     cx.scale(this.scale, this.scale);
 
+    /* per draw, not per load: dragging a step can turn a forward edge into
+       a loop closer and back again, and the lanes have to follow */
+    this.laneBackEdges();
     for (const e of this.edges) this.drawEdge(e);
     for (const n of this.nodes) this.drawNode(n, this.orphans.has(n.key));
 
