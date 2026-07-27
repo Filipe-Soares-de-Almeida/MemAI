@@ -91,8 +91,10 @@ function tipShow(html, x, y) {
   tip.innerHTML = html;
   tip.hidden = false;
   const r = tip.getBoundingClientRect();
-  tip.style.left = `${Math.min(x + 14, innerWidth - r.width - 10)}px`;
-  tip.style.top = `${Math.min(y + 14, innerHeight - r.height - 10)}px`;
+  /* clamp both ends: a wrapped tip can be tall enough that pushing it up
+     to fit would otherwise take it off the top of the window */
+  tip.style.left = `${Math.max(10, Math.min(x + 14, innerWidth - r.width - 10))}px`;
+  tip.style.top = `${Math.max(10, Math.min(y + 14, innerHeight - r.height - 10))}px`;
 }
 function tipHide() { tip.hidden = true; }
 
@@ -1436,6 +1438,9 @@ async function renderDiagram(view, params) {
   }
   let data = mem.diagram;
   let selected = null;
+  /* Read-only until asked otherwise: reading a flow is the common case, and
+     a stray drag while reading rewrites a position every other reader sees. */
+  let editing = false;
 
   view.innerHTML = `<div class="anim">
     <div class="view-head">
@@ -1446,15 +1451,15 @@ async function renderDiagram(view, params) {
       <div class="dg-stage" id="dgStage">
         <canvas id="dgCanvas"></canvas>
         <div class="dg-tools">
-          <button class="btn btn-sm btn-solid" id="dgAdd">${t('dg.add')}</button>
-          <button class="btn btn-sm" id="dgConnect">${t('dg.connect')}</button>
-          <button class="btn btn-sm" id="dgArrange">${t('dg.arrange')}</button>
+          <button class="btn btn-sm" id="dgMode"></button>
+          <button class="btn btn-sm" id="dgAdd" data-editonly>${t('dg.add')}</button>
+          <button class="btn btn-sm" id="dgConnect" data-editonly>${t('dg.connect')}</button>
+          <button class="btn btn-sm" id="dgArrange" data-editonly>${t('dg.arrange')}</button>
           <button class="btn btn-sm" id="dgFit">${t('dg.center')}</button>
-          <button class="btn btn-sm" id="dgMeta">${t('dg.meta')}</button>
           <button class="btn btn-sm" id="dgMermaid">${t('dg.mermaid')}</button>
           <button class="btn btn-sm" id="dgRecord">${t('dg.record')}</button>
         </div>
-        <div class="dg-hint" id="dgHint"></div>
+        <div class="dg-hint" id="dgHint" hidden></div>
       </div>
       <div class="dg-side" id="dgSide"></div>
     </div>
@@ -1490,38 +1495,82 @@ async function renderDiagram(view, params) {
     catch (err) { toast(err.message, 'bad'); }
   };
 
-  /* ── hint strip: connect-mode state, else unreachable steps ─────────── */
+  /* ── hint strip ─────────────────────────────────────────────────────
+     Only speaks when it has something to say: which end of a connection
+     is being picked, or which steps the flow cannot reach. It used to
+     also carry a standing "drag to move" line, which just repeated what
+     dragging a box already tells you. */
   function paintHint(connectFrom) {
     const el = $('#dgHint');
     const orphans = diagramEngine ? [...diagramEngine.orphans] : [];
     if (diagramEngine?.connectMode) {
+      el.hidden = false;
       el.className = 'dg-hint';
       el.textContent = connectFrom
         ? t('dg.hint.connectTarget', { key: connectFrom.key })
         : t('dg.hint.connectSource');
     } else if (orphans.length) {
+      el.hidden = false;
       el.className = 'dg-hint warn';
       el.textContent = t('dg.hint.orphans', { keys: orphans.join(', ') });
     } else {
-      el.className = 'dg-hint';
-      el.textContent = t('dg.hint.idle');
+      el.hidden = true;
+      el.textContent = '';
     }
     $('#dgSub').textContent = t('dg.sub', {
       n: data.nodes.length, m: data.edges.length, l: data.links.length,
     });
   }
 
+  function openMetaModal() {
+    const m = openModal({
+      title: t('dg.meta'),
+      bodyHTML: `
+        <div class="field"><label>${t('dg.meta.name')}</label>
+          <input type="text" id="dgmTitle" value="${esc(data.title)}"></div>
+        <div class="field"><label>${t('dg.meta.summary')}</label>
+          <textarea id="dgmSummary" rows="6" placeholder="${t('dg.meta.summaryPh')}">${esc(data.summary)}</textarea></div>`,
+      footHTML: `<button class="btn" data-x>${t('common.cancel')}</button>
+                 <button class="btn btn-solid" data-ok>${t('common.save')}</button>`,
+    });
+    m.querySelector('[data-x]').onclick = closeModal;
+    m.querySelector('[data-ok]').onclick = async () => {
+      const body = { title: $('#dgmTitle').value, summary: $('#dgmSummary').value };
+      closeModal();
+      await act(() => api(`/api/diagrams/${uid}/meta`, { body }), t('dg.saved'));
+    };
+  }
+
+  /* ── read-only vs editing ───────────────────────────────────────────── */
+  function applyMode() {
+    diagramEngine?.setReadOnly(!editing);
+    const mode = $('#dgMode');
+    mode.textContent = editing ? t('dg.doneEditing') : t('dg.enableEditing');
+    mode.classList.toggle('btn-solid', editing);
+    view.querySelectorAll('[data-editonly]').forEach(b => { b.disabled = !editing; });
+    $('#dgTitle').classList.toggle('dg-editable', editing);
+    $('#dgTitle').title = editing ? t('dg.titleEdit') : '';
+    $('#dgConnect').classList.toggle('btn-solid', !!diagramEngine?.connectMode);
+    paintSide();
+    paintHint();
+  }
+
   /* ── inspector ─────────────────────────────────────────────────────── */
   function paintSide() {
     const side = $('#dgSide');
     const node = data.nodes.find(n => n.key === selected);
+    const metaBtn = editing
+      ? `<button class="btn btn-sm" id="dgMetaBtn">${t('common.edit')}</button>` : '';
     if (!node) {
       side.innerHTML = `<div class="dg-panel">
         <h3>${t('dg.step')}</h3>
         <div class="dg-empty">${t('dg.selectPrompt')}</div>
       </div>
-      ${data.summary ? `<div class="dg-panel"><h3>${t('dg.summary')}</h3>
-        <div class="dg-empty">${esc(data.summary)}</div></div>` : ''}`;
+      <div class="dg-panel">
+        <h3>${t('dg.summary')} ${metaBtn}</h3>
+        <div class="dg-empty">${data.summary ? esc(data.summary) : t('dg.noSummary')}</div>
+      </div>`;
+      $('#dgMetaBtn')?.addEventListener('click', openMetaModal);
       return;
     }
     const out = data.edges.filter(e => e.from === node.key);
@@ -1530,26 +1579,28 @@ async function renderDiagram(view, params) {
       <div class="dg-edge">
         <span class="dg-arrow">${dir === 'out' ? '→' : '←'}</span>
         <span class="dg-key">${esc(dir === 'out' ? e.to : e.from)}</span>
-        ${e.label ? `<span class="dg-label">${esc(e.label)}</span>` : ''}
+        ${e.label ? `<span class="dg-label" title="${esc(e.label)}">${esc(e.label)}</span>` : ''}
         <span class="spacer"></span>
-        <button class="icon-btn danger" data-deledge="${esc(e.from)}|${esc(e.to)}"
-                title="${t('dg.edge.remove')}">✕</button>
+        ${editing ? `<button class="icon-btn danger" data-deledge="${esc(e.from)}|${esc(e.to)}"
+                title="${t('dg.edge.remove')}">✕</button>` : ''}
       </div>`;
     const links = data.links.filter(l => l.node_key === node.key);
 
+    const ro = editing ? '' : ' disabled';
     side.innerHTML = `
       <div class="dg-panel">
         <h3>${t('dg.step')} <span class="dg-key">${esc(node.key)}</span></h3>
+        ${editing ? '' : `<div class="dg-empty" style="margin-bottom:9px">${t('dg.readOnlyNote')}</div>`}
         <div class="field"><label>${t('dg.label')}</label>
-          <input type="text" id="dgLabel" value="${esc(node.label)}"></div>
+          <input type="text" id="dgLabel" value="${esc(node.label)}"${ro}></div>
         <div class="field"><label>${t('dg.shape')}</label>
-          <select id="dgShape">${shapeOptions(node.shape)}</select></div>
+          <select id="dgShape"${ro}>${shapeOptions(node.shape)}</select></div>
         <div class="field"><label>${t('dg.note')}</label>
-          <textarea id="dgNote" rows="5" placeholder="${t('dg.notePh')}">${esc(node.note)}</textarea></div>
-        <div class="act-row">
+          <textarea id="dgNote" rows="5" placeholder="${t('dg.notePh')}"${ro}>${esc(node.note)}</textarea></div>
+        ${editing ? `<div class="act-row">
           <button class="btn btn-solid btn-sm" id="dgSave">${t('common.save')}</button>
           <button class="btn btn-danger btn-sm" id="dgDel">${t('dg.deleteStep')}</button>
-        </div>
+        </div>` : ''}
       </div>
 
       <div class="dg-panel">
@@ -1567,12 +1618,13 @@ async function renderDiagram(view, params) {
           ${links.map(l => `
             <div class="dg-link">
               <span class="type-tag ${typeClass(l.peer.type)}" style="flex:none"><span class="dot"></span>${esc(l.peer.type || '?')}</span>
-              <span class="snippet clickable" data-open="${esc(l.target_uid)}">${esc(l.peer.snippet || l.target_uid)}</span>
-              <button class="icon-btn danger" data-dellink="${esc(l.target_uid)}"
-                      title="${t('dg.link.remove')}">✕</button>
+              <span class="snippet clickable" data-open="${esc(l.target_uid)}"
+                    title="${esc(l.peer.snippet || l.target_uid)}">${esc(l.peer.snippet || l.target_uid)}</span>
+              ${editing ? `<button class="icon-btn danger" data-dellink="${esc(l.target_uid)}"
+                      title="${t('dg.link.remove')}">✕</button>` : ''}
             </div>`).join('') || `<div class="dg-empty">${t('dg.links.empty')}</div>`}
         </div>
-        <div class="rel-add" style="margin-top:10px">
+        ${editing ? `<div class="rel-add" style="margin-top:10px">
           <div class="picker">
             <input type="text" id="dgTarget" placeholder="${t('dg.link.target')}" autocomplete="off">
             <div class="picker-results" id="dgResults" hidden></div>
@@ -1584,8 +1636,12 @@ async function renderDiagram(view, params) {
           <datalist id="dgRelDL">
             ${['explains', 'contradicts', 'relates_to'].map(r => `<option value="${r}">`).join('')}
           </datalist>
-        </div>
+        </div>` : ''}
       </div>`;
+
+    side.querySelectorAll('[data-open]').forEach(el =>
+      el.addEventListener('click', () => openRecord(el.dataset.open)));
+    if (!editing) return;   /* nothing below this point exists in read-only */
 
     /* node fields */
     $('#dgSave').onclick = () => act(() => api(`/api/diagrams/${uid}/node`, { body: {
@@ -1610,8 +1666,6 @@ async function renderDiagram(view, params) {
     });
 
     /* links */
-    side.querySelectorAll('[data-open]').forEach(el =>
-      el.onclick = () => openRecord(el.dataset.open));
     side.querySelectorAll('[data-dellink]').forEach(b => b.onclick = () =>
       act(() => api(`/api/diagrams/${uid}/link`, { body: {
         node_key: node.key, target_uid: b.dataset.dellink, delete: true } }), t('dg.unlinked')));
@@ -1652,6 +1706,7 @@ async function renderDiagram(view, params) {
   diagramEngine?.destroy();
   diagramEngine = new DiagramEditor($('#dgCanvas'), data, {
     tipShow, tipHide,
+    readOnly: true,
     onSelect: node => { selected = node ? node.key : null; paintSide(); },
     onMove: positions => { Object.assign(pending, positions); flushLayout(); },
     onConnectProgress: from => paintHint(from),
@@ -1667,9 +1722,6 @@ async function renderDiagram(view, params) {
         body: { from, to, label } }), t('dg.connected'));
     },
   });
-
-  paintSide();
-  paintHint();
 
   /* ── toolbar ───────────────────────────────────────────────────────── */
   $('#dgAdd').onclick = async () => {
@@ -1691,24 +1743,11 @@ async function renderDiagram(view, params) {
   };
   $('#dgFit').onclick = () => diagramEngine.fit();
   $('#dgRecord').onclick = () => openRecord(uid);
-  $('#dgMeta').onclick = () => {
-    const m = openModal({
-      title: t('dg.meta'),
-      bodyHTML: `
-        <div class="field"><label>${t('dg.meta.name')}</label>
-          <input type="text" id="dgmTitle" value="${esc(data.title)}"></div>
-        <div class="field"><label>${t('dg.meta.summary')}</label>
-          <textarea id="dgmSummary" rows="4" placeholder="${t('dg.meta.summaryPh')}">${esc(data.summary)}</textarea></div>`,
-      footHTML: `<button class="btn" data-x>${t('common.cancel')}</button>
-                 <button class="btn btn-solid" data-ok>${t('common.save')}</button>`,
-    });
-    m.querySelector('[data-x]').onclick = closeModal;
-    m.querySelector('[data-ok]').onclick = async () => {
-      const body = { title: $('#dgmTitle').value, summary: $('#dgmSummary').value };
-      closeModal();
-      await act(() => api(`/api/diagrams/${uid}/meta`, { body }), t('dg.saved'));
-    };
-  };
+  $('#dgMode').onclick = () => { editing = !editing; applyMode(); };
+  /* the heading and the summary panel are where you reach for these, so both
+     open the same editor -- the toolbar is no longer the only way in */
+  $('#dgTitle').onclick = () => { if (editing) openMetaModal(); };
+  applyMode();
   $('#dgMermaid').onclick = async () => {
     let src = '';
     try { src = (await api(`/api/diagrams/${uid}/mermaid`)).mermaid; }
