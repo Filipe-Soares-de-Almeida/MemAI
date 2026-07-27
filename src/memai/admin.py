@@ -517,6 +517,23 @@ def _diagram_or_400(conn: sqlite3.Connection, uid: str) -> None:
         raise ValueError(f"unknown diagram: {uid}")
 
 
+def diagram_list(request, payload) -> dict:
+    """Every diagram with its size and its structural problems.
+
+    Backs the dedicated diagram view: a flow is maintained by fixing its
+    shape, which the confidence/dedup tooling for prose cannot see.
+    """
+    status = request.query_params.get("status", "active")
+    domain = request.query_params.get("domain", "")
+    with db.connect() as conn:
+        items = db.diagram_overview(conn, domain=domain, status=status)
+    return {
+        "total": len(items),
+        "with_issues": sum(1 for d in items if d["issues"]),
+        "items": items,
+    }
+
+
 def diagram_detail(request, payload) -> dict:
     uid = request.path_params["uid"]
     with db.connect() as conn:
@@ -1156,6 +1173,7 @@ routes = [
     Route("/api/relations", api(create_relation), methods=["POST"]),
     Route("/api/relations/{rel_id:int}", api(delete_relation), methods=["DELETE"]),
     Route("/api/graph", api(graph)),
+    Route("/api/diagrams", api(diagram_list), methods=["GET"]),
     Route("/api/diagrams", api(diagram_create), methods=["POST"]),
     Route("/api/diagrams/{uid}", api(diagram_detail), methods=["GET"]),
     Route("/api/diagrams/{uid}/graph", api(diagram_graph), methods=["POST"]),

@@ -839,6 +839,82 @@ def test_api_overview_counts_the_new_type(client):
     assert client.get("/api/overview").json()["by_type"].get("diagram") == 1
 
 
+# --------------------------------------------------------- structural upkeep
+
+def _issue_kinds(overview_entry) -> set[str]:
+    return {i["kind"] for i in overview_entry["issues"]}
+
+
+def test_a_well_formed_flow_reports_no_issues(conn):
+    uid = _mk(conn)
+    entry = next(d for d in db.diagram_overview(conn) if d["uid"] == uid)
+    assert entry["issues"] == []
+    assert (entry["nodes"], entry["edges"]) == (len(NODES), len(EDGES))
+    assert entry["documented"] == 1  # only 'load' carries a note
+
+
+def test_overview_flags_a_step_nothing_reaches(conn):
+    """Reachable only through the incremental writers -- which is the point."""
+    uid = _mk(conn)
+    db.upsert_diagram_node(conn, uid, "audit", label="Append to the audit log")
+    entry = next(d for d in db.diagram_overview(conn) if d["uid"] == uid)
+    unreachable = next(i for i in entry["issues"] if i["kind"] == "unreachable")
+    assert unreachable["keys"] == ["audit"]
+    assert "dead_end" in _issue_kinds(entry)   # nothing leaves it either
+
+
+def test_overview_flags_a_fork_with_an_unlabelled_arrow(conn):
+    uid = _mk(conn, edges=[
+        {"from": "start", "to": "load"},
+        {"from": "load", "to": "check"},
+        {"from": "check", "to": "write", "label": "yes"},
+        {"from": "check", "to": "done"},          # no condition on this arrow
+        {"from": "write", "to": "done"},
+    ])
+    entry = next(d for d in db.diagram_overview(conn) if d["uid"] == uid)
+    branch = next(i for i in entry["issues"] if i["kind"] == "unlabeled_branch")
+    assert branch["keys"] == ["check"]
+
+
+def test_overview_flags_a_missing_start_or_end(conn):
+    uid = _mk(conn)
+    db.upsert_diagram_node(conn, uid, "start", shape="step")
+    kinds = _issue_kinds(next(d for d in db.diagram_overview(conn) if d["uid"] == uid))
+    assert "no_start" in kinds
+
+    other = _mk(conn, nodes=[
+        {"key": "start", "shape": "start", "label": "Begin"},
+        {"key": "loop", "label": "Keep polling"},
+    ], edges=[{"from": "start", "to": "loop"}, {"from": "loop", "to": "start"}])
+    kinds = _issue_kinds(next(d for d in db.diagram_overview(conn) if d["uid"] == other))
+    assert kinds == {"no_end"}   # a daemon loop: no end, but no dead end either
+
+
+def test_overview_scopes_by_domain_and_status(conn):
+    a = _mk(conn, domain="proj-1042")
+    b = _mk(conn, domain="proj-2077")
+    assert [d["uid"] for d in db.diagram_overview(conn, domain="proj-1042")] == [a]
+    db.set_status(conn, b, "archived")
+    assert b not in [d["uid"] for d in db.diagram_overview(conn)]
+    assert b in [d["uid"] for d in db.diagram_overview(conn, status="")]
+
+
+def test_api_diagram_list(client):
+    uid = _create(client, domain="proj-1042", summary="One file per store.")
+    data = client.get("/api/diagrams").json()
+    assert data["total"] == 1 and data["with_issues"] == 0
+    item = data["items"][0]
+    assert (item["uid"], item["title"]) == (uid, "Nightly export routine")
+    assert item["nodes"] == len(NODES)
+
+    client.post(f"/api/diagrams/{uid}/node", json={"key": "audit", "label": "Append to the log"})
+    data = client.get("/api/diagrams").json()
+    assert data["with_issues"] == 1
+    assert "unreachable" in {i["kind"] for i in data["items"][0]["issues"]}
+
+    assert client.get("/api/diagrams?domain=nope").json()["total"] == 0
+
+
 def test_editor_module_is_served(client):
     """app.js imports it as an ES module, so a 404 would break the whole SPA."""
     res = client.get("/static/diagram.js")
