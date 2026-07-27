@@ -1068,7 +1068,8 @@ def test_overview_flags_a_step_nothing_reaches(conn):
     assert "dead_end" in _issue_kinds(entry)   # nothing leaves it either
 
 
-def test_overview_flags_a_fork_with_an_unlabelled_arrow(conn):
+def test_overview_stays_quiet_about_an_unlabelled_fork(conn):
+    """A fall-through arrow with no condition on it is normal, not a defect."""
     uid = _mk(conn, edges=[
         {"from": "start", "to": "load"},
         {"from": "load", "to": "check"},
@@ -1077,8 +1078,7 @@ def test_overview_flags_a_fork_with_an_unlabelled_arrow(conn):
         {"from": "write", "to": "done"},
     ])
     entry = next(d for d in db.diagram_overview(conn) if d["uid"] == uid)
-    branch = next(i for i in entry["issues"] if i["kind"] == "unlabeled_branch")
-    assert branch["keys"] == ["check"]
+    assert entry["issues"] == []
 
 
 def test_overview_flags_a_missing_start_or_end(conn):

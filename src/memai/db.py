@@ -1431,6 +1431,11 @@ def _graph_issues(nodes: list[dict], edges: list[dict]) -> list[dict]:
     through the incremental writers, which skip the whole-graph rules on
     purpose so a flow can be built across several calls -- so something
     has to report them afterwards.
+
+    Every rule here has to be worth acting on. "This fork has an arrow
+    with no condition on it" was not: on a real routine most forks have an
+    obvious fall-through, so it flagged healthy diagrams and taught the
+    reader to ignore the whole strip. It was removed rather than tuned.
     """
     if not nodes:
         return [{"kind": "empty", "keys": []}]
@@ -1456,13 +1461,6 @@ def _graph_issues(nodes: list[dict], edges: list[dict]) -> list[dict]:
                   if n["shape"] != "end" and not outgoing.get(n["key"]))
     if dead:
         issues.append({"kind": "dead_end", "keys": dead})
-
-    # a fork whose arrows do not say which condition takes which arrow
-    ambiguous = sorted(n["key"] for n in nodes
-                       if len(outgoing.get(n["key"], [])) > 1
-                       and any(not e["label"] for e in outgoing[n["key"]]))
-    if ambiguous:
-        issues.append({"kind": "unlabeled_branch", "keys": ambiguous})
 
     if not ends:
         issues.append({"kind": "no_end", "keys": []})
