@@ -682,11 +682,20 @@ export class DiagramEditor {
   static anchors(n) {
     const hw = n.w / 2, hh = n.h / 2;
     if (n.shape === 'io') {
-      /* the parallelogram leans, so its horizontal edges are offset and
-         its slanted sides meet the middle half a lean in */
+      /* Top and bottom attach on the card's CENTRE LINE, not at the middle
+         of those two edges. The parallelogram leans, so the middle of its
+         top edge sits half a skew right of centre and the middle of its
+         bottom edge half a skew left -- 14 units apart. A line arriving
+         from above and the line leaving underneath then came in and out at
+         different x, and a step you just pass through looked kinked.
+         Centre is still ON both edges (the lean is smaller than the card),
+         and it is where the flow reads as passing straight through.
+
+         The slanted sides are different: their middle IS half a lean in,
+         and nothing lines up against them. */
       const s = IO_SKEW / 2;
       return {
-        top: { x: n.x + s, y: n.y - hh }, bottom: { x: n.x - s, y: n.y + hh },
+        top: { x: n.x, y: n.y - hh }, bottom: { x: n.x, y: n.y + hh },
         left: { x: n.x - hw + s, y: n.y }, right: { x: n.x + hw - s, y: n.y },
       };
     }
