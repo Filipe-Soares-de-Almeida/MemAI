@@ -91,8 +91,8 @@ function optCard(s) {
   const statusChip = s.status === 'applied' ? `<span class="status-tag opt-applied">${t('op.applied')}</span>`
     : s.status === 'rejected' ? `<span class="status-tag archived">${t('op.rejected')}</span>` : '';
   const verified = s.verified
-    ? `<div class="opt-verified" title="${t('op.verifiedTitle')}">${t('op.verified', { v: esc(s.verified) })}</div>`
-    : `<div class="opt-verified muted">${t('op.noVerified')}</div>`;
+    ? `<div class="opt-verified" title="${t('op.verifiedTitle')}">${icon('confirmed')}${t('op.verified', { v: esc(s.verified) })}</div>`
+    : `<div class="opt-verified muted">${icon('unverified')}${t('op.noVerified')}</div>`;
   const relKind = s.kind === 'link' || s.kind === 'merge' || s.kind === 'distill';
   const bodyHtml = s.kind === 'distill' ? optDistillBody(s)
     : relKind ? optRelBody(s) : `<div class="opt-diff">
@@ -146,7 +146,7 @@ function optRunCard(r) {
   const kinds = (r.kinds || []).map(k =>
     `<span class="opt-kind-chip${k.pending ? ' has-pending' : ''}">${esc(k.kind)}<b>${k.pending ? `${k.pending}/` : ''}${k.total}</b></span>`).join('');
   const backup = r.backup_path
-    ? `<span class="opt-run-backup" title="${esc(t('op.backupNote', { name: r.backup_path.split(/[\\/]/).pop() }))}">${t('op.card.backup')}</span>` : '';
+    ? `<span class="opt-run-backup" title="${esc(t('op.backupNote', { name: r.backup_path.split(/[\\/]/).pop() }))}">${icon('confirmed')}${t('op.card.backup')}</span>` : '';
   return `<div class="opt-run-card" data-run="${r.id}" role="button" tabindex="0">
     <div class="opt-run-top">
       <span class="opt-run-id">#${r.id}</span>
@@ -219,7 +219,7 @@ function renderOptRun(view, initialMeta) {
   const runId = initialMeta.id;
   let meta = initialMeta;
   view.innerHTML = `<div class="anim">
-    <a class="opt-back" href="#/optimization">${t('op.backToRuns')}</a>
+    <a class="opt-back" href="#/optimization">${icon('chevron-left')}${t('op.backToRuns')}</a>
     <div class="view-head" style="margin-top:8px">
       <h2 class="view-title">${t('op.runTitle', { id: runId })} <em class="opt-run-when">· ${fmtDate(meta.created_at)}</em></h2>
       ${meta.note ? `<div class="view-sub">${esc(meta.note)}</div>` : ''}

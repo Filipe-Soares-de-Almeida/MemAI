@@ -4,6 +4,7 @@
 
 import { $, esc, fmtInt, fmtAgo } from '../core/dom.js';
 import { api } from '../core/api.js';
+import { icon } from '../core/icons.js';
 import { toast, promptModal } from '../core/ui.js';
 import { statusTag, confPill, uidChip, wireCopyChips, getDomains,
          invalidateDomains } from '../core/shared.js';
@@ -117,7 +118,7 @@ export async function renderDiagrams(view, params, ctx) {
       </div>
       <div class="dgl-issues">
         ${issues.length ? issues.map(issueChip).join('')
-          : `<span class="dgl-sound">${t('dgl.sound')}</span>`}
+          : `<span class="dgl-sound">${icon('confirmed')}${t('dgl.sound')}</span>`}
       </div>
       <div class="dgl-foot">
         ${d.domain ? `<span class="chip clickable" data-fdomain="${esc(d.domain)}">${esc(d.domain)}</span>` : ''}

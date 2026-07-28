@@ -78,7 +78,7 @@ export async function renderMemories(view, params, ctx) {
         <option value="created_at:asc" ${state.sort === 'created_at' && state.dir === 'asc' ? 'selected' : ''}>${t('mem.sort.oldest')}</option>
         <option value="updated_at:desc" ${state.sort === 'updated_at' ? 'selected' : ''}>${t('mem.sort.updated')}</option>
       </select>`}
-      ${state.session ? `<span class="chip clickable" id="fSession" title="${t('mem.session.title')}">${t('mem.session.chip', { s: esc(state.session.slice(0, 18)) })}</span>` : ''}
+      ${state.session ? `<span class="chip clickable" id="fSession" title="${t('mem.session.title')}">${t('mem.session.chip', { s: esc(state.session.slice(0, 18)) })}${icon('close')}</span>` : ''}
     </div>
 
     <div class="mem-list" id="memList">${renderRows(data.items)}</div>
@@ -88,8 +88,8 @@ export async function renderMemories(view, params, ctx) {
         ? t('mem.results', { n: fmtInt(data.total), q: esc(state.q) })
         : t('mem.range', { a: fmtInt(state.page * PAGE + Math.min(1, data.items.length)), b: fmtInt(state.page * PAGE + data.items.length), c: fmtInt(data.total) })}</span>
       <span class="pager">
-        <button class="btn btn-sm" id="pgPrev" ${state.page === 0 ? 'disabled' : ''}>${t('mem.prev')}</button>
-        <button class="btn btn-sm" id="pgNext" ${(state.page + 1) * PAGE >= data.total ? 'disabled' : ''}>${t('mem.next')}</button>
+        <button class="btn btn-sm" id="pgPrev" ${state.page === 0 ? 'disabled' : ''}>${icon('chevron-left')}${t('mem.prev')}</button>
+        <button class="btn btn-sm" id="pgNext" ${(state.page + 1) * PAGE >= data.total ? 'disabled' : ''}>${t('mem.next')}${icon('chevron-right')}</button>
       </span>
     </div>
   </div>`;
