@@ -876,9 +876,30 @@ export class DiagramEditor {
      Those keep the centre and rely on the staggered stub instead. */
   static fanned(n, side, p, by) {
     if (!by) return p;
+    const hw = n.w / 2, hh = n.h / 2;
+    const vertical = side === 'top' || side === 'bottom';
+
+    /* A diamond has no flat side to slide along -- the "side" IS a vertex.
+       So the point walks DOWN the face instead, which moves both of its
+       coordinates. Leaving it pinned to the vertex was worse than it
+       sounds: the far end of the edge fans and this one does not, so the
+       run between them comes out as a slant of a few degrees in a drawing
+       where everything else is square. */
+    if (n.shape === 'decision') {
+      const room = 0.6;             /* stay well clear of the other vertices */
+      if (vertical) {
+        const dx = Math.max(-hw * room, Math.min(hw * room, by));
+        const dy = Math.abs(dx) / hw * hh;
+        return { x: n.x + dx, y: side === 'top' ? n.y - hh + dy : n.y + hh - dy };
+      }
+      const dy = Math.max(-hh * room, Math.min(hh * room, by));
+      const dx = Math.abs(dy) / hh * hw;
+      return { y: n.y + dy, x: side === 'left' ? n.x - hw + dx : n.x + hw - dx };
+    }
+
     const span = DiagramEditor.slideSpan(n, side);
     if (!span || span[0] >= span[1]) return p;
-    const axis = side === 'top' || side === 'bottom' ? 'x' : 'y';
+    const axis = vertical ? 'x' : 'y';
     return { ...p, [axis]: Math.min(span[1], Math.max(span[0], p[axis] + by)) };
   }
 
@@ -1016,9 +1037,17 @@ export class DiagramEditor {
     const along = vertical ? Math.abs(p.y - q.y) : Math.abs(p.x - q.x);
     /* Straight through when the offset is too small to read as a detour, or
        when the run is too short to fit corners in -- both otherwise produce
-       the same wiggle. */
+       the same wiggle.
+
+       NOT for a fanned edge, though. Its ends are offset on purpose, and
+       drawing that as one "straight" line makes it a slant: three degrees
+       off vertical in a picture where everything else is square, which
+       reads as a kink and not as a deliberate separation. It takes the Z.
+       A run too short for corners still slants -- a Z crammed into it is
+       the worse of the two. */
     const bar = e.via?.crossY;
-    if (bar == null && (across <= ORTH_SNAP || along <= ORTH_RADIUS * 2)) {
+    const nearlyInLine = across <= ORTH_SNAP && !fanned;
+    if (bar == null && (nearlyInLine || along <= ORTH_RADIUS * 2)) {
       out.push(q);
       return { pts: out, curve: null };
     }
