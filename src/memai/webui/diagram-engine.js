@@ -73,6 +73,13 @@ export const ROUTINGS = ['orthogonal', 'curved'];
 const LABEL_PX = 12;
 const LABEL_LH = 14;
 const BADGE_PX = 10;
+/* How much of an edge's label is drawn on the line. A branch condition is
+   often a whole sentence, and a badge that long is a wall across the
+   picture, so it is cut to a phrase -- three words, twenty characters,
+   whichever comes first -- and hovering it shows the rest. See
+   shortLabel() and the tip in onMove(). */
+const BADGE_WORDS = 3;
+const BADGE_CHARS = 20;
 export const FONT_SCALES = [0.8, 1, 1.25, 1.6, 2];
 
 /* canvas `font` takes a literal font stack -- it does not resolve the
@@ -596,22 +603,30 @@ export class DiagramEditor {
     const world = this.toWorld(e);
     const grip = this.readOnly ? null : this.handleAt(world);
     const n = this.nodeAt(world);
-    const lab = (!n && !this.readOnly) ? this.labelAt(world) : null;
-    if (n !== this.hover || lab !== this.hoverLabel) {
-      this.hover = n; this.hoverLabel = lab; this.requestDraw();
+    /* Asked for in read-only mode too -- the tip below is the only way to
+       read a cut label there. Only the OUTLINE that says "click to edit
+       this" is editor-only, hence the second variable. */
+    const lab = n ? null : this.labelAt(world);
+    const editLab = this.readOnly ? null : lab;
+    if (n !== this.hover || editLab !== this.hoverLabel) {
+      this.hover = n; this.hoverLabel = editLab; this.requestDraw();
     }
     /* Only asked when nothing nearer is under the pointer, because it
        routes every edge to answer. A line is clickable -- it selects that
        one connection -- and nothing else would say so. */
-    const overLine = !n && !lab && !this.connectMode && !!this.edgeAt(world);
+    const overLine = !n && !editLab && !this.connectMode && !!this.edgeAt(world);
     this.cv.style.cursor = this.connectMode ? 'crosshair'
       : grip ? (grip.id === 'nw' || grip.id === 'se' ? 'nwse-resize' : 'nesw-resize')
-      : lab ? 'text'
+      : editLab ? 'text'
       : n ? (this.readOnly ? 'pointer' : 'grab')
       : overLine ? 'pointer' : 'grab';
     if (n && n.note) {
       this.hooks.tipShow?.(
         `<b>${esc(n.key)}</b><br>${esc(n.note.slice(0, 220))}`, e.clientX, e.clientY);
+    } else if (lab && DiagramEditor.shortLabel(lab.label) !== lab.label.trim()) {
+      /* only when something is actually hidden -- a tip repeating a badge
+         you can already read is noise following the pointer around */
+      this.hooks.tipShow?.(esc(lab.label.trim()), e.clientX, e.clientY);
     } else {
       this.hooks.tipHide?.();
     }
@@ -1329,7 +1344,7 @@ export class DiagramEditor {
     const base = BADGE_PX * this.fontScale;
     const px = hot ? Math.max(base, (base + 1) / this.scale) : base;
     cx.font = `${px}px ${FONT_MONO}`;
-    const text = e.label.length > 34 ? `${e.label.slice(0, 33)}…` : e.label;
+    const text = DiagramEditor.shortLabel(e.label);
     const wide = cx.measureText(text).width;
     const pad = px * 0.4;
     const box = { x: at.x - wide / 2 - pad, y: at.y - px * 0.8,
@@ -1348,6 +1363,21 @@ export class DiagramEditor {
     cx.fillText(text, at.x, at.y);
     cx.restore();
     e.hit = box;                         /* for labelAt(), see onClick */
+  }
+
+  /* An edge label cut down to the phrase that is drawn on the line. Returns
+     the label unchanged when the whole thing fits, so a caller can compare
+     the two to find out whether anything is being hidden. */
+  static shortLabel(text) {
+    const full = String(text ?? '').trim();
+    const words = full.split(/\s+/);
+    let cut = words.length > BADGE_WORDS ? words.slice(0, BADGE_WORDS).join(' ') : full;
+    if (cut.length > BADGE_CHARS) cut = cut.slice(0, BADGE_CHARS);
+    /* Either cut can land on punctuation -- a space, a comma, the colon that
+       introduced the half being dropped -- and that reads as a typo once the
+       ellipsis is stuck to it. */
+    if (cut !== full) cut = `${cut.replace(/[\s,;:.\-/]+$/, '')}…`;
+    return cut;
   }
 
   /* The edge whose label sits under a world point, if any. */
