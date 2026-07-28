@@ -98,6 +98,8 @@ export class DiagramEditor {
     this.connectFrom = null;
     this.destroyed = false;
     this._frame = 0;
+    /* set whenever the lane/detour solution below is out of date */
+    this.routesDirty = true;
     /* Read-only until asked otherwise. Reading a flow is the common case,
        and a stray drag while reading silently rewrites a stored position
        everyone else sees -- panning, zooming and selecting stay available. */
@@ -208,6 +210,7 @@ export class DiagramEditor {
     /* before the first fit, not only per draw: fit has to know how far the
        lanes reach or it frames the boxes and cuts the corridors off */
     this.laneEdges();
+    this.routesDirty = false;
     if (fit) this.fit();
     this.requestDraw();
   }
@@ -222,8 +225,14 @@ export class DiagramEditor {
      which is most of what "the arrows are tangled" looks like.
 
      Alternating sides and stacking lanes matters: one shared bow direction
-     and magnitude piles a routine's loops on top of each other. */
-  laneEdges() {
+     and magnitude piles a routine's loops on top of each other.
+
+     `detours` is the expensive half: for every forward edge that would
+     cross a box it re-routes the edge against up to ~22 candidate
+     detours, and each of those tests the whole route against every other
+     box. That is fine once, and far too much per mousemove, so a drag
+     asks for it to be skipped -- see draw(). */
+  laneEdges({ detours = true } = {}) {
     const maxX = Math.max(...this.nodes.map(n => n.x + n.w / 2), 0);
     const minX = Math.min(...this.nodes.map(n => n.x - n.w / 2), 0);
     let taken = 0;
@@ -245,6 +254,11 @@ export class DiagramEditor {
       const a = this.byKey[e.from], b = this.byKey[e.to];
       e.lane = 0;
       e.bow = 0;
+      /* A cheap pass keeps whatever detour was solved last, rather than
+         snapping every routed line straight the moment a drag starts:
+         slightly stale beats a diagram that redraws itself under the
+         pointer. The next full pass corrects it. */
+      if (detours) e.via = null;
       /* `back` is geometry: does this edge currently run UP the canvas, so
          it needs a lane and enters from below. `loops` is the graph saying
          the edge closes a cycle, and that is what gets drawn dashed -- the
@@ -262,8 +276,7 @@ export class DiagramEditor {
        34-step one, 16 forward edges collide, and 16 detours around the
        whole diagram read worse than the collisions did. */
     for (const e of this.edges) {
-      if (e.back) continue;
-      e.via = null;
+      if (e.back || !detours) continue;
       if (!this.routeHitsABox(e)) continue;
       let cleared = false;
       for (const via of this.detours(e)) {
@@ -416,6 +429,8 @@ export class DiagramEditor {
 
   setRouting(mode) {
     this.routing = ROUTINGS.includes(mode) ? mode : 'orthogonal';
+    /* which edges cross a box depends on how they are drawn */
+    this.routesDirty = true;
     this.requestDraw();
   }
 
@@ -517,7 +532,10 @@ export class DiagramEditor {
     /* Clearing state is not enough: the last frame painted was the one WITH
        the alignment guides on it, and nothing else here asks for a repaint,
        so a guide stayed drawn across the whole canvas after the drag ended. */
-    const painted = !!this.guides?.length;
+    const painted = !!this.guides?.length || !!(this.drag || this.sizing);
+    /* the geometry has stopped moving, so the full lane/detour solve is
+       worth paying for again -- see draw() */
+    if (this.drag || this.sizing) this.routesDirty = true;
     if (this.drag) {
       const { node } = this.drag;
       this.drag = null;
@@ -1225,10 +1243,21 @@ export class DiagramEditor {
     cx.translate(this.tx, this.ty);
     cx.scale(this.scale, this.scale);
 
-    /* per draw, not per load: dragging a step can turn a forward edge into
-       a loop closer, or park it over a box it now runs through, and the
-       lanes have to follow */
-    this.laneEdges();
+    /* Lanes are geometry, so they have to follow a drag: moving a step can
+       turn a forward edge into a loop closer, or park it over a box it now
+       runs through. They cannot be cached per node either -- dragging one
+       card can make an unrelated edge cross it.
+
+       But the full solve is the most expensive thing in this file and a
+       drag redraws on every mousemove, so while something is being moved
+       only the cheap half runs (loop closers still get their lanes;
+       forward edges are drawn straight, crossings and all). onUp marks the
+       routes dirty and the next frame solves them properly. */
+    const interacting = !!(this.drag || this.sizing);
+    if (this.routesDirty || interacting) {
+      this.laneEdges({ detours: !interacting });
+      this.routesDirty = interacting;
+    }
     /* the selected step's lines go last, so they sit over the ones they
        cross instead of disappearing under them */
     const sel = this.selected;

@@ -178,6 +178,7 @@
     "mm.nothing": "nada mudou",
     "g.title": "Grafo de relações",
     "g.sub": "{n} memórias · {m} vínculos — arraste nós; role para dar zoom; clique para inspecionar",
+    "g.truncated": "mostrando {n} de {total} — refine os filtros para ver o resto",
     "g.linkMode": "✎ Modo vínculo",
     "g.center": "Centralizar",
     "g.emptyLegend": "grafo vazio",

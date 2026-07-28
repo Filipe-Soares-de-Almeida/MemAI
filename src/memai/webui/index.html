@@ -5,9 +5,10 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>MemAI · Admin</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect x='7' y='7' width='18' height='18' rx='2' transform='rotate(45 16 16)' fill='none' stroke='%23BB86FC' stroke-width='2'/><circle cx='16' cy='16' r='3' fill='%23BB86FC'/></svg>">
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&family=Roboto+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<!-- Roboto is declared in admin.css: installed copy first, then
+     webui/fonts/ if `python tools/fetch-fonts.py` has populated it, then
+     the system stack. Nothing here reaches the network -- the rest of
+     MemAI runs offline and this page is served from loopback. -->
 <link rel="stylesheet" href="/static/admin.css">
 </head>
 <body>

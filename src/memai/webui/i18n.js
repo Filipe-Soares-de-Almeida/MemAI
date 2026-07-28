@@ -62,10 +62,13 @@ const applyStatic = () => {
   }
 };
 
+/* month names and the number locale fall back per-key like strings do: a
+   new catalog that ships `strings` and forgets `months` degrades to
+   English month names instead of rendering every date as undefined */
 const I18N = {
   t, set, applyStatic, locale,
-  months: active.months,
-  numberLocale: active.numberLocale,
+  months: active.months || en.months,
+  numberLocale: active.numberLocale || en.numberLocale,
 };
 
 applyStatic();
