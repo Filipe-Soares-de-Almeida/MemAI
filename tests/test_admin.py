@@ -188,6 +188,41 @@ def test_static_ui_served(client):
     assert client.get("/static/admin.css").status_code == 200
 
 
+def test_fonts_css_never_names_a_missing_file(client):
+    """webui/fonts/ is untracked and normally absent.
+
+    A url() in a stylesheet is a request whether the file is there or not,
+    so naming an unfetched face means a 404 in the console for something
+    working exactly as designed. Every face still gets a local() src.
+    """
+    res = client.get("/fonts.css")
+    assert res.status_code == 200
+    assert "text/css" in res.headers["content-type"]
+    body = res.text
+    assert body.count("@font-face") == len(admin.WEBFONTS)
+    assert "local('Roboto')" in body
+
+    fonts_dir = admin.WEBUI_DIR / "fonts"
+    for _family, _weight, filename, _locals in admin.WEBFONTS:
+        if (fonts_dir / filename).is_file():
+            assert f"url('/static/fonts/{filename}')" in body
+        else:
+            assert filename not in body
+
+
+def test_fonts_css_uses_a_face_once_fetched(client, tmp_path, monkeypatch):
+    webui = tmp_path / "webui"
+    (webui / "fonts").mkdir(parents=True)
+    (webui / "fonts" / "roboto-400.woff2").write_bytes(b"not really a font")
+    monkeypatch.setattr(admin, "WEBUI_DIR", webui)
+
+    body = client.get("/fonts.css").text
+    assert "url('/static/fonts/roboto-400.woff2') format('woff2')" in body
+    # the ones still absent stay out of it
+    assert "roboto-mono-400.woff2" not in body
+    assert "roboto-700.woff2" not in body
+
+
 def test_graph_is_capped_and_says_so(client):
     """An uncapped graph freezes the browser: the layout is O(n^2)."""
     for i in range(6):
