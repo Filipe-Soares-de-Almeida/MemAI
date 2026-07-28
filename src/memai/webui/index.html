@@ -5,10 +5,13 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>MemAI · Admin</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect x='7' y='7' width='18' height='18' rx='2' transform='rotate(45 16 16)' fill='none' stroke='%23BB86FC' stroke-width='2'/><circle cx='16' cy='16' r='3' fill='%23BB86FC'/></svg>">
-<!-- Roboto is declared in admin.css: installed copy first, then
-     webui/fonts/ if `python tools/fetch-fonts.py` has populated it, then
-     the system stack. Nothing here reaches the network -- the rest of
-     MemAI runs offline and this page is served from loopback. -->
+<!-- Generated, not static: it names a font file only when that file has
+     actually been fetched (tools/fetch-fonts.py), so the optional half of
+     the font setup cannot log 404s. Installed copy first, then
+     webui/fonts/, then the system stack. Nothing here reaches the network
+     -- the rest of MemAI runs offline and this page is served from
+     loopback. -->
+<link rel="stylesheet" href="/fonts.css">
 <link rel="stylesheet" href="/static/admin.css">
 </head>
 <body>

@@ -11,45 +11,12 @@
    to enter the dark lightness band) / Teal 500 / Green 800 / Red 600.
    ========================================================================== */
 
-/* Roboto, without asking Google for it on every page load.
-   The spec above calls for Roboto; a dashboard served from loopback in a
-   project whose whole point is running offline must not need a CDN to
-   look right. So each face resolves in three steps: a copy installed on
-   the machine, then webui/fonts/ (populated by `python
-   tools/fetch-fonts.py`, deliberately untracked -- see .gitignore), then
-   the system stack in --font-ui / --font-m. A missing file is a 404 the
-   browser skips, not a broken page. */
-
-@font-face {
-  font-family: 'Roboto'; font-style: normal; font-weight: 400; font-display: swap;
-  src: local('Roboto'), local('Roboto Regular'),
-       url('/static/fonts/roboto-400.woff2') format('woff2');
-}
-@font-face {
-  font-family: 'Roboto'; font-style: normal; font-weight: 500; font-display: swap;
-  src: local('Roboto Medium'), local('Roboto'),
-       url('/static/fonts/roboto-500.woff2') format('woff2');
-}
-@font-face {
-  font-family: 'Roboto'; font-style: normal; font-weight: 700; font-display: swap;
-  src: local('Roboto Bold'), local('Roboto'),
-       url('/static/fonts/roboto-700.woff2') format('woff2');
-}
-@font-face {
-  font-family: 'Roboto Mono'; font-style: normal; font-weight: 400; font-display: swap;
-  src: local('Roboto Mono'), local('Roboto Mono Regular'),
-       url('/static/fonts/roboto-mono-400.woff2') format('woff2');
-}
-@font-face {
-  font-family: 'Roboto Mono'; font-style: normal; font-weight: 500; font-display: swap;
-  src: local('Roboto Mono Medium'), local('Roboto Mono'),
-       url('/static/fonts/roboto-mono-500.woff2') format('woff2');
-}
-@font-face {
-  font-family: 'Roboto Mono'; font-style: normal; font-weight: 600; font-display: swap;
-  src: local('Roboto Mono SemiBold'), local('Roboto Mono'),
-       url('/static/fonts/roboto-mono-600.woff2') format('woff2');
-}
+/* The @font-face rules are NOT here: they are generated per request by
+   memai.admin (see fonts_css and the <link> in index.html), because a face
+   whose file has not been fetched must not be named in a url() -- the
+   browser would request it and log a 404 for something working as
+   designed. Roboto resolves as: installed copy, then webui/fonts/ if
+   populated, then the system stack in --font-ui / --font-m. */
 
 :root {
   /* surfaces — #121212 + white elevation overlays */
