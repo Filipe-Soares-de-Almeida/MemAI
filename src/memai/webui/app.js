@@ -20,9 +20,10 @@
 import { $ } from './core/dom.js';
 import { api } from './core/api.js';
 import { paintIcons } from './core/icons.js';
-import { modalOpen, closeModal } from './core/ui.js';
+import { modalOpen, closeModal, confirmModal, toast } from './core/ui.js';
 import { updateRail } from './core/shared.js';
-import { registerViews, route, go } from './core/router.js';
+import { registerViews, route, go, parseHash } from './core/router.js';
+import { I18N, t } from './i18n.js';
 
 import { renderOverview } from './views/overview.js';
 import { renderMemories } from './views/memories.js';
@@ -52,6 +53,27 @@ paintIcons();
 
 $('#btnNew').addEventListener('click', openNewMemory);
 
+/* Language. The reload that applies it discards whatever is on screen and
+   unsaved, so it asks -- except when a modal is holding the form, because
+   opening a confirmation would itself close that modal. Then it waits. */
+$('#langSel').addEventListener('change', async e => {
+  const code = e.target.value;
+  if (modalOpen()) {
+    e.target.value = I18N.locale;
+    toast(t('lang.busy'), 'bad');
+    return;
+  }
+  if (drawerOpen() && !(await confirmModal({
+    title: t('lang.switch.title'),
+    body: t('lang.switch.body'),
+    okLabel: t('lang.switch.ok'),
+  }))) {
+    e.target.value = I18N.locale;
+    return;
+  }
+  I18N.set(code);
+});
+
 $('#globalSearch').addEventListener('keydown', e => {
   if (e.key === 'Enter' && e.target.value.trim()) {
     go('memories', { q: e.target.value.trim(), status: '' });
@@ -73,7 +95,10 @@ document.addEventListener('keydown', e => {
   }
 });
 
-addEventListener('hashchange', route);
+/* wrapped, so the hashchange Event is not read as route's options */
+addEventListener('hashchange', () => route());
 route();
-/* rail health on first paint, independent of the landing view */
-api('/api/overview').then(updateRail).catch(() => {});
+/* Rail health on first paint. Overview renders from /api/overview and hands
+   the same payload to updateRail itself, so asking for it here as well put
+   two copies of one request in flight on the landing view. */
+if (parseHash().name !== 'overview') api('/api/overview').then(updateRail).catch(() => {});

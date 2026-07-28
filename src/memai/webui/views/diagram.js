@@ -9,9 +9,9 @@
 import { $, esc, debounce } from '../core/dom.js';
 import { api, seg } from '../core/api.js';
 import { icon } from '../core/icons.js';
-import { toast, openModal, closeModal, confirmModal, promptModal,
-         openCtxMenu, tipShow, tipHide } from '../core/ui.js';
-import { typeClass, typeColor } from '../core/shared.js';
+import { toast, failed, openModal, closeModal, confirmModal, promptModal,
+         openCtxMenu, tipShow, tipHide, setPressed } from '../core/ui.js';
+import { typeClass, wireUidPicker } from '../core/shared.js';
 import { onTeardown } from '../core/lifecycle.js';
 import { openRecord } from './record.js';
 import { DiagramEditor, NODE_SHAPES, ROUTINGS, FONT_SCALES } from '../diagram-engine.js';
@@ -30,13 +30,13 @@ function dgStepModal({ title, key = '', label = '', shape = 'step', lockKey = fa
       title,
       bodyHTML: `
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
-          <div class="field"><label>${t('dg.key')}</label>
+          <div class="field"><label for="dgsKey">${t('dg.key')}</label>
             <input type="text" id="dgsKey" value="${esc(key)}" placeholder="${t('dg.keyPh')}"
                    ${lockKey ? 'disabled' : ''} autocomplete="off"></div>
-          <div class="field"><label>${t('dg.shape')}</label>
+          <div class="field"><label for="dgsShape">${t('dg.shape')}</label>
             <select id="dgsShape">${shapeOptions(shape)}</select></div>
         </div>
-        <div class="field"><label>${t('dg.label')}</label>
+        <div class="field"><label for="dgsLabel">${t('dg.label')}</label>
           <input type="text" id="dgsLabel" value="${esc(label)}" placeholder="${t('dg.labelPh')}"></div>
         <div class="dg-empty">${t('dg.labelHint')}</div>`,
       footHTML: `<button class="btn" data-x>${t('common.cancel')}</button>
@@ -99,7 +99,12 @@ export async function renderDiagram(view, params, ctx) {
           <button class="btn btn-sm" id="dgRecord">${t('dg.record')}</button>
         </div>
         <div class="dg-stage" id="dgStage">
-          <canvas id="dgCanvas"></canvas>
+          <!-- A drawing. The flow itself is readable as text two ways that do
+               not need this canvas: the inspector beside it lists a step's
+               connections and note, and the Mermaid button exports the whole
+               graph. The label says so rather than claiming the picture is
+               navigable. -->
+          <canvas id="dgCanvas" role="img" aria-label="${esc(t('dg.canvasAlt', { title: data.title }))}"></canvas>
           <div class="dg-overlay" id="dgOverlay">
             <div class="dg-hint" id="dgHint" hidden></div>
             <div class="dg-legend" id="dgLegend"></div>
@@ -122,7 +127,7 @@ export async function renderDiagram(view, params, ctx) {
       await api(`/api/diagrams/${seg(uid)}/layout`, { body: { positions: batch } });
     } catch (err) {
       /* the canvas is now lying about where things are; take the store's word */
-      toast(err.message, 'bad');
+      failed('err.diagram', err);
       reload();
     }
   }, 450);
@@ -140,7 +145,7 @@ export async function renderDiagram(view, params, ctx) {
 
   const act = async (fn, okMsg) => {
     try { await fn(); if (okMsg) toast(okMsg, 'ok'); await reload(); }
-    catch (err) { toast(err.message, 'bad'); }
+    catch (err) { failed('err.diagram', err); }
   };
 
   /* What the strokes on the canvas mean. Static, so it is painted once --
@@ -232,7 +237,7 @@ export async function renderDiagram(view, params, ctx) {
     const stored = data.nodes.find(n => n.key === node.key) || node;
     const m = openModal({
       title: t('dg.note.title', { key: esc(node.key) }),
-      bodyHTML: `<div class="field"><label>${t('dg.note')}</label>
+      bodyHTML: `<div class="field"><label for="dgnNote">${t('dg.note')}</label>
           <textarea id="dgnNote" rows="9" style="min-height:210px"
                     placeholder="${t('dg.notePh')}">${esc(stored.note || '')}</textarea></div>
         <div class="dg-empty" style="margin-top:9px">${t('dg.note.hint')}</div>`,
@@ -274,7 +279,7 @@ export async function renderDiagram(view, params, ctx) {
       selected = step.key;
       engine.select(step.key);
       paintSide();
-    } catch (err) { toast(err.message, 'bad'); }
+    } catch (err) { failed('err.diagram', err); }
   }
 
   async function arrange() {
@@ -313,7 +318,7 @@ export async function renderDiagram(view, params, ctx) {
           /* the engine reports the pending end through onConnectProgress,
              so the hint is already right -- only the button needs telling */
           run: () => { engine.startConnectFrom(node.key);
-                       $('#dgConnect').classList.add('btn-solid'); } },
+                       setPressed($('#dgConnect'), true); } },
         (stored?.w != null || stored?.h != null)
           && { label: t('dg.ctx.resetSize'), run: () => resetCardSize(node.key) },
         { sep: true },
@@ -332,9 +337,9 @@ export async function renderDiagram(view, params, ctx) {
     const m = openModal({
       title: t('dg.meta'),
       bodyHTML: `
-        <div class="field"><label>${t('dg.meta.name')}</label>
+        <div class="field"><label for="dgmTitle">${t('dg.meta.name')}</label>
           <input type="text" id="dgmTitle" value="${esc(data.title)}"></div>
-        <div class="field"><label>${t('dg.meta.summary')}</label>
+        <div class="field"><label for="dgmSummary">${t('dg.meta.summary')}</label>
           <textarea id="dgmSummary" rows="6" placeholder="${t('dg.meta.summaryPh')}">${esc(data.summary)}</textarea></div>`,
       footHTML: `<button class="btn" data-x>${t('common.cancel')}</button>
                  <button class="btn btn-solid" data-ok>${t('common.save')}</button>`,
@@ -382,11 +387,11 @@ export async function renderDiagram(view, params, ctx) {
     engine?.setReadOnly(!editing);
     const mode = $('#dgMode');
     mode.textContent = editing ? t('dg.doneEditing') : t('dg.enableEditing');
-    mode.classList.toggle('btn-solid', editing);
+    setPressed(mode, editing);
     view.querySelectorAll('[data-editonly]').forEach(b => { b.disabled = !editing; });
     $('#dgTitle').classList.toggle('dg-editable', editing);
     $('#dgTitle').title = editing ? t('dg.titleEdit') : '';
-    $('#dgConnect').classList.toggle('btn-solid', !!engine?.connectMode);
+    setPressed($('#dgConnect'), !!engine?.connectMode);
     paintSide();
     paintHint();
   }
@@ -429,11 +434,11 @@ export async function renderDiagram(view, params, ctx) {
       <div class="dg-panel">
         <h3>${t('dg.step')} <span class="dg-key">${esc(node.key)}</span></h3>
         ${editing ? '' : `<div class="dg-empty">${t('dg.readOnlyNote')}</div>`}
-        <div class="field"><label>${t('dg.label')}</label>
+        <div class="field"><label for="dgLabel">${t('dg.label')}</label>
           <input type="text" id="dgLabel" value="${esc(node.label)}"${ro}></div>
-        <div class="field"><label>${t('dg.shape')}</label>
+        <div class="field"><label for="dgShape">${t('dg.shape')}</label>
           <select id="dgShape"${ro}>${shapeOptions(node.shape)}</select></div>
-        <div class="field"><label>${t('dg.note')}</label>
+        <div class="field"><label for="dgNote">${t('dg.note')}</label>
           <textarea id="dgNote" rows="5" placeholder="${t('dg.notePh')}"${ro}>${esc(node.note)}</textarea></div>
         ${editing ? `<div class="act-row">
           <button class="btn btn-solid btn-sm" id="dgSave">${t('common.save')}</button>
@@ -464,11 +469,13 @@ export async function renderDiagram(view, params, ctx) {
         </div>
         ${editing ? `<div class="rel-add">
           <div class="picker">
-            <input type="text" id="dgTarget" placeholder="${t('dg.link.target')}" autocomplete="off">
+            <input type="text" id="dgTarget" placeholder="${t('dg.link.target')}"
+                   aria-label="${t('dg.link.target')}" autocomplete="off">
             <div class="picker-results" id="dgResults" hidden></div>
           </div>
           <div class="act-row">
-            <input type="text" id="dgRelType" list="dgRelDL" value="explains" style="flex:1">
+            <input type="text" id="dgRelType" list="dgRelDL" value="explains"
+                   aria-label="${t('dg.link.relType')}" style="flex:1">
             <button class="btn btn-sm" id="dgAttach">${t('dg.link.attach')}</button>
           </div>
           <datalist id="dgRelDL">
@@ -503,31 +510,17 @@ export async function renderDiagram(view, params, ctx) {
       act(() => api(`/api/diagrams/${seg(uid)}/link`, { body: {
         node_key: node.key, target_uid: b.dataset.dellink, delete: true } }), t('dg.unlinked')));
 
-    let pick = null;
-    const input = side.querySelector('#dgTarget'), results = side.querySelector('#dgResults');
-    const lookup = debounce(async () => {
-      try {
-        const r = await api(`/api/lookup?q=${seg(input.value.trim())}&exclude=${seg(uid)}`);
-        results.innerHTML = r.items.map(it => `
-          <div class="picker-item" data-pick="${esc(it.uid)}">
-            <span class="dot" style="--c:${typeColor(it.type)}"></span>
-            <span class="uid-chip" style="cursor:inherit">${esc(it.uid)}</span>
-            <span class="snippet">${esc(it.snippet)}</span>
-          </div>`).join('') || `<div class="picker-item">${t('lookup.empty')}</div>`;
-        results.hidden = false;
-        results.querySelectorAll('[data-pick]').forEach(it => it.addEventListener('mousedown', () => {
-          pick = it.dataset.pick;
-          input.value = pick;
-          results.hidden = true;
-        }));
-      } catch { /* lookup is best-effort */ }
-    }, 280);
-    input.addEventListener('input', () => { pick = null; lookup(); });
-    input.addEventListener('focus', lookup);
-    input.addEventListener('blur', () => setTimeout(() => { results.hidden = true; }, 180));
+    /* the same picker the relations editor in a record uses -- it was a second
+       copy of it here, with the same keyboard hole in both */
+    const picked = wireUidPicker({
+      input: side.querySelector('#dgTarget'),
+      results: side.querySelector('#dgResults'),
+      exclude: uid,
+      label: t('dg.link.target'),
+    });
 
     side.querySelector('#dgAttach').onclick = () => {
-      const target = pick || input.value.trim();
+      const target = picked() || side.querySelector('#dgTarget').value.trim();
       if (!target) { toast(t('dg.link.pickTarget'), 'bad'); return; }
       act(() => api(`/api/diagrams/${seg(uid)}/link`, { body: {
         node_key: node.key, target_uid: target,
@@ -583,7 +576,7 @@ export async function renderDiagram(view, params, ctx) {
   };
   $('#dgConnect').onclick = () => {
     engine.toggleConnectMode();
-    $('#dgConnect').classList.toggle('btn-solid', engine.connectMode);
+    setPressed($('#dgConnect'), engine.connectMode);
     paintHint();
   };
   $('#dgArrange').onclick = arrange;
@@ -606,7 +599,7 @@ export async function renderDiagram(view, params, ctx) {
   $('#dgMermaid').onclick = async () => {
     let src = '';
     try { src = (await api(`/api/diagrams/${seg(uid)}/mermaid`)).mermaid; }
-    catch (err) { toast(err.message, 'bad'); return; }
+    catch (err) { failed('err.load', err); return; }
     const m = openModal({
       title: t('dg.mermaid.title'),
       bodyHTML: `<div class="dg-empty" style="margin-bottom:9px">${t('dg.mermaid.hint')}</div>

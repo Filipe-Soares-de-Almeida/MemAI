@@ -3,8 +3,8 @@
 
 import { $, esc, fmtInt, fmtBytes, fmtDate } from '../core/dom.js';
 import { api, seg } from '../core/api.js';
-import { toast, confirmModal, promptModal } from '../core/ui.js';
-import { typeTag, typeClass, uidChip, statusTag, wireCopyChips,
+import { toast, failed, confirmModal, promptModal } from '../core/ui.js';
+import { typeTag, typeClass, uidChip, statusTag, wireCopyChips, failedHTML, retryable,
          getDomains, TYPE_ORDER, TYPE_LABEL } from '../core/shared.js';
 import { openRecord } from './record.js';
 import { t } from '../i18n.js';
@@ -58,9 +58,10 @@ export async function renderMaintenance(view) {
         <label style="display:flex;align-items:center;gap:8px;font-size:11.5px;color:var(--ink-3)">
           ${t('mn.dd.threshold')} <input type="range" id="ddThr" min="0.45" max="0.95" step="0.05" value="0.60" style="width:130px">
           <b id="ddThrVal" style="color:var(--ink)">0.60</b></label>
-        <select id="ddType"><option value="">${t('common.allTypes')}</option>
+        <select id="ddType" aria-label="${t('common.allTypes')}"><option value="">${t('common.allTypes')}</option>
           ${TYPE_ORDER.map(tp => `<option value="${tp}">${TYPE_LABEL[tp]}</option>`).join('')}</select>
-        <input type="text" id="ddDomain" placeholder="${t('mn.dd.domainPh')}" list="ddDomainsDL" style="max-width:200px">
+        <input type="text" id="ddDomain" placeholder="${t('mn.dd.domainPh')}"
+               aria-label="${t('mn.dd.domainPh')}" list="ddDomainsDL" style="max-width:200px">
         <datalist id="ddDomainsDL"></datalist>
         <button class="btn btn-solid btn-sm" id="ddRun">${t('mn.dd.run')}</button>
       </div>
@@ -80,7 +81,7 @@ export async function renderMaintenance(view) {
     if (dl) dl.innerHTML = ds.map(d => `<option value="${esc(d.domain)}">`).join('');
   }).catch(() => {});
 
-  const loadHealth = async () => {
+  const loadHealth = retryable('#healthBody', async () => {
     const h = await api('/api/maintenance/health');
     const rows = [];
     const push = (level, name, detail) =>
@@ -104,24 +105,29 @@ export async function renderMaintenance(view) {
     $('#backupsBody').innerHTML = h.backups.length
       ? h.backups.map(b => `<div class="backup-row"><span>${esc(b.name)}</span><span>${fmtBytes(b.size)}</span></div>`).join('')
       : t('mn.backups.empty');
-  };
-  loadHealth().catch(err => {
-    if ($('#healthBody')) $('#healthBody').innerHTML = `<div class="empty">${esc(err.message)}</div>`;
   });
-  $('#hRefresh').addEventListener('click', () => loadHealth().catch(e => toast(e.message, 'bad')));
+  loadHealth();
+  /* the same wrapped loader the failure's own Retry calls, so Refresh and Retry
+     cannot end up doing two different things */
+  $('#hRefresh').addEventListener('click', loadHealth);
 
   view.querySelectorAll('[data-op]').forEach(b => b.addEventListener('click', async () => {
     const op = OPS[b.dataset.op];
     if (op.confirm && !(await confirmModal({ title: t('mn.confirm.title'), body: op.confirm, okLabel: t('common.run') }))) return;
     b.disabled = true;
+    b.setAttribute('aria-busy', 'true');
     const prev = b.textContent;
-    b.innerHTML = '<span class="spin"></span>';
+    /* the label stays beside the spinner: replacing it left the button with
+       no accessible name at all, and nothing on screen saying which of the
+       six operations was the one running */
+    b.innerHTML = `<span class="spin"></span>${esc(prev)}`;
     try {
       const r = await api(op.path, { body: op.body });
       toast(op.msg(r), 'ok');
       loadHealth().catch(() => {});
-    } catch (err) { toast(err.message, 'bad'); }
+    } catch (err) { failed('err.maintenance', err); }
     b.disabled = false;
+    b.removeAttribute('aria-busy');
     b.textContent = prev;
   }));
 
@@ -144,13 +150,13 @@ export async function renderMaintenance(view) {
             <span style="font-size:11px;color:var(--ink-3)">${t('mn.dd.overlap')} <b style="color:var(--ink)">${(p.ratio * 100).toFixed(0)}%</b></span>
             <button class="btn btn-sm" data-linkdup="${i}">${t('mn.dd.linkDup')}</button>
           </div>
-          <div class="ratio-bar"><div class="ratio-fill" style="width:${(p.ratio * 100).toFixed(0)}%"></div></div>
+          <div class="ratio-bar"><div class="ratio-fill" style="--v:${p.ratio.toFixed(3)}"></div></div>
           <div class="pair-cards">
             ${[p.a, p.b].map(mm => `
               <div class="pair-card">
                 <div style="display:flex;gap:7px;align-items:center;flex-wrap:wrap">
                   ${typeTag(mm.type)} ${uidChip(mm.uid)} ${statusTag(mm.status)}
-                  <span style="color:var(--ink-4);font-size:10px">${fmtDate(mm.created_at)}</span>
+                  <span style="color:var(--ink-3);font-size:10px">${fmtDate(mm.created_at)}</span>
                 </div>
                 ${mm.domain ? `<span class="chip">${esc(mm.domain)}</span>` : ''}
                 <div class="snippet">${esc(mm.content)}</div>
@@ -174,8 +180,10 @@ export async function renderMaintenance(view) {
             await api(`/api/memories/${seg(btn.dataset.archm)}/status`, {
               body: { status: 'archived', reason: reason || t('mn.dd.dupReason') } });
             toast(t('dr.archived'), 'ok');
-            btn.closest('.pair-card').style.opacity = .4;
-          } catch (err) { toast(err.message, 'bad'); }
+            /* sink the card a step instead of dimming it: the snippet is what
+               you would re-read to check you archived the right one */
+            btn.closest('.pair-card').classList.add('decided');
+          } catch (err) { failed('err.status', err); }
         }));
       body.querySelectorAll('[data-linkdup]').forEach(btn =>
         btn.addEventListener('click', async () => {
@@ -184,33 +192,39 @@ export async function renderMaintenance(view) {
             await api('/api/relations', { body: { from_uid: p.a.uid, to_uid: p.b.uid, relation_type: 'duplicates', note: t('mn.dd.linkNote', { p: (p.ratio * 100).toFixed(0) }) } });
             toast(t('mn.dd.linked'), 'ok');
             btn.disabled = true;
-          } catch (err) { toast(err.message, 'bad'); }
+          } catch (err) { failed('err.relation', err); }
         }));
-    } catch (err) { body.innerHTML = `<div class="empty">${esc(err.message)}</div>`; }
+    } catch (err) {
+      body.innerHTML = failedHTML(err);
+      /* the scan's inputs are untouched and still on screen, so retrying is
+         literally pressing the button that started it */
+      body.querySelector('[data-retry]').addEventListener('click', () => $('#ddRun').click());
+    }
   });
 
   /* audit */
-  const loadAudit = async () => {
+  const loadAudit = retryable('#auditBody', async () => {
     const r = await api('/api/audit?limit=120');
     const host = $('#auditBody');
     if (!host) return;
     host.innerHTML = r.entries.length ? `
+      <div class="table-scroll">
       <table class="table">
         <thead><tr><th>${t('mn.au.th.when')}</th><th>${t('mn.au.th.memory')}</th><th>${t('common.domain')}</th><th>${t('mn.au.th.event')}</th><th class="num">${t('mn.au.th.delta')}</th></tr></thead>
         <tbody>${r.entries.map(e => `
-          <tr style="cursor:pointer" data-uid="${esc(e.memory_uid)}">
+          <tr class="clickable" data-uid="${esc(e.memory_uid)}">
             <td style="white-space:nowrap" title="${esc(e.edited_at)}">${fmtDate(e.edited_at)}</td>
-            <td><span class="type-tag ${typeClass(e.type)}"><span class="dot"></span>${esc(e.memory_uid)}</span></td>
+            <td><button type="button" class="type-tag ${typeClass(e.type)}"
+                        aria-label="${esc(t('a11y.openRecord', { uid: e.memory_uid }))}"><span class="dot"></span>${esc(e.memory_uid)}</button></td>
             <td style="max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(e.domain || '—')}</td>
             <td style="max-width:340px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(e.note)}">${esc(e.note || '') || t('mn.au.contentEdit')}</td>
-            <td class="num">${e.content_changed ? `${e.prev_len} → ${e.new_len}` : '<span style="color:var(--ink-4)">—</span>'}</td>
+            <td class="num">${e.content_changed ? `${e.prev_len} → ${e.new_len}` : '<span style="color:var(--ink-3)">—</span>'}</td>
           </tr>`).join('')}</tbody>
-      </table>` : `<div class="empty">${t('mn.au.empty')}</div>`;
+      </table>
+      </div>` : `<div class="empty">${t('mn.au.empty')}</div>`;
     host.querySelectorAll('[data-uid]').forEach(tr =>
       tr.addEventListener('click', () => openRecord(tr.dataset.uid)));
-  };
-  loadAudit().catch(err => {
-    if ($('#auditBody')) $('#auditBody').innerHTML = `<div class="empty">${esc(err.message)}</div>`;
   });
-  $('#auRefresh').addEventListener('click', () => loadAudit().catch(e => toast(e.message, 'bad')));
+  loadAudit();
+  $('#auRefresh').addEventListener('click', loadAudit);
 }

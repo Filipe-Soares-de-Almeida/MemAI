@@ -9,7 +9,7 @@
 import { $, esc, fmtInt, fmtDate, debounce } from '../core/dom.js';
 import { api, query } from '../core/api.js';
 import { icon } from '../core/icons.js';
-import { toast, promptModal } from '../core/ui.js';
+import { toast, failed, promptModal } from '../core/ui.js';
 import { typeTag, uidChip, statusTag, confPill, wireCopyChips, getDomains,
          TYPE_ORDER, TYPE_LABEL, CONF } from '../core/shared.js';
 import { go, refreshBehind } from '../core/router.js';
@@ -20,8 +20,23 @@ import { t } from '../i18n.js';
 const PAGE = 50;
 const selection = new Set();
 
-function dropBulkbar() {
-  document.querySelector('.bulkbar')?.remove();
+/* The toast stack has to clear this bar, so the bar publishes its own height
+   instead of the stylesheet guessing at it -- at 375px it wraps to two rows,
+   and a toast used to land squarely on top of Archive / Restore / clear. */
+let bulkSize = null;
+
+function publishBulkHeight(bar) {
+  document.documentElement.style.setProperty('--bulk-h', bar ? `${bar.offsetHeight + 10}px` : '0px');
+}
+
+/* Called three ways: with the bar, with nothing, and as a teardown callback
+   (which may hand it an argument of its own), hence the instanceof rather than
+   a default parameter. */
+function dropBulkbar(bar) {
+  bulkSize?.disconnect();
+  bulkSize = null;
+  (bar instanceof HTMLElement ? bar : document.querySelector('.bulkbar'))?.remove();
+  publishBulkHeight(null);
   selection.clear();
 }
 
@@ -64,10 +79,10 @@ export async function renderMemories(view, params, ctx) {
       <input id="fQ" type="search" placeholder="${t('mem.search.placeholder')}" value="${esc(state.q)}" spellcheck="false">
       <select id="fType">${typeOpts.join('')}</select>
       <select id="fDomain">${domainOpts.join('')}</select>
-      <div class="seg" id="fStatus">
-        <button data-v="active" class="${state.status === 'active' ? 'active' : ''}">${t('common.active')}</button>
-        <button data-v="archived" class="${state.status === 'archived' ? 'active' : ''}">${t('common.archived')}</button>
-        <button data-v="" class="${state.status === '' ? 'active' : ''}">${t('common.all')}</button>
+      <div class="seg" id="fStatus" role="group" aria-label="${t('mem.status.aria')}">
+        <button type="button" data-v="active" aria-pressed="${state.status === 'active'}">${t('common.active')}</button>
+        <button type="button" data-v="archived" aria-pressed="${state.status === 'archived'}">${t('common.archived')}</button>
+        <button type="button" data-v="" aria-pressed="${state.status === ''}">${t('common.all')}</button>
       </div>
       <select id="fConf">
         <option value="">${t('mem.conf.all')}</option>
@@ -78,7 +93,7 @@ export async function renderMemories(view, params, ctx) {
         <option value="created_at:asc" ${state.sort === 'created_at' && state.dir === 'asc' ? 'selected' : ''}>${t('mem.sort.oldest')}</option>
         <option value="updated_at:desc" ${state.sort === 'updated_at' ? 'selected' : ''}>${t('mem.sort.updated')}</option>
       </select>`}
-      ${state.session ? `<span class="chip clickable" id="fSession" title="${t('mem.session.title')}">${t('mem.session.chip', { s: esc(state.session.slice(0, 18)) })}${icon('close')}</span>` : ''}
+      ${state.session ? `<button type="button" class="chip clickable" id="fSession" title="${t('mem.session.title')}">${t('mem.session.chip', { s: esc(state.session.slice(0, 18)) })}${icon('close')}</button>` : ''}
     </div>
 
     <div class="mem-list" id="memList">${renderRows(data.items)}</div>
@@ -137,10 +152,10 @@ export async function renderMemories(view, params, ctx) {
       e.stopPropagation();
       cb.checked ? selection.add(row.dataset.uid) : selection.delete(row.dataset.uid);
       row.classList.toggle('selected', cb.checked);
-      renderBulkbar();
+      syncBulkbar();
     });
   });
-  renderBulkbar();
+  syncBulkbar();
 }
 
 function renderRows(items) {
@@ -149,11 +164,22 @@ function renderRows(items) {
     const tags = (m.tags || '').split(',').map(s => s.trim()).filter(Boolean).slice(0, 5);
     const match = m.match_source
       ? `<span class="match-badge" title="${m.fts_rank !== undefined ? `bm25 ${Number(m.fts_rank).toFixed(2)} ` : ''}${m.vec_distance !== undefined ? `cos ${Number(m.vec_distance).toFixed(3)}` : ''}">${esc(m.match_source)}</span>` : '';
+    /* The row keeps its click for the mouse, but the thing that OPENS the
+       record is a real button around the snippet -- the row itself cannot be
+       one, because it already contains a checkbox and a copy button and a
+       control inside a control is a control neither the keyboard nor a
+       screen reader can make sense of. Enter on the button bubbles a click
+       to the row, so there is still exactly one handler. */
     return `<div class="mem-row" data-uid="${esc(m.uid)}">
       <div class="mem-check"><input type="checkbox" aria-label="${t('mem.select.aria', { uid: esc(m.uid) })}"></div>
-      <div class="mem-col-type">${typeTag(m.type)}${uidChip(m.uid)}${statusTag(m.status)}</div>
+      <!-- Confidence leads this column. It used to be the second of four
+           whispers stacked in .mem-right, at 60% white, quieter than the uid
+           beside it -- in a store whose whole point is that a human vets what
+           an agent wrote, the vetting was the faintest thing in the row. -->
+      <div class="mem-col-type">${confPill(m.confidence)}${typeTag(m.type)}${uidChip(m.uid)}${statusTag(m.status)}</div>
       <div class="mem-main">
-        <div class="mem-snippet">${esc(m.content)}</div>
+        <button type="button" class="row-open mem-snippet"
+                aria-label="${esc(t('a11y.openRecord', { uid: m.uid }))}">${esc(m.content)}</button>
         ${tags.length || m.domain ? `<div class="mem-tags">
           ${m.domain ? `<span class="chip">${esc(m.domain)}</span>` : ''}
           ${tags.map(tg => `<span class="chip" style="color:var(--ink-3)">#${esc(tg)}</span>`).join('')}
@@ -161,29 +187,43 @@ function renderRows(items) {
       </div>
       <div class="mem-right">
         ${match}
-        ${confPill(m.confidence)}
         <span title="${esc(m.created_at)}">${fmtDate(m.created_at)}</span>
-        ${m.content_len > 300 ? `<span style="color:var(--ink-4)">${fmtInt(m.content_len)} ${t('common.chars')}</span>` : ''}
+        ${m.content_len > 300 ? `<span style="color:var(--ink-3)">${fmtInt(m.content_len)} ${t('common.chars')}</span>` : ''}
       </div>
     </div>`;
   }).join('');
 }
 
-function renderBulkbar() {
-  document.querySelector('.bulkbar')?.remove();
-  if (!selection.size) return;
+/* Built once, then only its count is written. It used to be removed and
+   recreated on every checkbox, which replayed its entrance animation each
+   time and threw away the focus of whoever was tabbing through it. */
+function syncBulkbar() {
+  const existing = document.querySelector('.bulkbar');
+  if (!selection.size) { dropBulkbar(existing); return; }
+  if (existing) {
+    /* innerHTML, because bulk.selected marks the number up -- textContent
+       here printed the <b> tags as text on every toggle after the first */
+    existing.querySelector('[data-count]').innerHTML = t('bulk.selected', { n: selection.size });
+    return;
+  }
   const bar = document.createElement('div');
   bar.className = 'bulkbar';
+  bar.setAttribute('role', 'toolbar');
+  bar.setAttribute('aria-label', t('bulk.aria'));
   bar.innerHTML = `
-    <span>${t('bulk.selected', { n: selection.size })}</span>
-    <select id="bulkConf">
+    <span data-count>${t('bulk.selected', { n: selection.size })}</span>
+    <select id="bulkConf" aria-label="${t('bulk.setConf')}">
       <option value="">${t('bulk.setConf')}</option>
       ${Object.keys(CONF).map(c => `<option value="${c}">${CONF[c].label}</option>`).join('')}
     </select>
-    <button class="btn btn-sm" id="bulkArch">${t('common.archive')}</button>
-    <button class="btn btn-sm" id="bulkRest">${t('common.restore')}</button>
-    <button class="icon-btn" id="bulkClear" title="${t('bulk.clear.title')}">${icon('close')}</button>`;
+    <button type="button" class="btn btn-sm" id="bulkArch">${t('common.archive')}</button>
+    <button type="button" class="btn btn-sm" id="bulkRest">${t('common.restore')}</button>
+    <button type="button" class="icon-btn" id="bulkClear"
+            title="${t('bulk.clear.title')}" aria-label="${t('bulk.clear.title')}">${icon('close')}</button>`;
   document.body.appendChild(bar);
+  publishBulkHeight(bar);
+  bulkSize = new ResizeObserver(() => publishBulkHeight(bar));
+  bulkSize.observe(bar);
 
   bar.querySelector('#bulkConf').addEventListener('change', async e => {
     if (!e.target.value) return;
@@ -198,16 +238,38 @@ function renderBulkbar() {
     await runBulk({ action: 'archive', reason });
   });
   bar.querySelector('#bulkRest').addEventListener('click', () => runBulk({ action: 'restore' }));
+  /* Clearing a selection changes no data, so it unticks the boxes in place.
+     It used to call refreshBehind(), which re-ran the whole route -- a fetch
+     and a full repaint to undo three checkboxes. */
   bar.querySelector('#bulkClear').addEventListener('click', () => {
-    selection.clear(); renderBulkbar(); refreshBehind();
+    selection.clear();
+    document.querySelectorAll('#memList .mem-row').forEach(row => {
+      row.querySelector('input[type=checkbox]').checked = false;
+      row.classList.remove('selected');
+    });
+    syncBulkbar();
   });
 }
 
 async function runBulk(body) {
+  /* captured before the selection is cleared, so the Undo below acts on exactly
+     the set that was archived and not on whatever is ticked by then */
+  const uids = [...selection];
   try {
-    const r = await api('/api/bulk', { body: { ...body, uids: [...selection] } });
-    toast(t('bulk.updated', { n: r.affected }), 'ok');
+    const r = await api('/api/bulk', { body: { ...body, uids } });
+    /* Archiving fifty rows behind a single confirm was a one-way door. Restore
+       over the same set is the exact inverse, so it is offered rather than
+       leaving you to find those fifty rows again. The reverse direction gets no
+       Undo -- see the note on the drawer's Restore in record.js. */
+    toast(t('bulk.updated', { n: r.affected }), 'ok', body.action === 'archive' ? {
+      action: {
+        label: t('common.undo'),
+        run: () => api('/api/bulk', { body: { action: 'restore', uids } })
+          .then(() => { toast(t('bulk.undone', { n: uids.length }), 'ok'); refreshBehind(); })
+          .catch(err => failed('err.bulk', err)),
+      },
+    } : {});
     selection.clear();
-    refreshBehind();
-  } catch (err) { toast(err.message, 'bad'); }
+    refreshBehind();   /* the rows themselves changed, so the list is refetched */
+  } catch (err) { failed('err.bulk', err); }
 }

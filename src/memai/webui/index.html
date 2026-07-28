@@ -3,6 +3,10 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- declared before any stylesheet, so the native half of the UI (form
+     controls, scrollbars, the caret) is dark from the first paint rather
+     than from the first rule -->
+<meta name="color-scheme" content="dark">
 <title>MemAI · Admin</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect x='7' y='7' width='18' height='18' rx='2' transform='rotate(45 16 16)' fill='none' stroke='%23BB86FC' stroke-width='2'/><circle cx='16' cy='16' r='3' fill='%23BB86FC'/></svg>">
 <!-- Generated, not static: it names a font file only when that file has
@@ -24,31 +28,36 @@
   <div class="brand">
     <svg class="brand-seal" data-icon="brand-seal"></svg>
     <div class="brand-text">
-      <span class="brand-name">MemAI</span>
+      <!-- the page's h1. It was a span, which left the document with no
+           level-one heading and every view's title starting at h2. -->
+      <h1 class="brand-name">MemAI</h1>
       <span class="brand-sub" data-i18n="brand.sub">memory administration</span>
     </div>
   </div>
 
+  <!-- data-i18n-title as well as the label: below 940px the rail collapses
+       and the labels are sized to nothing, so the tooltip is the only thing
+       naming an icon for a sighted user. -->
   <nav class="nav" aria-label="Sections" data-i18n-aria="nav.aria">
-    <a href="#/overview" data-view="overview">
+    <a href="#/overview" data-view="overview" data-i18n-title="nav.overview">
       <svg data-icon="overview"></svg>
       <span data-i18n="nav.overview">Overview</span></a>
-    <a href="#/memories" data-view="memories">
+    <a href="#/memories" data-view="memories" data-i18n-title="nav.memories">
       <svg data-icon="memories"></svg>
       <span data-i18n="nav.memories">Memories</span></a>
-    <a href="#/graph" data-view="graph">
+    <a href="#/graph" data-view="graph" data-i18n-title="nav.graph">
       <svg data-icon="graph"></svg>
       <span data-i18n="nav.graph">Graph</span></a>
-    <a href="#/diagrams" data-view="diagrams">
+    <a href="#/diagrams" data-view="diagrams" data-i18n-title="nav.diagrams">
       <svg data-icon="diagrams"></svg>
       <span data-i18n="nav.diagrams">Diagrams</span></a>
-    <a href="#/domains" data-view="domains">
+    <a href="#/domains" data-view="domains" data-i18n-title="nav.domains">
       <svg data-icon="domains"></svg>
       <span data-i18n="nav.domains">Domains</span></a>
-    <a href="#/maintenance" data-view="maintenance">
+    <a href="#/maintenance" data-view="maintenance" data-i18n-title="nav.maintenance">
       <svg data-icon="maintenance"></svg>
       <span data-i18n="nav.maintenance">Maintenance</span></a>
-    <a href="#/optimization" data-view="optimization">
+    <a href="#/optimization" data-view="optimization" data-i18n-title="nav.optimization">
       <svg data-icon="optimization"></svg>
       <span data-i18n="nav.optimization">Optimization</span></a>
   </nav>
@@ -66,7 +75,8 @@
              placeholder="Search memories — keywords + vectors"
              aria-label="Global search"
              data-i18n-placeholder="search.placeholder" data-i18n-aria="search.aria">
-      <kbd>/</kbd>
+      <!-- a hint for the eye; the input is already named -->
+      <kbd aria-hidden="true">/</kbd>
     </div>
     <div class="topbar-right">
       <span id="dbBadge" class="db-badge" title=""></span>
@@ -75,15 +85,44 @@
     </div>
   </header>
 
-  <main id="view" class="view" tabindex="-1"></main>
+  <!-- the spinner ships in the markup: the modules are fetched, and a shell
+       with an empty middle reads as "nothing here" rather than as loading -->
+  <main id="view" class="view" tabindex="-1">
+    <div class="loading"><span class="spin"></span></div>
+  </main>
 </div>
 
 <div id="scrim" class="scrim" hidden></div>
-<aside id="drawer" class="drawer" hidden aria-label="Memory record" data-i18n-aria="drawer.aria"></aside>
+<!-- a dialog, and said so: it takes the screen behind a scrim, Escape
+     closes it, and openRecord() moves the caret into it -->
+<aside id="drawer" class="drawer" hidden tabindex="-1"
+       role="dialog" aria-modal="true"
+       aria-label="Memory record" data-i18n-aria="drawer.aria"></aside>
 <div id="modalRoot"></div>
 <div id="toasts" class="toasts" aria-live="polite"></div>
 <div id="tip" class="tip" hidden></div>
 
+<noscript>
+  <div class="noscript">
+    This dashboard is a JavaScript application — it renders every view in the
+    browser and talks to the local API. Enable JavaScript for this origin to
+    use it.
+  </div>
+</noscript>
+
+<script>
+/* The one classic script on the page, and its whole job is to admit failure.
+   A module that 404s or throws while loading leaves the shell painted and
+   the middle spinning forever, which is indistinguishable from a slow
+   request. Capture phase, because an error on a <script> element does not
+   bubble. */
+addEventListener('error', function (e) {
+  if (!(e.target instanceof HTMLScriptElement)) return;
+  var view = document.getElementById('view');
+  if (view) view.innerHTML = '<div class="empty">The dashboard could not load '
+    + 'its modules. Check the server log, then reload.</div>';
+}, true);
+</script>
 <script type="module" src="/static/app.js"></script>
 </body>
 </html>
