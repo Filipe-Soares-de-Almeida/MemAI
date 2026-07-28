@@ -146,6 +146,24 @@ const ICONS = {
     viewBox: '0 0 16 16',
     body: `<path d="M8 2.5v11M4.1 9.4L8 13.5l3.9-4.1"/>`,
   },
+  /* ── line samples, for the canvas legend ────────────────────────────
+     Wide and flat rather than 16x16 (see .ico-line), because they stand
+     for a stroke and not for a thing. Each one repeats what the canvas
+     actually draws, so drawEdge and these have to change together. */
+
+  'line-plain': {
+    viewBox: '0 0 22 7',
+    body: `<path d="M1 3.5h20"/>`,
+  },
+  'line-loop': {   /* dashed: closes a cycle -- see drawEdge's `back` */
+    viewBox: '0 0 22 7',
+    body: `<path d="M1 3.5h20" stroke-dasharray="4.5 3.5"/>`,
+  },
+  'line-hot': {    /* thicker: the selected connection */
+    viewBox: '0 0 22 7',
+    body: `<path d="M1 3.5h20" stroke-width="2.6"/>`,
+  },
+
   /* paging, where a full arrow reads as heavier than the step it takes */
   'chevron-left': {
     viewBox: '0 0 16 16',
