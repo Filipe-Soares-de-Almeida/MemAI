@@ -399,8 +399,18 @@ export class DiagramEditor {
       }
     }
     bars.sort((u, v) => Math.abs(u.crossY - midY) - Math.abs(v.crossY - midY));
+    /* Cheapest first, and cheap is not the same as near. A corridor OUTSIDE
+       the two columns makes the edge overshoot one of its own ends and come
+       back: that is what "it goes past the card and hooks in from the far
+       side" was -- a corridor 23 units beyond the target's right edge,
+       picked over an equally near one on the side the edge was already
+       arriving from. `over` is the extra sideways travel that costs, and it
+       is zero for every candidate BETWEEN the two columns, so those are all
+       preferred and proximity only decides between them. */
+    const over = x => Math.abs(x - a.x) + Math.abs(x - b.x) - Math.abs(a.x - b.x);
     const near = x => Math.min(Math.abs(x - a.x), Math.abs(x - b.x));
-    corridors.sort((u, v) => near(u.corridor) - near(v.corridor));
+    corridors.sort((u, v) => over(u.corridor) - over(v.corridor)
+                          || near(u.corridor) - near(v.corridor));
     return [...bars.slice(0, 10), ...corridors.slice(0, 12)];
   }
 
