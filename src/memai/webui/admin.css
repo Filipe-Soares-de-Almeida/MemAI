@@ -11,6 +11,46 @@
    to enter the dark lightness band) / Teal 500 / Green 800 / Red 600.
    ========================================================================== */
 
+/* Roboto, without asking Google for it on every page load.
+   The spec above calls for Roboto; a dashboard served from loopback in a
+   project whose whole point is running offline must not need a CDN to
+   look right. So each face resolves in three steps: a copy installed on
+   the machine, then webui/fonts/ (populated by `python
+   tools/fetch-fonts.py`, deliberately untracked -- see .gitignore), then
+   the system stack in --font-ui / --font-m. A missing file is a 404 the
+   browser skips, not a broken page. */
+
+@font-face {
+  font-family: 'Roboto'; font-style: normal; font-weight: 400; font-display: swap;
+  src: local('Roboto'), local('Roboto Regular'),
+       url('/static/fonts/roboto-400.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Roboto'; font-style: normal; font-weight: 500; font-display: swap;
+  src: local('Roboto Medium'), local('Roboto'),
+       url('/static/fonts/roboto-500.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Roboto'; font-style: normal; font-weight: 700; font-display: swap;
+  src: local('Roboto Bold'), local('Roboto'),
+       url('/static/fonts/roboto-700.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Roboto Mono'; font-style: normal; font-weight: 400; font-display: swap;
+  src: local('Roboto Mono'), local('Roboto Mono Regular'),
+       url('/static/fonts/roboto-mono-400.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Roboto Mono'; font-style: normal; font-weight: 500; font-display: swap;
+  src: local('Roboto Mono Medium'), local('Roboto Mono'),
+       url('/static/fonts/roboto-mono-500.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Roboto Mono'; font-style: normal; font-weight: 600; font-display: swap;
+  src: local('Roboto Mono SemiBold'), local('Roboto Mono'),
+       url('/static/fonts/roboto-mono-600.woff2') format('woff2');
+}
+
 :root {
   /* surfaces — #121212 + white elevation overlays */
   --bg:        #121212;   /* 0dp  */
@@ -910,10 +950,6 @@ textarea { resize: vertical; min-height: 110px; width: 100%; font-family: var(--
   grid-template-areas: "bl . al" "bs arrow as";
   column-gap: 12px; row-gap: 4px;
 }
-@media (max-width: 760px) {
-  .opt-diff { grid-template-columns: 1fr; grid-template-areas: "bl" "bs" "arrow" "al" "as"; }
-  .opt-arrow { transform: rotate(90deg); padding: 4px 0; }
-}
 .opt-arrow { grid-area: arrow; align-self: center; justify-self: center; color: var(--ink-4); font-size: 16px; }
 .opt-label { font-size: 10px; text-transform: uppercase; letter-spacing: .06em; color: var(--ink-4); }
 .opt-diff .snippet, .opt-peer-body .snippet {
@@ -928,8 +964,11 @@ textarea { resize: vertical; min-height: 110px; width: 100%; font-family: var(--
   grid-template-areas: "l1 . l2" "b1 arrow b2";
   column-gap: 12px; row-gap: 4px;
 }
+/* both optimization layouts collapse to one column at the same breakpoint */
 @media (max-width: 760px) {
+  .opt-diff { grid-template-columns: 1fr; grid-template-areas: "bl" "bs" "arrow" "al" "as"; }
   .opt-rel { grid-template-columns: 1fr; grid-template-areas: "l1" "b1" "arrow" "l2" "b2"; }
+  .opt-arrow { transform: rotate(90deg); padding: 4px 0; }
 }
 .opt-rel .opt-arrow { white-space: nowrap; }
 .opt-peer-body { display: flex; flex-direction: column; gap: 6px; height: 100%; }

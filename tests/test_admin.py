@@ -186,3 +186,85 @@ def test_static_ui_served(client):
     assert "MemAI" in res.text
     assert client.get("/static/app.js").status_code == 200
     assert client.get("/static/admin.css").status_code == 200
+
+
+def test_graph_is_capped_and_says_so(client):
+    """An uncapped graph freezes the browser: the layout is O(n^2)."""
+    for i in range(6):
+        _create(client, content=f"graph node {i}", domain="proj-1042")
+
+    full = client.get("/api/graph").json()
+    assert full["total"] == 6
+    assert full["truncated"] is False
+    assert len(full["nodes"]) == 6
+
+    capped = client.get("/api/graph?limit=2").json()
+    assert len(capped["nodes"]) == 2
+    assert capped["total"] == 6
+    assert capped["truncated"] is True
+
+
+def test_graph_cap_keeps_the_connected_nodes(client):
+    """If it has to cut, cut the isolated dots -- they graph nothing."""
+    lonely = [_create(client, content=f"isolated {i}") for i in range(4)]
+    a = _create(client, content="linked one")
+    b = _create(client, content="linked two")
+    client.post("/api/relations", json={"from_uid": a, "to_uid": b,
+                                        "relation_type": "relates_to"})
+
+    kept = {n["uid"] for n in client.get("/api/graph?limit=2").json()["nodes"]}
+    assert kept == {a, b}
+    assert not kept & set(lonely)
+
+
+# ------------------------------------------------------- same-origin guard
+
+def test_cross_origin_write_is_refused(client):
+    """A page you happen to be visiting must not be able to drive this.
+
+    There is no login on the admin API, so the browser's own labelling is
+    the guard: Sec-Fetch-Site on everything, Origin on anything
+    cross-origin. See admin.SameOriginMiddleware.
+    """
+    uid = _create(client)
+
+    res = client.post("/api/memories", json={"type": "note", "content": "x"},
+                      headers={"Sec-Fetch-Site": "cross-site"})
+    assert res.status_code == 403
+
+    res = client.post(f"/api/memories/{uid}/status", json={"status": "archived"},
+                      headers={"Origin": "https://evil.example.com"})
+    assert res.status_code == 403
+
+    # reads are refused the same way -- the store is not public either
+    assert client.get("/api/overview",
+                      headers={"Sec-Fetch-Site": "cross-site"}).status_code == 403
+
+    # and nothing happened to the record
+    assert client.get(f"/api/memories/{uid}").json()["status"] == "active"
+
+
+def test_same_origin_write_is_allowed(client):
+    """The UI's own requests carry both headers and must sail through."""
+    res = client.post("/api/memories",
+                      json={"type": "note", "content": "from the real UI"},
+                      headers={"Sec-Fetch-Site": "same-origin",
+                               "Origin": "http://testserver"})
+    assert res.status_code == 200, res.text
+
+
+def test_form_content_type_write_is_refused(client):
+    """The whole point of requiring JSON.
+
+    A cross-origin POST skips the CORS preflight only while it looks like
+    a form. request.json() parses any content type, so text/plain used to
+    be a working way to reach a destructive endpoint from another page.
+    """
+    for ctype in ("text/plain", "application/x-www-form-urlencoded",
+                  "multipart/form-data"):
+        res = client.post("/api/maintenance/vacuum", content=b"{}",
+                          headers={"Content-Type": ctype})
+        assert res.status_code == 415, ctype
+
+    # DELETE needs no body, and cross-origin DELETE always preflights
+    assert client.delete("/api/relations/999").status_code in (400, 404)

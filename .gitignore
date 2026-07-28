@@ -6,6 +6,10 @@ build/
 dist/
 .pytest_cache/
 
+# webfonts fetched by tools/fetch-fonts.py — Apache-2.0, but a script can
+# get them, so they don't belong in the repo. admin.css degrades without them.
+/src/memai/webui/fonts/
+
 # local memory store (user data, not repo content)
 *.db
 *.db-wal

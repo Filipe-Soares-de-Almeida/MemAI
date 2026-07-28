@@ -31,6 +31,7 @@ import os
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import uvicorn
 from starlette.applications import Starlette
@@ -54,6 +55,14 @@ DEDUP_SNIPPET = 480
 KNOWN_TYPES = ("note", "checkpoint", "anti_pattern", "reasoning", "handoff", "diagram")
 CONFIDENCES = ("unverified", "confirmed", "contradicted")
 STATUSES = ("active", "archived")
+
+# The relations graph is laid out in the browser by an O(n^2) force
+# simulation, so handing over the whole store freezes the tab rather than
+# drawing anything. Most-connected first, because a graph of unconnected
+# dots is the useless half of a big store.
+GRAPH_NODE_CAP = 400
+
+LOOPBACK_HOSTS = {"localhost", "127.0.0.1", "::1", "[::1]"}
 
 
 # ---------------------------------------------------------------- helpers
@@ -459,10 +468,19 @@ def graph(request, payload) -> dict:
         if value:
             where.append(f"AND {field} = ?")
             params.append(value)
+    limit = _int_param(request, "limit", GRAPH_NODE_CAP, 1, 2000)
     with db.connect() as conn:
+        total = conn.execute(
+            f"SELECT COUNT(*) FROM memories WHERE {' '.join(where)}", params).fetchone()[0]
+        # `deg` orders the cut, not the payload: the degree reported per
+        # node below counts only edges between nodes that made it in, so
+        # what the legend says matches what is drawn.
         rows = conn.execute(
-            f"SELECT uid, type, domain, status, confidence, content, created_at "
-            f"FROM memories WHERE {' '.join(where)}", params).fetchall()
+            f"SELECT uid, type, domain, status, confidence, content, created_at, "
+            f"       (SELECT COUNT(*) FROM relations r "
+            f"        WHERE r.from_uid = memories.uid OR r.to_uid = memories.uid) AS deg "
+            f"FROM memories WHERE {' '.join(where)} "
+            f"ORDER BY deg DESC, created_at DESC LIMIT ?", [*params, limit]).fetchall()
         uids = {r["uid"] for r in rows}
         edges = [
             dict(r) for r in conn.execute(
@@ -480,7 +498,9 @@ def graph(request, payload) -> dict:
         "degree": degree.get(r["uid"], 0),
         "created_at": r["created_at"],
     } for r in rows]
-    return {"nodes": nodes, "edges": edges}
+    # A cap that says nothing reads as "this is everything".
+    return {"nodes": nodes, "edges": edges,
+            "total": total, "truncated": total > len(nodes)}
 
 
 # ---------------------------------------------------------------- diagrams
@@ -1166,6 +1186,58 @@ class NoCacheMiddleware(BaseHTTPMiddleware):
         return response
 
 
+def _same_origin(origin: str, request) -> bool:
+    """Does `origin` name this very server, as the request reached it?"""
+    try:
+        netloc = urlsplit(origin).netloc
+    except ValueError:
+        return False
+    return bool(netloc) and netloc == request.headers.get("host", "")
+
+
+class SameOriginMiddleware(BaseHTTPMiddleware):
+    """Keep another page in the browser from driving this server.
+
+    There is no login here -- it is a single-user loopback tool -- so the
+    browser is the only thing between a random web page you happen to
+    visit and POST /api/maintenance/vacuum on your own machine. Two
+    checks do that job:
+
+    * Fetch metadata, then Origin. A browser labels every request with
+      Sec-Fetch-Site, and any cross-origin one with Origin. A non-browser
+      client (curl, the test suite) sends neither and is let through --
+      it is not the threat, and it cannot be tricked by a web page.
+
+    * application/json on a written body. A cross-origin POST escapes the
+      CORS preflight only while it looks like a form: text/plain,
+      multipart/form-data, application/x-www-form-urlencoded. Starlette's
+      request.json() does not care about the content type, which is what
+      made that a working attack -- so care here instead. Requiring JSON
+      forces a preflight, and this server answers none.
+
+    Neither check is a substitute for authentication. Do not put this on
+    a network interface; see the warning in main().
+    """
+
+    WRITE_METHODS = ("POST", "PUT", "PATCH")
+
+    async def dispatch(self, request, call_next):
+        site = request.headers.get("sec-fetch-site")
+        if site and site not in ("same-origin", "none"):
+            return JSONResponse({"error": f"cross-origin request refused ({site})"},
+                                status_code=403)
+        origin = request.headers.get("origin")
+        if origin and not _same_origin(origin, request):
+            return JSONResponse({"error": "cross-origin request refused"}, status_code=403)
+        if request.method in self.WRITE_METHODS:
+            ctype = request.headers.get("content-type", "").split(";")[0].strip().lower()
+            if ctype != "application/json":
+                return JSONResponse(
+                    {"error": f"{request.method} requires Content-Type: application/json"},
+                    status_code=415)
+        return await call_next(request)
+
+
 routes = [
     Route("/", index),
     Route("/api/overview", api(overview)),
@@ -1216,7 +1288,10 @@ routes = [
     Mount("/static", StaticFiles(directory=str(WEBUI_DIR)), name="static"),
 ]
 
-app = Starlette(routes=routes, middleware=[Middleware(NoCacheMiddleware)])
+app = Starlette(routes=routes, middleware=[
+    Middleware(SameOriginMiddleware),
+    Middleware(NoCacheMiddleware),
+])
 
 
 def main() -> None:
@@ -1226,6 +1301,10 @@ def main() -> None:
                         default=int(os.environ.get("MEMAI_ADMIN_PORT", "8765")))
     args = parser.parse_args()
     print(f"memai admin · db {db.default_db_path()} · http://{args.host}:{args.port}")
+    if args.host not in LOOPBACK_HOSTS:
+        print(f"  WARNING: {args.host} is not loopback. This API has NO authentication:"
+              f"\n  anyone who can reach {args.host}:{args.port} can read, edit and"
+              f"\n  permanently delete every memory in the store.")
     uvicorn.run(app, host=args.host, port=args.port, log_level="warning")
 
 

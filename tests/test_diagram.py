@@ -1120,11 +1120,42 @@ def test_api_diagram_list(client):
     assert client.get("/api/diagrams?domain=nope").json()["total"] == 0
 
 
-def test_editor_module_is_served(client):
-    """app.js imports it as an ES module, so a 404 would break the whole SPA."""
-    res = client.get("/static/diagram.js")
-    assert res.status_code == 200
-    assert "text/javascript" in res.headers["content-type"]
+def test_every_module_is_served(client):
+    """The UI is a graph of ES modules: any 404 breaks the whole SPA.
+
+    Walked rather than listed, so splitting a view into a new file cannot
+    pass this test by being forgotten in it.
+    """
+    from pathlib import Path
+
+    root = Path(admin.WEBUI_DIR)
+    modules = sorted(p for p in root.rglob("*.js"))
+    assert len(modules) > 10, "expected the split-out core/ and views/ modules"
+    for path in modules:
+        rel = path.relative_to(root).as_posix()
+        res = client.get(f"/static/{rel}")
+        assert res.status_code == 200, rel
+        assert "text/javascript" in res.headers["content-type"], rel
+
+
+def test_module_imports_resolve(client):
+    """A renamed or moved module has to be renamed at its import sites too.
+
+    Cheap textual check -- it does not run the modules, it only asserts
+    that every relative import names a file that exists on disk.
+    """
+    import re
+    from pathlib import Path
+
+    root = Path(admin.WEBUI_DIR)
+    pattern = re.compile(r"""from\s+['"](\.[^'"]+)['"]""")
+    seen = 0
+    for path in root.rglob("*.js"):
+        for spec in pattern.findall(path.read_text(encoding="utf-8")):
+            target = (path.parent / spec).resolve()
+            assert target.is_file(), f"{path.name} imports missing {spec}"
+            seen += 1
+    assert seen > 20, "expected the modules to import one another"
 
 
 def test_locale_catalogs_stay_in_parity():

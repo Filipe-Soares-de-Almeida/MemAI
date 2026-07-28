@@ -178,6 +178,7 @@
     "mm.nothing": "nothing changed",
     "g.title": "Relations graph",
     "g.sub": "{n} memories · {m} links — drag nodes; scroll to zoom; click to inspect",
+    "g.truncated": "showing {n} of {total} — narrow the filters to graph the rest",
     "g.linkMode": "✎ Link mode",
     "g.center": "Center",
     "g.emptyLegend": "empty graph",

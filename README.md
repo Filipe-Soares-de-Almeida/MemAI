@@ -178,9 +178,24 @@ only make sense for a person:
   (`VACUUM INTO`), a dedup-candidate review queue, and the audit trail.
 
 It runs on Starlette + uvicorn, both already present as dependencies of
-the `mcp` SDK — no new requirements. Destructive-action parity with the
-MCP tools is kept: archiving is the default "delete", and purging demands
-the literal `DELETE <uid>` phrase typed into the UI.
+the `mcp` SDK — no new requirements. The front end is plain ES modules
+with no build step (`webui/core/` for the router and shared machinery,
+`webui/views/` for one module per section). Destructive-action parity with
+the MCP tools is kept: archiving is the default "delete", and purging
+demands the literal `DELETE <uid>` phrase typed into the UI.
+
+**It has no authentication**, so it binds to loopback and refuses
+cross-origin requests (any `Sec-Fetch-Site` or `Origin` that is not this
+server, and any write that is not `application/json` — that content type
+is what forces a browser preflight, which is what stops another page you
+have open from POSTing to your own port). Those checks are not a login:
+passing `--host` something other than loopback exposes the whole store to
+anyone who can reach the port, and prints a warning saying so.
+
+The UI asks for Roboto per the Material spec but never fetches it: it
+uses an installed copy, or `webui/fonts/` if you populate it with
+`python tools/fetch-fonts.py`, or the system font stack. Nothing about
+the dashboard needs the network.
 
 ## Data location
 
