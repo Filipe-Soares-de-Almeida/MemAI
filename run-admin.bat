@@ -10,4 +10,4 @@ if not exist .venv\Scripts\activate.bat (
 call .venv\Scripts\activate.bat
 
 set MEMAI_ADMIN_PORT=8888
-memai-admin %*
+python -m memai.admin %*
