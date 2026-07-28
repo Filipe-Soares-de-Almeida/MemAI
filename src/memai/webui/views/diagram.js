@@ -100,7 +100,10 @@ export async function renderDiagram(view, params, ctx) {
         </div>
         <div class="dg-stage" id="dgStage">
           <canvas id="dgCanvas"></canvas>
-          <div class="dg-hint" id="dgHint" hidden></div>
+          <div class="dg-overlay" id="dgOverlay">
+            <div class="dg-hint" id="dgHint" hidden></div>
+            <div class="dg-legend" id="dgLegend"></div>
+          </div>
         </div>
       </div>
       <div class="dg-side" id="dgSide"></div>
@@ -140,6 +143,20 @@ export async function renderDiagram(view, params, ctx) {
     catch (err) { toast(err.message, 'bad'); }
   };
 
+  /* What the strokes on the canvas mean. Static, so it is painted once --
+     but it lives here rather than in index.html because the samples come
+     from core/icons.js and the words from the catalogs. */
+  function paintLegend() {
+    const rows = [
+      ['line-plain', 'var(--ink-2)', t('dg.legend.plain')],
+      ['line-loop', 'var(--warn)', t('dg.legend.loop')],
+      ['line-hot', 'var(--accent)', t('dg.legend.selected')],
+    ];
+    $('#dgLegend').innerHTML = rows.map(([sample, color, label]) =>
+      `<span class="dg-legend-item"><span style="color:${color};display:inline-flex">${
+        icon(sample, { cls: 'ico-line' })}</span>${label}</span>`).join('');
+  }
+
   /* ── hint strip ─────────────────────────────────────────────────────
      Only speaks when it has something to say: which end of a connection
      is being picked, or which steps the flow cannot reach. It used to
@@ -148,12 +165,22 @@ export async function renderDiagram(view, params, ctx) {
   function paintHint(connectFrom) {
     const el = $('#dgHint');
     const orphans = engine ? [...engine.orphans] : [];
+    const edge = engine?.selectedEdge;
     if (engine?.connectMode) {
       el.hidden = false;
       el.className = 'dg-hint';
       el.textContent = connectFrom
         ? t('dg.hint.connectTarget', { key: connectFrom.key })
         : t('dg.hint.connectSource');
+    } else if (edge) {
+      /* the picture already highlights it; this says the same thing in
+         words, which is what you read when the two ends are off-screen */
+      el.hidden = false;
+      el.className = 'dg-hint';
+      el.textContent = t('dg.hint.edgeSelected', {
+        from: edge.from, to: edge.to,
+        label: edge.label ? ` · ${edge.label}` : '',
+      });
     } else if (orphans.length) {
       el.hidden = false;
       el.className = 'dg-hint warn';
@@ -508,19 +535,25 @@ export async function renderDiagram(view, params, ctx) {
     };
   }
 
-  /* ── engine ────────────────────────────────────────────────────────── */
+  /* ── engine ──────────────────────────────────────────────────────────
+     The legend is painted BEFORE the engine exists: the constructor fits
+     the diagram, and fit() asks insets() how much of the corner is taken.
+     An empty legend at that moment measures zero and the first row of
+     cards lands behind it. */
+  paintLegend();
   engine = new DiagramEditor($('#dgCanvas'), data, {
     tipShow, tipHide,
     readOnly: true,
     routing,
     onEditEdgeLabel: editEdgeLabel,
     onContextMenu: canvasMenu,
-    /* the toolbar has its own row now; the hint strip still floats on the
-       canvas, so the fit stays out from under that one */
+    /* the toolbar has its own row now; the hint strip and the legend still
+       float on the canvas, so the fit stays clear of that corner */
     insets: () => ({
-      bottom: $('#dgHint')?.hidden === false ? ($('#dgHint').offsetHeight || 0) + 18 : 0,
+      bottom: ($('#dgOverlay')?.offsetHeight || 0) + 18,
     }),
     onSelect: node => { selected = node ? node.key : null; paintSide(); },
+    onSelectEdge: () => paintHint(),
     onMove: positions => { Object.assign(pending, positions); flushLayout(); },
     onConnectProgress: from => paintHint(from),
     onConnect: async (from, to) => {

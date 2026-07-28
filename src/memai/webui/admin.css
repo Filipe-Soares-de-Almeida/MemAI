@@ -1158,15 +1158,40 @@ textarea { resize: vertical; min-height: 110px; width: 100%; font-family: var(--
   display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
   min-width: 0;
 }
-.dg-hint {
+/* Bottom-left corner of the stage. Both the hint strip and the legend want
+   to live here, so they stack instead of fighting: the legend is always
+   there, the hint appears above it when it has something to say, and
+   insets() measures the pair so fit() never parks a card behind them.
+   Transparent to the pointer, or it would eat drags near the corner. */
+.dg-overlay {
   position: absolute; left: 12px; bottom: 12px; z-index: 3;
   max-width: calc(100% - 24px);
+  display: flex; flex-direction: column; gap: 8px; align-items: flex-start;
+  pointer-events: none;
+}
+.dg-overlay > * { pointer-events: auto; }
+
+.dg-hint {
+  max-width: 100%;
   background: rgba(30, 30, 30, .92);
   border: 1px solid var(--line-soft);
   border-radius: 6px; padding: 7px 11px;
   font-size: 11px; color: var(--ink-2);
 }
 .dg-hint.warn { border-color: var(--warn); color: var(--warn); }
+
+/* What the lines mean. Deliberately one short row: it sits ON the canvas,
+   so every pixel it takes is drawing it covers. */
+.dg-legend {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px;
+  background: rgba(30, 30, 30, .82);
+  border: 1px solid var(--line-soft);
+  border-radius: 6px; padding: 5px 9px;
+  font-size: 10px; color: var(--ink-3); letter-spacing: .02em;
+}
+.dg-legend-item { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
+/* a line sample is wide and flat, not a square icon */
+.ico-line { width: 22px; height: 7px; }
 
 /* the heading doubles as the way into the title/summary editor, but only
    once editing is on -- otherwise it must not look clickable at all */

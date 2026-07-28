@@ -93,7 +93,11 @@ export class DiagramEditor {
     this.pan = null;
     this.moved = false;
     this.hover = null;
+    /* Selection is a card OR a single connection, never both: they answer
+       different questions ("what is this step" vs "where does this branch
+       go") and highlighting both at once answers neither. */
     this.selected = null;
+    this.selectedEdge = null;
     this.connectMode = false;
     this.connectFrom = null;
     this.destroyed = false;
@@ -200,6 +204,12 @@ export class DiagramEditor {
       this.linkCount[l.node_key] = (this.linkCount[l.node_key] || 0) + 1;
     }
     if (this.selected && !this.byKey[this.selected]) this.selected = null;
+    /* a reload hands over fresh edge objects, so re-find the selected one
+       by its ends rather than dropping the selection on every save */
+    if (this.selectedEdge) {
+      const { from, to } = this.selectedEdge;
+      this.selectedEdge = this.edges.find(e => e.from === from && e.to === to) || null;
+    }
     this.connectFrom = null;
     this.hover = null;
     this.sizing = null;
@@ -250,44 +260,69 @@ export class DiagramEditor {
       taken++;
     };
 
+    /* An A->B that also exists as B->A: the two would be drawn on the same
+       line between the same two sides, so one of them has to leave. */
+    const drawn = new Set(this.edges.map(e => `${e.from} ${e.to}`));
+    const hasOpposite = e => drawn.has(`${e.to} ${e.from}`);
+
     for (const e of this.edges) {
       const a = this.byKey[e.from], b = this.byKey[e.to];
-      e.lane = 0;
-      e.bow = 0;
-      /* A cheap pass keeps whatever detour was solved last, rather than
+      /* `back` is geometry: does this edge currently run UP the canvas, so
+         it enters from below. `loops` is the graph saying the edge closes a
+         cycle, and that is what gets drawn dashed -- the two used to be one
+         flag, which is why dragging a card above its source turned an
+         ordinary edge dashed. */
+      e.back = b.y <= a.y;
+      /* A cheap pass keeps the whole solution from last time rather than
          snapping every routed line straight the moment a drag starts:
          slightly stale beats a diagram that redraws itself under the
          pointer. The next full pass corrects it. */
-      if (detours) e.via = null;
-      /* `back` is geometry: does this edge currently run UP the canvas, so
-         it needs a lane and enters from below. `loops` is the graph saying
-         the edge closes a cycle, and that is what gets drawn dashed -- the
-         two used to be one flag, which is why dragging a card above its
-         source turned an ordinary edge dashed. */
-      e.back = b.y <= a.y;
-    }
-    /* loop closers first, so their lanes stay nearest the diagram: a reader
-       looking for the retry path finds it in the same place every time */
-    for (const e of this.edges) if (e.back) assign(e);
-    /* A forward edge that would cross a box tries to get out of the way
-       WITHOUT leaving the flow first: move the crossbar into a clear gap,
-       or run up a corridor just past the obstacle. Sending every one of
-       them to the margin is what a hand-arranged flow punishes -- on a
-       34-step one, 16 forward edges collide, and 16 detours around the
-       whole diagram read worse than the collisions did. */
-    for (const e of this.edges) {
-      if (e.back || !detours) continue;
-      if (!this.routeHitsABox(e)) continue;
-      let cleared = false;
-      for (const via of this.detours(e)) {
-        e.via = via;
-        if (!this.routeHitsABox(e)) { cleared = true; break; }
-      }
-      if (!cleared) { e.via = null; assign(e); }
+      if (detours) { e.lane = 0; e.bow = 0; e.via = null; }
     }
 
-    /* what fit() has to leave room for, so a lane is not drawn off-screen */
-    this.laneSpan = { left: minX - outLeft, right: maxX + outRight };
+    /* Can this edge be drawn between its own two ends? Straight if that is
+       clear, otherwise nudged -- move the crossbar of a Z into a free gap,
+       or run up a corridor just past the obstacle. False means it has to go
+       out to the margin.
+
+       Sending every colliding edge to the margin is what a hand-arranged
+       flow punishes: on a 34-step one, 16 forward edges collide, and 16
+       detours around the whole diagram read worse than the collisions. */
+    const fitsBetweenItsEnds = e => {
+      /* Only the BACK half of an A->B / B->A pair has to leave. Failing both
+         halves sends two lines to the margin and leaves no line at all in
+         the column between two adjacent cards. */
+      if (e.back && hasOpposite(e)) return false;
+      if (!this.routeHitsABox(e)) return true;
+      for (const via of this.detours(e)) {
+        e.via = via;
+        if (!this.routeHitsABox(e)) return true;
+      }
+      e.via = null;
+      return false;
+    };
+
+    if (detours) {
+      /* A back edge is NOT automatically a margin lane, which is what this
+         used to assume. Two stacked cards with the lower one pointing at
+         the upper need a short hop up its own column; sending that to the
+         margin is what "the line goes around the world to reach the card
+         above it" looked like. It earns a lane the same way a forward edge
+         does -- by not fitting between its ends.
+
+         Back edges are decided first so that the ones that DO take a lane
+         stay nearest the diagram: a reader looking for the retry path finds
+         it in the same place every time. */
+      const needLane = [];
+      for (const e of this.edges) if (e.back && !fitsBetweenItsEnds(e)) needLane.push(e);
+      for (const e of this.edges) if (!e.back && !fitsBetweenItsEnds(e)) needLane.push(e);
+      for (const e of needLane) assign(e);
+    }
+
+    /* What fit() has to leave room for, so a lane is not drawn off-screen.
+       Only from a full pass: the cheap one assigns no lanes, and letting it
+       report zero reach would shrink the frame mid-drag. */
+    if (detours) this.laneSpan = { left: minX - outLeft, right: maxX + outRight };
   }
 
   /* Detours to try, nearest first. Crossbars come before corridors: moving
@@ -516,10 +551,15 @@ export class DiagramEditor {
     if (n !== this.hover || lab !== this.hoverLabel) {
       this.hover = n; this.hoverLabel = lab; this.requestDraw();
     }
+    /* Only asked when nothing nearer is under the pointer, because it
+       routes every edge to answer. A line is clickable -- it selects that
+       one connection -- and nothing else would say so. */
+    const overLine = !n && !lab && !this.connectMode && !!this.edgeAt(world);
     this.cv.style.cursor = this.connectMode ? 'crosshair'
       : grip ? (grip.id === 'nw' || grip.id === 'se' ? 'nwse-resize' : 'nesw-resize')
       : lab ? 'text'
-      : n ? (this.readOnly ? 'pointer' : 'grab') : 'grab';
+      : n ? (this.readOnly ? 'pointer' : 'grab')
+      : overLine ? 'pointer' : 'grab';
     if (n && n.note) {
       this.hooks.tipShow?.(
         `<b>${esc(n.key)}</b><br>${esc(n.note.slice(0, 220))}`, e.clientX, e.clientY);
@@ -629,9 +669,32 @@ export class DiagramEditor {
       this.requestDraw();
       return;
     }
-    this.selected = n ? n.key : null;
+    if (n) {
+      this.selectedEdge = null;
+      this.selected = n.key;
+      this.requestDraw();
+      this.hooks.onSelect?.(n);
+      this.hooks.onSelectEdge?.(null);
+      return;
+    }
+    /* Not a card: a LINE, if the pointer is near one. Selecting a single
+       connection is the only way to read where ONE branch of a fork goes --
+       selecting the card highlights every arrow leaving it, which on a step
+       with six outcomes is the question, not the answer. */
+    const edge = this.edgeAt(world);
+    this.selected = null;
+    this.selectedEdge = edge || null;
     this.requestDraw();
-    this.hooks.onSelect?.(n || null);
+    this.hooks.onSelect?.(null);
+    this.hooks.onSelectEdge?.(this.selectedEdge);
+  }
+
+  /* Select a connection from outside the canvas (the inspector's rows). */
+  selectEdge(from, to) {
+    this.selectedEdge = this.edges.find(e => e.from === from && e.to === to) || null;
+    if (this.selectedEdge) this.selected = null;
+    this.requestDraw();
+    return this.selectedEdge;
   }
 
   /* Right-click. Whatever is under the pointer decides what the menu can
@@ -1134,7 +1197,7 @@ export class DiagramEditor {
     return null;
   }
 
-  drawNode(n, orphan) {
+  drawNode(n, orphan, ringed = false) {
     const { cx } = this;
     const terminal = n.shape === 'start' || n.shape === 'end';
     this.shapePath(n);
@@ -1147,7 +1210,7 @@ export class DiagramEditor {
     cx.stroke();
     cx.setLineDash([]);
 
-    if (n.key === this.selected || n === this.connectFrom) {
+    if (n.key === this.selected || n === this.connectFrom || ringed) {
       this.shapePath(n, 6);
       cx.strokeStyle = this.colAccent;
       cx.lineWidth = 1.6 / this.scale;
@@ -1300,12 +1363,20 @@ export class DiagramEditor {
     }
     /* the selected step's lines go last, so they sit over the ones they
        cross instead of disappearing under them */
-    const sel = this.selected;
-    const isHot = e => !!sel && (e.from === sel || e.to === sel);
-    const cool = sel ? this.edges.filter(e => !isHot(e)) : this.edges;
-    for (const e of cool) this.drawEdge(e, { dim: !!sel });
-    if (sel) for (const e of this.edges.filter(isHot)) this.drawEdge(e, { hot: true });
-    for (const n of this.nodes) this.drawNode(n, this.orphans.has(n.key));
+    const sel = this.selected, selEdge = this.selectedEdge;
+    const isHot = e => selEdge
+      ? e === selEdge
+      : (!!sel && (e.from === sel || e.to === sel));
+    const anySel = !!(sel || selEdge);
+    const cool = anySel ? this.edges.filter(e => !isHot(e)) : this.edges;
+    for (const e of cool) this.drawEdge(e, { dim: anySel });
+    if (anySel) for (const e of this.edges.filter(isHot)) this.drawEdge(e, { hot: true });
+    /* Both ends of a selected connection get the ring, so "where does this
+       branch go" is answered by the picture and not by reading a label. */
+    const ends = selEdge ? [selEdge.from, selEdge.to] : null;
+    for (const n of this.nodes) {
+      this.drawNode(n, this.orphans.has(n.key), !!ends && ends.includes(n.key));
+    }
     this.drawGuides();   /* over the cards: it is about where they line up */
 
     cx.restore();
