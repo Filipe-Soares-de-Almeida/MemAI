@@ -43,6 +43,14 @@ const HANDLE = 7;            /* half-side of a corner resize grip, world units *
 const SNAP_PX = 7;           /* how near an axis has to be to pull a card onto it */
 const ARROW_GAP = 5;         /* air between the box edge and the arrow tip */
 const ORTH_STUB = 26;        /* how far a right-angled edge leaves its box */
+/* Two edges leaving the same side of the same card used to be drawn from
+   the exact same point with the exact same stub, so they ran on top of each
+   other until they parted -- on a hand-arranged 34-step flow, 37 of 49
+   edges had some length of line drawn over another line. FAN_GAP spreads
+   their anchors along the side; FAN_STUB staggers how deep each one turns,
+   so the perpendicular legs separate too. See assignFans(). */
+const FAN_GAP = 22;
+const FAN_STUB = 14;
 const ORTH_RADIUS = 11;      /* corner rounding on a right-angled edge */
 /* Two boxes almost -- but not exactly -- in line used to get a full Z
    detour for an offset of a few units, and two rounded corners that close
@@ -283,11 +291,6 @@ export class DiagramEditor {
       taken++;
     };
 
-    /* An A->B that also exists as B->A: the two would be drawn on the same
-       line between the same two sides, so one of them has to leave. */
-    const drawn = new Set(this.edges.map(e => `${e.from} ${e.to}`));
-    const hasOpposite = e => drawn.has(`${e.to} ${e.from}`);
-
     for (const e of this.edges) {
       const a = this.byKey[e.from], b = this.byKey[e.to];
       /* `back` is geometry: does this edge currently run UP the canvas, so
@@ -310,25 +313,18 @@ export class DiagramEditor {
 
        Sending every colliding edge to the margin is what a hand-arranged
        flow punishes: on a 34-step one, 16 forward edges collide, and 16
-       detours around the whole diagram read worse than the collisions. */
+       detours around the whole diagram read worse than the collisions.
+
+       An A->B / B->A pair needs nothing special here any more. It used to be
+       forced onto a corridor, because both halves were drawn from the same
+       anchors along the same line -- a detour was the only thing keeping
+       them apart, and it read as a mistake rather than as two connections.
+       assignFans() gives each of them its own place on the side and its own
+       turning depth instead, so this function is only about cards in the
+       way. */
     const fitsBetweenItsEnds = e => {
-      /* The BACK half of an A->B / B->A pair cannot take the straight route
-         even when it is clear -- the opposite edge is already drawn on it.
-         It still belongs near its own two cards, so it looks for a corridor
-         first and only takes a margin lane if none is free. Skipping
-         straight to the lane is what sent a 150-unit hop 3400 units to the
-         right of a wide flow and back.
-
-         Only CORRIDORS count for a pair: a crossbar moves the sideways leg
-         of a Z, which changes nothing when both ends share a column -- the
-         run is still the same vertical line the opposite edge draws.
-
-         Only the back half leaves. Failing both would leave no line at all
-         in the column between two adjacent cards. */
-      const pair = e.back && hasOpposite(e);
-      if (!pair && !this.routeHitsABox(e)) return true;
+      if (!this.routeHitsABox(e)) return true;
       for (const via of this.detours(e)) {
-        if (pair && via.corridor === undefined) continue;
         e.via = via;
         if (!this.routeHitsABox(e)) return true;
       }
@@ -337,6 +333,12 @@ export class DiagramEditor {
     };
 
     if (detours) {
+      /* Fanned FIRST, so the collision search below sees the routes as they
+         will actually be drawn. Deciding collisions against centred anchors
+         and then moving the anchors is how a fan pushed a route into a card
+         the centred one missed. */
+      this.assignFans();
+
       /* A back edge is NOT automatically a margin lane, which is what this
          used to assume. Two stacked cards with the lower one pointing at
          the upper need a short hop up its own column; sending that to the
@@ -351,6 +353,13 @@ export class DiagramEditor {
       for (const e of this.edges) if (e.back && !fitsBetweenItsEnds(e)) needLane.push(e);
       for (const e of this.edges) if (!e.back && !fitsBetweenItsEnds(e)) needLane.push(e);
       for (const e of needLane) assign(e);
+    }
+
+    if (detours) {
+      /* Again, because an edge that took a corridor leaves by a different
+         side than it did above, which puts it in a different fan group. */
+      this.assignFans();
+      this.unfanCollisions();
     }
 
     /* What fit() has to leave room for, so a lane is not drawn off-screen.
@@ -861,6 +870,75 @@ export class DiagramEditor {
     return [n.y - hh + round + inset, n.y + hh - round - inset];
   }
 
+  /* An anchor moved along its own side by `by`, clamped to what the shape
+     allows. Unchanged for a side that cannot take one: a diamond's vertex
+     is a single point, a stadium's left and right are the apex of a curve.
+     Those keep the centre and rely on the staggered stub instead. */
+  static fanned(n, side, p, by) {
+    if (!by) return p;
+    const span = DiagramEditor.slideSpan(n, side);
+    if (!span || span[0] >= span[1]) return p;
+    const axis = side === 'top' || side === 'bottom' ? 'x' : 'y';
+    return { ...p, [axis]: Math.min(span[1], Math.max(span[0], p[axis] + by)) };
+  }
+
+  /* Give every edge sharing a card's side its own place on it.
+
+     Two things move. The anchor slides along the side (FAN_GAP apart), and
+     the stub -- how far out the edge travels before it turns -- is
+     staggered (FAN_STUB per edge). The anchor alone is not enough: two
+     edges entering one card's top from opposite directions would still turn
+     at the same depth and share that horizontal leg.
+
+     Members are ordered by where their far end sits along the side's own
+     axis, so the fanned lines keep their relative order and do not cross
+     each other right at the card.
+
+     Called only from a full pass -- the sides depend on which edges took a
+     corridor, and a drag keeps the previous solution. */
+  assignFans() {
+    const groups = new Map();
+    for (const e of this.edges) {
+      const a = this.byKey[e.from], b = this.byKey[e.to];
+      const [sideFrom, sideTo] = DiagramEditor.sides(a, b, this.corridorFor(e) !== null);
+      e.fanFrom = 0; e.fanTo = 0; e.stubFrom = 0; e.stubTo = 0;
+      for (const [key, side, self, peer, end] of
+           [[e.from, sideFrom, a, b, 'From'], [e.to, sideTo, b, a, 'To']]) {
+        const id = `${key}|${side}`;
+        if (!groups.has(id)) groups.set(id, []);
+        groups.get(id).push({ e, side, self, peer, end });
+      }
+    }
+    for (const members of groups.values()) {
+      if (members.length < 2) continue;
+      const vertical = members[0].side === 'top' || members[0].side === 'bottom';
+      const along = m => (vertical ? m.peer.x : m.peer.y);
+      members.sort((m, n) => along(m) - along(n));
+      const mid = (members.length - 1) / 2;
+      members.forEach((m, i) => {
+        m.e[`fan${m.end}`] = (i - mid) * FAN_GAP;
+        /* Strictly increasing, NOT symmetric about the middle: a symmetric
+           depth gives the two members of a pair the same stub, which is
+           exactly the case that needs them different. */
+        m.e[`stub${m.end}`] = i * FAN_STUB;
+      });
+    }
+  }
+
+  /* Separation is worth a lot, but never worth a line drawn through a card.
+     Moving an anchor can push a route into a box the centred route missed,
+     so any fanned edge that now collides gives its fan up -- unless it was
+     colliding anyway, in which case the separation costs nothing. */
+  unfanCollisions() {
+    for (const e of this.edges) {
+      if (!(e.fanFrom || e.fanTo || e.stubFrom || e.stubTo)) continue;
+      if (!this.routeHitsABox(e)) continue;
+      const saved = [e.fanFrom, e.fanTo, e.stubFrom, e.stubTo];
+      e.fanFrom = 0; e.fanTo = 0; e.stubFrom = 0; e.stubTo = 0;
+      if (this.routeHitsABox(e)) [e.fanFrom, e.fanTo, e.stubFrom, e.stubTo] = saved;
+    }
+  }
+
   /* The anchor's coordinate moved towards `to` along its side, if the side
      allows it and the move stays small. null when it cannot line up. */
   static slide(n, side, from, to) {
@@ -896,10 +974,16 @@ export class DiagramEditor {
     const a = this.byKey[e.from], b = this.byKey[e.to];
     const corridorX = this.corridorFor(e);
     const [sideFrom, sideTo] = DiagramEditor.sides(a, b, corridorX !== null);
-    const start = DiagramEditor.anchors(a)[sideFrom];
-    const end = DiagramEditor.anchors(b)[sideTo];
+    /* fanned: its own place on a side it shares with other edges */
+    const start = DiagramEditor.fanned(a, sideFrom, DiagramEditor.anchors(a)[sideFrom], e.fanFrom);
+    const end = DiagramEditor.fanned(b, sideTo, DiagramEditor.anchors(b)[sideTo], e.fanTo);
     const p = DiagramEditor.offset(start, sideFrom, 0);
     const q = DiagramEditor.offset(end, sideTo, ARROW_GAP);
+    /* and its own turning depth, so the legs perpendicular to the side do
+       not share a line either */
+    const stubFrom = ORTH_STUB + (e.stubFrom || 0);
+    const stubTo = ORTH_STUB + (e.stubTo || 0);
+    const fanned = !!(e.fanFrom || e.fanTo || e.stubFrom || e.stubTo);
 
     if (this.routing === 'curved') return { pts: [p, q], curve: this.curveCtrl(p, q, e) };
 
@@ -907,8 +991,8 @@ export class DiagramEditor {
     if (corridorX !== null) {
       /* clear of the box, sideways in the row gap, along the corridor, and
          back into the far end the same way -- five legs, all axis-aligned */
-      const leave = DiagramEditor.offset(p, sideFrom, ORTH_STUB);
-      const enter = DiagramEditor.offset(q, sideTo, ORTH_STUB);
+      const leave = DiagramEditor.offset(p, sideFrom, stubFrom);
+      const enter = DiagramEditor.offset(q, sideTo, stubTo);
       out.push(leave, { x: corridorX, y: leave.y },
                { x: corridorX, y: enter.y }, enter, q);
       return { pts: out, curve: null };
@@ -918,7 +1002,9 @@ export class DiagramEditor {
        EXACTLY straight, instead of drawing the near-miss as a slant. Either
        end will do, so try the tail first and fall back to the head. */
     const axis = vertical ? 'x' : 'y';
-    if (Math.abs(p[axis] - q[axis]) > 0.01) {
+    /* Not for a fanned edge: lining it up would put it back on the line the
+       fan just moved it off. */
+    if (!fanned && Math.abs(p[axis] - q[axis]) > 0.01) {
       const tail = DiagramEditor.slide(a, sideFrom, p[axis], q[axis]);
       if (tail !== null) p[axis] = tail;
       else {
@@ -939,8 +1025,10 @@ export class DiagramEditor {
     if (vertical) {
       if (sideTo === 'top' || sideTo === 'bottom') {
         /* Z: down, across, down. The crossbar is normally half way, but a
-           detour may have moved it into a gap where nothing is in the way. */
-        const midY = bar ?? (p.y + q.y) / 2;
+           detour may have moved it into a gap where nothing is in the way,
+           and a fanned edge shifts it so two Zs between the same cards do
+           not share their crossbar. */
+        const midY = (bar ?? (p.y + q.y) / 2) + (e.stubFrom || 0);
         out.push({ x: p.x, y: midY }, { x: q.x, y: midY });
       } else {
         out.push({ x: p.x, y: q.y });               /* L: down, then across */
