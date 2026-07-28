@@ -75,8 +75,11 @@ const LABEL_LH = 14;
 const BADGE_PX = 10;
 /* How much of an edge's label is drawn on the line. A branch condition is
    often a whole sentence, and a badge that long is a wall across the
-   picture, so it is cut to a phrase -- three words, twenty characters,
-   whichever comes first -- and hovering it shows the rest. See
+   picture, so a long one is cut to a phrase and hovering it shows the rest.
+
+   BOTH limits have to be passed before anything is cut, not either: four
+   short words are still only fourteen characters, and cutting those to
+   three left an ellipsis promising text that was barely there. See
    shortLabel() and the tip in onMove(). */
 const BADGE_WORDS = 3;
 const BADGE_CHARS = 20;
@@ -1381,13 +1384,13 @@ export class DiagramEditor {
   static shortLabel(text) {
     const full = String(text ?? '').trim();
     const words = full.split(/\s+/);
-    let cut = words.length > BADGE_WORDS ? words.slice(0, BADGE_WORDS).join(' ') : full;
+    if (words.length <= BADGE_WORDS || full.length <= BADGE_CHARS) return full;
+    let cut = words.slice(0, BADGE_WORDS).join(' ');
     if (cut.length > BADGE_CHARS) cut = cut.slice(0, BADGE_CHARS);
     /* Either cut can land on punctuation -- a space, a comma, the colon that
        introduced the half being dropped -- and that reads as a typo once the
        ellipsis is stuck to it. */
-    if (cut !== full) cut = `${cut.replace(/[\s,;:.\-/]+$/, '')}…`;
-    return cut;
+    return `${cut.replace(/[\s,;:.\-/]+$/, '')}…`;
   }
 
   /* The edge whose label sits under a world point, if any. */
