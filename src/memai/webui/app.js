@@ -6,6 +6,7 @@
      core/dom.js        formatting and DOM helpers
      core/api.js        the one door to the JSON API in memai/admin.py
      core/ui.js         toasts, hover tip, modals, context menu
+     core/icons.js      every icon in the UI
      core/shared.js     types, confidence scale, shared fragments, domains
      core/lifecycle.js  per-view teardown
      core/router.js     hash routing, generation-counted renders
@@ -18,6 +19,7 @@
 
 import { $ } from './core/dom.js';
 import { api } from './core/api.js';
+import { paintIcons } from './core/icons.js';
 import { modalOpen, closeModal } from './core/ui.js';
 import { updateRail } from './core/shared.js';
 import { registerViews, route, go } from './core/router.js';
@@ -43,6 +45,10 @@ registerViews({
   maintenance: renderMaintenance,
   optimization: renderOptimization,
 }, { onRecord: openRecord });
+
+/* draw the shell's icons before the first route, so the rail is never
+   shown mid-assembly (i18n does the same for its text, at import time) */
+paintIcons();
 
 $('#btnNew').addEventListener('click', openNewMemory);
 

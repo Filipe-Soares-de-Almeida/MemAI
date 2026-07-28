@@ -1138,6 +1138,30 @@ def test_every_module_is_served(client):
         assert "text/javascript" in res.headers["content-type"], rel
 
 
+def test_every_referenced_icon_is_defined(client):
+    """`<svg data-icon="x">` is filled in from core/icons.js at boot, so a
+    name that module does not define is an icon that silently never draws.
+
+    Textual, like the import check below: it reads the ICONS keys off the
+    object literal rather than running the module.
+    """
+    import re
+    from pathlib import Path
+
+    root = Path(admin.WEBUI_DIR)
+    icons_js = (root / "core" / "icons.js").read_text(encoding="utf-8")
+    defined = set(re.findall(r"^ {2}'?([\w-]+)'?:\s*\{", icons_js, re.M))
+    assert {"brand-seal", "overview", "graph", "search"} <= defined, defined
+
+    used = set()
+    for path in [root / "index.html", *root.rglob("*.js")]:
+        src = path.read_text(encoding="utf-8")
+        used |= set(re.findall(r"""data-icon=["']([\w-]+)["']""", src))
+        used |= set(re.findall(r"""\bicon\(\s*['"]([\w-]+)['"]""", src))
+    assert used, "expected the shell to reference some icons"
+    assert used <= defined, f"undefined icons: {sorted(used - defined)}"
+
+
 def test_module_imports_resolve(client):
     """A renamed or moved module has to be renamed at its import sites too.
 

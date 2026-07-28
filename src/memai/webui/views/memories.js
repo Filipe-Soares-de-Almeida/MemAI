@@ -8,6 +8,7 @@
 
 import { $, esc, fmtInt, fmtDate, debounce } from '../core/dom.js';
 import { api, query } from '../core/api.js';
+import { icon } from '../core/icons.js';
 import { toast, promptModal } from '../core/ui.js';
 import { typeTag, uidChip, statusTag, confPill, wireCopyChips, getDomains,
          TYPE_ORDER, TYPE_LABEL, CONF } from '../core/shared.js';
@@ -181,7 +182,7 @@ function renderBulkbar() {
     </select>
     <button class="btn btn-sm" id="bulkArch">${t('common.archive')}</button>
     <button class="btn btn-sm" id="bulkRest">${t('common.restore')}</button>
-    <button class="icon-btn" id="bulkClear" title="${t('bulk.clear.title')}">✕</button>`;
+    <button class="icon-btn" id="bulkClear" title="${t('bulk.clear.title')}">${icon('close')}</button>`;
   document.body.appendChild(bar);
 
   bar.querySelector('#bulkConf').addEventListener('change', async e => {

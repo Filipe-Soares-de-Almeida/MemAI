@@ -1181,20 +1181,60 @@ export class DiagramEditor {
     /* Attached memories carry a marker, because nothing else on the canvas
        hints at them. A note does NOT: hovering the card shows it, and a
        glyph on most of the cards of a documented flow is just noise. */
-    const badges = this.linkCount[n.key] ? `⇱${this.linkCount[n.key]}` : '';
-    if (badges && this.scale > 0.45) {
+    const count = this.linkCount[n.key];
+    if (count && this.scale > 0.45) {
+      /* save/restore because this is the last thing drawn on a card: the
+         font and textAlign set below otherwise leak into the next frame,
+         where every consumer happens to set its own -- happens to, which
+         is not something to leave a later edit standing on */
+      cx.save();
       const bpx = BADGE_PX * this.fontScale;
-      cx.font = `${bpx}px ${FONT_MONO}`;
-      cx.fillStyle = terminal ? 'rgba(0,0,0,.6)' : this.colInk2;
-      cx.textAlign = 'right';
+      const color = terminal ? 'rgba(0,0,0,.6)' : this.colInk2;
       /* inside the SHAPE, not inside its bounding box -- the top-right
          corner of the box is empty space on a diamond and outside the
          curve on a stadium, which is where this used to land */
       const dy = -n.h / 2 + bpx * 0.9;
-      cx.fillText(badges, n.x + DiagramEditor.halfWidthAt(n, dy) - 5, n.y + dy + bpx / 2);
+      const right = n.x + DiagramEditor.halfWidthAt(n, dy) - 5;
+      const midY = n.y + dy + bpx / 2;
+      cx.font = `${bpx}px ${FONT_MONO}`;
+      cx.fillStyle = color;
+      cx.textAlign = 'right';
+      cx.fillText(String(count), right, midY);
+      this.drawLinkMark(right - cx.measureText(String(count)).width - bpx * 0.3, midY, bpx, color);
+      cx.restore();
     }
 
     if (this.resizable(n)) this.drawHandles(n);
+  }
+
+  /* The "has memories attached" mark, DRAWN rather than typed.
+
+     It used to be U+21F1, which Roboto does not have and most monospace
+     faces do not either: it fell through to whatever the system happened
+     to ship, and to a tofu box where nothing did. Canvas cannot use the
+     SVG set in core/icons.js, so this is the same idea by hand -- two
+     nodes and a tie, matching that set's `graph` icon, which is what a
+     linked memory is. Drawn right-to-left from `right`, so it sits beside
+     a count of unknown width. */
+  drawLinkMark(right, midY, size, color) {
+    const { cx } = this;
+    const r = size * 0.15;
+    const ax = right - size * 0.62, ay = midY + size * 0.22;
+    const bx = right - size * 0.1, by = midY - size * 0.24;
+    cx.save();
+    cx.strokeStyle = color;
+    cx.fillStyle = color;
+    cx.lineWidth = Math.max(0.5, size * 0.1);
+    cx.beginPath();
+    cx.moveTo(ax, ay);
+    cx.lineTo(bx, by);
+    cx.stroke();
+    for (const [px, py] of [[ax, ay], [bx, by]]) {
+      cx.beginPath();
+      cx.arc(px, py, r, 0, 7);
+      cx.fill();
+    }
+    cx.restore();
   }
 
   /* Corner grips, on the selected card only and only while editing: four

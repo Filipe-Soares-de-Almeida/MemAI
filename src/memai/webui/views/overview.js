@@ -2,6 +2,7 @@
 
 import { esc, fmtInt, fmtBytes, fmtAgo } from '../core/dom.js';
 import { api } from '../core/api.js';
+import { icon } from '../core/icons.js';
 import { tipShow, tipHide } from '../core/ui.js';
 import { typeClass, CONF, TYPE_ORDER, updateRail } from '../core/shared.js';
 import { go } from '../core/router.js';
@@ -23,7 +24,7 @@ export async function renderOverview(view, params, ctx) {
     return n ? `<div class="meter-seg" style="flex:${n};background:${confColor(c)}" title="${esc(CONF[c].label)}: ${fmtInt(n)}"></div>` : '';
   }).join('');
   const confLegend = CONF_ORDER.map(c =>
-    `<span class="legend-item"><i style="color:${confColor(c)}">${CONF[c].i}</i>${esc(CONF[c].label)} <b>${fmtInt(o.by_confidence[c] || 0)}</b></span>`).join('');
+    `<span class="legend-item"><span style="color:${confColor(c)};display:inline-flex;--ico:12px">${icon(CONF[c].icon)}</span>${esc(CONF[c].label)} <b>${fmtInt(o.by_confidence[c] || 0)}</b></span>`).join('');
 
   const typesPresent = [...TYPE_ORDER.filter(x => x in o.by_type),
                         ...Object.keys(o.by_type).filter(x => !TYPE_ORDER.includes(x))];

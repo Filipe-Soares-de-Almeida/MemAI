@@ -8,6 +8,7 @@
 
 import { esc, fmtDate, fmtInt, debounce } from '../core/dom.js';
 import { api, seg } from '../core/api.js';
+import { icon } from '../core/icons.js';
 import { toast, openModal, closeModal, confirmModal, promptModal } from '../core/ui.js';
 import { typeTag, typeClass, typeColor, confPill, uidChip, statusTag, wireCopyChips,
          TYPE_ORDER, CONF, relOptions, cachedDomains, invalidateDomains } from '../core/shared.js';
@@ -59,7 +60,7 @@ export async function openRecord(uid) {
 
   const rels = m.relations.map(r => `
     <div class="rel-row">
-      <span class="rel-dir" title="${r.direction === 'out' ? t('dr.rel.out.title') : t('dr.rel.in.title')}">${r.direction === 'out' ? '→' : '←'}</span>
+      <span class="rel-dir" title="${r.direction === 'out' ? t('dr.rel.out.title') : t('dr.rel.in.title')}">${icon(r.direction === 'out' ? 'arrow-right' : 'arrow-left')}</span>
       <span class="rel-type-chip">${esc(r.relation_type)}</span>
       ${r.peer.missing
         ? `<span class="rel-peer"><span class="snippet" style="color:var(--bad)">${t('dr.rel.missing', { uid: esc(r.peer.uid) })}</span></span>`
@@ -68,8 +69,8 @@ export async function openRecord(uid) {
              <span class="snippet">${esc(r.peer.snippet)}</span>
              ${r.peer.status === 'archived' ? statusTag('archived') : ''}
            </span>`}
-      ${r.note ? `<span class="icon-btn" title="${esc(r.note)}" style="cursor:help">𝒊</span>` : ''}
-      <button class="icon-btn danger" data-delrel="${r.id}" title="${t('dr.rel.remove.title')}">✕</button>
+      ${r.note ? `<span class="icon-btn" title="${esc(r.note)}" style="cursor:help">${icon('info')}</span>` : ''}
+      <button class="icon-btn danger" data-delrel="${r.id}" title="${t('dr.rel.remove.title')}">${icon('close')}</button>
     </div>`).join('') || `<div class="empty" style="padding:18px">${t('dr.rel.empty')}</div>`;
 
   const hist = m.edit_history.slice().reverse().map((e, i) => `
@@ -88,7 +89,7 @@ export async function openRecord(uid) {
       ${statusTag(m.status)}
       ${confPill(m.confidence)}
       <span class="spacer"></span>
-      <button class="icon-btn" id="dClose" title="${t('dr.close.title')}" style="font-size:19px">✕</button>
+      <button class="icon-btn" id="dClose" title="${t('dr.close.title')}" style="--ico:17px">${icon('close')}</button>
     </div>
     <div class="drawer-body">
 
@@ -141,7 +142,7 @@ export async function openRecord(uid) {
         <div class="section-label">${t('dr.curation')}</div>
         <div class="act-row">
           <div class="seg" id="dConf">
-            ${Object.keys(CONF).map(c => `<button data-c="${c}" class="${m.confidence === c ? 'active' : ''}"><i class="conf-pill c-${c}" style="font-style:normal"><i>${CONF[c].i}</i></i>${CONF[c].label}</button>`).join('')}
+            ${Object.keys(CONF).map(c => `<button data-c="${c}" class="${m.confidence === c ? 'active' : ''}"><span class="conf-pill c-${c}">${icon(CONF[c].icon)}</span>${CONF[c].label}</button>`).join('')}
           </div>
           ${m.status === 'active'
             ? `<button class="btn" id="dArchive">${t('dr.archiveSoft')}</button>`
