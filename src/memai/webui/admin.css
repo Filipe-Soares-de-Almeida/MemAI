@@ -625,7 +625,7 @@ textarea { resize: vertical; min-height: 110px; width: 100%; font-family: var(--
   display: flex; align-items: center; gap: 9px;
   font-size: 11px; color: var(--ink-3);
 }
-.opt-run-backup { color: var(--ok); font-size: 10.5px; font-family: var(--font-m); }
+.opt-run-backup { color: var(--ok); font-size: 10.5px; font-family: var(--font-m); display: inline-flex; align-items: center; gap: 4px; --ico: 11px; }
 
 .opt-run-kinds { display: flex; flex-wrap: wrap; gap: 5px; }
 .opt-kind-chip {
@@ -707,6 +707,10 @@ textarea { resize: vertical; min-height: 110px; width: 100%; font-family: var(--
 .list-foot { display: flex; justify-content: space-between; align-items: center; margin-top: 12px; font-size: 12px; color: var(--ink-2); }
 .list-foot b { font-family: var(--font-m); }
 .pager { display: flex; gap: 6px; align-items: center; }
+/* paging and back links put their chevron beside the word */
+.pager .btn, .opt-back, #gLink, .chip.clickable {
+  display: inline-flex; align-items: center; gap: 5px; --ico: 12px;
+}
 
 .bulkbar {
   position: fixed; bottom: 22px; left: calc(var(--rail-w) + 50%); transform: translateX(-50%);
@@ -1000,7 +1004,7 @@ textarea { resize: vertical; min-height: 110px; width: 100%; font-family: var(--
 .opt-distill .opt-peer-body,
 .opt-distill > .snippet { padding: 8px 10px; background: var(--inset); border-radius: 6px; }
 .opt-distill .opt-arrow { align-self: flex-start; white-space: nowrap; }
-.opt-verified { font-size: 11px; color: var(--ok); border-top: 1px dashed var(--line-soft); padding-top: 7px; }
+.opt-verified { font-size: 11px; color: var(--ok); border-top: 1px dashed var(--line-soft); padding-top: 7px; display: flex; align-items: center; gap: 5px; --ico: 12px; }
 .opt-verified.muted { color: var(--ink-4); }
 
 /* ── modal ───────────────────────────────────────────────────────────── */
@@ -1298,7 +1302,7 @@ textarea { resize: vertical; min-height: 110px; width: 100%; font-family: var(--
   border-radius: 4px; padding: 2px 7px;
   cursor: help;
 }
-.dgl-sound { font: 500 10.5px var(--font-m); color: var(--ok); }
+.dgl-sound { font: 500 10.5px var(--font-m); color: var(--ok); display: inline-flex; align-items: center; gap: 5px; --ico: 12px; }
 
 .dgl-foot {
   display: flex; align-items: center; gap: 7px; flex-wrap: wrap;

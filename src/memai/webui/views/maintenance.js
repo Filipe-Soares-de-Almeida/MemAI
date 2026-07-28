@@ -86,9 +86,12 @@ export async function renderMaintenance(view) {
     const push = (level, name, detail) =>
       rows.push(`<div class="check-row"><span class="check-dot ${level}"></span>
         <span class="check-name">${name}</span><span class="check-detail">${detail}</span></div>`);
-    push(h.integrity.ok ? 'ok' : 'bad', t('mn.h.integrity'), h.integrity.detail ? esc(h.integrity.detail) : t('mn.h.quickClean'));
+    /* the server sends a detail only when something is wrong, and that
+       detail is SQLite's own message -- so the healthy wording is ours */
+    push(h.integrity.ok ? 'ok' : 'bad', t('mn.h.integrity'),
+      h.integrity.detail ? esc(h.integrity.detail) : t('mn.h.quickClean'));
     push(h.fts.ok ? 'ok' : 'bad', t('mn.h.fts'),
-      `${esc(h.fts.detail)} · ${t('mn.h.rows', { a: fmtInt(h.fts.rows), b: fmtInt(h.fts.expected) })}`);
+      `${h.fts.detail ? esc(h.fts.detail) : t('mn.h.ftsConsistent')} · ${t('mn.h.rows', { a: fmtInt(h.fts.rows), b: fmtInt(h.fts.expected) })}`);
     if (!h.vectors.ready) push('warn', t('mn.h.vectors'), t('mn.h.vecUnavailable'));
     else push(h.vectors.missing === 0 && h.vectors.orphans === 0 ? 'ok' : 'warn', t('mn.h.vectors'),
       `${t('mn.h.vecDetail', { a: fmtInt(h.vectors.rows), b: fmtInt(h.vectors.expected), m: h.vectors.missing, o: h.vectors.orphans })} · ${esc((h.vectors.model || '').split(/[\\/]/).pop())} ${esc(h.vectors.dim)}d${h.vectors.model_available ? '' : t('mn.h.modelUnavailable')}`);

@@ -146,6 +146,15 @@ const ICONS = {
     viewBox: '0 0 16 16',
     body: `<path d="M8 2.5v11M4.1 9.4L8 13.5l3.9-4.1"/>`,
   },
+  /* paging, where a full arrow reads as heavier than the step it takes */
+  'chevron-left': {
+    viewBox: '0 0 16 16',
+    body: `<path d="M10 3.2L5.2 8l4.8 4.8"/>`,
+  },
+  'chevron-right': {
+    viewBox: '0 0 16 16',
+    body: `<path d="M6 3.2L10.8 8 6 12.8"/>`,
+  },
 };
 
 export const iconNames = () => Object.keys(ICONS);

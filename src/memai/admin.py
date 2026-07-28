@@ -823,13 +823,19 @@ def set_config(request, payload) -> dict:
 
 def _fts_check(conn: sqlite3.Connection) -> tuple[bool, str]:
     """FTS5 integrity-check; the 2-arg form also verifies the index against
-    the external content table where supported."""
+    the external content table where supported.
+
+    `detail` is empty when the check passes: the "all good" wording is a UI
+    string and belongs in webui/i18n, not in an API response. Only the
+    failure detail crosses the wire, because that is SQLite's own message
+    and translating it would lose the thing an operator needs to read.
+    """
     try:
         try:
             conn.execute("INSERT INTO memories_fts(memories_fts, rank) VALUES ('integrity-check', 1)")
         except sqlite3.OperationalError:
             conn.execute("INSERT INTO memories_fts(memories_fts) VALUES ('integrity-check')")
-        return True, "index consistent with the table"
+        return True, ""
     except sqlite3.DatabaseError as exc:
         return False, str(exc)
 
@@ -865,7 +871,10 @@ def health(request, payload) -> dict:
          for p in _backups_dir().glob("*.db")),
         key=lambda b: b["name"], reverse=True)
     return {
-        "integrity": {"ok": integrity_ok, "detail": "; ".join(quick)[:400]},
+        # same rule as _fts_check: "ok" is quick_check's way of saying
+        # nothing is wrong, and the UI has its own words for that
+        "integrity": {"ok": integrity_ok,
+                      "detail": "" if integrity_ok else "; ".join(quick)[:400]},
         "fts": {"ok": fts_ok, "detail": fts_detail, "rows": fts_count, "expected": mem_count},
         "vectors": {
             "ready": vec_ready, "rows": vec_count, "missing": missing_vec,

@@ -62,7 +62,7 @@ export async function renderGraph(view, params, ctx) {
           <button data-v="active" class="${state.status === 'active' ? 'active' : ''}">${t('common.active')}</button>
           <button data-v="" class="${state.status === '' ? 'active' : ''}">${t('common.all')}</button>
         </div>
-        <button class="btn btn-sm" id="gLink">${t('g.linkMode')}</button>
+        <button class="btn btn-sm" id="gLink">${icon('pencil')}${t('g.linkMode')}</button>
         <button class="btn btn-sm" id="gFit">${t('g.center')}</button>
       </div>
       <div class="graph-legend">
