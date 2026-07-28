@@ -246,17 +246,40 @@ export class DiagramEditor {
     const maxX = Math.max(...this.nodes.map(n => n.x + n.w / 2), 0);
     const minX = Math.min(...this.nodes.map(n => n.x - n.w / 2), 0);
     let taken = 0;
-    let outRight = 0, outLeft = 0;
+    let laneRight = maxX, laneLeft = minX;
     const assign = e => {
       const a = this.byKey[e.from], b = this.byKey[e.to];
       const side = taken % 2 === 0 ? 1 : -1;
       const lane = Math.floor(taken / 2);
-      const clearance = side > 0 ? maxX - Math.max(a.x, b.x) : Math.min(a.x, b.x) - minX;
+      /* How far out the corridor has to sit: past the cards this edge
+         actually travels alongside, NOT past the whole diagram.
+
+         Clearing the diagram's own maxX is what made a hop between two
+         cards near the left edge of a wide flow cross the entire canvas
+         and come back -- it was reserving room against 34 steps it never
+         went near. Only the rows the edge spans can be in its way. */
+      const loY = Math.min(a.y, b.y) - ORTH_STUB;
+      const hiY = Math.max(a.y, b.y) + ORTH_STUB;
+      let spanMaxX = Math.max(a.x + a.w / 2, b.x + b.w / 2);
+      let spanMinX = Math.min(a.x - a.w / 2, b.x - b.w / 2);
+      for (const n of this.nodes) {
+        if (n.y + n.h / 2 < loY || n.y - n.h / 2 > hiY) continue;
+        spanMaxX = Math.max(spanMaxX, n.x + n.w / 2);
+        spanMinX = Math.min(spanMinX, n.x - n.w / 2);
+      }
+      const clearance = side > 0
+        ? spanMaxX - Math.max(a.x, b.x)
+        : Math.min(a.x, b.x) - spanMinX;
       const reach = 70 + lane * 45;
       e.lane = side;
       e.bow = side * (Math.max(clearance, 0) + reach);
-      if (side > 0) outRight = Math.max(outRight, reach);
-      else outLeft = Math.max(outLeft, reach);
+      /* the actual corridor, so fit() reserves what the lanes reach and no
+         more -- see corridorFor(), which recomputes the same x */
+      const corridorX = side > 0
+        ? Math.max(a.x, b.x) + Math.abs(e.bow)
+        : Math.min(a.x, b.x) - Math.abs(e.bow);
+      if (side > 0) laneRight = Math.max(laneRight, corridorX + 20);
+      else laneLeft = Math.min(laneLeft, corridorX - 20);
       taken++;
     };
 
@@ -289,12 +312,23 @@ export class DiagramEditor {
        flow punishes: on a 34-step one, 16 forward edges collide, and 16
        detours around the whole diagram read worse than the collisions. */
     const fitsBetweenItsEnds = e => {
-      /* Only the BACK half of an A->B / B->A pair has to leave. Failing both
-         halves sends two lines to the margin and leaves no line at all in
-         the column between two adjacent cards. */
-      if (e.back && hasOpposite(e)) return false;
-      if (!this.routeHitsABox(e)) return true;
+      /* The BACK half of an A->B / B->A pair cannot take the straight route
+         even when it is clear -- the opposite edge is already drawn on it.
+         It still belongs near its own two cards, so it looks for a corridor
+         first and only takes a margin lane if none is free. Skipping
+         straight to the lane is what sent a 150-unit hop 3400 units to the
+         right of a wide flow and back.
+
+         Only CORRIDORS count for a pair: a crossbar moves the sideways leg
+         of a Z, which changes nothing when both ends share a column -- the
+         run is still the same vertical line the opposite edge draws.
+
+         Only the back half leaves. Failing both would leave no line at all
+         in the column between two adjacent cards. */
+      const pair = e.back && hasOpposite(e);
+      if (!pair && !this.routeHitsABox(e)) return true;
       for (const via of this.detours(e)) {
+        if (pair && via.corridor === undefined) continue;
         e.via = via;
         if (!this.routeHitsABox(e)) return true;
       }
@@ -322,7 +356,7 @@ export class DiagramEditor {
     /* What fit() has to leave room for, so a lane is not drawn off-screen.
        Only from a full pass: the cheap one assigns no lanes, and letting it
        report zero reach would shrink the frame mid-drag. */
-    if (detours) this.laneSpan = { left: minX - outLeft, right: maxX + outRight };
+    if (detours) this.laneSpan = { left: laneLeft, right: laneRight };
   }
 
   /* Detours to try, nearest first. Crossbars come before corridors: moving
