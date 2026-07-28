@@ -9,7 +9,7 @@
 import { $, esc, fmtInt, cssVar } from '../core/dom.js';
 import { api, query } from '../core/api.js';
 import { icon } from '../core/icons.js';
-import { toast, tipShow, tipHide, openModal, closeModal } from '../core/ui.js';
+import { toast, failed, tipShow, tipHide, openModal, closeModal, setPressed } from '../core/ui.js';
 import { typeTag, typeColor, uidChip, statusTag, confPill, wireCopyChips,
          getDomains, TYPE_ORDER, TYPE_LABEL, relOptions } from '../core/shared.js';
 import { go, refreshBehind } from '../core/router.js';
@@ -48,22 +48,27 @@ export async function renderGraph(view, params, ctx) {
       <div class="view-sub">${t('g.sub', { n: fmtInt(data.nodes.length), m: fmtInt(data.edges.length) })}${capNote}</div>
     </div>
     <div class="graph-wrap" id="gWrap">
-      <canvas id="gCanvas"></canvas>
+      <!-- A drawing, and labelled as one. The same records are in Memories as
+           a list, which is what the label points at: a force layout has no
+           reading order to expose, so pretending otherwise would be worse
+           than saying where the text version lives. -->
+      <canvas id="gCanvas" role="img"
+              aria-label="${esc(t('g.canvasAlt', { n: fmtInt(data.nodes.length), m: fmtInt(data.edges.length) }))}"></canvas>
       <div class="graph-controls">
-        <select id="gDomain">
+        <select id="gDomain" aria-label="${t('common.allDomains')}">
           <option value="">${t('common.allDomains')}</option>
           ${domains.map(d => `<option value="${esc(d.domain)}" ${d.domain === state.domain ? 'selected' : ''}>${esc(d.domain)}</option>`).join('')}
         </select>
-        <select id="gType">
+        <select id="gType" aria-label="${t('common.allTypes')}">
           <option value="">${t('common.allTypes')}</option>
           ${TYPE_ORDER.map(tp => `<option value="${tp}" ${tp === state.type ? 'selected' : ''}>${TYPE_LABEL[tp]}</option>`).join('')}
         </select>
-        <div class="seg">
-          <button data-v="active" class="${state.status === 'active' ? 'active' : ''}">${t('common.active')}</button>
-          <button data-v="" class="${state.status === '' ? 'active' : ''}">${t('common.all')}</button>
+        <div class="seg" role="group" aria-label="${t('mem.status.aria')}">
+          <button type="button" data-v="active" aria-pressed="${state.status === 'active'}">${t('common.active')}</button>
+          <button type="button" data-v="" aria-pressed="${state.status === ''}">${t('common.all')}</button>
         </div>
-        <button class="btn btn-sm" id="gLink">${icon('pencil')}${t('g.linkMode')}</button>
-        <button class="btn btn-sm" id="gFit">${t('g.center')}</button>
+        <button type="button" class="btn btn-sm" id="gLink" aria-pressed="false">${icon('pencil')}${t('g.linkMode')}</button>
+        <button type="button" class="btn btn-sm" id="gFit">${t('g.center')}</button>
       </div>
       <div class="graph-legend">
         ${TYPE_ORDER.filter(tp => counts[tp]).map(tp =>
@@ -116,6 +121,7 @@ class ForceGraph {
     this.byUid = Object.fromEntries(this.nodes.map(n => [n.uid, n]));
     this.edges = edges.filter(e => this.byUid[e.from_uid] && this.byUid[e.to_uid]);
     this.tx = 0; this.ty = 0; this.scale = 1;
+    this.fitScale = null;   /* set by fit(); it is the zoom-out floor, see zoomAt */
     this.alpha = 1;
     this.hover = null; this.selected = null;
     this.linkMode = false; this.linkFrom = null;
@@ -125,9 +131,12 @@ class ForceGraph {
     /* theme colors resolved once from CSS custom properties */
     this.colAccent = cssVar('--accent') || '#bb86fc';
     this.colRing = cssVar('--bg') || '#121212';
-    this.colEdge = 'rgba(255,255,255,.25)';
-    this.colArrow = 'rgba(255,255,255,.38)';
-    this.colLabel = 'rgba(255,255,255,.87)';
+    this.colEdge = cssVar('--canvas-edge') || 'rgba(255,255,255,.25)';
+    this.colArrow = cssVar('--canvas-arrow') || 'rgba(255,255,255,.38)';
+    this.colLabel = cssVar('--ink') || 'rgba(255,255,255,.87)';
+    /* pointers currently down, by id: one drags or pans, two pinch */
+    this.pointers = new Map();
+    this.pinch = null;
 
     /* bound before resize(), which kicks the simulation and so needs a
        callable frame handler already in place */
@@ -148,9 +157,15 @@ class ForceGraph {
     this.fit();
     this.draw();
 
-    canvas.addEventListener('mousedown', e => this.onDown(e));
-    canvas.addEventListener('mousemove', e => this.onMove(e));
-    addEventListener('mouseup', this._up = () => this.onUp());
+    /* Pointer events, not mouse events: the same three handlers then serve a
+       mouse, a pen and a finger. On touch this canvas used to do nothing at
+       all -- no pan, no zoom, no drag, no selection -- while the rail beside
+       it collapsed for narrow screens and promised otherwise. */
+    canvas.addEventListener('pointerdown', e => this.onDown(e));
+    canvas.addEventListener('pointermove', e => this.onMove(e));
+    this._up = e => this.onUp(e);
+    addEventListener('pointerup', this._up);
+    addEventListener('pointercancel', this._up);
     canvas.addEventListener('wheel', e => this.onWheel(e), { passive: false });
     canvas.addEventListener('click', e => this.onClick(e));
 
@@ -161,7 +176,8 @@ class ForceGraph {
     cancelAnimationFrame(this.raf);
     this.raf = 0;
     removeEventListener('resize', this._resize);
-    removeEventListener('mouseup', this._up);
+    removeEventListener('pointerup', this._up);
+    removeEventListener('pointercancel', this._up);
   }
   /* Resume the simulation, optionally stirring it back up first. */
   kick(alpha = 0) {
@@ -191,7 +207,11 @@ class ForceGraph {
     const xs = this.nodes.map(n => n.x), ys = this.nodes.map(n => n.y);
     const minX = Math.min(...xs), maxX = Math.max(...xs), minY = Math.min(...ys), maxY = Math.max(...ys);
     const spanX = Math.max(80, maxX - minX), spanY = Math.max(80, maxY - minY);
-    this.scale = Math.min(2, Math.min(this.w / (spanX + 140), this.h / (spanY + 140)));
+    /* remembered as the zoom-out floor, same reason as the diagram engine: fit()
+       writes the scale directly, so a fixed floor in zoomAt can end up ABOVE the
+       level that shows the whole graph */
+    this.fitScale = Math.min(2, Math.min(this.w / (spanX + 140), this.h / (spanY + 140)));
+    this.scale = this.fitScale;
     this.tx = this.w / 2 - (minX + maxX) / 2 * this.scale;
     this.ty = this.h / 2 - (minY + maxY) / 2 * this.scale;
     this.requestDraw();
@@ -208,7 +228,40 @@ class ForceGraph {
     }
     return null;
   }
+  /* The two-finger gesture, frozen at the moment it started: every move is
+     measured against this rather than against the previous frame, so the
+     zoom cannot drift and the midpoint stays put under the fingers. */
+  pinchFrom() {
+    const [a, b] = [...this.pointers.values()];
+    const r = this.cv.getBoundingClientRect();
+    return {
+      dist: Math.max(1, Math.hypot(a.x - b.x, a.y - b.y)),
+      mx: (a.x + b.x) / 2 - r.left,
+      my: (a.y + b.y) / 2 - r.top,
+      scale: this.scale, tx: this.tx, ty: this.ty,
+    };
+  }
+  /* Zoom about a point in canvas space -- shared by the wheel and the pinch,
+     which used to be the wheel's arithmetic written out once. */
+  zoomAt(mx, my, next) {
+    const ns = Math.min(4, Math.max(Math.min(.12, this.fitScale ?? .12), next));
+    this.tx = mx - (mx - this.tx) * (ns / this.scale);
+    this.ty = my - (my - this.ty) * (ns / this.scale);
+    this.scale = ns;
+  }
   onDown(e) {
+    /* same guard as the diagram engine: capture throws for a pointer the
+       browser does not consider active, and that must not cost the drag */
+    try { this.cv.setPointerCapture(e.pointerId); } catch { /* not capturable */ }
+    this.pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (this.pointers.size === 2) {
+      this.drag = null;
+      this.pan = null;
+      this.cv.classList.remove('dragging');
+      this.pinch = this.pinchFrom();
+      return;
+    }
+    if (this.pointers.size > 2) return;
     const n = this.nodeAt(this.toWorld(e));
     if (n) { this.drag = n; this.kick(.35); }
     else {
@@ -217,6 +270,20 @@ class ForceGraph {
     }
   }
   onMove(e) {
+    if (this.pointers.has(e.pointerId)) {
+      this.pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    }
+    if (this.pinch && this.pointers.size >= 2) {
+      const [a, b] = [...this.pointers.values()];
+      const dist = Math.max(1, Math.hypot(a.x - b.x, a.y - b.y));
+      const p = this.pinch;
+      this.scale = p.scale; this.tx = p.tx; this.ty = p.ty;
+      this.zoomAt(p.mx, p.my, p.scale * (dist / p.dist));
+      this.moved = true;
+      tipHide();
+      this.requestDraw();
+      return;
+    }
     if (this.drag) {
       const p = this.toWorld(e);
       this.drag.x = p.x; this.drag.y = p.y;
@@ -236,12 +303,19 @@ class ForceGraph {
     const n = this.nodeAt(this.toWorld(e));
     if (n !== this.hover) { this.hover = n; this.requestDraw(); }
     this.cv.style.cursor = this.linkMode ? 'crosshair' : n ? 'pointer' : 'grab';
+    /* a finger has no hover: leaving a tip behind after a tap is a label
+       stuck on the canvas with nothing to dismiss it */
+    if (e.pointerType === 'touch') { tipHide(); return; }
     if (n) tipShow(
       `<b>${esc(n.type)}</b> · ${esc(n.uid)}<br>${esc(n.label)}${n.domain ? `<br><span style="color:var(--ink-3)">${esc(n.domain)}</span>` : ''}`,
       e.clientX, e.clientY);
     else tipHide();
   }
-  onUp() {
+  onUp(e) {
+    if (e) this.pointers.delete(e.pointerId);
+    if (this.pointers.size < 2) this.pinch = null;
+    /* a second finger lifting off a pinch does not end the gesture */
+    if (this.pointers.size) return;
     const wasDragging = !!(this.drag || this.pan);
     this.drag = null; this.pan = null;
     this.cv.classList.remove('dragging');
@@ -250,12 +324,8 @@ class ForceGraph {
   onWheel(e) {
     e.preventDefault();
     const r = this.cv.getBoundingClientRect();
-    const mx = e.clientX - r.left, my = e.clientY - r.top;
-    const f = e.deltaY < 0 ? 1.13 : 1 / 1.13;
-    const ns = Math.min(4, Math.max(.12, this.scale * f));
-    this.tx = mx - (mx - this.tx) * (ns / this.scale);
-    this.ty = my - (my - this.ty) * (ns / this.scale);
-    this.scale = ns;
+    this.zoomAt(e.clientX - r.left, e.clientY - r.top,
+                this.scale * (e.deltaY < 0 ? 1.13 : 1 / 1.13));
     this.requestDraw();
   }
   onClick(e) {
@@ -282,7 +352,7 @@ class ForceGraph {
     const b = $('#gBanner');
     b.hidden = !this.linkMode;
     if (this.linkMode) b.textContent = t('g.banner.source');
-    $('#gLink').classList.toggle('btn-solid', this.linkMode);
+    setPressed($('#gLink'), this.linkMode);
     this.requestDraw();
   }
   promptLink(a, b) {
@@ -294,10 +364,10 @@ class ForceGraph {
           <div style="color:var(--accent);padding-left:2px;--ico:15px">${icon('arrow-down')}</div>
           <div><span class="dot" style="--c:${typeColor(b.type)};display:inline-block;margin-right:6px"></span>${esc(b.uid)} · ${esc(b.label)}</div>
         </div>
-        <div class="field"><label>${t('g.modal.relType')}</label>
+        <div class="field"><label for="glType">${t('g.modal.relType')}</label>
           <input type="text" id="glType" list="glTypesDL" value="relates_to">
           <datalist id="glTypesDL">${relOptions()}</datalist></div>
-        <div class="field"><label>${t('g.modal.note')}</label><input type="text" id="glNote"></div>`,
+        <div class="field"><label for="glNote">${t('g.modal.note')}</label><input type="text" id="glNote"></div>`,
       footHTML: `<button class="btn" data-x>${t('common.cancel')}</button><button class="btn btn-solid" data-ok>${t('g.modal.create')}</button>`,
     });
     const mq = s => modal.querySelector(s);
@@ -312,7 +382,7 @@ class ForceGraph {
         toast(t('dr.rel.created'), 'ok');
         this.toggleLinkMode();
         refreshBehind();
-      } catch (err) { toast(err.message, 'bad'); }
+      } catch (err) { failed('err.relation', err); }
     };
   }
   renderCard() {

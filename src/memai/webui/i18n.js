@@ -58,7 +58,10 @@ const applyStatic = () => {
       .map(([code, name]) => `<option value="${code}" ${code === locale ? 'selected' : ''}>${name}</option>`).join('');
     sel.title = t('lang.title');
     sel.setAttribute('aria-label', t('lang.title'));
-    sel.addEventListener('change', () => set(sel.value));
+    /* The change handler lives in app.js, NOT here. Switching reloads the
+       page and throws away anything typed and unsaved, so the switch has to
+       ask first -- and asking means the modal machinery, which imports this
+       module. Populating the options is all this layer can own. */
   }
 };
 

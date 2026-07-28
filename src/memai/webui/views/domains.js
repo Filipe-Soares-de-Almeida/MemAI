@@ -5,7 +5,7 @@
 import { esc, fmtInt, fmtAgo } from '../core/dom.js';
 import { api } from '../core/api.js';
 import { icon } from '../core/icons.js';
-import { toast, openModal, closeModal } from '../core/ui.js';
+import { toast, failed, openModal, closeModal } from '../core/ui.js';
 import { typeColor, TYPE_ORDER, getDomains, invalidateDomains } from '../core/shared.js';
 import { go, refreshBehind } from '../core/router.js';
 import { t } from '../i18n.js';
@@ -23,14 +23,14 @@ export async function renderDomains(view, params, ctx) {
     const dots = TYPE_ORDER.filter(tp => d.types[tp]).map(tp =>
       `<span class="dot" style="--c:${typeColor(tp)}" title="${esc(tp)}: ${fmtInt(d.types[tp])}"></span>`).join('');
     const collide = d.collides_with
-      ? `<span class="collide-chip" data-merge="${esc(d.collides_with[0])}" data-into="${esc(d.domain)}"
-           title="${t('do.collide.title', { list: esc(d.collides_with.join(', ')) })}">${icon('approx')}${esc(d.collides_with[0])}</span>` : '';
+      ? `<button type="button" class="collide-chip" data-merge="${esc(d.collides_with[0])}" data-into="${esc(d.domain)}"
+           title="${t('do.collide.title', { list: esc(d.collides_with.join(', ')) })}">${icon('approx')}${esc(d.collides_with[0])}</button>` : '';
     return `<tr>
       <td style="color:var(--ink)">${esc(d.domain)} ${collide}</td>
       <td class="num">${fmtInt(d.active)}</td>
-      <td class="num" style="color:var(--ink-4)">${fmtInt(d.archived)}</td>
+      <td class="num" style="color:var(--ink-3)">${fmtInt(d.archived)}</td>
       <td><span class="type-dots">${dots}</span></td>
-      <td class="num" style="color:var(--ink-4)" title="${esc(d.latest_at)}">${fmtAgo(d.latest_at)}</td>
+      <td class="num" style="color:var(--ink-3)" title="${esc(d.latest_at)}">${fmtAgo(d.latest_at)}</td>
       <td class="actions">
         <button class="btn btn-sm" data-see="${esc(d.domain)}">${t('common.view')}</button>
         <button class="btn btn-sm" data-ren="${esc(d.domain)}">${t('common.rename')}</button>
@@ -47,9 +47,9 @@ export async function renderDomains(view, params, ctx) {
     </div>
     <div class="panel" style="margin-bottom:14px">
       <h3 class="panel-title">${t('do.case.title')}</h3>
-      <div style="font-size:11.5px;color:var(--ink-4);margin-bottom:10px">${t('do.case.desc')}</div>
+      <div style="font-size:11.5px;color:var(--ink-3);margin-bottom:10px">${t('do.case.desc')}</div>
       <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-        <select id="caseMode">
+        <select id="caseMode" aria-label="${t('do.case.title')}">
           ${CASE_MODES.map(mode =>
             `<option value="${mode}"${cfg.domain_case === mode ? ' selected' : ''}>${t('do.case.mode.' + mode)}</option>`).join('')}
         </select>
@@ -58,10 +58,12 @@ export async function renderDomains(view, params, ctx) {
       </div>
     </div>
     <div class="panel">
-      <table class="table">
-        <thead><tr><th>${t('common.domain')}</th><th class="num">${t('do.th.active')}</th><th class="num">${t('do.th.archived')}</th><th>${t('do.th.types')}</th><th class="num">${t('common.lastActivity')}</th><th></th></tr></thead>
-        <tbody>${rows}</tbody>
-      </table>
+      <div class="table-scroll">
+        <table class="table">
+          <thead><tr><th>${t('common.domain')}</th><th class="num">${t('do.th.active')}</th><th class="num">${t('do.th.archived')}</th><th>${t('do.th.types')}</th><th class="num">${t('common.lastActivity')}</th><th></th></tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>
       ${rows ? '' : `<div class="empty">${t('do.empty')}</div>`}
     </div>
   </div>`;
@@ -78,7 +80,7 @@ export async function renderDomains(view, params, ctx) {
     try {
       await api('/api/config', { body: { domain_case: modeSel.value } });
       toast(t('do.case.saved'), 'ok');
-    } catch (err) { toast(err.message, 'bad'); }
+    } catch (err) { failed('err.save', err); }
   };
   view.querySelector('#caseNorm').onclick = () => openNormalizeModal();
 }
@@ -87,24 +89,24 @@ async function openNormalizeModal() {
   let plan;
   try {
     plan = await api('/api/domains/normalize', { body: { dry_run: true } });
-  } catch (err) { toast(err.message, 'bad'); return; }
+  } catch (err) { failed('err.load', err); return; }
   if (plan.mode === 'preserve') { toast(t('do.case.preserveHint'), ''); return; }
   if (!plan.plan.length) { toast(t('do.case.none'), 'ok'); return; }
   const rows = plan.plan.map(e => `<tr>
     <td>${esc(e.from)}</td>
     <td style="color:var(--ink)">${esc(e.to)}</td>
     <td class="num">${fmtInt(e.count)}</td>
-    <td><span style="color:${e.action === 'merge' ? 'var(--warn)' : 'var(--ink-4)'}">${t('do.norm.act.' + e.action)}</span></td>
+    <td><span style="color:${e.action === 'merge' ? 'var(--warn)' : 'var(--ink-3)'}">${t('do.norm.act.' + e.action)}</span></td>
   </tr>`).join('');
   const modal = openModal({
     title: t('do.norm.title'),
     bodyHTML: `
       <div style="font-size:12px;margin-bottom:8px">${t('do.norm.intro', { renames: plan.renames, merges: plan.merges, mode: t('do.case.mode.' + plan.mode) })}</div>
       ${plan.merges ? `<div style="font-size:11.5px;color:var(--warn);margin-bottom:8px">${t('do.norm.mergeWarn')}</div>` : ''}
-      <table class="table"><thead><tr>
+      <div class="table-scroll"><table class="table"><thead><tr>
         <th>${t('do.norm.th.from')}</th><th>${t('do.norm.th.to')}</th>
         <th class="num">${t('do.norm.th.count')}</th><th>${t('do.norm.th.action')}</th>
-      </tr></thead><tbody>${rows}</tbody></table>`,
+      </tr></thead><tbody>${rows}</tbody></table></div>`,
     footHTML: `<button class="btn" data-x>${t('common.cancel')}</button><button class="btn btn-solid" data-ok>${t('do.norm.apply')}</button>`,
   });
   modal.querySelector('[data-x]').onclick = closeModal;
@@ -115,7 +117,7 @@ async function openNormalizeModal() {
       toast(t('do.norm.done', { n: r.moved, affected: r.affected }), 'ok');
       invalidateDomains();
       refreshBehind();
-    } catch (err) { toast(err.message, 'bad'); }
+    } catch (err) { failed('err.domain', err); }
   };
 }
 
@@ -124,12 +126,13 @@ function openRenameModal(from, domains, presetTo = '') {
   const modal = openModal({
     title: presetTo ? t('do.rn.merge') : t('do.rn.rename'),
     bodyHTML: `
-      <div class="field"><label>${t('do.rn.from')}</label><input type="text" value="${esc(from)}" disabled></div>
-      <div class="field"><label>${t('do.rn.to')}</label>
+      <div class="field"><label for="rnFrom">${t('do.rn.from')}</label>
+        <input type="text" id="rnFrom" value="${esc(from)}" disabled></div>
+      <div class="field"><label for="rnTo">${t('do.rn.to')}</label>
         <input type="text" id="rnTo" value="${esc(presetTo)}" list="rnDL" placeholder="${t('do.rn.placeholder')}">
         <datalist id="rnDL">${dl}</datalist></div>
       <div id="rnWarn" style="font-size:11.5px;color:var(--warn)" hidden>${t('do.rn.warn')}</div>
-      <div style="font-size:11px;color:var(--ink-4)">${t('do.rn.hint')}</div>`,
+      <div style="font-size:11px;color:var(--ink-3)">${t('do.rn.hint')}</div>`,
     footHTML: `<button class="btn" data-x>${t('common.cancel')}</button><button class="btn btn-solid" data-ok>${t('common.apply')}</button>`,
   });
   const toInput = modal.querySelector('#rnTo');
@@ -146,6 +149,6 @@ function openRenameModal(from, domains, presetTo = '') {
       toast(t('do.rn.moved', { n: r.affected }) + (r.merged ? t('do.rn.merged') : ''), 'ok');
       invalidateDomains();
       refreshBehind();
-    } catch (err) { toast(err.message, 'bad'); }
+    } catch (err) { failed('err.domain', err); }
   };
 }

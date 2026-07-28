@@ -7,34 +7,247 @@
 
 import { $, esc } from './dom.js';
 import { t } from '../i18n.js';
+import { icon } from './icons.js';
 
-/* ─── toasts ────────────────────────────────────────────────────────── */
+/* ─── toasts ──────────────────────────────────────────────────────────────
+   Thirty-five call sites push SEVEN different shapes of message through this
+   one function: a bare confirmation, a counted one, an object being named, an
+   irreversible deletion, a partial failure, a raw API error, and -- until this
+   round -- a form-validation nag fired four hundred pixels from the field that
+   was wrong. It used to answer all seven with the same 3.6-second rectangle
+   that could not be dismissed, could not be acted on, offered no Undo for any
+   of the reversible things it reported, and stacked without a limit.
 
-export function toast(msg, kind = '') {
-  const el = document.createElement('div');
-  el.className = `toast ${kind}`;
-  el.textContent = msg;
-  $('#toasts').appendChild(el);
-  setTimeout(() => { el.classList.add('out'); setTimeout(() => el.remove(), 350); }, 3600);
+   What a kind means now:
+
+     ''      nothing happened. No mark, no hue -- a neutral result is neutral,
+             and two call sites used to get the BRAND colour for this.
+     'ok'    it worked.
+     'warn'  it partly worked; `detail` says which part did not.
+     'bad'   it failed. Never auto-dismisses, because a failure is something to
+             read and act on, and it already carries role="alert".
+
+   State is carried by the MARK's shape and by the container -- never by a
+   coloured strip on one edge. The three marks in core/icons.js are already a
+   closed ring, an open ring and a crossed ring, so the three states are told
+   apart on a greyscale monitor.
+
+   opts:
+     detail  a second line: an error message, a uid, the ids that failed. Keeps
+             the headline short and stable while the specifics still ship.
+     action  {label, run} -- Undo, Retry, View. Extends the timer, because an
+             Undo you cannot reach in time is not an Undo.
+     sticky  force no auto-dismiss ('bad' implies it).                        */
+
+const MARK = { ok: 'confirmed', warn: 'unverified', bad: 'contradicted' };
+const LIFE = { '': 3200, ok: 3200, warn: 5000 };
+const VISIBLE_MAX = 3;
+
+/* arrivals past VISIBLE_MAX wait here rather than pushing the oldest off the
+   top of a container that does not scroll */
+const waiting = [];
+let escWired = false;
+let stackSize = null;
+
+/* The stack floats over content that scrolls, so it publishes its own height
+   the way the bulk bar publishes its own: .view and .drawer-body reserve that
+   much extra bottom padding, and the toast lands on padding the reader can
+   scroll past rather than on the last of the content. Measured: with the record
+   drawer open at 1280x800 the stack overlaps the drawer's own body by 400x50px,
+   and the drawer is exactly where most toasts fire. */
+function publishStackHeight(host) {
+  const h = host.children.length ? host.offsetHeight + 10 : 0;
+  document.documentElement.style.setProperty('--toast-h', `${h}px`);
 }
 
-/* ─── hover tip ─────────────────────────────────────────────────────── */
+export function toast(msg, kind = '', opts = {}) {
+  const host = $('#toasts');
+  /* Collapse a repeat instead of stacking it: applying six suggestions fires
+     six identical toasts (optimization.js runs one per apply), which used to
+     push the earliest out of sight with nothing to scroll. */
+  const newest = host.lastElementChild;
+  if (newest && !newest.dataset.going && !opts.action
+      && newest.dataset.msg === msg && newest.dataset.kind === kind) {
+    const n = Number(newest.dataset.count || 1) + 1;
+    newest.dataset.count = String(n);
+    const tally = newest.querySelector('.toast-n');
+    tally.textContent = `×${n}`;
+    tally.hidden = false;
+    arm(newest);
+    return newest;
+  }
+  if (host.children.length >= VISIBLE_MAX) { waiting.push([msg, kind, opts]); return null; }
+  return mount(host, msg, kind, opts);
+}
+
+function mount(host, msg, kind, opts) {
+  const el = document.createElement('div');
+  el.className = `toast${kind ? ` ${kind}` : ''}`;
+  el.dataset.msg = msg;
+  el.dataset.kind = kind;
+  if (opts.sticky ?? kind === 'bad') el.dataset.sticky = '1';
+  if (opts.action) el.dataset.acting = '1';
+  /* A failure interrupts; a confirmation waits its turn. The container is
+     aria-live="polite", which is right for "archived" and wrong for "the
+     write was rejected" -- role="alert" on the node itself is assertive. */
+  el.setAttribute('role', kind === 'bad' ? 'alert' : 'status');
+
+  el.innerHTML = `${MARK[kind] ? `<span class="toast-mark">${icon(MARK[kind])}</span>` : ''}
+    <div class="toast-text">
+      <div class="toast-line"><span class="toast-msg"></span><span class="toast-n" hidden></span></div>
+      ${opts.detail ? '<span class="toast-detail"></span>' : ''}
+    </div>
+    ${opts.action ? '<button type="button" class="btn btn-sm btn-ghost" data-act></button>' : ''}
+    <button type="button" class="icon-btn" data-close
+            aria-label="${esc(t('common.close'))}">${icon('close')}</button>`;
+
+  /* textContent, never innerHTML, for every caller-supplied string. Five
+     catalog entries carry <b>/<code>, and memories.js records a shipped bug
+     where one of them printed as literal tags. The body of a toast is TEXT;
+     emphasis is a node this function builds, never a string it parses. */
+  el.querySelector('.toast-msg').textContent = msg;
+  if (opts.detail) el.querySelector('.toast-detail').textContent = opts.detail;
+  if (opts.action) {
+    const btn = el.querySelector('[data-act]');
+    btn.textContent = opts.action.label;
+    btn.addEventListener('click', () => { drop(el); opts.action.run?.(); });
+  }
+  el.querySelector('[data-close]').addEventListener('click', () => drop(el));
+
+  /* focusin as well as pointerenter: someone tabbing to the Undo must not lose
+     it halfway to the button */
+  for (const ev of ['pointerenter', 'focusin']) el.addEventListener(ev, () => stop(el));
+  for (const ev of ['pointerleave', 'focusout']) el.addEventListener(ev, () => arm(el));
+
+  host.appendChild(el);
+  publishStackHeight(host);
+  if (!stackSize) {
+    /* a message that wraps to two lines changes the height without changing the
+       count, so observe rather than only counting */
+    stackSize = new ResizeObserver(() => publishStackHeight(host));
+    stackSize.observe(host);
+  }
+  if (!escWired) {
+    escWired = true;
+    /* Escape closes the toast the caret is inside, and only that one, so it
+       never competes with the drawer or a modal for the same key. */
+    host.addEventListener('keydown', e => {
+      if (e.key !== 'Escape') return;
+      const hit = e.target.closest?.('.toast');
+      if (!hit) return;
+      e.stopPropagation();
+      drop(hit);
+    });
+  }
+  arm(el);
+  return el;
+}
+
+/* Every failure in this app used to say only what the API said: an un-i18n'd
+   string of unbounded length, in a corner, gone in 3.6 seconds, with no way to
+   re-read it and with nothing naming what had actually failed -- a pt-BR user
+   got an English sentence from the server and no context for it.
+
+   The headline is a stable translated sentence naming the ACTION that failed;
+   err.message drops to the detail line, still there for whoever needs it and no
+   longer the whole message. 'bad' does not auto-dismiss, so it waits to be
+   read, and `opts.action` carries a Retry where the call is idempotent. */
+export const failed = (key, err, opts = {}) =>
+  toast(t(key), 'bad', { detail: err?.message || '', ...opts });
+
+function stop(el) { clearTimeout(Number(el.dataset.timer)); }
+
+function arm(el) {
+  stop(el);
+  if (el.dataset.sticky || el.dataset.going) return;
+  const ms = el.dataset.acting ? 6000 : (LIFE[el.dataset.kind] ?? 3200);
+  el.dataset.timer = String(setTimeout(() => drop(el), ms));
+}
+
+function drop(el) {
+  if (el.dataset.going) return;
+  stop(el);
+  el.dataset.going = '1';
+  el.classList.add('out');
+  setTimeout(() => {
+    const host = el.parentElement;
+    el.remove();
+    const next = waiting.shift();
+    if (next && host) mount(host, ...next);
+    else if (host) publishStackHeight(host);
+  }, 300);
+}
+
+/* ─── hover tip ───────────────────────────────────────────────────────
+   Positioned in an animation frame, and measured only when the content
+   changes. Writing innerHTML and reading getBoundingClientRect on the next
+   line forces a synchronous layout, and both canvases call this on every
+   pointermove -- so a slow drag across a card used to pay for a reflow per
+   pixel. The size only changes when the words do. */
+
+let tipHtml = '', tipBox = null, tipFrame = 0;
+const tipAt = { x: 0, y: 0 };
 
 export function tipShow(html, x, y) {
   const tip = $('#tip');
-  tip.innerHTML = html;
+  tipAt.x = x; tipAt.y = y;
+  if (html !== tipHtml) {
+    tip.innerHTML = html;
+    tipHtml = html;
+    tipBox = null;
+  }
   tip.hidden = false;
-  const r = tip.getBoundingClientRect();
-  /* clamp both ends: a wrapped tip can be tall enough that pushing it up
-     to fit would otherwise take it off the top of the window */
-  tip.style.left = `${Math.max(10, Math.min(x + 14, innerWidth - r.width - 10))}px`;
-  tip.style.top = `${Math.max(10, Math.min(y + 14, innerHeight - r.height - 10))}px`;
+  if (tipFrame) return;
+  tipFrame = requestAnimationFrame(() => {
+    tipFrame = 0;
+    if (tip.hidden) return;
+    if (!tipBox) {
+      const r = tip.getBoundingClientRect();
+      tipBox = { w: r.width, h: r.height };
+    }
+    /* clamp both ends: a wrapped tip can be tall enough that pushing it up
+       to fit would otherwise take it off the top of the window */
+    tip.style.left = `${Math.max(10, Math.min(tipAt.x + 14, innerWidth - tipBox.w - 10))}px`;
+    tip.style.top = `${Math.max(10, Math.min(tipAt.y + 14, innerHeight - tipBox.h - 10))}px`;
+  });
 }
 
-export function tipHide() { $('#tip').hidden = true; }
+export function tipHide() {
+  $('#tip').hidden = true;
+  tipHtml = '';
+  tipBox = null;
+}
 
 export function copyUid(uid) {
-  navigator.clipboard?.writeText(uid).then(() => toast(t('toast.uidCopied', { uid }), 'ok'));
+  /* no clipboard access (a non-secure origin other than loopback, or a
+     browser that withholds it) has to say so rather than do nothing */
+  if (!navigator.clipboard) { toast(t('toast.copyUnavailable'), 'bad'); return; }
+  navigator.clipboard.writeText(uid)
+    .then(() => toast(t('toast.uidCopied', { uid }), 'ok'))
+    .catch(() => toast(t('toast.copyUnavailable'), 'bad'));
+}
+
+/* ─── toggle state ────────────────────────────────────────────────────
+   A control that stays pressed says so in the accessibility tree too. The
+   UI marked these with a class alone, so the state existed only for eyes. */
+
+export const setPressed = (el, on) => {
+  if (!el) return;
+  el.setAttribute('aria-pressed', on ? 'true' : 'false');
+  el.classList.toggle('btn-solid', !!on);
+};
+
+/* Everything behind the record drawer, taken out of the tab order and out of
+   the accessibility tree while it is open. The drawer sits over the whole
+   app behind a scrim, so tabbing into the list underneath -- which is what
+   used to happen -- moves an invisible caret through covered content.
+
+   `inert` and not aria-hidden: it does both, and it also stops a click. */
+export function inertBackground(on) {
+  for (const sel of ['.rail', '.frame']) {
+    const el = document.querySelector(sel);
+    if (el) el.toggleAttribute('inert', !!on);
+  }
 }
 
 /* ─── modal machinery ───────────────────────────────────────────────────

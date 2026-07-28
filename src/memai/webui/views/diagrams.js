@@ -5,7 +5,7 @@
 import { $, esc, fmtInt, fmtAgo } from '../core/dom.js';
 import { api } from '../core/api.js';
 import { icon } from '../core/icons.js';
-import { toast, promptModal } from '../core/ui.js';
+import { toast, failed, promptModal } from '../core/ui.js';
 import { statusTag, confPill, uidChip, wireCopyChips, getDomains,
          invalidateDomains } from '../core/shared.js';
 import { go } from '../core/router.js';
@@ -37,13 +37,19 @@ async function promptNewDiagram(domain = '') {
     const r = await newDiagramSkeleton({ title, domain });
     invalidateDomains();
     go('diagram', { uid: r.uid });
-  } catch (err) { toast(err.message, 'bad'); }
+  } catch (err) { failed('err.create', err); }
 }
 
 function issueChip(issue) {
   const label = t(`dg.issue.${issue.kind}`);
   const keys = issue.keys.length ? `: ${issue.keys.join(', ')}` : '';
-  return `<span class="dgl-issue" title="${esc(t(`dg.issueWhy.${issue.kind}`))}">${esc(label)}${esc(keys)}</span>`;
+  const why = t(`dg.issueWhy.${issue.kind}`);
+  /* role="note" so the aria-label has something to attach to -- a label on a
+     bare span is dropped, which left the explanation of a structural fault
+     visible only to a mouse hovering it. tabindex so a keyboard can stop on
+     it and hear the same thing. */
+  return `<span class="dgl-issue" role="note" tabindex="0"
+                title="${esc(why)}" aria-label="${esc(`${label}${keys} — ${why}`)}">${esc(label)}${esc(keys)}</span>`;
 }
 
 export async function renderDiagrams(view, params, ctx) {
@@ -71,17 +77,18 @@ export async function renderDiagrams(view, params, ctx) {
     </div>
 
     <div class="panel" style="margin-bottom:14px">
-      <div style="font-size:11.5px;color:var(--ink-4);margin-bottom:10px">${t('dgl.intro')}</div>
+      <div style="font-size:11.5px;color:var(--ink-3);margin-bottom:10px">${t('dgl.intro')}</div>
       <div class="act-row">
-        <select id="dglDomain">
+        <select id="dglDomain" aria-label="${t('common.allDomains')}">
           <option value="">${t('common.allDomains')}</option>
           ${domains.map(d => `<option value="${esc(d.domain)}" ${d.domain === state.domain ? 'selected' : ''}>${esc(d.domain)}</option>`).join('')}
         </select>
-        <div class="seg" id="dglStatus">
-          <button data-v="active" class="${state.status === 'active' ? 'active' : ''}">${t('common.active')}</button>
-          <button data-v="" class="${state.status === '' ? 'active' : ''}">${t('common.all')}</button>
+        <div class="seg" id="dglStatus" role="group" aria-label="${t('mem.status.aria')}">
+          <button type="button" data-v="active" aria-pressed="${state.status === 'active'}">${t('common.active')}</button>
+          <button type="button" data-v="" aria-pressed="${state.status === ''}">${t('common.all')}</button>
         </div>
-        <input type="text" id="dglFilter" placeholder="${t('dgl.filter')}" style="flex:1;min-width:160px" autocomplete="off">
+        <input type="text" id="dglFilter" placeholder="${t('dgl.filter')}" aria-label="${t('dgl.filter')}"
+               style="flex:1;min-width:160px" autocomplete="off">
         <button class="btn btn-solid" id="dglNew">${t('dgl.new')}</button>
       </div>
     </div>
@@ -106,7 +113,7 @@ export async function renderDiagrams(view, params, ctx) {
       (a, b) => ISSUE_ORDER.indexOf(a.kind) - ISSUE_ORDER.indexOf(b.kind));
     return `<div class="dgl-card${issues.length ? ' has-issues' : ''}">
       <div class="dgl-top">
-        <span class="dgl-title" data-edit="${esc(d.uid)}" title="${esc(d.title)}">${esc(d.title || '—')}</span>
+        <button type="button" class="dgl-title" data-edit="${esc(d.uid)}" title="${esc(d.title)}">${esc(d.title || '—')}</button>
         ${statusTag(d.status)} ${confPill(d.confidence)}
       </div>
       ${d.summary ? `<div class="dgl-summary" title="${esc(d.summary)}">${esc(d.summary)}</div>` : ''}
@@ -121,7 +128,8 @@ export async function renderDiagrams(view, params, ctx) {
           : `<span class="dgl-sound">${icon('confirmed')}${t('dgl.sound')}</span>`}
       </div>
       <div class="dgl-foot">
-        ${d.domain ? `<span class="chip clickable" data-fdomain="${esc(d.domain)}">${esc(d.domain)}</span>` : ''}
+        ${d.domain ? `<button type="button" class="chip clickable" data-fdomain="${esc(d.domain)}"
+                aria-label="${esc(t('a11y.filterDomain', { domain: d.domain }))}">${esc(d.domain)}</button>` : ''}
         ${uidChip(d.uid)}
         <span class="spacer"></span>
         <span class="dgl-when" title="${esc(d.updated_at)}">${fmtAgo(d.updated_at)}</span>

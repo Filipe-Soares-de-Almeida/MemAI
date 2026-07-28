@@ -5,13 +5,18 @@
 import { $, esc, fmtDate } from '../core/dom.js';
 import { api, seg } from '../core/api.js';
 import { icon } from '../core/icons.js';
-import { toast, confirmModal } from '../core/ui.js';
-import { typeTag, uidChip, statusTag, wireCopyChips } from '../core/shared.js';
+import { toast, failed, confirmModal, setPressed } from '../core/ui.js';
+import { typeTag, uidChip, statusTag, wireCopyChips, failedHTML } from '../core/shared.js';
 import { go } from '../core/router.js';
 import { openRecord } from './record.js';
 import { t } from '../i18n.js';
 
 /* ─── one suggestion, rendered by kind ───────────────────────────────── */
+
+/* the kinds the before/after pair below knows how to render. Anything else
+   is shown as its payload rather than as two empty boxes -- see optRaw. */
+const DIFF_KINDS = new Set(['compact', 'reword', 'retag', 'redomain',
+                            'set_confidence', 'archive']);
 
 function optBefore(s) {
   const tg = s.target || {};
@@ -67,7 +72,17 @@ function optDistillBody(s) {
     ${srcs}
     <div class="opt-arrow" title="${t('op.relType.title')}">supersedes${icon('arrow-right')}</div>
     <span class="opt-label">${t('op.distill.new')}${p.new_type ? ` · ${esc(p.new_type)}` : ''}${p.domain ? ` · ${esc(p.domain)}` : ''}</span>
-    <div class="opt-side snippet">${esc(p.new_content || '')}</div>
+    <div class="snippet">${esc(p.new_content || '')}</div>
+  </div>`;
+}
+
+/* A kind with no renderer here still has to be readable. This used to fall
+   through to an empty before/after pair with a live Apply button under it,
+   which asked for a decision about nothing. */
+function optRaw(s) {
+  return `<div class="opt-unknown">
+    <span class="opt-label">${t('op.unknownKind')}</span>
+    <pre class="snippet">${esc(JSON.stringify(s.payload ?? {}, null, 2))}</pre>
   </div>`;
 }
 
@@ -95,17 +110,18 @@ function optCard(s) {
     : `<div class="opt-verified muted">${icon('unverified')}${t('op.noVerified')}</div>`;
   const relKind = s.kind === 'link' || s.kind === 'merge' || s.kind === 'distill';
   const bodyHtml = s.kind === 'distill' ? optDistillBody(s)
-    : relKind ? optRelBody(s) : `<div class="opt-diff">
+    : relKind ? optRelBody(s)
+    : !DIFF_KINDS.has(s.kind) ? optRaw(s) : `<div class="opt-diff">
       <span class="opt-label" style="grid-area:bl">${t('op.before')}</span>
       <span class="opt-label" style="grid-area:al">${t('op.after')}</span>
-      <div class="opt-side snippet" style="grid-area:bs">${optBefore(s)}</div>
+      <div class="snippet" style="grid-area:bs">${optBefore(s)}</div>
       <div class="opt-arrow" style="grid-area:arrow">→</div>
-      <div class="opt-side snippet" style="grid-area:as">${optAfter(s)}</div>
+      <div class="snippet" style="grid-area:as">${optAfter(s)}</div>
     </div>`;
   const openUid = s.target_uid || s.new_uid;   /* distill: open the created memory once applied */
   return `<div class="pair-card opt-card ${s.status !== 'pending' ? 'decided' : ''}">
     <div style="display:flex;gap:7px;align-items:center;flex-wrap:wrap">
-      <span class="type-tag t-note"><span class="dot"></span>${esc(s.kind)}</span>
+      <span class="opt-kind">${esc(s.kind)}</span>
       ${s.target_uid ? uidChip(s.target_uid) : ''}
       ${statusChip}
       <span style="flex:1"></span>
@@ -117,6 +133,18 @@ function optCard(s) {
     ${bodyHtml}
     ${verified}
   </div>`;
+}
+
+/* "applied 8 · 2 failed" used to be painted 'bad' -- total-failure red for a
+   mostly-successful batch -- and res.failed, which carries the id AND the reason
+   for every one that did not go through, was thrown away. So the screen said
+   something went wrong and gave you no way to find out what. A partial result is
+   a warning, and the ids go where they can be read. */
+function reportApplied(res) {
+  const bad = res.failed || [];
+  if (!bad.length) { toast(t('op.toast.appliedN', { n: res.applied }), 'ok'); return; }
+  toast(t('op.toast.appliedN', { n: res.applied }) + t('op.toast.failedN', { m: bad.length }),
+        'warn', { detail: bad.map(f => `#${f.id}: ${f.error}`).join(' · ') });
 }
 
 /* ─── entry point ────────────────────────────────────────────────────── */
@@ -147,7 +175,8 @@ function optRunCard(r) {
     `<span class="opt-kind-chip${k.pending ? ' has-pending' : ''}">${esc(k.kind)}<b>${k.pending ? `${k.pending}/` : ''}${k.total}</b></span>`).join('');
   const backup = r.backup_path
     ? `<span class="opt-run-backup" title="${esc(t('op.backupNote', { name: r.backup_path.split(/[\\/]/).pop() }))}">${icon('confirmed')}${t('op.card.backup')}</span>` : '';
-  return `<div class="opt-run-card" data-run="${r.id}" role="button" tabindex="0">
+  return `<div class="opt-run-card${r.pending ? ' has-pending' : ''}" data-run="${r.id}" role="button" tabindex="0"
+       aria-label="${esc(t('op.card.aria', { id: r.id, n: r.total, p: r.pending }))}">
     <div class="opt-run-top">
       <span class="opt-run-id">#${r.id}</span>
       <span class="opt-run-date">${fmtDate(r.created_at)} · ${t('op.nSuggestions', { n: r.total })}</span>
@@ -173,9 +202,9 @@ function renderOptRunList(view, runs) {
     </div>
     ${runs.length ? `
     <div class="list-toolbar">
-      <input type="search" id="optSearch" placeholder="${t('op.searchRuns')}">
-      <button class="btn btn-sm" id="optOnlyPending">${t('op.onlyPending')}</button>
-      <span class="panel-aside" id="optRunsCount"></span>
+      <input type="search" id="optSearch" placeholder="${t('op.searchRuns')}" aria-label="${t('op.searchRuns')}">
+      <button type="button" class="btn btn-sm" id="optOnlyPending" aria-pressed="false">${t('op.onlyPending')}</button>
+      <span class="panel-aside" id="optRunsCount" aria-live="polite"></span>
     </div>
     <div class="opt-run-grid" id="optRunGrid"></div>
     ` : `<div class="empty">${t('op.emptyRuns')}</div>`}
@@ -207,7 +236,7 @@ function renderOptRunList(view, runs) {
   const pendBtn = $('#optOnlyPending');
   pendBtn.addEventListener('click', () => {
     onlyPending = !onlyPending;
-    pendBtn.classList.toggle('btn-solid', onlyPending);
+    setPressed(pendBtn, onlyPending);
     draw();
   });
   draw();
@@ -228,11 +257,11 @@ function renderOptRun(view, initialMeta) {
       <div class="list-toolbar" style="align-items:center;margin-bottom:0">
         <span id="optSummary" class="panel-aside"></span>
         <span style="flex:1"></span>
-        <button class="btn btn-sm" id="optHideApplied"></button>
-        <button class="btn btn-sm" id="optApplyAll">${t('op.applyAll')}</button>
-        <button class="btn btn-danger btn-sm" id="optDiscard">${t('op.discard')}</button>
+        <button type="button" class="btn btn-sm" id="optHideApplied" aria-pressed="false"></button>
+        <button type="button" class="btn btn-sm" id="optApplyAll">${t('op.applyAll')}</button>
+        <button type="button" class="btn btn-danger btn-sm" id="optDiscard">${t('op.discard')}</button>
       </div>
-      <div id="optBackup" style="font-size:11px;color:var(--ink-4);margin-top:6px"></div>
+      <div id="optBackup" style="font-size:11px;color:var(--ink-3);margin-top:6px"></div>
     </div>
     <div id="optBody"><div class="loading"><span class="spin"></span></div></div>
   </div>`;
@@ -253,13 +282,23 @@ function renderOptRun(view, initialMeta) {
   const hideBtn = $('#optHideApplied');
   const syncHideBtn = () => {
     hideBtn.textContent = hideApplied ? t('op.showApplied') : t('op.hideApplied');
-    hideBtn.classList.toggle('btn-solid', hideApplied);
+    setPressed(hideBtn, hideApplied);
   };
   syncHideBtn();
 
   const loadRun = async () => {
     const body = $('#optBody');
     if (!body) return;
+    /* Every accept, reject and undo comes back through here, so this is a
+       re-read of the same run far more often than it is a first read. Which
+       groups were open and where the reader had scrolled to are theirs, not
+       the render's -- deciding twenty suggestions used to mean being sent
+       back to the top of a fully re-folded page twenty times. */
+    const scroller = $('#view');
+    const keepScroll = scroller ? scroller.scrollTop : 0;
+    const wasOpen = new Set([...body.querySelectorAll('.opt-group')]
+      .filter(d => d.open).map(d => d.dataset.kind));
+    const rerender = !!body.querySelector('.opt-group');
     body.innerHTML = '<div class="loading"><span class="spin"></span></div>';
     try {
       const r = await api(`/api/optimization/suggestions?run=${seg(runId)}`);
@@ -274,9 +313,11 @@ function renderOptRun(view, initialMeta) {
         const pend = list.filter(s => s.status === 'pending').length;
         const count = pend ? t('op.group.countPending', { p: pend, t: list.length })
           : t('op.group.countAll', { t: list.length });
-        return `<details class="opt-group" open>
+        /* open by default on a first read, and as the reader left it after */
+        const open = rerender ? wasOpen.has(kind) : true;
+        return `<details class="opt-group" data-kind="${esc(kind)}"${open ? ' open' : ''}>
           <summary>
-            <span class="opt-group-caret" aria-hidden="true"></span>
+            ${icon('chevron-right', { cls: 'opt-group-caret' })}
             <span class="opt-group-kind">${esc(kind)}</span>
             <span class="opt-group-count">${count}</span>
             <span style="flex:1"></span>
@@ -285,6 +326,7 @@ function renderOptRun(view, initialMeta) {
           <div class="opt-group-body">${list.map(optCard).join('')}</div>
         </details>`;
       }).join('');
+      if (scroller) scroller.scrollTop = keepScroll;
       wireCopyChips(body);
 
       const act = (btn, path, bodyObj) => async () => {
@@ -294,7 +336,7 @@ function renderOptRun(view, initialMeta) {
           toast(res && res.backup ? t('op.toast.appliedBackup') : t('op.toast.done'), 'ok');
           await refreshMeta();
           await loadRun();
-        } catch (err) { toast(err.message, 'bad'); btn.disabled = false; }
+        } catch (err) { failed('err.optimize', err); btn.disabled = false; }
       };
       body.querySelectorAll('[data-apply]').forEach(b => b.addEventListener('click', act(b, '/api/optimization/apply', { id: +b.dataset.apply })));
       body.querySelectorAll('[data-reject]').forEach(b => b.addEventListener('click', act(b, '/api/optimization/reject', { id: +b.dataset.reject })));
@@ -310,13 +352,15 @@ function renderOptRun(view, initialMeta) {
         b.disabled = true;
         try {
           const res = await api('/api/optimization/apply-all', { body: { run: runId, kind } });
-          toast(t('op.toast.appliedN', { n: res.applied }) + (res.failed.length ? t('op.toast.failedN', { m: res.failed.length }) : ''), res.failed.length ? 'bad' : 'ok');
+          reportApplied(res);
           await refreshMeta();
           await loadRun();
-        } catch (err) { toast(err.message, 'bad'); b.disabled = false; }
+        } catch (err) { failed('err.optimize', err); b.disabled = false; }
       }));
     } catch (err) {
-      if (body.isConnected) body.innerHTML = `<div class="empty">${esc(err.message)}</div>`;
+      if (!body.isConnected) return;
+      body.innerHTML = failedHTML(err);
+      body.querySelector('[data-retry]').addEventListener('click', loadRun);
     }
   };
 
@@ -333,10 +377,10 @@ function renderOptRun(view, initialMeta) {
       okLabel: t('op.applyAllConfirm.ok') }))) return;
     try {
       const r = await api('/api/optimization/apply-all', { body: { run: runId } });
-      toast(t('op.toast.appliedN', { n: r.applied }) + (r.failed.length ? t('op.toast.failedN', { m: r.failed.length }) : ''), r.failed.length ? 'bad' : 'ok');
+      reportApplied(r);
       await refreshMeta();
       await loadRun();
-    } catch (err) { toast(err.message, 'bad'); }
+    } catch (err) { failed('err.optimize', err); }
   });
 
   $('#optDiscard').addEventListener('click', async () => {
@@ -347,7 +391,7 @@ function renderOptRun(view, initialMeta) {
       await api(`/api/optimization/runs/${seg(runId)}`, { method: 'DELETE' });
       toast(t('op.toast.discarded'), 'ok');
       go('optimization');
-    } catch (err) { toast(err.message, 'bad'); }
+    } catch (err) { failed('err.optimize', err); }
   });
 
   loadRun();

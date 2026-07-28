@@ -29,12 +29,27 @@ export const fmtBytes = b => {
 
 const MONTHS = I18N.months;
 
+const pad2 = n => String(n).padStart(2, '0');
+
 export function fmtDate(iso) {
   if (!iso) return '—';
   const d = new Date(iso);
   if (isNaN(d)) return iso.slice(0, 16);
-  return `${String(d.getDate()).padStart(2, '0')} ${MONTHS[d.getMonth()]} · ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+  /* The year is printed only when it is not this one. Without it at all, an
+     edit from last March and one from this March read identically -- which
+     in an audit trail is the difference between a record and a guess. With
+     it on every row it is four characters of noise on the common case. */
+  const year = d.getFullYear() === new Date().getFullYear() ? '' : ` ${d.getFullYear()}`;
+  return `${pad2(d.getDate())} ${MONTHS[d.getMonth()]}${year} · ${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
 }
+
+/* A calendar day (YYYY-MM-DD), for an axis label. Uses the same month names
+   as fmtDate: this was a slice into the string, which numbered the month in
+   every language whether or not that language numbers months. */
+export const fmtDay = key => {
+  const [, m, d] = String(key).split('-');
+  return MONTHS[Number(m) - 1] ? `${d} ${MONTHS[Number(m) - 1]}` : key;
+};
 
 export function fmtAgo(iso) {
   /* The empty check is not redundant with the NaN one below: new Date(null)
@@ -44,11 +59,13 @@ export function fmtAgo(iso) {
   const ms = Date.now() - new Date(iso).getTime();
   if (!Number.isFinite(ms)) return '';
   const m = Math.floor(ms / 60000);
+  /* the units go through the catalog like every other word on screen --
+     'now' was translated and 'min', 'h' and 'd' were not */
   if (m < 1) return I18N.t('ago.now');
-  if (m < 60) return `${m} min`;
+  if (m < 60) return I18N.t('ago.min', { n: m });
   const h = Math.floor(m / 60);
-  if (h < 48) return `${h} h`;
-  return `${Math.floor(h / 24)} d`;
+  if (h < 48) return I18N.t('ago.hour', { n: h });
+  return I18N.t('ago.day', { n: Math.floor(h / 24) });
 }
 
 export const debounce = (fn, ms) => {

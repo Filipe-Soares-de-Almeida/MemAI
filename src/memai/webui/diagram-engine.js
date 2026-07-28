@@ -114,7 +114,11 @@ export class DiagramEditor {
     this.sizing = null;
     this.guides = null;
     this.fontScale = 1;
+    this.fitScale = null;   /* set by fit(); it is the zoom-out floor, see zoomAt */
     this.pan = null;
+    /* pointers currently down, by id: one drags, resizes or pans, two pinch */
+    this.pointers = new Map();
+    this.pinch = null;
     this.moved = false;
     this.hover = null;
     /* Selection is a card OR a single connection, never both: they answer
@@ -143,7 +147,7 @@ export class DiagramEditor {
 
     this._down = e => this.onDown(e);
     this._move = e => this.onMove(e);
-    this._up = () => this.onUp();
+    this._up = e => this.onUp(e);
     this._wheel = e => this.onWheel(e);
     this._click = e => this.onClick(e);
     this._context = e => this.onContext(e);
@@ -156,13 +160,19 @@ export class DiagramEditor {
     };
     this._resize = () => { this.resize(); this.requestDraw(); };
 
-    canvas.addEventListener('mousedown', this._down);
-    canvas.addEventListener('mousemove', this._move);
+    /* Pointer events rather than mouse events: one set of handlers then
+       serves a mouse, a pen and a finger. On a touch screen this editor used
+       to be a picture and nothing else -- no pan, no zoom, no dragging a
+       card, no selecting one -- so a flow could be read on a tablet and not
+       arranged there. Two pointers pinch; see onDown. */
+    canvas.addEventListener('pointerdown', this._down);
+    canvas.addEventListener('pointermove', this._move);
     canvas.addEventListener('wheel', this._wheel, { passive: false });
     canvas.addEventListener('click', this._click);
     canvas.addEventListener('contextmenu', this._context);
-    canvas.addEventListener('mouseleave', this._leave);
-    addEventListener('mouseup', this._up);
+    canvas.addEventListener('pointerleave', this._leave);
+    addEventListener('pointerup', this._up);
+    addEventListener('pointercancel', this._up);
 
     /* Three overlapping triggers, on purpose. The stage changes size
        without the window ever resizing -- a vertical scrollbar appearing
@@ -182,13 +192,14 @@ export class DiagramEditor {
   destroy() {
     this.destroyed = true;
     cancelAnimationFrame(this._frame);
-    this.cv.removeEventListener('mousedown', this._down);
-    this.cv.removeEventListener('mousemove', this._move);
+    this.cv.removeEventListener('pointerdown', this._down);
+    this.cv.removeEventListener('pointermove', this._move);
     this.cv.removeEventListener('wheel', this._wheel);
     this.cv.removeEventListener('click', this._click);
     this.cv.removeEventListener('contextmenu', this._context);
-    this.cv.removeEventListener('mouseleave', this._leave);
-    removeEventListener('mouseup', this._up);
+    this.cv.removeEventListener('pointerleave', this._leave);
+    removeEventListener('pointerup', this._up);
+    removeEventListener('pointercancel', this._up);
     removeEventListener('resize', this._resize);
     this._ro?.disconnect();
   }
@@ -501,7 +512,13 @@ export class DiagramEditor {
     const left = pad + (ins.left || 0), right = pad + (ins.right || 0);
     const roomW = Math.max(40, this.w - left - right);
     const roomH = Math.max(40, this.h - top - bottom);
-    this.scale = Math.min(1.4, Math.min(roomW / (maxX - minX), roomH / (maxY - minY)));
+    /* Remembered, because it is the floor the wheel and the pinch have to
+       respect. fit() writes this.scale directly and a 34-step flow fits well
+       under the 0.15 that zoomAt used to clamp to, so Centre-view would show
+       the whole diagram and then zooming out could never get back to it --
+       the floor was above the level that fitted. See zoomAt. */
+    this.fitScale = Math.min(1.4, Math.min(roomW / (maxX - minX), roomH / (maxY - minY)));
+    this.scale = this.fitScale;
     this.tx = left + roomW / 2 - (minX + maxX) / 2 * this.scale;
     this.ty = top + roomH / 2 - (minY + maxY) / 2 * this.scale;
     this.requestDraw();
@@ -551,7 +568,53 @@ export class DiagramEditor {
     this.requestDraw();
   }
 
+  /* The two-finger gesture as it stood when it began. Every move is measured
+     against this rather than against the previous frame, so the zoom cannot
+     accumulate drift and the point between the fingers stays under them. */
+  pinchFrom() {
+    const [a, b] = [...this.pointers.values()];
+    const r = this.cv.getBoundingClientRect();
+    return {
+      dist: Math.max(1, Math.hypot(a.x - b.x, a.y - b.y)),
+      mx: (a.x + b.x) / 2 - r.left,
+      my: (a.y + b.y) / 2 - r.top,
+      scale: this.scale, tx: this.tx, ty: this.ty,
+    };
+  }
+
+  /* Zoom about a point in canvas space. Shared by the wheel and the pinch --
+     it was the wheel's arithmetic, written once and needed twice. */
+  zoomAt(mx, my, next) {
+    /* The floor is whatever showed the whole diagram, or 0.15 -- whichever is
+       SMALLER. A fixed floor is only right while every diagram happens to fit
+       above it; below it, zooming out stops at a level that cannot show the
+       flow and Centre-view becomes the only way back to one that can. */
+    const ns = clampTo(next, Math.min(0.15, this.fitScale ?? 0.15), 3);
+    this.tx = mx - (mx - this.tx) * (ns / this.scale);
+    this.ty = my - (my - this.ty) * (ns / this.scale);
+    this.scale = ns;
+  }
+
   onDown(e) {
+    /* Capture so a drag that leaves the canvas keeps arriving here. In a
+       try because it throws for a pointer the browser does not consider
+       active, and losing capture is a worse drag -- not no drag at all. */
+    try { this.cv.setPointerCapture(e.pointerId); } catch { /* not capturable */ }
+    this.pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (this.pointers.size === 2) {
+      /* A second finger turns the gesture into a pinch. Whatever the first
+         one had already moved is committed rather than abandoned: the card is
+         at its new coordinates on screen either way, so dropping the write
+         would leave the canvas disagreeing with the store. */
+      this.commitGeometry();
+      this.pan = null;
+      this.guides = null;
+      this.cv.classList.remove('dragging');
+      this.pinch = this.pinchFrom();
+      this.requestDraw();
+      return;
+    }
+    if (this.pointers.size > 2) return;
     if (this.connectMode) return;
     const p = this.toWorld(e);
     /* a grip wins over the card under it: the grips sit ON the outline, so
@@ -578,6 +641,20 @@ export class DiagramEditor {
   }
 
   onMove(e) {
+    if (this.pointers.has(e.pointerId)) {
+      this.pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    }
+    if (this.pinch && this.pointers.size >= 2) {
+      const [a, b] = [...this.pointers.values()];
+      const dist = Math.max(1, Math.hypot(a.x - b.x, a.y - b.y));
+      const p = this.pinch;
+      this.scale = p.scale; this.tx = p.tx; this.ty = p.ty;
+      this.zoomAt(p.mx, p.my, p.scale * (dist / p.dist));
+      this.moved = true;
+      this.hooks.tipHide?.();
+      this.requestDraw();
+      return;
+    }
     if (this.sizing) {
       const p = this.toWorld(e);
       const { node, fx, fy } = this.sizing;
@@ -633,6 +710,10 @@ export class DiagramEditor {
       : editLab ? 'text'
       : n ? (this.readOnly ? 'pointer' : 'grab')
       : overLine ? 'pointer' : 'grab';
+    /* A finger has no hover state, so a tip summoned by a tap has nothing
+       that would ever dismiss it -- it would sit on the canvas until the next
+       one moved it. */
+    if (e.pointerType === 'touch') { this.hooks.tipHide?.(); return; }
     if (n && n.note) {
       this.hooks.tipShow?.(
         `<b>${esc(n.key)}</b><br>${esc(n.note.slice(0, 220))}`, e.clientX, e.clientY);
@@ -645,13 +726,10 @@ export class DiagramEditor {
     }
   }
 
-  onUp() {
-    /* Clearing state is not enough: the last frame painted was the one WITH
-       the alignment guides on it, and nothing else here asks for a repaint,
-       so a guide stayed drawn across the whole canvas after the drag ended. */
-    const painted = !!this.guides?.length || !!(this.drag || this.sizing);
-    /* the geometry has stopped moving, so the full lane/detour solve is
-       worth paying for again -- see draw() */
+  /* Hand whatever was moved or resized to the caller to persist, and mark the
+     routes for a full solve now that the geometry has stopped. Split out of
+     onUp because a pinch beginning mid-drag ends that drag too. */
+  commitGeometry() {
     if (this.drag || this.sizing) this.routesDirty = true;
     if (this.drag) {
       const { node } = this.drag;
@@ -669,6 +747,18 @@ export class DiagramEditor {
         x: Math.round(node.x), y: Math.round(node.y),
         w: Math.round(node.w), h: Math.round(node.h) } });
     }
+  }
+
+  onUp(e) {
+    if (e) this.pointers.delete(e.pointerId);
+    if (this.pointers.size < 2) this.pinch = null;
+    /* one finger of a pinch lifting is not the end of the gesture */
+    if (this.pointers.size) return;
+    /* Clearing state is not enough: the last frame painted was the one WITH
+       the alignment guides on it, and nothing else here asks for a repaint,
+       so a guide stayed drawn across the whole canvas after the drag ended. */
+    const painted = !!this.guides?.length || !!(this.drag || this.sizing);
+    this.commitGeometry();
     this.guides = null;
     this.pan = null;
     this.cv.classList.remove('dragging');
@@ -714,12 +804,8 @@ export class DiagramEditor {
   onWheel(e) {
     e.preventDefault();
     const r = this.cv.getBoundingClientRect();
-    const mx = e.clientX - r.left, my = e.clientY - r.top;
-    const f = e.deltaY < 0 ? 1.13 : 1 / 1.13;
-    const ns = Math.min(3, Math.max(0.15, this.scale * f));
-    this.tx = mx - (mx - this.tx) * (ns / this.scale);
-    this.ty = my - (my - this.ty) * (ns / this.scale);
-    this.scale = ns;
+    this.zoomAt(e.clientX - r.left, e.clientY - r.top,
+                this.scale * (e.deltaY < 0 ? 1.13 : 1 / 1.13));
     this.requestDraw();
   }
 
