@@ -51,6 +51,12 @@ const ORTH_STUB = 26;        /* how far a right-angled edge leaves its box */
    so the perpendicular legs separate too. See assignFans(). */
 const FAN_GAP = 22;
 const FAN_STUB = 14;
+/* The funnel. MERGE_GAP is where an edge's own parallel track begins, out
+   from the card; MERGE_TAIL is the straight bit right at the card, so a
+   line leaves and arrives square and the arrowhead is never drawn on the
+   diagonal that closes the funnel. */
+const MERGE_GAP = 30;
+const MERGE_TAIL = 9;
 const ORTH_RADIUS = 11;      /* corner rounding on a right-angled edge */
 /* Two boxes almost -- but not exactly -- in line used to get a full Z
    detour for an offset of a few units, and two rounded corners that close
@@ -874,33 +880,16 @@ export class DiagramEditor {
      allows. Unchanged for a side that cannot take one: a diamond's vertex
      is a single point, a stadium's left and right are the apex of a curve.
      Those keep the centre and rely on the staggered stub instead. */
-  static fanned(n, side, p, by) {
-    if (!by) return p;
-    const hw = n.w / 2, hh = n.h / 2;
-    const vertical = side === 'top' || side === 'bottom';
-
-    /* A diamond has no flat side to slide along -- the "side" IS a vertex.
-       So the point walks DOWN the face instead, which moves both of its
-       coordinates. Leaving it pinned to the vertex was worse than it
-       sounds: the far end of the edge fans and this one does not, so the
-       run between them comes out as a slant of a few degrees in a drawing
-       where everything else is square. */
-    if (n.shape === 'decision') {
-      const room = 0.6;             /* stay well clear of the other vertices */
-      if (vertical) {
-        const dx = Math.max(-hw * room, Math.min(hw * room, by));
-        const dy = Math.abs(dx) / hw * hh;
-        return { x: n.x + dx, y: side === 'top' ? n.y - hh + dy : n.y + hh - dy };
-      }
-      const dy = Math.max(-hh * room, Math.min(hh * room, by));
-      const dx = Math.abs(dy) / hh * hw;
-      return { y: n.y + dy, x: side === 'left' ? n.x - hw + dx : n.x + hw - dx };
-    }
-
-    const span = DiagramEditor.slideSpan(n, side);
-    if (!span || span[0] >= span[1]) return p;
-    const axis = vertical ? 'x' : 'y';
-    return { ...p, [axis]: Math.min(span[1], Math.max(span[0], p[axis] + by)) };
+  /* A point moved sideways relative to a side: along x for top and bottom,
+     along y for left and right. This is how an edge gets its own parallel
+     track -- the offset is on the PATH, never on where it attaches, so it
+     works the same for a rectangle, a parallelogram and a diamond's tip.
+     Attaching the offset to the anchor instead is what put arrows on the
+     face of a diamond and five separate landings on one card. */
+  static alongSide(pt, side, by) {
+    return side === 'top' || side === 'bottom'
+      ? { x: pt.x + by, y: pt.y }
+      : { x: pt.x, y: pt.y + by };
   }
 
   /* Give every edge sharing a card's side its own place on it.
@@ -995,28 +984,54 @@ export class DiagramEditor {
     const a = this.byKey[e.from], b = this.byKey[e.to];
     const corridorX = this.corridorFor(e);
     const [sideFrom, sideTo] = DiagramEditor.sides(a, b, corridorX !== null);
-    /* fanned: its own place on a side it shares with other edges */
-    const start = DiagramEditor.fanned(a, sideFrom, DiagramEditor.anchors(a)[sideFrom], e.fanFrom);
-    const end = DiagramEditor.fanned(b, sideTo, DiagramEditor.anchors(b)[sideTo], e.fanTo);
-    const p = DiagramEditor.offset(start, sideFrom, 0);
-    const q = DiagramEditor.offset(end, sideTo, ARROW_GAP);
-    /* and its own turning depth, so the legs perpendicular to the side do
-       not share a line either */
+    /* The contact point is the anchor itself: the centre of a side, the tip
+       of a diamond. Every edge sharing it lands on it, because several
+       arrows converging on one point is what a flowchart looks like --
+       several arrows landing on different parts of one card is not, which
+       is what attaching the fan to the anchor got wrong.
+
+       What separates is the APPROACH. Each edge runs parallel at its own
+       offset and funnels into the shared point over the last few units, so
+       the paths are readable apart and the contact stays single. */
+    const tail = DiagramEditor.offset(DiagramEditor.anchors(a)[sideFrom], sideFrom, 0);
+    const head = DiagramEditor.offset(DiagramEditor.anchors(b)[sideTo], sideTo, ARROW_GAP);
+
+    if (this.routing === 'curved') {
+      return { pts: [tail, head], curve: this.curveCtrl(tail, head, e) };
+    }
+
+    /* Where the parallel run begins and ends -- offset sideways from the
+       centre line, MERGE_GAP out from the card. */
+    const p = e.fanFrom
+      ? DiagramEditor.alongSide(DiagramEditor.offset(tail, sideFrom, MERGE_GAP), sideFrom, e.fanFrom)
+      : tail;
+    const q = e.fanTo
+      ? DiagramEditor.alongSide(DiagramEditor.offset(head, sideTo, MERGE_GAP), sideTo, e.fanTo)
+      : head;
+    /* MERGE_TAIL of straight line at each end, so an edge leaves and arrives
+       square and the arrowhead is not drawn on a diagonal. */
+    const lead = [tail];
+    if (p !== tail) lead.push(DiagramEditor.offset(tail, sideFrom, MERGE_TAIL), p);
+    const trail = [];
+    if (q !== head) trail.push(q, DiagramEditor.offset(head, sideTo, MERGE_TAIL));
+    trail.push(head);
+    /* lead ends at p and trail starts at q in both cases, so the section
+       built below is only what goes strictly between them */
+    const done = body => ({ pts: [...lead, ...body, ...trail], curve: null });
+
+    /* its own turning depth too, so the legs perpendicular to a side do not
+       share a line either */
     const stubFrom = ORTH_STUB + (e.stubFrom || 0);
     const stubTo = ORTH_STUB + (e.stubTo || 0);
     const fanned = !!(e.fanFrom || e.fanTo || e.stubFrom || e.stubTo);
 
-    if (this.routing === 'curved') return { pts: [p, q], curve: this.curveCtrl(p, q, e) };
-
-    const out = [p];
     if (corridorX !== null) {
       /* clear of the box, sideways in the row gap, along the corridor, and
-         back into the far end the same way -- five legs, all axis-aligned */
+         back into the far end the same way -- all axis-aligned */
       const leave = DiagramEditor.offset(p, sideFrom, stubFrom);
       const enter = DiagramEditor.offset(q, sideTo, stubTo);
-      out.push(leave, { x: corridorX, y: leave.y },
-               { x: corridorX, y: enter.y }, enter, q);
-      return { pts: out, curve: null };
+      return done([leave, { x: corridorX, y: leave.y },
+                   { x: corridorX, y: enter.y }, enter]);
     }
     const vertical = sideFrom === 'top' || sideFrom === 'bottom';
     /* Nearly in line? Slide one anchor along its own side so the run is
@@ -1026,11 +1041,11 @@ export class DiagramEditor {
     /* Not for a fanned edge: lining it up would put it back on the line the
        fan just moved it off. */
     if (!fanned && Math.abs(p[axis] - q[axis]) > 0.01) {
-      const tail = DiagramEditor.slide(a, sideFrom, p[axis], q[axis]);
-      if (tail !== null) p[axis] = tail;
+      const movedTail = DiagramEditor.slide(a, sideFrom, p[axis], q[axis]);
+      if (movedTail !== null) p[axis] = movedTail;
       else {
-        const head = DiagramEditor.slide(b, sideTo, q[axis], p[axis]);
-        if (head !== null) q[axis] = head;
+        const movedHead = DiagramEditor.slide(b, sideTo, q[axis], p[axis]);
+        if (movedHead !== null) q[axis] = movedHead;
       }
     }
     const across = vertical ? Math.abs(p.x - q.x) : Math.abs(p.y - q.y);
@@ -1048,8 +1063,7 @@ export class DiagramEditor {
     const bar = e.via?.crossY;
     const nearlyInLine = across <= ORTH_SNAP && !fanned;
     if (bar == null && (nearlyInLine || along <= ORTH_RADIUS * 2)) {
-      out.push(q);
-      return { pts: out, curve: null };
+      return done([]);
     }
     if (vertical) {
       if (sideTo === 'top' || sideTo === 'bottom') {
@@ -1058,18 +1072,15 @@ export class DiagramEditor {
            and a fanned edge shifts it so two Zs between the same cards do
            not share their crossbar. */
         const midY = (bar ?? (p.y + q.y) / 2) + (e.stubFrom || 0);
-        out.push({ x: p.x, y: midY }, { x: q.x, y: midY });
-      } else {
-        out.push({ x: p.x, y: q.y });               /* L: down, then across */
+        return done([{ x: p.x, y: midY }, { x: q.x, y: midY }]);
       }
-    } else if (sideTo === 'left' || sideTo === 'right') {
-      const midX = (p.x + q.x) / 2;                /* Z: across, down, across */
-      out.push({ x: midX, y: p.y }, { x: midX, y: q.y });
-    } else {
-      out.push({ x: q.x, y: p.y });                 /* L: across, then down */
+      return done([{ x: p.x, y: q.y }]);            /* L: down, then across */
     }
-    out.push(q);
-    return { pts: out, curve: null };
+    if (sideTo === 'left' || sideTo === 'right') {
+      const midX = (p.x + q.x) / 2;                /* Z: across, down, across */
+      return done([{ x: midX, y: p.y }, { x: midX, y: q.y }]);
+    }
+    return done([{ x: q.x, y: p.y }]);              /* L: across, then down */
   }
 
   curveCtrl(p, q, e) {
