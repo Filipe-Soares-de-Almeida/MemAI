@@ -8,6 +8,7 @@
 
 import { $, esc, fmtInt, cssVar } from '../core/dom.js';
 import { api, query } from '../core/api.js';
+import { icon } from '../core/icons.js';
 import { toast, tipShow, tipHide, openModal, closeModal } from '../core/ui.js';
 import { typeTag, typeColor, uidChip, statusTag, confPill, wireCopyChips,
          getDomains, TYPE_ORDER, TYPE_LABEL, relOptions } from '../core/shared.js';
@@ -290,7 +291,7 @@ class ForceGraph {
       bodyHTML: `
         <div style="display:grid;gap:6px;font-size:11.5px">
           <div><span class="dot" style="--c:${typeColor(a.type)};display:inline-block;margin-right:6px"></span>${esc(a.uid)} · ${esc(a.label)}</div>
-          <div style="color:var(--accent);padding-left:2px">↓</div>
+          <div style="color:var(--accent);padding-left:2px;--ico:15px">${icon('arrow-down')}</div>
           <div><span class="dot" style="--c:${typeColor(b.type)};display:inline-block;margin-right:6px"></span>${esc(b.uid)} · ${esc(b.label)}</div>
         </div>
         <div class="field"><label>${t('g.modal.relType')}</label>

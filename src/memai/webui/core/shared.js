@@ -8,6 +8,7 @@
 
 import { $, esc, cssVar, fmtBytes, fmtInt } from './dom.js';
 import { api } from './api.js';
+import { icon } from './icons.js';
 import { t } from '../i18n.js';
 import { copyUid } from './ui.js';
 
@@ -20,10 +21,12 @@ export const TYPES = Object.fromEntries(
    display-only */
 export const TYPE_LABEL = Object.fromEntries(TYPE_ORDER.map(tp => [tp, t(`type.${tp}`)]));
 
+/* `icon` names an entry in core/icons.js -- all three are ringed marks, so
+   a confidence state never reads as the bare cross that dismisses things */
 export const CONF = {
-  unverified:   { i: '◌', label: t('conf.unverified') },
-  confirmed:    { i: '✓', label: t('conf.confirmed') },
-  contradicted: { i: '✕', label: t('conf.contradicted') },
+  unverified:   { icon: 'unverified', label: t('conf.unverified') },
+  confirmed:    { icon: 'confirmed', label: t('conf.confirmed') },
+  contradicted: { icon: 'contradicted', label: t('conf.contradicted') },
 };
 
 export const REL_SUGGEST = ['relates_to', 'supersedes', 'contradicts', 'duplicates', 'links_to'];
@@ -40,8 +43,8 @@ export const typeTag = tp =>
   `<span class="type-tag ${typeClass(tp)}"><span class="dot"></span>${esc(tp)}</span>`;
 
 export const confPill = c => {
-  const meta = CONF[c] || { i: '·', label: c };
-  return `<span class="conf-pill c-${esc(c)}"><i>${meta.i}</i>${esc(meta.label)}</span>`;
+  const meta = CONF[c];
+  return `<span class="conf-pill c-${esc(c)}">${meta ? icon(meta.icon) : ''}${esc(meta ? meta.label : c)}</span>`;
 };
 
 export const uidChip = uid =>

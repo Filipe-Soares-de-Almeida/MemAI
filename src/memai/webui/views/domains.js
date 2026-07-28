@@ -4,6 +4,7 @@
 
 import { esc, fmtInt, fmtAgo } from '../core/dom.js';
 import { api } from '../core/api.js';
+import { icon } from '../core/icons.js';
 import { toast, openModal, closeModal } from '../core/ui.js';
 import { typeColor, TYPE_ORDER, getDomains, invalidateDomains } from '../core/shared.js';
 import { go, refreshBehind } from '../core/router.js';
@@ -23,7 +24,7 @@ export async function renderDomains(view, params, ctx) {
       `<span class="dot" style="--c:${typeColor(tp)}" title="${esc(tp)}: ${fmtInt(d.types[tp])}"></span>`).join('');
     const collide = d.collides_with
       ? `<span class="collide-chip" data-merge="${esc(d.collides_with[0])}" data-into="${esc(d.domain)}"
-           title="${t('do.collide.title', { list: esc(d.collides_with.join(', ')) })}">≈ ${esc(d.collides_with[0])}</span>` : '';
+           title="${t('do.collide.title', { list: esc(d.collides_with.join(', ')) })}">${icon('approx')}${esc(d.collides_with[0])}</span>` : '';
     return `<tr>
       <td style="color:var(--ink)">${esc(d.domain)} ${collide}</td>
       <td class="num">${fmtInt(d.active)}</td>

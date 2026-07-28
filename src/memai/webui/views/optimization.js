@@ -4,6 +4,7 @@
 
 import { $, esc, fmtDate } from '../core/dom.js';
 import { api, seg } from '../core/api.js';
+import { icon } from '../core/icons.js';
 import { toast, confirmModal } from '../core/ui.js';
 import { typeTag, uidChip, statusTag, wireCopyChips } from '../core/shared.js';
 import { go } from '../core/router.js';
@@ -50,7 +51,7 @@ function optRelBody(s) {
         ${m ? `<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">${typeTag(m.type)} ${uidChip(m.uid)} ${statusTag(m.status)}</div>
           <div class="snippet">${esc(m.snippet || '')}</div>` : `<div class="snippet">${t('op.missing')}</div>`}
       </div>`).join('')}
-    <div class="opt-arrow" title="${t('op.relType.title')}">${rel} →</div>
+    <div class="opt-arrow" title="${t('op.relType.title')}">${rel}${icon('arrow-right')}</div>
   </div>`;
 }
 
@@ -64,7 +65,7 @@ function optDistillBody(s) {
   return `<div class="opt-distill">
     <span class="opt-label">${t('op.distill.sources', { n: (s.sources || []).length })}</span>
     ${srcs}
-    <div class="opt-arrow" title="${t('op.relType.title')}">supersedes →</div>
+    <div class="opt-arrow" title="${t('op.relType.title')}">supersedes${icon('arrow-right')}</div>
     <span class="opt-label">${t('op.distill.new')}${p.new_type ? ` · ${esc(p.new_type)}` : ''}${p.domain ? ` · ${esc(p.domain)}` : ''}</span>
     <div class="opt-side snippet">${esc(p.new_content || '')}</div>
   </div>`;

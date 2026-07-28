@@ -8,6 +8,7 @@
 
 import { $, esc, debounce } from '../core/dom.js';
 import { api, seg } from '../core/api.js';
+import { icon } from '../core/icons.js';
 import { toast, openModal, closeModal, confirmModal, promptModal,
          openCtxMenu, tipShow, tipHide } from '../core/ui.js';
 import { typeClass, typeColor } from '../core/shared.js';
@@ -385,14 +386,14 @@ export async function renderDiagram(view, params, ctx) {
     const inc = data.edges.filter(e => e.to === node.key);
     const edgeRow = (e, dir) => `
       <div class="dg-edge">
-        <span class="dg-arrow">${dir === 'out' ? '→' : '←'}</span>
+        <span class="dg-arrow">${icon(dir === 'out' ? 'arrow-right' : 'arrow-left')}</span>
         <span class="dg-key">${esc(dir === 'out' ? e.to : e.from)}</span>
         ${e.label ? `<span class="dg-label" title="${esc(e.label)}">${esc(e.label)}</span>` : ''}
         <span class="spacer"></span>
         ${editing ? `<button class="icon-btn" data-editedge="${esc(e.from)}|${esc(e.to)}"
-                title="${t('dg.edge.editLabel')}">✎</button>
+                title="${t('dg.edge.editLabel')}">${icon('pencil')}</button>
           <button class="icon-btn danger" data-deledge="${esc(e.from)}|${esc(e.to)}"
-                title="${t('dg.edge.remove')}">✕</button>` : ''}
+                title="${t('dg.edge.remove')}">${icon('close')}</button>` : ''}
       </div>`;
     const links = data.links.filter(l => l.node_key === node.key);
 
@@ -431,7 +432,7 @@ export async function renderDiagram(view, params, ctx) {
               <span class="snippet clickable" data-open="${esc(l.target_uid)}"
                     title="${esc(l.peer.snippet || l.target_uid)}">${esc(l.peer.snippet || l.target_uid)}</span>
               ${editing ? `<button class="icon-btn danger" data-dellink="${esc(l.target_uid)}"
-                      title="${t('dg.link.remove')}">✕</button>` : ''}
+                      title="${t('dg.link.remove')}">${icon('close')}</button>` : ''}
             </div>`).join('') || `<div class="dg-empty">${t('dg.links.empty')}</div>`}
         </div>
         ${editing ? `<div class="rel-add">
