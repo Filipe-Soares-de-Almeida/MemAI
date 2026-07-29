@@ -273,7 +273,7 @@ async function runBulk(body) {
     /* Archiving fifty rows behind a single confirm was a one-way door. Restore
        over the same set is the exact inverse, so it is offered rather than
        leaving you to find those fifty rows again. The reverse direction gets no
-       Undo -- see the note on the drawer's Restore in record.js. */
+       Undo -- see the note on the record's Restore in record.js. */
     toast(t('bulk.updated', { n: r.affected }), 'ok', body.action === 'archive' ? {
       action: {
         label: t('common.undo'),

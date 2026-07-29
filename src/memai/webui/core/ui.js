@@ -50,11 +50,11 @@ let escWired = false;
 let stackSize = null;
 
 /* The stack floats over content that scrolls, so it publishes its own height
-   the way the bulk bar publishes its own: .view and .drawer-body reserve that
-   much extra bottom padding, and the toast lands on padding the reader can
-   scroll past rather than on the last of the content. Measured: with the record
-   drawer open at 1280x800 the stack overlaps the drawer's own body by 400x50px,
-   and the drawer is exactly where most toasts fire. */
+   the way the bulk bar publishes its own: .view and the record's own grid
+   reserve that much extra bottom padding, and the toast lands on padding the
+   reader can scroll past rather than on the last of the content. Measured: at
+   1280x800 the stack overlaps an open record by 400x50px, and the record is
+   exactly where most toasts fire. */
 function publishStackHeight(host) {
   const h = host.children.length ? host.offsetHeight + 10 : 0;
   document.documentElement.style.setProperty('--toast-h', `${h}px`);
@@ -237,13 +237,17 @@ export const setPressed = (el, on) => {
   el.classList.toggle('btn-solid', !!on);
 };
 
-/* Everything behind the record drawer, taken out of the tab order and out of
-   the accessibility tree while it is open. The drawer sits over the whole
-   app behind a scrim, so tabbing into the list underneath -- which is what
-   used to happen -- moves an invisible caret through covered content.
+/* Everything behind the modal stack, taken out of the tab order and out of
+   the accessibility tree for as long as anything is layered over it. A
+   dialog sits over the whole app behind a scrim, so tabbing into the list
+   underneath -- which is what used to happen -- moves an invisible caret
+   through covered content.
 
-   `inert` and not aria-hidden: it does both, and it also stops a click. */
-export function inertBackground(on) {
+   `inert` and not aria-hidden: it does both, and it also stops a click.
+   Applied by openModal/closeModal at the edges of the stack, so it is not
+   a thing a caller can forget: it used to be the record drawer's own call,
+   and every other dialog in the app went without it. */
+function inertBackground(on) {
   for (const sel of ['.rail', '.frame']) {
     const el = document.querySelector(sel);
     if (el) el.toggleAttribute('inert', !!on);
@@ -253,71 +257,108 @@ export function inertBackground(on) {
 /* ─── modal machinery ───────────────────────────────────────────────────
    A modal takes the screen: it is labelled aria-modal, it keeps Tab
    inside itself, and closing it puts the caret back where it was. The
-   context menu below is the deliberate opposite -- see its own note. */
+   context menu below is the deliberate opposite -- see its own note.
+
+   Modals STACK. One-at-a-time was the rule until a form grew a form of
+   its own: the memory record is itself a dialog now, and it opens the
+   link picker over the top of itself. Under the old rule opening the
+   picker would have thrown the record away, and closing the picker would
+   have had nothing to go back to.
+
+   So openModal PUSHES and closeModal POPS exactly one level -- Escape
+   backs out of a sub-form into the form that raised it, which is the only
+   reading of Escape here that cannot lose work. A caller that owns several
+   levels closes them by popping until its own is gone -- see closeRecord()
+   in views/record.js.
+
+   Only the TOP modal is live. One keydown listener consults the top of
+   the stack, rather than every modal installing a trap of its own and two
+   traps then fighting over where the caret belongs; the scrims below are
+   covered by the one above, so a click cannot reach them either. */
 
 const FOCUSABLE = ['a[href]', 'button:not([disabled])', 'input:not([disabled])',
                    'textarea:not([disabled])', 'select:not([disabled])',
                    'details > summary', '[tabindex]:not([tabindex="-1"])'].join(',');
 
-let modalDrop = null, modalOpener = null;
+const modals = [];        /* [{ scrim, opener }] -- innermost last */
+let trapWired = false;
 
-export function openModal({ title, bodyHTML, footHTML }) {
-  /* captured before closeModal, which restores focus to whatever the
-     PREVIOUS modal was opened from -- and ignored if the caller was itself
-     inside a modal, since that element is about to be removed */
+const topModal = () => modals[modals.length - 1] || null;
+
+const focusInto = dialog => {
+  const first = dialog.querySelector('input, textarea, select, button');
+  (first || dialog).focus();
+};
+
+export function openModal({ title, bodyHTML, footHTML, ariaLabel,
+                            wide = false, tall = false }) {
+  /* Whatever had the caret -- INCLUDING a control inside the modal
+     underneath. That one is still on screen when this level closes, which
+     is exactly where the caret has to go back to. */
   const opener = document.activeElement;
-  closeModal();
   /* A hover tip outlives the pointer that summoned it -- open a modal from
      the canvas (or from a context menu over a card) and the tip is left
      floating on top of the dialog, because nothing moved off the card to
      dismiss it. Whatever is opening now owns the screen. */
   tipHide();
-  modalOpener = opener instanceof HTMLElement && document.contains(opener)
-    && !opener.closest('.modal-scrim') ? opener : null;
 
   const scrim = document.createElement('div');
-  scrim.className = 'modal-scrim';
-  scrim.innerHTML = `<div class="modal" role="dialog" aria-modal="true" aria-label="${esc(title)}">
+  scrim.className = `modal-scrim${modals.length ? ' stacked' : ''}`;
+  /* `title` may carry markup -- the memory record's heading is a row of
+     chips -- so the accessible name comes from ariaLabel when the caller
+     has one, rather than from a string of tags */
+  scrim.innerHTML = `<div class="modal${wide ? ' modal-wide' : ''}${tall ? ' modal-tall' : ''}"
+       role="dialog" aria-modal="true" aria-label="${esc(ariaLabel || title)}" tabindex="-1">
     <div class="modal-head">${title}</div>
     <div class="modal-body">${bodyHTML}</div>
     <div class="modal-foot">${footHTML || ''}</div>
   </div>`;
   scrim.addEventListener('mousedown', e => { if (e.target === scrim) closeModal(); });
   $('#modalRoot').appendChild(scrim);
+  if (!modals.length) inertBackground(true);
+  modals.push({ scrim, opener: opener instanceof HTMLElement ? opener : null });
 
-  const dialog = scrim.querySelector('.modal');
-  /* Tab wraps inside the dialog. Recomputed per keypress rather than
-     cached: a modal body can gain and lose controls while it is open (the
-     new-memory form swaps a textarea for a title field). */
-  const trap = e => {
-    if (e.key !== 'Tab') return;
-    const items = [...dialog.querySelectorAll(FOCUSABLE)].filter(el => el.offsetParent !== null);
-    if (!items.length) return;
-    const first = items[0], last = items[items.length - 1];
-    const inside = dialog.contains(document.activeElement);
-    if (e.shiftKey && (!inside || document.activeElement === first)) {
-      e.preventDefault(); last.focus();
-    } else if (!e.shiftKey && (!inside || document.activeElement === last)) {
-      e.preventDefault(); first.focus();
-    }
-  };
-  addEventListener('keydown', trap, true);
-  modalDrop = () => removeEventListener('keydown', trap, true);
-
-  const first = dialog.querySelector('input, textarea, select, button');
-  first && first.focus();
+  if (!trapWired) {
+    trapWired = true;
+    /* Tab wraps inside the topmost dialog. Recomputed per keypress rather
+       than cached: a modal body can gain and lose controls while it is
+       open (the new-memory form swaps a textarea for a title field). */
+    addEventListener('keydown', e => {
+      const top = topModal();
+      if (e.key !== 'Tab' || !top) return;
+      const dialog = top.scrim.querySelector('.modal');
+      const items = [...dialog.querySelectorAll(FOCUSABLE)].filter(el => el.offsetParent !== null);
+      if (!items.length) return;
+      const first = items[0], last = items[items.length - 1];
+      const inside = dialog.contains(document.activeElement);
+      if (e.shiftKey && (!inside || document.activeElement === first)) {
+        e.preventDefault(); last.focus();
+      } else if (!e.shiftKey && (!inside || document.activeElement === last)) {
+        e.preventDefault(); first.focus();
+      }
+    }, true);
+  }
+  focusInto(scrim.querySelector('.modal'));
   return scrim;
 }
 
+/* Closes the top level only. */
 export function closeModal() {
-  modalDrop?.();
-  modalDrop = null;
-  $('#modalRoot').innerHTML = '';
-  /* the opener may itself have been re-rendered away while the modal was
-     open (saving from the drawer repaints it), hence the guard */
-  if (modalOpener && document.contains(modalOpener)) modalOpener.focus();
-  modalOpener = null;
+  const top = modals.pop();
+  if (!top) return;
+  top.scrim.remove();
+  const back = topModal();
+  /* released before the focus call below: an inert subtree cannot take
+     focus, so restoring it first would silently do nothing */
+  if (!back) inertBackground(false);
+  /* the opener may itself have been re-rendered away while this was open
+     (saving from the record repaints it), hence the guard -- and then the
+     form underneath takes the caret rather than the page behind it all */
+  if (top.opener && document.contains(top.opener)) top.opener.focus();
+  else if (back) focusInto(back.scrim.querySelector('.modal'));
 }
+
+export const modalOpen = () => modals.length > 0;
 
 export function confirmModal({ title, body, okLabel = t('common.confirm'), danger = false }) {
   return new Promise(resolve => {
@@ -350,8 +391,6 @@ export function promptModal({ title, body = '', label, placeholder = '', value =
     m.querySelector('[data-ok]').onclick = () => { const v = input.value; closeModal(); resolve(v); };
   });
 }
-
-export const modalOpen = () => $('#modalRoot').children.length > 0;
 
 /* ─── context menu ───────────────────────────────────────────────────
    A right-click menu, not a modal: it has no scrim and no focus trap,

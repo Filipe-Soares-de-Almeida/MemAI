@@ -88,12 +88,9 @@
   </main>
 </div>
 
-<div id="scrim" class="scrim" hidden></div>
-<!-- a dialog, and said so: it takes the screen behind a scrim, Escape
-     closes it, and openRecord() moves the caret into it -->
-<aside id="drawer" class="drawer" hidden tabindex="-1"
-       role="dialog" aria-modal="true"
-       aria-label="Memory record" data-i18n-aria="drawer.aria"></aside>
+<!-- Every dialog in the app lives here, stacked: modals, and the memory
+     record, which used to be a drawer welded into this page. See the stack
+     in webui/core/ui.js -- markup, labelling and focus are all its job. -->
 <div id="modalRoot"></div>
 <div id="toasts" class="toasts" aria-live="polite"></div>
 <div id="tip" class="tip" hidden></div>

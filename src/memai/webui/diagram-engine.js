@@ -238,6 +238,16 @@ export class DiagramEditor {
     for (const l of data.links || []) {
       this.linkCount[l.node_key] = (this.linkCount[l.node_key] || 0) + 1;
     }
+    /* Jumps are counted per step the same way and drawn with their own mark:
+       a step that continues in another flow is a step you can LEAVE from,
+       which is a different fact about it than having a note attached. Both
+       directions count -- being jumped INTO ties this step to another flow
+       just as much -- and an incoming jump aimed at the diagram as a whole
+       carries no key, so it belongs to no card. */
+    this.jumpCount = {};
+    for (const j of data.jumps || []) {
+      if (j.node_key) this.jumpCount[j.node_key] = (this.jumpCount[j.node_key] || 0) + 1;
+    }
     if (this.selected && !this.byKey[this.selected]) this.selected = null;
     /* a reload hands over fresh edge objects, so re-find the selected one
        by its ends rather than dropping the selection on every save */
@@ -903,6 +913,30 @@ export class DiagramEditor {
     this.requestDraw();
   }
 
+  /* Arrive ON a step: select it and put it in the middle of the free area.
+     What a jump between diagrams lands on -- the whole point of naming a
+     step at the far end is arriving at it, and fit() would frame the flow
+     and leave the reader to find the one card that was meant.
+
+     Zoom deliberately not left at the fit: a 34-step routine fits at ~0.35,
+     where the label on the card you just navigated to is unreadable. It
+     opens near 1:1 unless the whole diagram already fits closer than that,
+     and panning out from there is one wheel turn. */
+  focusNode(key) {
+    const n = this.byKey[key];
+    if (!n || !this.w) return false;
+    this.selected = key;
+    this.selectedEdge = null;
+    this.scale = clampTo(Math.max(this.fitScale ?? 1, 0.9), 0.15, 1.2);
+    const ins = this.hooks.insets?.() || {};
+    const top = ins.top || 0, bottom = ins.bottom || 0;
+    const left = ins.left || 0, right = ins.right || 0;
+    this.tx = left + (this.w - left - right) / 2 - n.x * this.scale;
+    this.ty = top + (this.h - top - bottom) / 2 - n.y * this.scale;
+    this.requestDraw();
+    return true;
+  }
+
   /* ── drawing ───────────────────────────────────────────────────── */
 
   requestDraw() {
@@ -1558,7 +1592,58 @@ export class DiagramEditor {
       cx.restore();
     }
 
+    /* Steps that continue in another flow get their own mark, in the
+       OPPOSITE corner: two counts sharing one corner read as a single
+       two-digit number, and these two say different things. */
+    const jumps = this.jumpCount[n.key];
+    if (jumps && this.scale > 0.45) {
+      cx.save();
+      const bpx = BADGE_PX * this.fontScale;
+      const color = terminal ? 'rgba(0,0,0,.6)' : this.colInk2;
+      const dy = n.h / 2 - bpx * 0.9;
+      const right = n.x + DiagramEditor.halfWidthAt(n, dy) - 5;
+      const midY = n.y + dy - bpx / 2;
+      cx.font = `${bpx}px ${FONT_MONO}`;
+      cx.fillStyle = color;
+      cx.textAlign = 'right';
+      cx.fillText(String(jumps), right, midY);
+      this.drawJumpMark(right - cx.measureText(String(jumps)).width - bpx * 0.3, midY, bpx, color);
+      cx.restore();
+    }
+
     if (this.resizable(n)) this.drawHandles(n);
+  }
+
+  /* The "continues in another flow" mark: a wall with an arrow going
+     through it, which is what leaving this diagram is. Drawn rather than
+     typed for the same reason drawLinkMark is -- canvas cannot use the SVG
+     set in core/icons.js, and a glyph picked out of a font is a glyph some
+     system does not ship. Right-to-left from `right`, beside a count of
+     unknown width. */
+  drawJumpMark(right, midY, size, color) {
+    const { cx } = this;
+    const w = size * 0.62, h = size * 0.52;
+    const x0 = right - w, y0 = midY - h / 2;
+    cx.save();
+    cx.strokeStyle = color;
+    cx.fillStyle = color;
+    cx.lineWidth = Math.max(0.5, size * 0.1);
+    cx.lineCap = 'round';
+    cx.beginPath();                       /* the wall being left behind */
+    cx.moveTo(x0, y0);
+    cx.lineTo(x0, y0 + h);
+    cx.stroke();
+    cx.beginPath();                       /* and the way out through it */
+    cx.moveTo(x0 + size * 0.16, midY);
+    cx.lineTo(right, midY);
+    cx.stroke();
+    cx.beginPath();
+    cx.moveTo(right, midY);
+    cx.lineTo(right - size * 0.2, midY - size * 0.16);
+    cx.lineTo(right - size * 0.2, midY + size * 0.16);
+    cx.closePath();
+    cx.fill();
+    cx.restore();
   }
 
   /* The "has memories attached" mark, DRAWN rather than typed.

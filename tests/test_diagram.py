@@ -1130,6 +1130,25 @@ def test_api_jump_round_trips_from_either_end(client):
     assert client.post(f"/api/diagrams/{a}/jump", json={"node_key": "write"}).status_code == 400
 
 
+def test_api_whole_diagram_jump_is_cut_from_the_receiving_end(client):
+    """That end has no step to name -- the jump arrives at the diagram -- and
+    it is still the end most likely to want the jump gone."""
+    a = _create(client)
+    b = _create(client, title="Store reconciliation routine")
+    client.post(f"/api/diagrams/{a}/jump", json={"node_key": "done", "peer_uid": b})
+
+    incoming = client.get(f"/api/diagrams/{b}").json()["jumps"][0]
+    assert incoming["node_key"] == ""
+    assert client.post(f"/api/diagrams/{b}/jump", json={
+        "node_key": "", "peer_uid": a, "peer_node": "done",
+        "delete": True}).status_code == 200
+    assert client.get(f"/api/diagrams/{a}").json()["jumps"] == []
+
+    # creating one still has to say which step it leaves from
+    assert client.post(f"/api/diagrams/{a}/jump", json={"peer_uid": b}).status_code == 400
+    assert client.post(f"/api/diagrams/{a}/jump", json={"node_key": "done"}).status_code == 400
+
+
 def test_api_clean_orphans_drops_a_jump_to_a_missing_step(client):
     a = _create(client)
     b = _create(client, title="Store reconciliation routine")

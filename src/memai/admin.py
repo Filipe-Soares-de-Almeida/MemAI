@@ -694,10 +694,16 @@ def diagram_jump(request, payload) -> dict:
     node_key = (payload.get("node_key") or "").strip()
     peer_uid = (payload.get("peer_uid") or "").strip()
     peer_node = (payload.get("peer_node") or "").strip()
-    if not (node_key and peer_uid):
-        raise ValueError("node_key and peer_uid are required")
+    if not peer_uid:
+        raise ValueError("peer_uid is required")
+    delete = bool(payload.get("delete"))
+    # An empty node_key on THIS side means the whole diagram, which only
+    # happens on the receiving end of a jump -- and that end has to be able
+    # to cut it. Creating one still names the step it leaves from.
+    if not (node_key or delete):
+        raise ValueError("node_key is required")
     with db.connect() as conn:
-        if payload.get("delete"):
+        if delete:
             if not db.delete_diagram_jump(conn, uid, node_key, peer_uid, peer_node):
                 raise ValueError(f"no jump between '{node_key}' and {peer_uid}")
         else:

@@ -208,7 +208,6 @@
      sized independently -- 66px against 58px -- so the two rules met at the
      rail's edge eight pixels apart. One floor, and they cannot drift. */
   --head-h: 66px;
-  --shadow-drawer: -16px 0 48px rgba(0, 0, 0, .55);
   --shadow-pop: 0 8px 28px rgba(0, 0, 0, .55);
 
   /* --surface with alpha, for the strips that float ON a canvas and have to
@@ -407,7 +406,6 @@ kbd {
      entrances keep their fade and lose their slide, panels arrive in
      place, and the spinner breathes instead of turning. */
   :root { --rise-y: 0px; }
-  .drawer { transition: none; }
   .opt-run-card:hover { transform: none; }
   .opt-group-caret { transition: none; }
   .rh-fill, .bar-fill, .ratio-fill { transition: none; }
@@ -1142,41 +1140,37 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
 }
 .bulkbar b { color: var(--accent); font-family: var(--font-m); }
 
-/* ── drawer (memory record) ──────────────────────────────────────────── */
+/* ── memory record (a dialog in the modal stack) ───────────────────────
+   This was a 760px drawer down the right edge with everything in one
+   column: the content of a memory, and then five panels ABOUT that memory
+   queued below the fold -- on windows with 500 unused pixels beside them.
 
-.scrim {
-  position: fixed; inset: 0; z-index: 40;
-  background: rgba(0, 0, 0, .55);
-  opacity: 0; transition: opacity .25s;
-}
-.scrim.show { opacity: 1; }
+   It is a wide centred dialog now (see .modal-wide / .modal-tall), and the
+   two columns are the point of the change: the memory on one side and
+   everything that curates it on the other, both on screen at once. */
 
-/* --raised, not --surface: the drawer slides OVER the list it came from, and
-   at 1dp it was the same tone as the cards it covered -- only the shadow said
-   which was on top. One step up, and the left border it needed to separate
-   itself is no longer needed. */
-.drawer {
-  position: fixed; top: 0; right: 0; bottom: 0; z-index: 45;
-  width: min(760px, 94vw);
-  background: var(--raised);
-  box-shadow: var(--shadow-drawer);
-  transform: translateX(103%);
-  transition: transform .28s cubic-bezier(.3, .75, .25, 1);
-  display: flex; flex-direction: column;
-}
-.drawer.open { transform: translateX(0); }
-.drawer-head {
+.record-head {
   display: flex; align-items: center; gap: var(--sp-3); flex-wrap: wrap;
-  padding: var(--sp-4) var(--sp-5);
-  border-bottom: 1px solid var(--line-soft);
 }
-.drawer-head .spacer { flex: 1; }
-/* the extra bottom padding is the toast stack's reserved space -- core/ui.js
-   publishes --toast-h, so a toast lands on padding you can scroll past instead
-   of on a control. It is 0 whenever nothing is on screen. */
-.drawer-body {
-  flex: 1; overflow-y: auto;
-  padding: var(--sp-5) var(--sp-5) calc(var(--sp-7) + var(--toast-h, 0px));
+.record-head .spacer { flex: 1; }
+
+.record-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr);
+  gap: var(--sp-5);
+  align-items: start;
+  /* the bottom padding is the toast stack's reserved space -- core/ui.js
+     publishes --toast-h, so a toast lands on padding you can scroll past
+     instead of on a control. It is 0 whenever nothing is on screen. */
+  padding-bottom: var(--toast-h, 0px);
+}
+.record-col { min-width: 0; }
+.record-col > .section:last-child { margin-bottom: 0; }
+
+/* One column again below this, in the order that reads: the memory itself,
+   then the record of it. */
+@media (max-width: 980px) {
+  .record-grid { grid-template-columns: 1fr; gap: 0; }
 }
 
 .section { margin-bottom: var(--sp-5); }
@@ -1214,11 +1208,11 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
   /* The WELL STAYS. It was removed here along with the monospace, and that was
      one change too many: this box scrolls (max-height + overflow-y above), and a
      scrolling region with no edge has no visible beginning or end -- the text
-     just dissolved into the drawer behind it. What was wrong was the costume,
+     just dissolved into the panel behind it. What was wrong was the costume,
      not the container. Only the typography changes; --inset keeps the reading
-     pane recessed below the --raised drawer, which is what tells you it is a
-     pane you can scroll and not the page itself.
-     Measure is capped rather than left to the drawer's 716px, which would run
+     pane recessed below the surface it sits on, which is what tells you it is
+     a pane you can scroll and not the page itself.
+     Measure is capped rather than left to the column's width, which would run
      the line to ~100 characters. */
   max-width: 68ch;
 }
@@ -1266,31 +1260,15 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 
-/* ── the memory picker ─────────────────────────────────────────────────
-   The search field used to share a flex row with the relation type and the
-   Link button at `flex: 2`, so the field you type the longest query into was
-   the narrowest control on the row -- and .picker-results is anchored to the
-   field, so the list of TITLES inherited that width and ran at roughly half
-   the drawer. The field owns its own row now; the popover is full width for
-   free, with no override anywhere. */
-.rel-add { display: grid; gap: var(--sp-2); margin-top: var(--sp-3); }
-.picker { position: relative; }
-.picker > input { width: 100%; }
-/* a chosen memory reads as chosen: the field is holding a title, not a query */
-.picker > input.has-pick { border-color: var(--accent); color: var(--ink); }
+/* ── result rows for the memory picker ─────────────────────────────────
+   Shared by the picker dialog (.lp, below). They were the rows of a popover
+   anchored to a lookup field, in a column narrow enough that the list of
+   TITLES ran at roughly half the width of a 760px drawer -- which is most
+   of why choosing the right memory was guesswork. */
 
-.picker-results {
-  position: absolute; top: calc(100% + 4px); left: 0; right: 0; z-index: 20;
-  background: var(--overlay);
-  border: 1px solid var(--line);
-  border-radius: var(--r-md);
-  box-shadow: var(--shadow-pop);
-  overflow: hidden;                /* the list scrolls; the strip and foot do not */
-}
-
-/* Filters live INSIDE the popover, so they cost nothing at rest and are
-   there the moment the list is. Inside .picker too, which is what the
-   focusout dismissal keys on -- reaching for a filter is not leaving. */
+/* Filters sit above the list they filter, in their own strip: they cost a
+   row of chrome and they are the difference between finding one memory in
+   a store of hundreds and scrolling for it. */
 .picker-filters {
   display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2);
   padding: var(--sp-2) var(--sp-3);
@@ -1308,12 +1286,8 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
 /* the archived toggle is an .inline-label; only its wrapping differs */
 .picker-filters .inline-label { flex: none; }
 
-/* 10 two-line rows is 540px, which would outrun the drawer; 8 fit, and the
-   foot says when there are more rather than letting the scrollbar imply it */
-.picker-list { max-height: 420px; overflow-y: auto; }
-
-/* dot | snippet
-   dot | domain · type · match · uid · archived
+/* mark | snippet
+   mark | domain · type · match · uid · archived
    The snippet leads and takes the width. Everything that separates two
    near-identical memories sits under it in one quiet line -- present, and
    not competing with the sentence you are actually reading. */
@@ -1353,10 +1327,93 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
   font-size: var(--fs-sm); color: var(--ink-2);
 }
 .picker-note-bad { color: var(--bad-ink); }
-.picker-foot {
-  padding: var(--sp-2) var(--sp-3);
-  border-top: 1px solid var(--line);
-  font-size: var(--fs-label); color: var(--ink-3);
+
+/* ── link picker (core/link-picker.js) ─────────────────────────────────
+   Find on the left, the whole memory on the right, what you chose along
+   the bottom. The two panes are the point: judging a candidate needs its
+   full content, and a 280-character snippet in a dropdown was the only
+   thing this decision used to have to go on. */
+
+.lp {
+  flex: 1; min-height: 0;        /* both panes scroll; the grid must not grow */
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: var(--sp-4);
+}
+.lp-find { display: flex; flex-direction: column; gap: var(--sp-2); min-height: 0; }
+.lp-q { width: 100%; }
+.lp-list {
+  flex: 1; overflow-y: auto; min-height: 180px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--inset);
+}
+.lp-foot-note { font-size: var(--fs-label); color: var(--ink-3); }
+
+/* mark | snippet | meta -- the same row as .picker-item, plus the mark that
+   says whether it is chosen. aria-pressed carries the state; this draws it.
+   The bar as well as the tint, because the tint alone is what .picker-item
+   already uses for HOVER -- a chosen row and the row under the pointer
+   would have looked the same. */
+.lp-item[aria-pressed="true"] {
+  background: var(--accent-dim);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+.lp-check { grid-column: 1; grid-row: 1; display: inline-flex; margin-top: 3px; --ico: 15px; color: var(--ink-3); }
+.lp-item[aria-pressed="true"] .lp-check { color: var(--accent); }
+/* already tied to this thing: listed so it is not hunted for twice, and
+   not pickable, because linking it again is not a thing that can happen */
+.lp-linked { opacity: .55; cursor: default; }
+.lp-linked:hover { background: none; }
+
+.lp-prev {
+  display: flex; flex-direction: column; gap: var(--sp-3);
+  min-height: 0; overflow-y: auto;
+  padding: var(--sp-3);
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--inset);
+}
+.lp-prev-head { display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; }
+.lp-prev-meta {
+  display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap;
+  font-size: var(--fs-label); color: var(--ink-2);
+}
+.lp-prev-tags { font-family: var(--font-m); color: var(--ink-3); }
+.lp-prev-body { margin: 0; background: none; border: none; padding: 0; }
+
+/* What the tie itself says -- its type, its note. Beside the choice it
+   describes, not on the form behind this one. */
+.lp-form {
+  flex: none;
+  display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap;
+}
+
+/* The tray: the answer to "which memories am I about to link?", in the one
+   place a reader looks before pressing the button -- beside the button. */
+.lp-tray {
+  flex: none;
+  display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap;
+  padding-top: var(--sp-3);
+  border-top: 1px solid var(--line-soft);
+}
+.lp-tray-label { font-size: var(--fs-label); color: var(--ink-2); }
+.lp-chip {
+  display: inline-flex; align-items: center; gap: var(--sp-1);
+  max-width: 300px;
+  padding: var(--sp-1) var(--sp-1) var(--sp-1) var(--sp-2);
+  font-size: var(--fs-label); color: var(--ink);
+  background: var(--accent-dim);
+  border: 1px solid var(--accent);
+  border-radius: var(--r-pill);
+}
+.lp-chip-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lp-count { margin-right: auto; font-size: var(--fs-label); color: var(--ink-2); }
+
+@media (max-width: 900px) {
+  /* one column, and the preview under the list rather than beside it */
+  .lp { grid-template-columns: 1fr; }
+  .lp-prev { max-height: 40vh; }
 }
 
 /* the relation type, and the free-text escape that keeps the vocabulary open */
@@ -1677,6 +1734,10 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
   display: flex; align-items: center; justify-content: center;
   animation: fade .18s both;
 }
+/* A second level over the first: two scrims at .6 stack to near-black and
+   the form underneath -- which is the context for the one on top -- stops
+   being readable. This one only has to separate the two dialogs. */
+.modal-scrim.stacked { background: rgba(0, 0, 0, .32); }
 @keyframes fade { from { opacity: 0; } }
 .modal {
   width: min(540px, 92vw);
@@ -1687,6 +1748,24 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
   box-shadow: var(--shadow-pop);
   animation: rise .2s both;
 }
+.modal:focus-visible { outline: none; }
+/* A form with columns rather than one column of fields: the record and the
+   link picker both put two panes side by side, and 540px is a stack. */
+.modal-wide { width: min(1120px, 95vw); }
+/* Head and foot pinned, body scrolling -- for a dialog tall enough that
+   the buttons would otherwise be somewhere down the page. The plain modal
+   scrolls as one piece, which is right for four fields. */
+.modal-tall {
+  height: min(88vh, 940px);
+  display: flex; flex-direction: column; overflow: hidden;
+}
+/* flex, not the grid a plain modal body is: a tall dialog has one region
+   that takes the leftover height (a pane pair, a scrolling record) and the
+   rest pinned around it, which rows of auto height cannot express */
+.modal-tall > .modal-body {
+  flex: 1; min-height: 0; overflow-y: auto;
+  display: flex; flex-direction: column; gap: var(--sp-3);
+}
 .modal-head {
   padding: var(--sp-4) var(--sp-5) 0;
   font: 500 var(--fs-lg)/1.3 var(--font-ui);
@@ -1694,6 +1773,9 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
 }
 .modal-body { padding: var(--sp-4) var(--sp-5); display: grid; gap: var(--sp-3); font-size: var(--fs-body); color: var(--ink-2); }
 .modal-foot { padding: var(--sp-2) var(--sp-5) var(--sp-4); display: flex; justify-content: flex-end; gap: var(--sp-2); }
+/* the memory record has no footer buttons -- each of its sections commits
+   its own change -- and an empty one is 26px of dead space under it */
+.modal-foot:empty { display: none; }
 
 /* ── toasts / tooltip / misc ─────────────────────────────────────────── */
 
@@ -1704,11 +1786,10 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
      it -- z-index 90 against the bar's 30 -- covering Archive, Restore and the
      clear button outright. syncBulkbar() publishes --bulk-h; there is no bar
      most of the time and the fallback is 0.
-     Right-anchored deliberately, and NOT centred on the content: the record
-     drawer is 760px of a 1280px window, so a centred stack would overlap it
-     MORE than this does, not less. Anchored here it lands in the drawer's own
-     bottom corner, which is where it belongs -- nearly every toast that fires
-     while the drawer is open is about the record inside it. */
+     Right-anchored deliberately, and NOT centred on the content: a centred
+     stack would land on the middle of the dialog the toast is usually ABOUT.
+     Down here it clears a centred record's own bottom corner, and the record
+     reserves this much padding for it (see --toast-h on .record-grid). */
   bottom: calc(var(--sp-5) + var(--bulk-h, 0px));
   /* max-width, never width: a fixed width made "uid copied" as wide as the
      longest error the API can return. align-items so each toast hugs the right
@@ -2022,6 +2103,33 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
 .dg-link .snippet.clickable { cursor: pointer; }
 .dg-link .snippet.clickable:hover { color: var(--ink); }
 
+/* ── jumps: where a step continues in another flow ──────────────────────
+   Built to read as an ADDRESS rather than as a note. The row is an <a> so
+   the destination is in the status bar before it is clicked, ctrl-click
+   opens it in another tab, and the accent colour says the same thing every
+   other link in this app says with it. */
+.dg-jumps { display: grid; gap: var(--sp-2); }
+.dg-jump {
+  display: flex; align-items: center; gap: var(--sp-2);
+  background: var(--inset);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--r-md); padding: var(--sp-1) var(--sp-2);
+}
+.dg-jump .dg-arrow { color: var(--accent); flex: none; display: inline-flex; --ico: 13px; }
+.dg-jump-to {
+  flex: 1; min-width: 0;
+  display: flex; align-items: center; gap: var(--sp-2);
+  font-size: var(--fs-sm); color: var(--accent);
+  text-decoration: none;
+}
+.dg-jump-to:hover .dg-jump-title { text-decoration: underline; }
+.dg-jump-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dg-jump-whole { font-size: var(--fs-label); color: var(--ink-3); flex: none; }
+.dg-jump .dg-label {
+  color: var(--ink-3); font: 500 var(--fs-label) var(--font-m);
+  max-width: 40%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
 /* the inspector's minimum plus a usable canvas needs this much window; below
    it the two stack rather than squeezing the flow into a slot */
 @media (max-width: 1180px) {
@@ -2168,7 +2276,9 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
   }
   .mem-col-type { grid-column: 2; grid-row: 2; overflow: visible; }
   .mem-right { grid-column: 2; grid-row: 3; flex-wrap: wrap; white-space: normal; }
-  .drawer-head, .drawer-body { padding-left: var(--sp-4); padding-right: var(--sp-4); }
+  .modal-head, .modal-body, .modal-foot {
+    padding-left: var(--sp-4); padding-right: var(--sp-4);
+  }
   .graph-wrap { height: calc(100vh - 250px); }
   /* Five controls wrapped to four rows here and covered 28% of the canvas --
      on the one view whose whole job is the shape of the whole store. The strip
