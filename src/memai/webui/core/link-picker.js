@@ -155,7 +155,7 @@ export function pickMemories({
           ${relOptions ? relTypeField({
             selId: 'lpRel', customId: 'lpRelCustom', options: relOptions,
             value: relValue, ariaLabel: t('dr.rel.type.placeholder') }) : ''}
-          ${withNote ? `<input type="text" id="lpNote" class="rel-note"
+          ${withNote ? `<input type="text" id="lpNote" class="lp-note"
                  placeholder="${t('dr.rel.note.placeholder')}"
                  aria-label="${t('dr.rel.note.placeholder')}">` : ''}
           <div class="field-error" id="lpRelError" role="alert" hidden></div>
