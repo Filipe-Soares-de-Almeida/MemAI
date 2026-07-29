@@ -375,10 +375,13 @@ def get_diagram(uid: str, format: str = "mermaid") -> dict:
 
       * you can render inline HTML/SVG in your reply (a widget, an artifact,
         an inline preview) -> format='svg-interactive', then READ THE FILE at
-        the returned `path` and emit its contents inline. That file is the
-        whole answer: one self-contained fragment, pan and zoom included, no
-        network, no external CSS. Do NOT reach for mermaid here -- it draws a
-        different picture (see below).
+        the returned `inline_path` and emit its contents inline. That file is
+        the whole answer: a self-contained fragment with pan and zoom, no
+        doctype, no <body>, no network, no external CSS, nothing that reaches
+        the host page. (`path` is the same drawing as a standalone document,
+        for opening in a browser or sending as a file -- do not paste that
+        one inline, most renderers reject a full document.) Do NOT reach for
+        mermaid here -- it draws a different picture (see below).
       * you can only attach or link a file -> format='svg'. Same drawing,
         no shell, openable in any browser or image viewer.
       * you can render neither, but your client draws mermaid natively ->
@@ -458,9 +461,20 @@ def _write_render(conn, uid: str, data: dict, format: str) -> dict:
     which are already in the file and are most of its size.
     """
     interactive = format == "svg-interactive"
+    inline_target = None
     if interactive:
-        markup = diagram_svg.render_interactive(data)
+        # TWO files, because the two uses genuinely differ. Opening a file
+        # needs a document -- doctype, charset, a body whose background is
+        # not white behind a dark diagram. Embedding in a reply needs the
+        # opposite: no doctype and no body, which most inline renderers
+        # reject, and no styling that would reach the host page. Writing one
+        # and telling the caller which part to cut out is the version of
+        # this that breaks quietly.
+        markup = diagram_svg.render_interactive(data, standalone=True)
         viewbox = diagram_svg.render_svg(data)[1]
+        inline_target = db.renders_dir() / f"diagram-{uid}.inline.html"
+        inline_target.write_text(
+            diagram_svg.render_interactive(data), encoding="utf-8")
     else:
         markup, viewbox = diagram_svg.render_svg(data)
     target = db.renders_dir() / f"diagram-{uid}.{'html' if interactive else 'svg'}"
@@ -478,13 +492,17 @@ def _write_render(conn, uid: str, data: dict, format: str) -> dict:
         # file -- so it says what to do with it instead. Without this, a
         # caller that has the path and a way to render inline still has to
         # infer that reading the file is the intended next step.
+        **({"inline_path": str(inline_target)} if inline_target else {}),
         "next_step": (
-            "read this file and put its contents in your reply -- that is "
-            "what displays the diagram. It is one self-contained fragment "
-            "with pan and zoom. Sending the file as an attachment instead "
-            "does NOT display it, it gives the user something to open "
-            "later. Yes, emitting it costs tokens: that is the work, not "
-            "an overrun."
+            "read `inline_path` and put its contents in your reply -- that "
+            "is what displays the diagram. It is a fragment on purpose: no "
+            "doctype, no <body>, nothing that touches the host page, which "
+            "is what an inline renderer needs. `path` is the same drawing "
+            "as a standalone document, for opening or sending as a file. "
+            "Sending a file instead of emitting the fragment does NOT "
+            "display anything, it gives the user something to open later. "
+            "Yes, emitting it costs tokens: that is the work, not an "
+            "overrun."
             if interactive else
             "send or link this file to show the diagram, marked to render "
             "rather than to download; read it only if you need the markup"),

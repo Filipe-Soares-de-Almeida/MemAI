@@ -1033,16 +1033,59 @@ _SHELL_JS = """
   centreOn(%(sx)s,%(sy)s,%(sz)s);};
  document.getElementById('dg-all').onclick=function(){
   s=1;tx=0;ty=0;apply();};
- centreOn(%(sx)s,%(sy)s,%(sz)s);
+ /* Opening position, applied once the box HAS a size. Running it against a
+    box that has not been laid out yet reads a meaningless CTM, and the
+    opening scale is computed FROM that CTM -- so the flow opens fitted, at
+    a scale where the labels are not drawn. Whichever of these fires first
+    with a real measurement wins; the rest are no-ops. */
+ var placed=false;
+ function place(){
+  if(placed)return;
+  var r=svg.getBoundingClientRect();
+  if(r.width<2||r.height<2)return;
+  placed=true;
+  centreOn(%(sx)s,%(sy)s,%(sz)s);
+ }
+ place();
+ requestAnimationFrame(place);
+ addEventListener('load',place);
+ if(typeof ResizeObserver==='function'){
+  var ro=new ResizeObserver(function(){place();if(placed)ro.disconnect();});
+  ro.observe(svg.parentNode);
+ }
+ /* a resized box changes what the transform buys, so the readout follows --
+    but the view stays where the reader put it */
  addEventListener('resize',apply);
 })();
 """
 
 
+_STANDALONE_HEAD = (
+    "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
+    "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
+    "<title>{title}</title><style>html,body{{margin:0;background:{bg};"
+    "color:{ink};font:14px Roboto,'Segoe UI',system-ui,sans-serif}}"
+    "body{{padding:12px}}h1{{font-size:15px;font-weight:500;margin:0 0 10px}}"
+    "</style></head><body><h1>{title}</h1>"
+)
+
+
 def render_interactive(data: dict, *, notes: bool = True,
                        routing: str = "orthogonal", height: int = 560,
-                       open_scale: float = 0.85) -> str:
-    """The same drawing, wrapped in pan/zoom. Returns an HTML fragment.
+                       open_scale: float = 0.85,
+                       standalone: bool = False) -> str:
+    """The same drawing, wrapped in pan/zoom.
+
+    `standalone=False` returns a FRAGMENT, for embedding in a reply or a
+    page that already has a document around it. `standalone=True` wraps it
+    in a real document -- doctype, charset, title, a body that matches the
+    diagram's own background.
+
+    That distinction is not cosmetic. A fragment written to a .html file is
+    not a document: the browser has to invent one, which is how the same
+    file ends up displayed under a `data:text/html;charset` origin with the
+    title undefined, and how a script inside it can end up in a context
+    that treats it differently from a real page.
 
     `open_scale` is the on-screen scale to open at, not a transform
     multiplier -- see the note above _SHELL_JS. It defaults above
@@ -1062,7 +1105,7 @@ def render_interactive(data: dict, *, notes: bool = True,
         "sy": _n(float(start.get("y") or 0) + 360),
         "sz": open_scale, "lmin": LABEL_MIN_SCALE, "bmin": BADGE_MIN_SCALE,
     }
-    return (
+    fragment = (
         f'<h2 class="dg-sr">Interactive flowchart, {len(nodes)} steps. '
         f"Drag to pan, scroll to zoom.</h2>"
         f"<style>{css}</style><div class=\"dgw\">"
@@ -1070,7 +1113,15 @@ def render_interactive(data: dict, *, notes: bool = True,
         f'<button id="dg-out">−</button>'
         f'<button id="dg-st">start</button>'
         f'<button id="dg-all">all</button></div>'
-        f'<div class="dgz" id="dg-z"></div>'
+        # seeded with the no-script state, so an empty readout is never what
+        # a working page looks like: if it still says "fit" the shell did not
+        # run, which is worth being able to see at a glance
+        f'<div class="dgz" id="dg-z">fit</div>'
         f'<div class="dgh">drag to pan &middot; scroll to zoom</div>'
         f"{svg}</div><script>{js}</script>"
     )
+    if not standalone:
+        return fragment
+    head = _STANDALONE_HEAD.format(
+        title=esc(data.get("title") or "Diagram"), bg=BG, ink=INK)
+    return f"{head}{fragment}</body></html>"
