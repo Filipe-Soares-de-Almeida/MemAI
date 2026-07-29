@@ -17,7 +17,32 @@
        layout computed here.
 
    All DOM outside the canvas (the inspector, toolbar wiring, toasts)
-   belongs to app.js and reaches this class through `hooks`. */
+   belongs to app.js and reaches this class through `hooks`.
+
+   =======================================================================
+   THIS FILE HAS A PYTHON TWIN: memai/diagram_svg.py
+   =======================================================================
+   That module renders the same diagram as SVG for readers with no browser
+   (a chat client, an exporter). It is a transcription of the edge geometry
+   below -- the constants, route(), laneEdges(), detours(), assignFans(),
+   unfanCollisions(), and the wrap/clamp/shortLabel text rules.
+
+   Change any of those here, change them there, then run:
+
+       node tools/route-parity.mjs --write   # re-record from THIS file
+       pytest tests/test_diagram_svg.py      # hold Python to the recording
+
+   A divergence does not raise anywhere. It draws a flow that is subtly not
+   the one the user arranged, which is why the parity harness exists and
+   why re-recording is a deliberate step rather than automatic.
+
+   Why two implementations at all: this file needs the geometry in
+   JavaScript regardless, because it hit-tests, drags and zooms against it.
+   The alternative was a headless browser on the server.
+
+   NOT duplicated: node layout. x/y comes from db.py and both sides read
+   it, which is what keeps this file free of a layout algorithm.
+   ======================================================================= */
 
 const esc = s => String(s ?? '').replace(/[&<>"']/g,
   c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -38,6 +63,10 @@ const NODE_H = 48;
 const DECISION_H = 66;
 const NODE_MIN_W = 110, NODE_MAX_W = 560;
 const NODE_MIN_H = 34, NODE_MAX_H = 340;
+/* Every constant from here to ORTH_SNAP is mirrored in diagram_svg.py
+   under the same name. Changing one alone silently splits the canvas from
+   the SVG export -- see the twin-file note at the top of this file for the
+   two commands that catch it. */
 const IO_SKEW = 14;          /* the lean on an input/output parallelogram */
 const HANDLE = 7;            /* half-side of a corner resize grip, world units */
 const SNAP_PX = 7;           /* how near an axis has to be to pull a card onto it */
@@ -69,7 +98,8 @@ const EDGE_PICK_PX = 11;     /* how near the pointer must be to grab a line */
 export const ROUTINGS = ['orthogonal', 'curved'];
 /* Label metrics live in world units alongside the box metrics above, so a
    label occupies the same fraction of its box at every zoom level. Both
-   are multiplied by the diagram's stored font scale. */
+   are multiplied by the diagram's stored font scale. Mirrored in
+   diagram_svg.py, along with the two badge limits below. */
 const LABEL_PX = 12;
 const LABEL_LH = 14;
 const BADGE_PX = 10;

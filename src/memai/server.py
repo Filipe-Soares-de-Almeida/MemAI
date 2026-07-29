@@ -25,7 +25,7 @@ import json
 
 from mcp.server.fastmcp import FastMCP
 
-from memai import db
+from memai import db, diagram_svg
 
 mcp = FastMCP("memai")
 
@@ -360,33 +360,145 @@ def diagram_relayout(uid: str) -> dict:
     return {"ok": moved > 0, "nodes": moved}
 
 
+_DIAGRAM_FORMATS = ("mermaid", "text", "json", "svg", "svg-interactive")
+
+
 @mcp.tool()
 def get_diagram(uid: str, format: str = "mermaid") -> dict:
-    """Read a diagram back. format: 'mermaid' | 'text' | 'json'.
+    """Read a diagram back: format='svg-interactive' to show it, 'json' to reason about it.
 
-    'mermaid' returns source ready to render as a fenced mermaid block --
-    the fastest way to show a flow in a chat client that can draw one.
-    Mermaid always applies its own layout, so it ignores stored positions.
-    'text' returns the same prose projection kept as the memory's content:
-    readable anywhere, no renderer required.
-    'json' returns the full graph including each node's stored x/y and its
-    links -- for a renderer that must reproduce the exact admin
-    arrangement, and the only format that round-trips back through
-    diagram_node/diagram_edge.
+    That first line is the whole summary help() prints for this tool, so it
+    names the two formats worth defaulting to rather than describing the
+    signature.
+
+    TO SHOW THE DIAGRAM TO A USER, pick by what you can actually do with it:
+
+      * you can render inline HTML/SVG in your reply (a widget, an artifact,
+        an inline preview) -> format='svg-interactive', then READ THE FILE at
+        the returned `path` and emit its contents inline. That file is the
+        whole answer: one self-contained fragment, pan and zoom included, no
+        network, no external CSS. Do NOT reach for mermaid here -- it draws a
+        different picture (see below).
+      * you can only attach or link a file -> format='svg'. Same drawing,
+        no shell, openable in any browser or image viewer.
+      * you can render neither, but your client draws mermaid natively ->
+        format='mermaid'.
+
+    Both SVG formats WRITE THE MARKUP TO A FILE and return the path plus a
+    thin index of the steps. The file is where the drawing lives; the payload
+    is deliberately too small to draw from.
+
+    That split exists for the calls that do NOT display -- reasoning over a
+    flow, checking what a step says, handing a path to something else, which
+    is most of them. IT IS NOT A REASON TO AVOID EMITTING THE MARKUP WHEN THE
+    USER ASKED TO SEE THE DIAGRAM. In that case, reading the file and putting
+    its contents in your reply IS the deliverable, and the tokens it costs
+    are the cost of doing the work, not an overrun to economise on.
+
+    Attaching or linking the file is NOT showing it: that hands the user
+    something to open later. If your only display mechanism is a file send,
+    at least mark it to render rather than to download.
+
+    Fidelity, which is the reason the SVG formats exist: they reproduce the
+    admin canvas exactly -- the arrangement the user made, the same edge
+    routing around it, the same wrapped labels, node notes as <title>
+    tooltips. MERMAID DOES NOT. Mermaid always applies its own layout, so it
+    discards the stored positions and shows a flow the user never arranged.
+    Prefer it only when nothing else can be displayed.
+
+    'svg-interactive' over 'svg' for anything long: a 34-step routine is
+    ~3000x6300 units, and scaled to fit a chat column that puts its labels
+    under 3px. The interactive shell opens at a readable scale near the
+    start step instead.
+
+    The data formats: 'text' returns the prose projection kept as the
+    memory's content -- readable anywhere, no renderer needed. 'json'
+    returns the full graph including each node's stored x/y, its notes and
+    its links; it is the only format that round-trips back through
+    diagram_node/diagram_edge, and the one to use when you need to REASON
+    about the flow rather than show it.
+
+    Each call also prunes older renders per the retention setting (see the
+    dashboard's maintenance view) and reports how many it removed.
     """
-    if format not in ("mermaid", "text", "json"):
-        return _errors([f"unknown format {format!r}; use 'mermaid', 'text' or 'json'"])
+    if format not in _DIAGRAM_FORMATS:
+        return _errors([f"unknown format {format!r}; use "
+                        f"{', '.join(repr(f) for f in _DIAGRAM_FORMATS)}"])
     with db.connect() as conn:
         data = db.get_diagram(conn, uid)
         if data is None:
             return _errors([f"{uid} is not a diagram"])
         if format == "json":
             return {"format": "json", **data}
+        if format in ("svg", "svg-interactive"):
+            return _write_render(conn, uid, data, format)
         body = (
             db.render_diagram_text(conn, uid) if format == "text"
             else db.render_diagram_mermaid(conn, uid)
         )
-    return {"uid": uid, "title": data["title"], "format": format, "body": _capped(body)}
+    out = {"uid": uid, "title": data["title"], "format": format,
+           "body": _capped(body)}
+    if format == "mermaid":
+        # Said here as well as in the docstring, because by now the docstring
+        # is behind the caller and this is what it is looking at. A request
+        # to "render the diagram" answered with mermaid silently swaps the
+        # user's arrangement for a fresh layout.
+        out["note"] = (
+            "mermaid re-lays out the flow and discards the stored positions. "
+            "To show the arrangement the user actually made, call again with "
+            "format='svg-interactive' and emit the returned file inline.")
+    return out
+
+
+def _write_render(conn, uid: str, data: dict, format: str) -> dict:
+    """Draw, write, sweep, and report -- without the markup in the payload.
+
+    The index of steps IS the payload: labels and link targets, so the
+    caller can talk about the diagram it just rendered, but not the notes,
+    which are already in the file and are most of its size.
+    """
+    interactive = format == "svg-interactive"
+    if interactive:
+        markup = diagram_svg.render_interactive(data)
+        viewbox = diagram_svg.render_svg(data)[1]
+    else:
+        markup, viewbox = diagram_svg.render_svg(data)
+    target = db.renders_dir() / f"diagram-{uid}.{'html' if interactive else 'svg'}"
+    target.write_text(markup, encoding="utf-8")
+    swept = db.prune_renders(db.get_svg_retention(conn), keep=target)
+    links: dict[str, list[str]] = {}
+    for link in data.get("links") or []:
+        links.setdefault(link["node_key"], []).append(link["target_uid"])
+    return {
+        "uid": uid,
+        "title": data["title"],
+        "format": format,
+        "path": str(target),
+        # The payload cannot be drawn from -- that is the point of writing the
+        # file -- so it says what to do with it instead. Without this, a
+        # caller that has the path and a way to render inline still has to
+        # infer that reading the file is the intended next step.
+        "next_step": (
+            "read this file and put its contents in your reply -- that is "
+            "what displays the diagram. It is one self-contained fragment "
+            "with pan and zoom. Sending the file as an attachment instead "
+            "does NOT display it, it gives the user something to open "
+            "later. Yes, emitting it costs tokens: that is the work, not "
+            "an overrun."
+            if interactive else
+            "send or link this file to show the diagram, marked to render "
+            "rather than to download; read it only if you need the markup"),
+        "bytes": len(markup.encode("utf-8")),
+        "viewbox": [round(v) for v in viewbox],
+        "nodes": [
+            {"key": n["key"], "label": n["label"], "shape": n["shape"],
+             **({"links": links[n["key"]]} if n["key"] in links else {})}
+            for n in data["nodes"]
+        ],
+        "edges": len(data["edges"]),
+        "retention": swept["mode"],
+        "pruned": swept["pruned"],
+    }
 
 
 @mcp.tool()
