@@ -681,6 +681,32 @@ def diagram_link(request, payload) -> dict:
     return {"ok": True}
 
 
+def diagram_jump(request, payload) -> dict:
+    """Create or drop a jump from a step of this diagram into another one.
+
+    `node_key` is always the step on THIS diagram and `peer_uid`/
+    `peer_node` the other end -- the same shape get_diagram_jumps() hands
+    the editor, so a row it drew can be deleted from whichever side it was
+    read on. Creating is directional (this diagram jumps out); deleting is
+    not (see db.delete_diagram_jump).
+    """
+    uid = request.path_params["uid"]
+    node_key = (payload.get("node_key") or "").strip()
+    peer_uid = (payload.get("peer_uid") or "").strip()
+    peer_node = (payload.get("peer_node") or "").strip()
+    if not (node_key and peer_uid):
+        raise ValueError("node_key and peer_uid are required")
+    with db.connect() as conn:
+        if payload.get("delete"):
+            if not db.delete_diagram_jump(conn, uid, node_key, peer_uid, peer_node):
+                raise ValueError(f"no jump between '{node_key}' and {peer_uid}")
+        else:
+            _require(db.add_diagram_jump(
+                conn, uid, node_key, peer_uid, peer_node,
+                label=(payload.get("label") or "").strip()))
+    return {"ok": True}
+
+
 def diagram_mermaid(request, payload) -> dict:
     uid = request.path_params["uid"]
     with db.connect() as conn:
@@ -949,8 +975,22 @@ def clean_orphans(request, payload) -> dict:
                         SELECT node_key FROM diagram_nodes
                         WHERE diagram_nodes.memory_uid = diagram_node_links.memory_uid)""")
         links = cur.rowcount
+        # a jump has four things that can rot -- both diagrams and both node
+        # keys -- and `to_node` is legitimately empty for a whole-diagram jump
+        cur = conn.execute(
+            """DELETE FROM diagram_jumps
+               WHERE from_uid NOT IN (SELECT memory_uid FROM diagrams)
+                  OR to_uid NOT IN (SELECT memory_uid FROM diagrams)
+                  OR from_node NOT IN (
+                        SELECT node_key FROM diagram_nodes
+                        WHERE diagram_nodes.memory_uid = diagram_jumps.from_uid)
+                  OR (to_node <> '' AND to_node NOT IN (
+                        SELECT node_key FROM diagram_nodes
+                        WHERE diagram_nodes.memory_uid = diagram_jumps.to_uid))""")
+        jumps = cur.rowcount
     return {"ok": True, "relations_removed": rels, "vectors_removed": vecs,
-            "suggestions_removed": sugs, "node_links_removed": links}
+            "suggestions_removed": sugs, "node_links_removed": links,
+            "jumps_removed": jumps}
 
 
 def vacuum(request, payload) -> dict:
@@ -1338,6 +1378,7 @@ routes = [
     Route("/api/diagrams/{uid}/layout", api(diagram_layout), methods=["POST"]),
     Route("/api/diagrams/{uid}/relayout", api(diagram_relayout), methods=["POST"]),
     Route("/api/diagrams/{uid}/link", api(diagram_link), methods=["POST"]),
+    Route("/api/diagrams/{uid}/jump", api(diagram_jump), methods=["POST"]),
     Route("/api/diagrams/{uid}/mermaid", api(diagram_mermaid), methods=["GET"]),
     Route("/api/config", api(get_config), methods=["GET"]),
     Route("/api/config", api(set_config), methods=["POST"]),

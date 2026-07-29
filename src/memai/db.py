@@ -163,6 +163,26 @@ CREATE TABLE IF NOT EXISTS diagram_node_links (
 CREATE INDEX IF NOT EXISTS idx_diagram_links_target
     ON diagram_node_links(target_uid);
 
+-- A step of one flow continuing into ANOTHER flow. Deliberately not a
+-- diagram_node_links row: that table attaches PROSE to a step ("here is
+-- why this step is the way it is"), this one is a way THROUGH ("the rest
+-- of this branch is documented over there"). `to_node` is optional -- ''
+-- means the target diagram as a whole -- and one row is read from BOTH
+-- ends, so the trip back needs no second row (see get_diagram_jumps).
+CREATE TABLE IF NOT EXISTS diagram_jumps (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    from_uid    TEXT NOT NULL REFERENCES memories(uid),  -- diagram jumped from
+    from_node   TEXT NOT NULL,
+    to_uid      TEXT NOT NULL REFERENCES memories(uid),  -- diagram jumped to
+    to_node     TEXT NOT NULL DEFAULT '',               -- '' = the whole diagram
+    label       TEXT NOT NULL DEFAULT '',               -- why it continues there
+    created_at  TEXT NOT NULL
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_diagram_jumps_pair
+    ON diagram_jumps(from_uid, from_node, to_uid, to_node);
+CREATE INDEX IF NOT EXISTS idx_diagram_jumps_to ON diagram_jumps(to_uid);
+
 CREATE TABLE IF NOT EXISTS meta (
     key    TEXT PRIMARY KEY,
     value  TEXT NOT NULL
@@ -481,9 +501,9 @@ def purge_memory(conn: sqlite3.Connection, uid: str) -> bool:
     unless the user specifically asked for permanent removal.
 
     Diagram tables cascade both ways: the graph of a purged diagram goes,
-    and so does any OTHER diagram's node link that pointed at this memory
-    -- otherwise a purged note leaves a node link dangling at a uid that
-    no longer resolves.
+    and so does any OTHER diagram's node link or jump that pointed at this
+    memory -- otherwise a purged note leaves a node link dangling at a uid
+    that no longer resolves.
     """
     row = get_memory(conn, uid)
     if row is None:
@@ -494,6 +514,7 @@ def purge_memory(conn: sqlite3.Connection, uid: str) -> bool:
     conn.execute(
         "DELETE FROM diagram_node_links WHERE memory_uid = ? OR target_uid = ?", (uid, uid)
     )
+    conn.execute("DELETE FROM diagram_jumps WHERE from_uid = ? OR to_uid = ?", (uid, uid))
     conn.execute("DELETE FROM diagram_nodes WHERE memory_uid = ?", (uid,))
     conn.execute("DELETE FROM diagram_edges WHERE memory_uid = ?", (uid,))
     conn.execute("DELETE FROM diagrams WHERE memory_uid = ?", (uid,))
@@ -1078,8 +1099,10 @@ def replace_diagram_graph(
 
     A node the user dragged keeps its coordinates across a rewrite; only
     keys that are new to the graph get layout coordinates. Call
-    relayout_diagram() for a clean arrangement. Node links pointing at
-    keys the rewrite dropped go with them.
+    relayout_diagram() for a clean arrangement. Node links and jumps
+    pointing at keys the rewrite dropped go with them -- including a jump
+    ANOTHER diagram aimed at one of those keys, which this diagram is the
+    only one able to notice.
     """
     if get_diagram_row(conn, uid) is None:
         return False, [f"{uid} is not a diagram"]
@@ -1095,9 +1118,19 @@ def replace_diagram_graph(
     _write_nodes(conn, uid, n, positions)
     _write_edges(conn, uid, e)
     live = [node["key"] for node in n]
+    holes = ",".join("?" * len(live))
     conn.execute(
-        "DELETE FROM diagram_node_links WHERE memory_uid = ? "
-        f"AND node_key NOT IN ({','.join('?' * len(live))})",
+        f"DELETE FROM diagram_node_links WHERE memory_uid = ? AND node_key NOT IN ({holes})",
+        (uid, *live),
+    )
+    conn.execute(
+        f"DELETE FROM diagram_jumps WHERE from_uid = ? AND from_node NOT IN ({holes})",
+        (uid, *live),
+    )
+    # to_node = '' is the diagram as a whole and survives any rewrite
+    conn.execute(
+        "DELETE FROM diagram_jumps WHERE to_uid = ? AND to_node <> '' "
+        f"AND to_node NOT IN ({holes})",
         (uid, *live),
     )
     _refresh_diagram_content(conn, uid)
@@ -1157,7 +1190,12 @@ def upsert_diagram_node(
 def delete_diagram_node(
     conn: sqlite3.Connection, uid: str, node_key: str
 ) -> tuple[bool, list[str]]:
-    """Remove a node together with its edges and its memory links."""
+    """Remove a node together with its edges, its memory links and its jumps.
+
+    Both ends of a jump, because the step is gone from the picture either
+    way: a jump leaving it has nothing to leave from, and a jump another
+    diagram aimed AT it has nowhere to land.
+    """
     if get_diagram_row(conn, uid) is None:
         return False, [f"{uid} is not a diagram"]
     cur = conn.execute(
@@ -1171,6 +1209,11 @@ def delete_diagram_node(
     )
     conn.execute(
         "DELETE FROM diagram_node_links WHERE memory_uid = ? AND node_key = ?", (uid, node_key)
+    )
+    conn.execute(
+        """DELETE FROM diagram_jumps
+           WHERE (from_uid = ? AND from_node = ?) OR (to_uid = ? AND to_node = ?)""",
+        (uid, node_key, uid, node_key),
     )
     _refresh_diagram_content(conn, uid)
     return True, []
@@ -1401,6 +1444,107 @@ def diagrams_referencing(conn: sqlite3.Connection, target_uid: str) -> list[sqli
     ).fetchall()
 
 
+def add_diagram_jump(
+    conn: sqlite3.Connection, uid: str, from_node: str, to_uid: str,
+    to_node: str = "", label: str = "",
+) -> tuple[bool, list[str]]:
+    """Point one step of a flow at another FLOW -- optionally at one of its steps.
+
+    A routine documented as one diagram usually is not one routine: a
+    branch hands off to a second flow, which hands back. That handoff is
+    not prose to read beside the step (add_node_link) but a place to go,
+    and it is the same statement from either side -- so it is stored once
+    and read from both ends.
+
+    An empty `to_node` means the target diagram as a whole. Jumping inside
+    one diagram is refused: that is an edge, and drawing it is the honest
+    way to say it.
+    """
+    if get_diagram_row(conn, uid) is None:
+        return False, [f"{uid} is not a diagram"]
+    if to_uid == uid:
+        return False, ["a jump goes to another diagram; inside one, draw an edge"]
+    if get_diagram_row(conn, to_uid) is None:
+        return False, [f"jump target {to_uid!r} is not a diagram"]
+    from_node = str(from_node).strip()
+    to_node = str(to_node or "").strip()
+    if conn.execute(
+        "SELECT 1 FROM diagram_nodes WHERE memory_uid = ? AND node_key = ?", (uid, from_node)
+    ).fetchone() is None:
+        return False, [f"no node {from_node!r} in {uid}"]
+    if to_node and conn.execute(
+        "SELECT 1 FROM diagram_nodes WHERE memory_uid = ? AND node_key = ?", (to_uid, to_node)
+    ).fetchone() is None:
+        return False, [f"no node {to_node!r} in {to_uid}"]
+    conn.execute(
+        """INSERT INTO diagram_jumps (from_uid, from_node, to_uid, to_node, label, created_at)
+           VALUES (?, ?, ?, ?, ?, ?)
+           ON CONFLICT(from_uid, from_node, to_uid, to_node)
+           DO UPDATE SET label = excluded.label""",
+        (uid, from_node, to_uid, to_node, str(label or "").strip(), now_iso()),
+    )
+    return True, []
+
+
+def delete_diagram_jump(
+    conn: sqlite3.Connection, uid: str, node_key: str, peer_uid: str, peer_node: str = ""
+) -> bool:
+    """Drop one jump, named from EITHER end.
+
+    `uid`/`node_key` is the caller's own side and `peer_uid`/`peer_node`
+    the other one, whichever way the arrow points. The row is a single
+    statement shared by two diagrams, so the diagram on the receiving end
+    has to be able to cut it too -- otherwise the only way out of an
+    unwanted incoming jump is to go and open the diagram that made it.
+    """
+    cur = conn.execute(
+        """DELETE FROM diagram_jumps
+           WHERE (from_uid = ? AND from_node = ? AND to_uid = ? AND to_node = ?)
+              OR (from_uid = ? AND from_node = ? AND to_uid = ? AND to_node = ?)""",
+        (uid, node_key, peer_uid, peer_node, peer_uid, peer_node, uid, node_key),
+    )
+    return cur.rowcount > 0
+
+
+# One query per direction. Which column carries the peer is the only
+# difference between them, and folding the two into a single UNION hid
+# exactly that.
+_JUMP_SQL = """SELECT j.*, d.title AS peer_title, m.status AS peer_status,
+                      n.label AS peer_node_label
+               FROM diagram_jumps j
+               JOIN diagrams d ON d.memory_uid = j.{far}_uid
+               JOIN memories m ON m.uid = j.{far}_uid
+               LEFT JOIN diagram_nodes n
+                      ON n.memory_uid = j.{far}_uid AND n.node_key = j.{far}_node
+               WHERE j.{near}_uid = ? ORDER BY j.{near}_node, j.created_at"""
+
+
+def get_diagram_jumps(conn: sqlite3.Connection, uid: str) -> list[dict]:
+    """Every jump touching this diagram, both directions, as one list.
+
+    `node_key` is always the step in THIS diagram, so the editor groups
+    them per step without caring which way a jump points -- '' for an
+    incoming jump aimed at the diagram as a whole. `peer_node` is where to
+    land at the other end, which is what makes the trip back arrive on the
+    step it left from rather than on a diagram and a hunt.
+    """
+    return [
+        {
+            "direction": direction,
+            "node_key": r[f"{near}_node"],
+            "peer_uid": r[f"{far}_uid"],
+            "peer_node": r[f"{far}_node"],
+            "peer_title": r["peer_title"],
+            "peer_node_label": r["peer_node_label"] or "",
+            "peer_status": r["peer_status"],
+            "label": r["label"],
+            "created_at": r["created_at"],
+        }
+        for direction, near, far in (("out", "from", "to"), ("in", "to", "from"))
+        for r in conn.execute(_JUMP_SQL.format(near=near, far=far), (uid,)).fetchall()
+    ]
+
+
 def get_diagram(conn: sqlite3.Connection, uid: str) -> dict | None:
     """Everything one diagram is made of, ready to render."""
     d = get_diagram_row(conn, uid)
@@ -1419,6 +1563,7 @@ def get_diagram(conn: sqlite3.Connection, uid: str) -> dict | None:
         # which is why it is drawn dashed and pointing back
         "edges": [dict(e, loops=(e["from"], e["to"]) in loops) for e in edges],
         "links": [dict(r) for r in get_node_links(conn, uid)],
+        "jumps": get_diagram_jumps(conn, uid),
     }
 
 
@@ -1510,6 +1655,16 @@ def diagram_overview(
     links_by: dict[str, int] = {}
     for r in conn.execute("SELECT memory_uid, COUNT(*) AS n FROM diagram_node_links GROUP BY memory_uid"):
         links_by[r["memory_uid"]] = r["n"]
+    # counted from both ends: a diagram nothing leaves but three flows arrive
+    # into is just as tied into the set as the one that made those jumps
+    jumps_by: dict[str, int] = {}
+    for r in conn.execute(
+        """SELECT uid, COUNT(*) AS n FROM (
+               SELECT from_uid AS uid FROM diagram_jumps
+               UNION ALL SELECT to_uid AS uid FROM diagram_jumps
+           ) GROUP BY uid"""
+    ):
+        jumps_by[r["uid"]] = r["n"]
 
     out = []
     for r in rows:
@@ -1521,6 +1676,7 @@ def diagram_overview(
             "nodes": len(nodes),
             "edges": len(edges),
             "links": links_by.get(r["uid"], 0),
+            "jumps": jumps_by.get(r["uid"], 0),
             "documented": sum(1 for n in nodes if n["note"]),
             "issues": issues,
             "issue_count": sum(max(1, len(i["keys"])) for i in issues),

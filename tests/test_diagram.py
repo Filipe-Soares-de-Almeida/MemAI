@@ -558,6 +558,107 @@ def test_node_link_endpoints_are_validated(conn):
     assert db.delete_node_link(conn, uid, "load", note) is False
 
 
+# --------------------------------------------------------------------- jumps
+#
+# A jump is one row read from two sides, which is the whole point of it:
+# the flow that hands off and the flow that takes over are both documented
+# by the same statement, and neither has to be told about the other twice.
+
+
+def _pair(conn):
+    return _mk(conn), _mk(conn, title="Store reconciliation routine")
+
+
+def test_a_jump_reads_from_both_ends(conn):
+    a, b = _pair(conn)
+    assert db.add_diagram_jump(conn, a, "write", b, "load", label="per store") == (True, [])
+
+    out = db.get_diagram(conn, a)["jumps"]
+    assert len(out) == 1
+    assert (out[0]["direction"], out[0]["node_key"]) == ("out", "write")
+    assert (out[0]["peer_uid"], out[0]["peer_node"]) == (b, "load")
+    assert out[0]["peer_title"] == "Store reconciliation routine"
+    # the label of the step being jumped TO, so the row names a destination
+    # a reader recognises instead of a node key
+    assert out[0]["peer_node_label"] == "Read the export window"
+
+    back = db.get_diagram(conn, b)["jumps"]
+    assert len(back) == 1
+    # the same row, mirrored: what to select on arrival is the step it left
+    assert (back[0]["direction"], back[0]["node_key"]) == ("in", "load")
+    assert (back[0]["peer_uid"], back[0]["peer_node"]) == (a, "write")
+    assert back[0]["peer_node_label"] == "Write one file per store"
+
+
+def test_a_whole_diagram_jump_lands_on_no_step(conn):
+    a, b = _pair(conn)
+    assert db.add_diagram_jump(conn, a, "done", b) == (True, [])
+    incoming = db.get_diagram(conn, b)["jumps"][0]
+    assert incoming["node_key"] == ""       # the diagram as a whole, not a step
+    assert incoming["peer_node"] == "done"
+
+
+def test_jump_endpoints_are_validated(conn):
+    a, b = _pair(conn)
+    note = db.insert_memory(conn, type="note", content="a fact")
+    assert "draw an edge" in db.add_diagram_jump(conn, a, "write", a)[1][0]
+    assert "not a diagram" in db.add_diagram_jump(conn, a, "write", note)[1][0]
+    assert "not a diagram" in db.add_diagram_jump(conn, note, "write", b)[1][0]
+    assert "no node 'ghost'" in db.add_diagram_jump(conn, a, "ghost", b)[1][0]
+    assert "no node 'ghost'" in db.add_diagram_jump(conn, a, "write", b, "ghost")[1][0]
+    assert db.delete_diagram_jump(conn, a, "write", b, "load") is False
+
+
+def test_jump_upsert_replaces_the_label(conn):
+    a, b = _pair(conn)
+    db.add_diagram_jump(conn, a, "write", b, "load", label="per store")
+    db.add_diagram_jump(conn, a, "write", b, "load", label="one file per store")
+    jumps = db.get_diagram(conn, a)["jumps"]
+    assert len(jumps) == 1 and jumps[0]["label"] == "one file per store"
+
+
+def test_a_jump_can_be_cut_from_the_receiving_end(conn):
+    """Otherwise the only way out of an unwanted incoming jump is to go
+    and open whichever diagram made it."""
+    a, b = _pair(conn)
+    db.add_diagram_jump(conn, a, "write", b, "load")
+    assert db.delete_diagram_jump(conn, b, "load", a, "write") is True
+    assert db.get_diagram(conn, a)["jumps"] == []
+
+
+def test_deleting_a_step_takes_its_jumps_from_either_side(conn):
+    a, b = _pair(conn)
+    db.add_diagram_jump(conn, a, "write", b, "load")   # b's step is the target
+    db.add_diagram_jump(conn, b, "check", a, "done")   # b's step is the source
+
+    assert db.delete_diagram_node(conn, b, "load") == (True, [])
+    assert [j["node_key"] for j in db.get_diagram(conn, a)["jumps"]] == ["done"]
+    assert db.delete_diagram_node(conn, b, "check") == (True, [])
+    assert db.get_diagram(conn, a)["jumps"] == []
+
+
+def test_replacing_a_graph_drops_jumps_whose_step_is_gone(conn):
+    a, b = _pair(conn)
+    db.add_diagram_jump(conn, a, "write", b, "write")  # dropped by the rewrite below
+    db.add_diagram_jump(conn, a, "load", b)           # aimed at b as a whole; survives
+
+    trimmed = [n for n in NODES if n["key"] != "write"]
+    ok, errors = db.replace_diagram_graph(conn, b, trimmed, [
+        {"from": "start", "to": "load"},
+        {"from": "load", "to": "check"},
+        {"from": "check", "to": "done"},
+    ])
+    assert (ok, errors) == (True, [])
+    assert [j["node_key"] for j in db.get_diagram(conn, a)["jumps"]] == ["load"]
+
+
+def test_overview_counts_jumps_at_both_ends(conn):
+    a, b = _pair(conn)
+    db.add_diagram_jump(conn, a, "write", b, "load")
+    counts = {d["uid"]: d["jumps"] for d in db.diagram_overview(conn)}
+    assert (counts[a], counts[b]) == (1, 1)
+
+
 # --------------------------------------------------------------------- cascade
 
 def test_purge_clears_every_diagram_table(conn):
@@ -568,6 +669,16 @@ def test_purge_clears_every_diagram_table(conn):
     assert db.purge_memory(conn, uid) is True
     for table in ("diagrams", "diagram_nodes", "diagram_edges", "diagram_node_links"):
         assert conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] == 0
+
+
+def test_purging_a_diagram_takes_the_jumps_pointing_at_it(conn):
+    a, b = _pair(conn)
+    db.add_diagram_jump(conn, a, "write", b, "load")
+    db.add_diagram_jump(conn, b, "check", a, "done")
+
+    assert db.purge_memory(conn, b) is True
+    assert db.get_diagram(conn, a)["jumps"] == []
+    assert conn.execute("SELECT COUNT(*) FROM diagram_jumps").fetchone()[0] == 0
 
 
 def test_purging_a_linked_memory_leaves_no_dangling_node_link(conn):
@@ -796,6 +907,20 @@ def test_mcp_get_memory_shows_the_link_from_both_ends(mcp):
     assert mcp.diagram_link(uid, "load", note, delete=True)["ok"] is False
 
 
+def test_mcp_jump_is_visible_on_both_diagrams(mcp):
+    a = mcp.diagram(title="Nightly export routine", nodes=NODES, edges=EDGES)["uid"]
+    b = mcp.diagram(title="Store reconciliation routine", nodes=NODES, edges=EDGES)["uid"]
+    assert mcp.diagram_jump(a, "write", b, "load", label="per store") == {"ok": True}
+
+    assert mcp.get_memory(a)["jumps"][0]["direction"] == "out"
+    assert mcp.get_memory(b)["jumps"][0]["node_key"] == "load"
+    assert mcp.get_diagram(b, format="json")["jumps"][0]["peer_uid"] == a
+
+    assert "draw an edge" in mcp.diagram_jump(a, "write", a)["errors"][0]
+    assert mcp.diagram_jump(b, "load", a, "write", delete=True) == {"ok": True}
+    assert mcp.diagram_jump(b, "load", a, "write", delete=True)["ok"] is False
+
+
 def test_mcp_pulse_names_diagrams_without_inlining_them(mcp):
     uid = mcp.diagram(
         title="Nightly export routine", nodes=NODES, edges=EDGES, domain="proj-1042",
@@ -980,6 +1105,43 @@ def test_api_link_carries_a_peer_card(client):
         "node_key": "load", "target_uid": note, "delete": True}).status_code == 200
     assert client.post(f"/api/diagrams/{uid}/link", json={
         "node_key": "load", "target_uid": note, "delete": True}).status_code == 400
+
+
+def test_api_jump_round_trips_from_either_end(client):
+    a = _create(client)
+    b = _create(client, title="Store reconciliation routine")
+    assert client.post(f"/api/diagrams/{a}/jump", json={
+        "node_key": "write", "peer_uid": b, "peer_node": "load",
+        "label": "per store"}).status_code == 200
+
+    out = client.get(f"/api/diagrams/{a}").json()["jumps"][0]
+    assert (out["direction"], out["node_key"], out["peer_node"]) == ("out", "write", "load")
+    incoming = client.get(f"/api/diagrams/{b}").json()["jumps"][0]
+    assert (incoming["direction"], incoming["node_key"]) == ("in", "load")
+
+    # cut from the side that did not create it
+    assert client.post(f"/api/diagrams/{b}/jump", json={
+        "node_key": "load", "peer_uid": a, "peer_node": "write",
+        "delete": True}).status_code == 200
+    assert client.get(f"/api/diagrams/{a}").json()["jumps"] == []
+    assert client.post(f"/api/diagrams/{b}/jump", json={
+        "node_key": "load", "peer_uid": a, "peer_node": "write",
+        "delete": True}).status_code == 400
+    assert client.post(f"/api/diagrams/{a}/jump", json={"node_key": "write"}).status_code == 400
+
+
+def test_api_clean_orphans_drops_a_jump_to_a_missing_step(client):
+    a = _create(client)
+    b = _create(client, title="Store reconciliation routine")
+    client.post(f"/api/diagrams/{a}/jump", json={
+        "node_key": "write", "peer_uid": b, "peer_node": "load"})
+
+    # forge the desync a crash mid-delete could leave behind
+    with db.connect() as conn:
+        conn.execute("DELETE FROM diagram_nodes WHERE memory_uid = ? AND node_key = 'load'", (b,))
+
+    assert client.post("/api/maintenance/clean-orphans", json={}).json()["jumps_removed"] == 1
+    assert client.get(f"/api/diagrams/{a}").json()["jumps"] == []
 
 
 def test_api_memory_detail_embeds_the_graph(client):

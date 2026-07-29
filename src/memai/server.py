@@ -319,6 +319,34 @@ def diagram_link(
 
 
 @mcp.tool()
+def diagram_jump(
+    uid: str, node_key: str, peer_uid: str, peer_node: str = "",
+    label: str = "", delete: bool = False,
+) -> dict:
+    """Continue one step of a flow into ANOTHER flow, optionally at one of its steps.
+
+    Not the same statement as diagram_link: that attaches prose explaining
+    a step, this says the rest of this branch is documented elsewhere. Use
+    it where a routine hands off -- a sub-process, an error path owned by
+    another flow, a variant of the same job.
+
+    Leave `peer_node` empty to arrive at the target diagram as a whole.
+    Stored once and read from both ends, so the return trip already exists
+    and get_diagram(format='json') reports it on both diagrams. `uid` and
+    `node_key` are this diagram's side either way, which is also how a jump
+    is deleted from the receiving end.
+    """
+    with db.connect() as conn:
+        if delete:
+            ok = db.delete_diagram_jump(conn, uid, node_key, peer_uid, peer_node)
+            errors = [] if ok else [f"no jump between {node_key!r} and {peer_uid!r}"]
+        else:
+            ok, errors = db.add_diagram_jump(
+                conn, uid, node_key, peer_uid, peer_node, label=label)
+    return {"ok": True} if ok else _errors(errors)
+
+
+@mcp.tool()
 def diagram_relayout(uid: str) -> dict:
     """Recompute a diagram's stored node positions from scratch.
 
@@ -529,10 +557,10 @@ def pulse(domain: str = "") -> dict:
 def get_memory(uid: str) -> dict:
     """Fetch a single memory's full record, including its edit history and relations.
 
-    A diagram also comes back with its mermaid source and its per-node
-    links; any other memory comes back with `referenced_by_diagrams`, the
-    flows that point a step at it -- so a note tells you which processes
-    depend on it without a second lookup.
+    A diagram also comes back with its mermaid source, its per-node links
+    and its jumps to and from other flows; any other memory comes back
+    with `referenced_by_diagrams`, the flows that point a step at it -- so
+    a note tells you which processes depend on it without a second lookup.
     """
     with db.connect() as conn:
         row = db.get_memory(conn, uid)
@@ -544,6 +572,7 @@ def get_memory(uid: str) -> dict:
         if row["type"] == TYPE_DIAGRAM:
             result["mermaid"] = _capped(db.render_diagram_mermaid(conn, uid))
             result["node_links"] = [_row_to_dict(r) for r in db.get_node_links(conn, uid)]
+            result["jumps"] = db.get_diagram_jumps(conn, uid)
         else:
             result["referenced_by_diagrams"] = [
                 _row_to_dict(r) for r in db.diagrams_referencing(conn, uid)
@@ -854,6 +883,7 @@ _TOOLS = {
     "diagram_node": diagram_node,
     "diagram_edge": diagram_edge,
     "diagram_link": diagram_link,
+    "diagram_jump": diagram_jump,
     "diagram_relayout": diagram_relayout,
     "get_diagram": get_diagram,
     "search": search,
