@@ -81,7 +81,7 @@ export async function renderOverview(view, params, ctx) {
       <span class="type-tag ${typeClass(m.type)}" style="flex:none;width:118px"><span class="dot"></span>${esc(m.type)}</span>
       <button type="button" class="row-open rel-peer"
               aria-label="${esc(t('a11y.openRecord', { uid: m.uid }))}"><span class="snippet">${esc(m.content)}</span></button>
-      <span style="font-size:10.5px;color:var(--ink-3);flex:none">${fmtAgo(m.created_at)}</span>
+      <span class="hint-sm">${fmtAgo(m.created_at)}</span>
     </div>`).join('') || `<div class="empty">${t('ov.recent.empty')}</div>`;
 
   view.innerHTML = `<div class="anim">

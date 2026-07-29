@@ -11,7 +11,8 @@ import { api, query } from '../core/api.js';
 import { icon } from '../core/icons.js';
 import { toast, failed, tipShow, tipHide, openModal, closeModal, setPressed } from '../core/ui.js';
 import { typeTag, typeColor, uidChip, statusTag, confPill, wireCopyChips,
-         getDomains, TYPE_ORDER, TYPE_LABEL, relOptions } from '../core/shared.js';
+         getDomains, TYPE_ORDER, TYPE_LABEL, REL_SUGGEST, relTypeField,
+         wireRelTypeField } from '../core/shared.js';
 import { go, refreshBehind } from '../core/router.js';
 import { onTeardown } from '../core/lifecycle.js';
 import { openRecord } from './record.js';
@@ -359,24 +360,26 @@ class ForceGraph {
     const modal = openModal({
       title: t('g.modal.title'),
       bodyHTML: `
-        <div style="display:grid;gap:6px;font-size:11.5px">
+        <div class="gl-peers">
           <div><span class="dot" style="--c:${typeColor(a.type)};display:inline-block;margin-right:6px"></span>${esc(a.uid)} · ${esc(a.label)}</div>
           <div style="color:var(--accent);padding-left:2px;--ico:15px">${icon('arrow-down')}</div>
           <div><span class="dot" style="--c:${typeColor(b.type)};display:inline-block;margin-right:6px"></span>${esc(b.uid)} · ${esc(b.label)}</div>
         </div>
         <div class="field"><label for="glType">${t('g.modal.relType')}</label>
-          <input type="text" id="glType" list="glTypesDL" value="relates_to">
-          <datalist id="glTypesDL">${relOptions()}</datalist></div>
+          <div class="act-row">${relTypeField({
+            selId: 'glType', customId: 'glTypeCustom', options: REL_SUGGEST,
+            value: 'relates_to', ariaLabel: t('g.modal.relType') })}</div></div>
         <div class="field"><label for="glNote">${t('g.modal.note')}</label><input type="text" id="glNote"></div>`,
       footHTML: `<button class="btn" data-x>${t('common.cancel')}</button><button class="btn btn-solid" data-ok>${t('g.modal.create')}</button>`,
     });
     const mq = s => modal.querySelector(s);
+    const glRelValue = wireRelTypeField(mq('#glType'), mq('#glTypeCustom'));
     mq('[data-x]').onclick = () => { closeModal(); this.linkFrom = null; this.requestDraw(); };
     mq('[data-ok]').onclick = async () => {
       try {
         await api('/api/relations', { body: {
           from_uid: a.uid, to_uid: b.uid,
-          relation_type: mq('#glType').value.trim() || 'relates_to',
+          relation_type: glRelValue() || 'relates_to',
           note: mq('#glNote').value } });
         closeModal();
         toast(t('dr.rel.created'), 'ok');

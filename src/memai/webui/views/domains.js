@@ -47,7 +47,7 @@ export async function renderDomains(view, params, ctx) {
     </div>
     <div class="panel" style="margin-bottom:14px">
       <h3 class="panel-title">${t('do.case.title')}</h3>
-      <div style="font-size:11.5px;color:var(--ink-3);margin-bottom:10px">${t('do.case.desc')}</div>
+      <div class="intro">${t('do.case.desc')}</div>
       <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
         <select id="caseMode" aria-label="${t('do.case.title')}">
           ${CASE_MODES.map(mode =>
@@ -101,8 +101,8 @@ async function openNormalizeModal() {
   const modal = openModal({
     title: t('do.norm.title'),
     bodyHTML: `
-      <div style="font-size:12px;margin-bottom:8px">${t('do.norm.intro', { renames: plan.renames, merges: plan.merges, mode: t('do.case.mode.' + plan.mode) })}</div>
-      ${plan.merges ? `<div style="font-size:11.5px;color:var(--warn);margin-bottom:8px">${t('do.norm.mergeWarn')}</div>` : ''}
+      <div class="intro">${t('do.norm.intro', { renames: plan.renames, merges: plan.merges, mode: t('do.case.mode.' + plan.mode) })}</div>
+      ${plan.merges ? `<div class="intro warn">${t('do.norm.mergeWarn')}</div>` : ''}
       <div class="table-scroll"><table class="table"><thead><tr>
         <th>${t('do.norm.th.from')}</th><th>${t('do.norm.th.to')}</th>
         <th class="num">${t('do.norm.th.count')}</th><th>${t('do.norm.th.action')}</th>
@@ -131,8 +131,8 @@ function openRenameModal(from, domains, presetTo = '') {
       <div class="field"><label for="rnTo">${t('do.rn.to')}</label>
         <input type="text" id="rnTo" value="${esc(presetTo)}" list="rnDL" placeholder="${t('do.rn.placeholder')}">
         <datalist id="rnDL">${dl}</datalist></div>
-      <div id="rnWarn" style="font-size:11.5px;color:var(--warn)" hidden>${t('do.rn.warn')}</div>
-      <div style="font-size:11px;color:var(--ink-3)">${t('do.rn.hint')}</div>`,
+      <div id="rnWarn" class="hint warn" hidden>${t('do.rn.warn')}</div>
+      <div class="hint-sm">${t('do.rn.hint')}</div>`,
     footHTML: `<button class="btn" data-x>${t('common.cancel')}</button><button class="btn btn-solid" data-ok>${t('common.apply')}</button>`,
   });
   const toInput = modal.querySelector('#rnTo');

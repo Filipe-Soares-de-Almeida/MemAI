@@ -261,7 +261,7 @@ function renderOptRun(view, initialMeta) {
         <button type="button" class="btn btn-sm" id="optApplyAll">${t('op.applyAll')}</button>
         <button type="button" class="btn btn-danger btn-sm" id="optDiscard">${t('op.discard')}</button>
       </div>
-      <div id="optBackup" style="font-size:11px;color:var(--ink-3);margin-top:6px"></div>
+      <div id="optBackup" class="hint-sm"></div>
     </div>
     <div id="optBody"><div class="loading"><span class="spin"></span></div></div>
   </div>`;

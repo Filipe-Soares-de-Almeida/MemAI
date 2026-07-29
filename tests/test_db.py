@@ -99,3 +99,51 @@ def test_dedup_candidates_finds_near_duplicates(conn):
     db.insert_memory(conn, type="note", content="completely unrelated fact about databases")
     pairs = db.dedup_candidates(conn, threshold=0.85)
     assert len(pairs) == 1
+
+
+def test_tag_filter_matches_whole_tags_only(conn):
+    """`tags` is one comma string, so the filter has to respect boundaries."""
+    hit = db.insert_memory(conn, type="note", content="alpha rollout note",
+                           domain="d1", tags="rollout,flag")
+    db.insert_memory(conn, type="note", content="beta rollout note",
+                     domain="d1", tags="rollout-plan,flagged")
+    db.insert_memory(conn, type="note", content="gamma rollout note",
+                     domain="d1", tags="batch")
+
+    rows = db.search_memories(conn, "rollout", tag="rollout")
+    assert [r["uid"] for r in rows] == [hit]
+
+    # a tag in the middle of the list, and one written with spaces around it
+    spaced = db.insert_memory(conn, type="note", content="delta rollout note",
+                              domain="d1", tags="batch, flag , loader")
+    rows = db.search_memories(conn, "rollout", tag="flag")
+    assert set(r["uid"] for r in rows) == {hit, spaced}
+
+
+def test_tag_filter_escapes_like_wildcards(conn):
+    """'anti_pattern' is a valid tag and '_' is a LIKE wildcard."""
+    exact = db.insert_memory(conn, type="note", content="one", tags="anti_pattern")
+    db.insert_memory(conn, type="note", content="two", tags="anti-pattern")
+    rows = db.list_recent(conn, tag="anti_pattern")
+    assert [r["uid"] for r in rows] == [exact]
+
+    pct = db.insert_memory(conn, type="note", content="three", tags="100%done")
+    rows = db.list_recent(conn, tag="100%done")
+    assert [r["uid"] for r in rows] == [pct]
+
+
+def test_tag_filter_default_is_inert(conn):
+    """Every existing caller passes no tag; the results must not move."""
+    db.insert_memory(conn, type="note", content="alpha note", tags="one")
+    db.insert_memory(conn, type="note", content="beta note", tags="two")
+    assert len(db.list_recent(conn)) == 2
+    assert len(db.list_recent(conn, tag="")) == 2
+    assert len(db.search_memories(conn, "note")) == 2
+    assert len(db.search_memories(conn, "note", tag="")) == 2
+
+
+def test_list_recent_tag_filter(conn):
+    a = db.insert_memory(conn, type="note", content="one", tags="loader,schema")
+    db.insert_memory(conn, type="note", content="two", tags="loader")
+    rows = db.list_recent(conn, tag="schema")
+    assert [r["uid"] for r in rows] == [a]

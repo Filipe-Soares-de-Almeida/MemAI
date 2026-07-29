@@ -11,7 +11,8 @@ import { api, seg } from '../core/api.js';
 import { icon } from '../core/icons.js';
 import { toast, failed, openModal, closeModal, confirmModal, promptModal,
          openCtxMenu, tipShow, tipHide, setPressed } from '../core/ui.js';
-import { typeClass, wireUidPicker } from '../core/shared.js';
+import { typeClass, wireUidPicker, relTypeField, wireRelTypeField,
+         DG_REL_SUGGEST } from '../core/shared.js';
 import { onTeardown } from '../core/lifecycle.js';
 import { openRecord } from './record.js';
 import { DiagramEditor, NODE_SHAPES, ROUTINGS, FONT_SCALES } from '../diagram-engine.js';
@@ -474,13 +475,12 @@ export async function renderDiagram(view, params, ctx) {
             <div class="picker-results" id="dgResults" hidden></div>
           </div>
           <div class="act-row">
-            <input type="text" id="dgRelType" list="dgRelDL" value="explains"
-                   aria-label="${t('dg.link.relType')}" style="flex:1">
+            ${relTypeField({
+              selId: 'dgRelType', customId: 'dgRelTypeCustom', options: DG_REL_SUGGEST,
+              value: 'explains', ariaLabel: t('dg.link.relType') })}
             <button class="btn btn-sm" id="dgAttach">${t('dg.link.attach')}</button>
           </div>
-          <datalist id="dgRelDL">
-            ${['explains', 'contradicts', 'relates_to'].map(r => `<option value="${r}">`).join('')}
-          </datalist>
+          <div class="field-error" id="dgLinkError" role="alert" hidden></div>
         </div>` : ''}
       </div>`;
 
@@ -512,19 +512,49 @@ export async function renderDiagram(view, params, ctx) {
 
     /* the same picker the relations editor in a record uses -- it was a second
        copy of it here, with the same keyboard hole in both */
-    const picked = wireUidPicker({
+    const resolveTarget = wireUidPicker({
       input: side.querySelector('#dgTarget'),
       results: side.querySelector('#dgResults'),
       exclude: uid,
       label: t('dg.link.target'),
     });
+    const dgRelValue = wireRelTypeField(
+      side.querySelector('#dgRelType'), side.querySelector('#dgRelTypeCustom'));
 
-    side.querySelector('#dgAttach').onclick = () => {
-      const target = picked() || side.querySelector('#dgTarget').value.trim();
-      if (!target) { toast(t('dg.link.pickTarget'), 'bad'); return; }
-      act(() => api(`/api/diagrams/${seg(uid)}/link`, { body: {
-        node_key: node.key, target_uid: target,
-        relation_type: side.querySelector('#dgRelType').value.trim() } }), t('dg.linked'));
+    /* Beside the field, not in the corner: the two things that can be wrong
+       here are both fields the caret is already in or next to. */
+    const linkErr = side.querySelector('#dgLinkError');
+    const targetEl = side.querySelector('#dgTarget');
+    const linkFail = msg => {
+      targetEl.setAttribute('aria-invalid', 'true');
+      linkErr.textContent = msg;
+      linkErr.hidden = false;
+      targetEl.focus();
+    };
+    targetEl.addEventListener('input', () => {
+      targetEl.setAttribute('aria-invalid', 'false');
+      linkErr.hidden = true;
+    });
+    const LINK_MSG = {
+      empty: 'dg.link.pickTarget',
+      self: 'dr.rel.selfTarget',
+      unknown: 'dr.rel.unknownTarget',
+      failed: 'dr.rel.lookupFailed',
+    };
+
+    const attach = side.querySelector('#dgAttach');
+    attach.onclick = async () => {
+      targetEl.setAttribute('aria-invalid', 'false');
+      linkErr.hidden = true;
+      if (!targetEl.value.trim()) return linkFail(t('dg.link.pickTarget'));
+      attach.disabled = true;
+      try {
+        const { uid: target, reason } = await resolveTarget();
+        if (!target) return linkFail(t(LINK_MSG[reason] || 'dr.rel.unknownTarget'));
+        act(() => api(`/api/diagrams/${seg(uid)}/link`, { body: {
+          node_key: node.key, target_uid: target,
+          relation_type: dgRelValue() } }), t('dg.linked'));
+      } finally { attach.disabled = false; }
     };
   }
 

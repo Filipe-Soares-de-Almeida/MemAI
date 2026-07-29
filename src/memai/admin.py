@@ -1003,23 +1003,50 @@ def audit(request, payload) -> dict:
 
 
 def lookup(request, payload) -> dict:
-    """Lightweight finder for the relation-target picker."""
+    """Finder for the memory-link picker in a record and on a diagram step.
+
+    Every field returned is one the picker renders. The operator is
+    choosing which memory to point at, and a uid is not something a human
+    recognizes -- so domain, status and the retrieval provenance travel
+    with the snippet, and the UI is free to show why a row is in the list
+    rather than asking the reader to trust the ranking.
+
+    Defaults to active memories. Archived ones are still reachable (the
+    picker has a toggle), but they are the exception: linking to something
+    already retired is a deliberate act, not the resting state.
+    """
     q = request.query_params.get("q", "").strip()
     exclude = request.query_params.get("exclude", "")
+    type_ = request.query_params.get("type", "")
+    domain = request.query_params.get("domain", "")
+    tag = request.query_params.get("tag", "").strip()
+    status = request.query_params.get("status", "active")
+    limit = _int_param(request, "limit", 20, 1, 50)
+    # One row past the cap answers "is there more?" without a second COUNT
+    # over the same predicate, and the excluded row costs one more on top.
+    fetch = limit + 1 + (1 if exclude else 0)
     with db.connect() as conn:
         if not q:
-            rows = [dict(r) for r in db.list_recent(conn, limit=10, status="")]
+            rows = [dict(r) for r in db.list_recent(
+                conn, type=type_, domain=domain, tag=tag, status=status, limit=fetch)]
         else:
+            # A pasted uid is an explicit request for one memory, so it
+            # answers past every filter including status -- the operator
+            # named the row, there is nothing left to narrow.
             exact = db.get_memory(conn, q)
             # pure relevance here: the operator is choosing *any* memory to
             # attach, so lifting diagrams to the top would only be noise
             rows = [dict(exact)] if exact is not None else \
-                db.search_hybrid(conn, q, status="", limit=10, diagrams_first=False)
+                db.search_hybrid(conn, q, type=type_, domain=domain, tag=tag,
+                                 status=status, limit=fetch, diagrams_first=False)
+    rows = [r for r in rows if r["uid"] != exclude]
     items = [{
         "uid": r["uid"], "type": r["type"], "domain": r["domain"],
         "status": r["status"], "snippet": _snip(r["content"], 110),
-    } for r in rows if r["uid"] != exclude]
-    return {"items": items}
+        "match_source": r.get("match_source", ""),
+        "fts_rank": r.get("fts_rank"), "vec_distance": r.get("vec_distance"),
+    } for r in rows[:limit]]
+    return {"items": items, "has_more": len(rows) > limit}
 
 
 # ---------------------------------------------------------------- optimization

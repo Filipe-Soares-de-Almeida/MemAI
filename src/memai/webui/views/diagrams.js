@@ -77,7 +77,7 @@ export async function renderDiagrams(view, params, ctx) {
     </div>
 
     <div class="panel" style="margin-bottom:14px">
-      <div style="font-size:11.5px;color:var(--ink-3);margin-bottom:10px">${t('dgl.intro')}</div>
+      <div class="intro">${t('dgl.intro')}</div>
       <div class="act-row">
         <select id="dglDomain" aria-label="${t('common.allDomains')}">
           <option value="">${t('common.allDomains')}</option>

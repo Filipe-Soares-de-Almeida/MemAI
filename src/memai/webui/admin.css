@@ -94,10 +94,30 @@
   --t-handoff:      #2e7d32;
   --t-diagram:      #009688;   /* Teal 500 — the sixth hue of the same check */
 
-  /* status scale (fixed, reserved; always icon + label) */
+  /* status scale (fixed, reserved; always icon + label).
+
+     Two reds, by role, because one cannot do both jobs on a dark theme.
+     #CF6679 is Material's dark-theme error and it is the right colour for a
+     BORDER or a FILL, where the bar is 3:1 for non-text. As TEXT it failed
+     AA in every place it was used: 4.36:1 on --raised (.btn-danger, the
+     danger-zone summary), 3.99:1 on its own tinted pill (contradicted
+     confidence, ten per list page) and 3.86:1 on the deletion tint
+     (.dz-hint code). A red that cannot be read is the wrong red for words.
+
+     --bad-ink is Red 300, which also settles an inconsistency: --ok is
+     Green 300 and --warn is Amber 300, so the ink tier of the status scale
+     is now three steps of one ramp instead of two 300s and an error token.
+     It clears 4.5:1 on every surface this UI puts it on -- 5.58 on
+     --surface, 5.26 on --raised, 4.81 on the contradicted pill, 4.65 on the
+     deletion tint. The diff row keeps --diff-del-ink, which is tuned for
+     that one background.
+
+       --bad      borders, fills, marks on a plain surface
+       --bad-ink  anything a human reads */
   --ok:   #81c784;   /* Green 300 */
   --warn: #ffd54f;   /* Amber 300 */
   --bad:  #cf6679;   /* Material dark error */
+  --bad-ink: #e57373;   /* Red 300 */
 
   /* edit-history diff: a tinted row, plus ink light enough to read on it */
   --diff-add-bg:  rgba(129, 199, 132, .12);
@@ -115,14 +135,41 @@
      visibly not the one below it, plus two display sizes for the numbers a
      dashboard exists to show. --fs-body matches the body rule below; a size
      not on this list is a size that has to argue for itself. */
-  --fs-label: 11px;     /* uppercase micro-label, table head */
-  --fs-sm:    12.5px;   /* dense data, chips, captions */
+  --fs-label: 11px;     /* uppercase micro-label, table head, quietest caption */
+  --fs-sm:    12.5px;   /* dense data, chips, explanatory text */
   --fs-body:  13.5px;
-  --fs-md:    15px;     /* panel and section titles */
+  --fs-md:    14px;     /* panel and section titles */
+  --fs-read:  15px;     /* prose someone sits and READS -- see below */
   --fs-lg:    18px;     /* modal title */
   --fs-xl:    22px;     /* view title */
   --fs-num:   26px;     /* a tile's value */
   --fs-hero:  42px;     /* one per view, at most */
+
+  /* Why --fs-md came DOWN to 14 and why --fs-read exists.
+     The consolidation that produced this scale rounded almost every rule UP
+     -- fifteen sizes rose, one fell -- and the loudest of those was the
+     heading: 11px uppercase tracked became 15px sentence case, five or six
+     times per view. That is not a 4px change, it is a different object on
+     the screen, and it is what made the whole UI read as if it were zoomed.
+
+     14 is deliberately NOT a perceptible size step over --fs-body's 13.5,
+     and it does not need to be. Most text a heading actually sits above is
+     --fs-sm or --fs-label, so the real gap is 1.5px, and three other
+     channels are already carrying this role: weight 500 against 400, --ink
+     against --ink-2, and --sp-5 above the heading against --sp-3 below it.
+     Size was the one asked to do all the work when it went to 15.
+
+     Roboto's weights are worth checking with the right instrument, because
+     the wrong one is convincing: this face keeps its ADVANCE WIDTHS nearly
+     constant across weights, so measuring a string at 400 / 500 / 700 gives
+     109.89 / 109.81 / 109.70 and reads as "weight does nothing". Rendered
+     ink at 100px tells the truth -- 7601 / 9068 / 10359 pixels. Weight is
+     the strongest channel here; it just cannot be measured by width.
+
+     And the reading surfaces were split off rather than dragged down with
+     the chrome: a memory's own text and the no-script page are prose, they
+     are capped at a measure, and they have no reason to shrink because a
+     panel title did. */
 
   /* radii. Nineteen values across 68 rules before this, with `--radius`
      declared once and ignored by 33 of 43 declarations, and the pill spelled
@@ -293,9 +340,16 @@ kbd {
 .view {
   flex: 1;
   overflow-y: auto;
-  /* 90px is clearance for the floating bulk bar, not rhythm -- plus whatever
-     the toast stack is currently taking, for the same reason .drawer-body does */
-  padding: var(--sp-5) var(--sp-6) calc(90px + var(--toast-h, 0px));
+  /* The bottom padding is clearance, not rhythm: whatever the floating bulk
+     bar and the toast stack are currently taking, over the normal gutter.
+
+     It was a flat 90px on all seven views for a bar that appears on ONE, and
+     views.memories already publishes --bulk-h (its own measured height, and
+     0px on teardown) precisely so the stylesheet would not have to guess.
+     Nothing read it. At 200% zoom that dead 90px was 27% of a 328px work
+     area, on views that could never show the bar it was reserved for. */
+  padding: var(--sp-5) var(--sp-6)
+           calc(var(--sp-5) + var(--bulk-h, 0px) + var(--toast-h, 0px));
   outline: none;
 }
 .view > * { max-width: 1340px; margin-left: auto; margin-right: auto; }
@@ -466,7 +520,7 @@ kbd {
 .btn-ghost { border-color: transparent; color: var(--ink-2); }
 .btn-ghost:hover { background: var(--hover-2); border-color: transparent; color: var(--ink); }
 /* declared after .btn-ghost so btn-ghost + btn-danger combos still read as dangerous */
-.btn-danger { color: var(--bad); border-color: rgba(207, 102, 121, .4); background: transparent; }
+.btn-danger { color: var(--bad-ink); border-color: rgba(207, 102, 121, .4); background: transparent; }
 .btn-danger:hover { background: rgba(207, 102, 121, .12); border-color: rgba(207, 102, 121, .6); }
 .btn-sm { padding: var(--sp-1) var(--sp-3); font-size: var(--fs-sm); min-height: var(--tap); }
 
@@ -483,7 +537,7 @@ kbd {
   --ico: 13px;
 }
 .icon-btn:hover { color: var(--ink); background: var(--hover-3); }
-.icon-btn.danger:hover { color: var(--bad); background: rgba(207, 102, 121, .12); }
+.icon-btn.danger:hover { color: var(--bad-ink); background: rgba(207, 102, 121, .12); }
 
 /* ── controls that do not look like buttons ───────────────────────────────
    A chip, a uid, a row's own text, a result in a picker: each of these does
@@ -549,6 +603,20 @@ input[type="checkbox"] {
   vertical-align: middle;
   transition: background .13s, border-color .13s;
 }
+/* The MARK is 16px because that is the Material checkbox; the TARGET has to
+   be 24 (WCAG 2.5.8), and there are fifty of these on one page of the
+   memories list -- the entry point to every bulk action. A centred
+   transparent ::before grows the hit area without moving anything: hit
+   testing on a pseudo-element resolves to the element that owns it, and the
+   checkmark stays on top because ::after paints after ::before. Not a
+   wrapping <label>, which would have meant touching every call site for a
+   property that belongs to the control. */
+input[type="checkbox"]::before {
+  content: "";
+  position: absolute; top: 50%; left: 50%;
+  width: var(--tap); height: var(--tap);
+  transform: translate(-50%, -50%);
+}
 input[type="checkbox"]:hover { border-color: rgba(255, 255, 255, .75); background: var(--hover-2); }
 input[type="checkbox"]:checked { background: var(--accent); border-color: var(--accent); }
 input[type="checkbox"]:checked::after {
@@ -561,7 +629,7 @@ textarea { resize: vertical; min-height: 110px; width: 100%; font-family: var(--
 /* A field that is wrong says so beside itself. Two of these used to fire as a
    toast in the opposite corner of the window, about a field the caret was
    already in -- the message and the problem were 400px apart. */
-.field-error { font-size: var(--fs-label); color: var(--bad); }
+.field-error { font-size: var(--fs-label); color: var(--bad-ink); }
 input[aria-invalid="true"], select[aria-invalid="true"], textarea[aria-invalid="true"] {
   border-color: var(--bad);
 }
@@ -575,6 +643,11 @@ input[aria-invalid="true"], select[aria-invalid="true"], textarea[aria-invalid="
   color: var(--ink-2);
   background: none; border: none; border-radius: var(--r-sm);
   padding: var(--sp-1) var(--sp-3); cursor: pointer;
+  /* the --tap floor, which this control was declared to honour and did not:
+     it measured 23px, one pixel under, and it is the Active/Archived/All
+     filter and the drawer's confidence setter -- two of the most-pressed
+     targets in the app */
+  min-height: var(--tap);
   display: inline-flex; align-items: center; gap: var(--sp-2);
   transition: all .13s;
 }
@@ -635,6 +708,9 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
 .chip.clickable:hover { border-color: rgba(187, 134, 252, .4); color: var(--accent); }
 
 .conf-pill { display: inline-flex; align-items: center; gap: var(--sp-1); font-size: var(--fs-label); color: var(--ink-2); white-space: nowrap; --ico: 12px; }
+/* mark only, for a list row. Slightly larger, because it is now carrying the
+   state on its own and 12px of ring is small to read at a glance. */
+.conf-pill.compact { gap: 0; --ico: 14px; }
 
 /* These three rules used to target `<i>`. There is no `<i>` anywhere in the JS
    tree -- confPill() in core/shared.js and the drawer's curation row both emit
@@ -645,14 +721,14 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
    as the rule existed, and the rule looked like it worked. */
 .c-confirmed    .ico { color: var(--ok); }
 .c-unverified   .ico { color: var(--warn); }
-.c-contradicted .ico { color: var(--bad); }
+.c-contradicted .ico { color: var(--bad-ink); }
 
 /* Only one of the three gets a fill. A contradicted memory is the state you
    must not scroll past, so it is loud enough to catch you at fifty rows;
    `confirmed` stays quiet because a good default should never shout, and
    `unverified` stays neutral because it is a question, not a problem. */
 .conf-pill.c-contradicted {
-  color: var(--bad);
+  color: var(--bad-ink);
   background: rgba(207, 102, 121, .12);
   border-radius: var(--r-pill);
   padding: var(--sp-0) var(--sp-2);
@@ -699,6 +775,35 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
    record.js was patching three of them inline with the two properties the
    uppercase voice used to force. */
 .panel-aside { font-weight: 400; font-size: var(--fs-sm); color: var(--ink-3); }
+
+/* ── the explanatory line ─────────────────────────────────────────────────
+   The sentence that opens a panel, the note beside a control, the caption on
+   a row. Fifteen inline `font-size` declarations said this in five values --
+   10, 10.5, 11, 11.5 and 12 -- three of them inside the half-pixel band the
+   scale above exists to have removed, and two of them below the floor for
+   text a person has to read. Five values for one job, none of them reachable
+   from :root.
+
+   Two steps now, chosen by how quiet the line is meant to be, plus the
+   opening sentence of a panel or modal, which owns its own bottom margin
+   because that space belongs to the sentence and not to whatever follows. */
+.intro   { font-size: var(--fs-sm); color: var(--ink-2); margin-bottom: var(--sp-3); }
+.hint    { font-size: var(--fs-sm); color: var(--ink-3); }
+.hint-sm { font-size: var(--fs-label); color: var(--ink-3); }
+.intro.warn, .hint.warn, .hint-sm.warn { color: var(--warn); }
+
+/* a control and the words naming it, on one line and as one target */
+.inline-label {
+  display: inline-flex; align-items: center; gap: var(--sp-2);
+  min-height: var(--tap);
+  font-size: var(--fs-label); color: var(--ink-2);
+  white-space: nowrap; cursor: pointer;
+}
+.inline-label b { color: var(--ink); font-weight: 500; }
+.inline-label input[type="range"] { width: 130px; }
+
+/* the two memories a link is about to join, stacked in the graph's modal */
+.gl-peers { display: grid; gap: var(--sp-1); font-size: var(--fs-sm); }
 
 .grid { display: grid; gap: var(--sp-4); }
 .grid > * { min-width: 0; } /* long nowrap snippets must ellipsize, not blow the track */
@@ -887,6 +992,8 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
 
 /* ── optimization · run detail (level 2) ────────────────────────────── */
 
+#optBackup { margin-top: var(--sp-2); }
+
 .opt-back {
   display: inline-flex; align-items: center;
   font-size: var(--fs-sm); color: var(--ink-3);
@@ -924,11 +1031,37 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
 .opt-group-count { font-size: var(--fs-label); color: var(--ink-3); }
 .opt-group-body { padding: var(--sp-3) var(--sp-4) var(--sp-0); border-top: 1px solid var(--line-soft); }
 
+/* ── memories list ───────────────────────────────────────────────────────
+   One line per memory, because the memory is the only thing on the row that
+   anyone came here to read.
+
+   It used to be four annotations stacked in a fixed 140px column beside a
+   two-line snippet clamp, and the stack -- not the memory -- set the height:
+   65px of chips (confidence 17, type 14, uid 24, status) against 19px of
+   actual memory, inside a 90px row. Eight of fifty rows fitted above the
+   fold and one page was 4849px, six screens, with the pager at the bottom of
+   all of it. The clamp was not the culprit either: 41 of 50 snippets
+   measured one line.
+
+   The annotations lie BESIDE the snippet now, so the tallest thing in the
+   row is the snippet itself and the row costs what one line of text costs.
+   Two of them left the row entirely and live in the record:
+     the uid    -- 110px of fixed width for a string nobody reads, and its
+                   --tap floor was what made the row 24px tall at minimum
+     the tags   -- there is no tag filter on this view, so they were chips
+                   you could look at and not act on
+   Confidence keeps the lead position and loses its word: three ringed marks
+   in three fixed colours, named on hover and in the drawer. The column stays
+   a FIXED width so the snippet's left edge does not jitter from row to row,
+   which is the whole point of a list. */
 .mem-list { border-radius: var(--r-lg); background: var(--surface); overflow: hidden; }
 .mem-row {
-  display: grid; grid-template-columns: 34px 140px 1fr auto;
-  gap: var(--sp-3); align-items: start;
-  padding: var(--sp-3) var(--sp-4) var(--sp-3) var(--sp-3);
+  display: grid; grid-template-columns: var(--tap) 150px 1fr auto;
+  gap: var(--sp-3); align-items: center;
+  /* --sp-2 vertical, the same as .rel-row: the app already had a dense
+     memory row and it lived in a side panel on Overview at 44px while this
+     one owned the view whose only job is listing memories */
+  padding: var(--sp-2) var(--sp-4);
   border-bottom: 1px solid var(--line-soft);
   cursor: pointer;
   transition: background .13s;
@@ -936,9 +1069,14 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
 .mem-row:last-child { border-bottom: none; }
 .mem-row:hover { background: var(--hover-1); }
 .mem-row.selected { background: var(--accent-dim); }
-.mem-check { display: flex; justify-content: center; padding-top: var(--sp-0); }
+.mem-check { display: flex; justify-content: center; }
 .mem-check input { cursor: pointer; }
-.mem-col-type { padding-top: var(--sp-0); display: flex; flex-direction: column; gap: var(--sp-1); align-items: flex-start; }
+/* fixed width and clipped rather than wrapping: a row that grows because its
+   type has a longer name is a row that broke the column */
+.mem-col-type {
+  display: flex; align-items: center; gap: var(--sp-2);
+  min-width: 0; overflow: hidden;
+}
 .mem-main { min-width: 0; }
 /* also a .row-open button -- the clamp works the same on one */
 /* --ink, not --ink-2: this is the memory, and it was two tiers quieter than the
@@ -947,13 +1085,12 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
    the primary thing here; it does not also need to be the biggest. */
 .mem-snippet {
   color: var(--ink); font-size: var(--fs-sm); line-height: 1.5;
-  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
-  overflow: hidden;
-  word-break: break-word;
+  display: block; width: 100%;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   text-align: left;
 }
-.mem-tags { margin-top: var(--sp-2); display: flex; gap: var(--sp-1); flex-wrap: wrap; }
-.mem-right { display: flex; flex-direction: column; align-items: flex-end; gap: var(--sp-1); font-size: var(--fs-label); color: var(--ink-3); white-space: nowrap; }
+.mem-right { display: flex; align-items: center; gap: var(--sp-2); font-size: var(--fs-label); color: var(--ink-3); white-space: nowrap; }
+.mem-right .chip { max-width: 150px; }
 
 .list-foot { display: flex; justify-content: space-between; align-items: center; margin-top: var(--sp-3); font-size: var(--fs-sm); color: var(--ink-2); }
 .list-foot b { font-family: var(--font-m); }
@@ -1058,7 +1195,7 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
    breaks carry meaning, and it drops the costume. The well is right for
    exactly one type -- `diagram`, whose content genuinely is machine output. */
 .content-prose {
-  font: 400 var(--fs-md)/1.65 var(--font-ui);
+  font: 400 var(--fs-read)/1.65 var(--font-ui);
   color: var(--ink);
   /* The WELL STAYS. It was removed here along with the monospace, and that was
      one change too many: this box scrolls (max-height + overflow-y above), and a
@@ -1100,6 +1237,9 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
 }
 .rel-peer:hover { background: var(--hover-2); }
 .rel-peer .snippet { color: var(--ink-2); font-size: var(--fs-sm); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* the relative time on a recent-memories row: it must not be squeezed by a
+   long snippet, which is what the inline flex:none used to say */
+.rel-row > .hint-sm { flex: none; }
 /* The note on a relation, on the page. It used to be a title on a span
    dressed as a button: unreachable by keyboard, invisible on touch, and
    announced by nothing. Text that matters is text. */
@@ -1109,19 +1249,103 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 
+/* ── the memory picker ─────────────────────────────────────────────────
+   The search field used to share a flex row with the relation type and the
+   Link button at `flex: 2`, so the field you type the longest query into was
+   the narrowest control on the row -- and .picker-results is anchored to the
+   field, so the list of TITLES inherited that width and ran at roughly half
+   the drawer. The field owns its own row now; the popover is full width for
+   free, with no override anywhere. */
 .rel-add { display: grid; gap: var(--sp-2); margin-top: var(--sp-3); }
 .picker { position: relative; }
+.picker > input { width: 100%; }
+/* a chosen memory reads as chosen: the field is holding a title, not a query */
+.picker > input.has-pick { border-color: var(--accent); color: var(--ink); }
+
 .picker-results {
   position: absolute; top: calc(100% + 4px); left: 0; right: 0; z-index: 20;
   background: var(--overlay);
   border: 1px solid var(--line);
   border-radius: var(--r-md);
   box-shadow: var(--shadow-pop);
-  max-height: 260px; overflow-y: auto;
+  overflow: hidden;                /* the list scrolls; the strip and foot do not */
 }
-.picker-item { display: flex; width: 100%; gap: var(--sp-2); align-items: center; padding: var(--sp-2) var(--sp-3); cursor: pointer; font-size: var(--fs-sm); border-bottom: 1px solid var(--line-soft); }
+
+/* Filters live INSIDE the popover, so they cost nothing at rest and are
+   there the moment the list is. Inside .picker too, which is what the
+   focusout dismissal keys on -- reaching for a filter is not leaving. */
+.picker-filters {
+  display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2);
+  padding: var(--sp-2) var(--sp-3);
+  border-bottom: 1px solid var(--line);
+  background: var(--raised);
+}
+.picker-filters select,
+.picker-filters input[type="text"] {
+  font-size: var(--fs-sm);
+  padding: var(--sp-1) var(--sp-2);
+  min-height: var(--tap);
+}
+.picker-filters select { padding-right: var(--sp-5); }
+.picker-filters input[type="text"] { flex: 1; min-width: 90px; }
+/* the archived toggle is an .inline-label; only its wrapping differs */
+.picker-filters .inline-label { flex: none; }
+
+/* 10 two-line rows is 540px, which would outrun the drawer; 8 fit, and the
+   foot says when there are more rather than letting the scrollbar imply it */
+.picker-list { max-height: 420px; overflow-y: auto; }
+
+/* dot | snippet
+   dot | domain · type · match · uid · archived
+   The snippet leads and takes the width. Everything that separates two
+   near-identical memories sits under it in one quiet line -- present, and
+   not competing with the sentence you are actually reading. */
+.picker-item {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: var(--sp-0) var(--sp-2);
+  width: 100%;
+  padding: var(--sp-2) var(--sp-3);
+  cursor: pointer;
+  font-size: var(--fs-sm);
+  border-bottom: 1px solid var(--line-soft);
+  text-align: left;
+}
+.picker-item:last-child { border-bottom: none; }
 .picker-item:hover { background: var(--accent-dim); }
-.picker-item .snippet { color: var(--ink-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 1; }
+.picker-item > .dot { grid-column: 1; grid-row: 1; margin-top: 5px; }
+.picker-snippet {
+  grid-column: 2; grid-row: 1;
+  color: var(--ink); line-height: 1.45;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+  overflow: hidden;
+  word-break: break-word;
+}
+.picker-meta {
+  grid-column: 2; grid-row: 2;
+  display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-1);
+  font-size: var(--fs-label); color: var(--ink-2);
+}
+.picker-domain { font-weight: 500; }
+.picker-uid { font-family: var(--font-m); color: var(--ink-3); }
+.picker-sep { color: var(--ink-3); }
+
+.picker-note {
+  display: flex; align-items: center; justify-content: space-between; gap: var(--sp-3);
+  padding: var(--sp-3);
+  font-size: var(--fs-sm); color: var(--ink-2);
+}
+.picker-note-bad { color: var(--bad-ink); }
+.picker-foot {
+  padding: var(--sp-2) var(--sp-3);
+  border-top: 1px solid var(--line);
+  font-size: var(--fs-label); color: var(--ink-3);
+}
+
+/* the relation type, and the free-text escape that keeps the vocabulary open */
+.rel-type-sel { flex: none; min-width: 150px; }
+.rel-type-custom { flex: 1; min-width: 140px; }
+.rel-note { flex: 1; min-width: 140px; }
 
 .hist-item { position: relative; padding: 0 0 var(--sp-4) var(--sp-5); }
 .hist-item::before {
@@ -1147,13 +1371,13 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
 .danger-zone { border: 1px solid rgba(207, 102, 121, .3); border-radius: var(--r-md); }
 .danger-zone summary {
   cursor: pointer; padding: var(--sp-3) var(--sp-4);
-  color: var(--bad);
+  color: var(--bad-ink);
   list-style: none;
 }
 .danger-zone summary::-webkit-details-marker { display: none; }
 .danger-zone .dz-body { padding: var(--sp-1) var(--sp-4) var(--sp-4); display: grid; gap: var(--sp-2); }
 .dz-hint { font-size: var(--fs-sm); color: var(--ink-2); }
-.dz-hint code { font-family: var(--font-m); color: var(--bad); background: rgba(207, 102, 121, .1); padding: var(--sp-0) var(--sp-1); border-radius: var(--r-sm); }
+.dz-hint code { font-family: var(--font-m); color: var(--bad-ink); background: rgba(207, 102, 121, .1); padding: var(--sp-0) var(--sp-1); border-radius: var(--r-sm); }
 
 /* ── graph ───────────────────────────────────────────────────────────── */
 
@@ -1170,7 +1394,25 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
 /* touch-action: none so a drag on the canvas is a drag ON the canvas and not
    the browser scrolling the page out from under it -- the engines listen on
    pointer events, which covers mouse, pen and finger with one path */
-.graph-wrap canvas { position: absolute; inset: 0; cursor: grab; touch-action: none; }
+/* width/height 100% for the same reason .dg-stage canvas has them, and this
+   is the canvas that went without. A canvas's width/height ATTRIBUTES act as
+   a CSS width, and an absolutely-positioned REPLACED element with width:auto
+   resolves from its intrinsic size rather than stretching between left and
+   right -- so `cv.width = r.width * dpr` (views/graph.js) was also setting
+   the displayed width, and .graph-wrap's overflow:hidden quietly clipped the
+   difference. At devicePixelRatio 1 the attribute happened to equal the wrap
+   and the bug was a one-pixel sliver; at 2 the element laid out at twice its
+   frame and three quarters of the graph was painted off-screen, with no
+   scrollbar and nothing on screen saying so. Every 125% / 150% / 200%
+   Windows scaling and every Retina panel had it; the machine it was written
+   on did not. resize() already reads the WRAP for its coordinate space, so
+   pinning the CSS size to the wrap is what the drawing code always assumed. */
+.graph-wrap canvas {
+  position: absolute; inset: 0;
+  width: 100%; height: 100%;
+  cursor: grab;
+  touch-action: none;
+}
 .graph-wrap canvas.dragging { cursor: grabbing; }
 .graph-wrap canvas.linkmode { cursor: crosshair; }
 
@@ -1447,7 +1689,7 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
    rejected write is gone. */
 .toast.ok   .toast-mark { color: var(--ok); }
 .toast.warn .toast-mark { color: var(--warn); }
-.toast.bad  .toast-mark { color: var(--bad); }
+.toast.bad  .toast-mark { color: var(--bad-ink); }
 .toast.bad {
   background-image: linear-gradient(rgba(207, 102, 121, .1), rgba(207, 102, 121, .1));
   border-color: rgba(207, 102, 121, .4);
@@ -1498,8 +1740,8 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
   cursor: pointer;
 }
 .ctx-item:hover { background: var(--hover-2); color: var(--accent); }
-.ctx-item.danger { color: var(--bad); }
-.ctx-item.danger:hover { background: rgba(207, 102, 121, .12); color: var(--bad); }
+.ctx-item.danger { color: var(--bad-ink); }
+.ctx-item.danger:hover { background: rgba(207, 102, 121, .12); color: var(--bad-ink); }
 .ctx-sep { height: 1px; margin: var(--sp-1) var(--sp-2); background: var(--line); }
 
 .empty {
@@ -1521,7 +1763,7 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
   border-radius: var(--r-md);
   font-size: var(--fs-body); color: var(--ink);
 }
-.failed-mark { display: inline-flex; color: var(--bad); --ico: 16px; padding-top: 1px; }
+.failed-mark { display: inline-flex; color: var(--bad-ink); --ico: 16px; padding-top: 1px; }
 .failed-text { flex: 1; min-width: 0; }
 .failed-detail {
   margin-top: var(--sp-1);
@@ -1554,7 +1796,7 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
   max-width: 34em;
   background: var(--bg);
   color: var(--ink-2);
-  font-size: var(--fs-md); line-height: 1.6; text-align: center;
+  font-size: var(--fs-read); line-height: 1.6; text-align: center;
 }
 
 /* ── diagram editor ──────────────────────────────────────────────────── */
@@ -1804,7 +2046,10 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
   .nav a svg { width: 17px; height: 17px; }
   .rail-foot { display: none; }
   .brand { justify-content: center; padding: var(--sp-4) var(--sp-2); }
-  .view { padding: var(--sp-4) var(--sp-4) 90px; }
+  .view {
+    padding: var(--sp-4) var(--sp-4)
+             calc(var(--sp-4) + var(--bulk-h, 0px) + var(--toast-h, 0px));
+  }
   .topbar { padding: var(--sp-3) var(--sp-4); }
 }
 
@@ -1819,7 +2064,30 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
   .searchbox kbd { display: none; }
   .db-badge { display: none; }
   .topbar-right { flex: 1; justify-content: flex-end; gap: var(--sp-3); }
-  .view { padding: var(--sp-4) var(--sp-3) 90px; }
+  .view {
+    padding: var(--sp-4) var(--sp-3)
+             calc(var(--sp-4) + var(--bulk-h, 0px) + var(--toast-h, 0px));
+  }
+  /* The memory takes the width; its annotations go under it. The four-column
+     grid had no narrow override, so at 375px the fixed metadata column plus
+     the auto date column plus three gaps consumed the whole 276px and the
+     snippet was allotted `0px` -- it wrapped one character per line, rows ran
+     121-175px, and two of them fitted on a phone. */
+  .mem-row {
+    grid-template-columns: var(--tap) 1fr;
+    gap: var(--sp-1) var(--sp-3);
+    align-items: start;
+    padding: var(--sp-3);
+  }
+  .mem-check { padding-top: var(--sp-0); }
+  .mem-main { grid-column: 2; grid-row: 1; }
+  .mem-snippet {
+    white-space: normal;
+    display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+    word-break: break-word;
+  }
+  .mem-col-type { grid-column: 2; grid-row: 2; overflow: visible; }
+  .mem-right { grid-column: 2; grid-row: 3; flex-wrap: wrap; white-space: normal; }
   .drawer-head, .drawer-body { padding-left: var(--sp-4); padding-right: var(--sp-4); }
   .graph-wrap { height: calc(100vh - 250px); }
   /* a floating bar with four controls does not fit a phone as a pill. It is

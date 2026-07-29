@@ -47,7 +47,7 @@ export async function renderMaintenance(view) {
           <button class="btn btn-solid" data-op="backup">${t('mn.op.backup')}</button>
         </div>
         <h3 class="panel-title" style="margin-top:20px">${t('mn.backups')}</h3>
-        <div id="backupsBody" style="font-size:11.5px;color:var(--ink-3)">—</div>
+        <div id="backupsBody" class="hint">—</div>
       </div>
     </div>
 
@@ -55,9 +55,9 @@ export async function renderMaintenance(view) {
       <h3 class="panel-title">${t('mn.dd.title')}
         <span class="panel-aside">${t('mn.dd.aside')}</span></h3>
       <div class="list-toolbar" style="margin-bottom:6px">
-        <label style="display:flex;align-items:center;gap:8px;font-size:11.5px;color:var(--ink-3)">
-          ${t('mn.dd.threshold')} <input type="range" id="ddThr" min="0.45" max="0.95" step="0.05" value="0.60" style="width:130px">
-          <b id="ddThrVal" style="color:var(--ink)">0.60</b></label>
+        <label class="inline-label">
+          ${t('mn.dd.threshold')} <input type="range" id="ddThr" min="0.45" max="0.95" step="0.05" value="0.60">
+          <b id="ddThrVal">0.60</b></label>
         <select id="ddType" aria-label="${t('common.allTypes')}"><option value="">${t('common.allTypes')}</option>
           ${TYPE_ORDER.map(tp => `<option value="${tp}">${TYPE_LABEL[tp]}</option>`).join('')}</select>
         <input type="text" id="ddDomain" placeholder="${t('mn.dd.domainPh')}"
@@ -147,7 +147,7 @@ export async function renderMaintenance(view) {
       body.innerHTML = r.pairs.map((p, i) => `
         <div class="dedup-pair">
           <div style="display:flex;justify-content:space-between;align-items:baseline">
-            <span style="font-size:11px;color:var(--ink-3)">${t('mn.dd.overlap')} <b style="color:var(--ink)">${(p.ratio * 100).toFixed(0)}%</b></span>
+            <span class="hint-sm">${t('mn.dd.overlap')} <b style="color:var(--ink)">${(p.ratio * 100).toFixed(0)}%</b></span>
             <button class="btn btn-sm" data-linkdup="${i}">${t('mn.dd.linkDup')}</button>
           </div>
           <div class="ratio-bar"><div class="ratio-fill" style="--v:${p.ratio.toFixed(3)}"></div></div>
@@ -156,7 +156,7 @@ export async function renderMaintenance(view) {
               <div class="pair-card">
                 <div style="display:flex;gap:7px;align-items:center;flex-wrap:wrap">
                   ${typeTag(mm.type)} ${uidChip(mm.uid)} ${statusTag(mm.status)}
-                  <span style="color:var(--ink-3);font-size:10px">${fmtDate(mm.created_at)}</span>
+                  <span class="hint-sm">${fmtDate(mm.created_at)}</span>
                 </div>
                 ${mm.domain ? `<span class="chip">${esc(mm.domain)}</span>` : ''}
                 <div class="snippet">${esc(mm.content)}</div>
