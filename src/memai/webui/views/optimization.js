@@ -18,6 +18,14 @@ import { t } from '../i18n.js';
 const DIFF_KINDS = new Set(['compact', 'reword', 'retag', 'redomain',
                             'set_confidence', 'archive']);
 
+/* The kinds whose "before" IS the memory's own content. For these, the
+   memory-under-review preview and the Before pane print the identical
+   string, one above the other, on the same card -- so the preview is
+   dropped. Every other diff kind puts a tag, a domain, a confidence or a
+   status in Before, and then the preview is the only thing on the card that
+   says WHICH memory is being retagged. */
+const CONTENT_KINDS = new Set(['compact', 'reword']);
+
 function optBefore(s) {
   const tg = s.target || {};
   switch (s.kind) {
@@ -53,7 +61,7 @@ function optRelBody(s) {
     ${pair.map(([role, m], i) => `
       <span class="opt-label" style="grid-area:${areas[i]}">${esc(role)}</span>
       <div class="opt-peer-body" style="grid-area:${bodies[i]}">
-        ${m ? `<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">${typeTag(m.type)} ${uidChip(m.uid)} ${statusTag(m.status)}</div>
+        ${m ? `<div class="opt-peer-meta">${typeTag(m.type)} ${uidChip(m.uid)} ${statusTag(m.status)}</div>
           <div class="snippet">${esc(m.snippet || '')}</div>` : `<div class="snippet">${t('op.missing')}</div>`}
       </div>`).join('')}
     <div class="opt-arrow" title="${t('op.relType.title')}">${rel}${icon('arrow-right')}</div>
@@ -64,7 +72,7 @@ function optDistillBody(s) {
   const p = s.payload || {};
   const srcs = (s.sources || []).map(m => `
     <div class="opt-peer-body">
-      ${m && !m.missing ? `<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">${typeTag(m.type)} ${uidChip(m.uid)} ${statusTag(m.status)}</div>
+      ${m && !m.missing ? `<div class="opt-peer-meta">${typeTag(m.type)} ${uidChip(m.uid)} ${statusTag(m.status)}</div>
         <div class="snippet">${esc(m.snippet || '')}</div>` : `<div class="snippet">${t('op.missing')}</div>`}
     </div>`).join('');
   return `<div class="opt-distill">
@@ -86,10 +94,12 @@ function optRaw(s) {
   </div>`;
 }
 
+/* Reject before Apply, so the solid primary is the rightmost thing in the
+   footer and the last thing under the evidence you just read. */
 function optButtons(s) {
   if (s.status === 'pending') return `
-    <button class="btn btn-solid btn-sm" data-apply="${s.id}">${t('common.apply')}</button>
-    <button class="btn btn-sm" data-reject="${s.id}">${t('common.reject')}</button>`;
+    <button class="btn btn-sm" data-reject="${s.id}">${t('common.reject')}</button>
+    <button class="btn btn-solid btn-sm" data-apply="${s.id}">${t('common.apply')}</button>`;
   if (s.status === 'applied') return `<button class="btn btn-sm" data-revert="${s.id}">${t('common.undo')}</button>`;
   return '';
 }
@@ -106,8 +116,8 @@ function optCard(s) {
   const statusChip = s.status === 'applied' ? `<span class="status-tag opt-applied">${t('op.applied')}</span>`
     : s.status === 'rejected' ? `<span class="status-tag archived">${t('op.rejected')}</span>` : '';
   const verified = s.verified
-    ? `<div class="opt-verified" title="${t('op.verifiedTitle')}">${icon('confirmed')}${t('op.verified', { v: esc(s.verified) })}</div>`
-    : `<div class="opt-verified muted">${icon('unverified')}${t('op.noVerified')}</div>`;
+    ? `<span class="opt-verified" title="${esc(s.verified)}">${icon('confirmed')}${t('op.verified', { v: esc(s.verified) })}</span>`
+    : `<span class="opt-verified muted">${icon('unverified')}${t('op.noVerified')}</span>`;
   const relKind = s.kind === 'link' || s.kind === 'merge' || s.kind === 'distill';
   const bodyHtml = s.kind === 'distill' ? optDistillBody(s)
     : relKind ? optRelBody(s)
@@ -119,19 +129,28 @@ function optCard(s) {
       <div class="snippet" style="grid-area:as">${optAfter(s)}</div>
     </div>`;
   const openUid = s.target_uid || s.new_uid;   /* distill: open the created memory once applied */
+  /* The head names the suggestion, the foot decides it, and the evidence is
+     between them. The buttons used to be in the head, above everything they
+     were a decision about: at 200% zoom one card is taller than the pane, so
+     the flow was scroll down to read the diff, scroll back up to answer it,
+     once per suggestion. The verification check moves next to those buttons
+     for the same reason -- it is the evidence for that decision, not a
+     footnote a row below it. */
   return `<div class="pair-card opt-card ${s.status !== 'pending' ? 'decided' : ''}">
-    <div style="display:flex;gap:7px;align-items:center;flex-wrap:wrap">
+    <div class="opt-card-head">
       <span class="opt-kind">${esc(s.kind)}</span>
       ${s.target_uid ? uidChip(s.target_uid) : ''}
       ${statusChip}
-      <span style="flex:1"></span>
+    </div>
+    ${s.rationale ? `<div class="opt-rationale">${esc(s.rationale)}</div>` : ''}
+    ${relKind || CONTENT_KINDS.has(s.kind) ? '' : optPreview(s)}
+    ${bodyHtml}
+    <div class="opt-card-foot">
+      ${verified}
+      <span class="opt-foot-gap"></span>
       ${openUid ? `<button class="btn btn-sm" data-openopt="${esc(openUid)}">${t('common.openRecord')}</button>` : ''}
       ${optButtons(s)}
     </div>
-    ${s.rationale ? `<div class="opt-rationale">${esc(s.rationale)}</div>` : ''}
-    ${relKind ? '' : optPreview(s)}
-    ${bodyHtml}
-    ${verified}
   </div>`;
 }
 
@@ -180,14 +199,14 @@ function optRunCard(r) {
     <div class="opt-run-top">
       <span class="opt-run-id">#${r.id}</span>
       <span class="opt-run-date">${fmtDate(r.created_at)} · ${t('op.nSuggestions', { n: r.total })}</span>
-      <span style="flex:1"></span>
+      <span class="opt-foot-gap"></span>
       ${state}
     </div>
     ${r.note ? `<div class="opt-run-note" title="${esc(r.note)}">${esc(r.note)}</div>` : ''}
     ${meter}
     <div class="opt-run-foot">
       <span>${t('op.summary', { p: r.pending, a: r.applied, r: r.rejected })}</span>
-      <span style="flex:1"></span>
+      <span class="opt-foot-gap"></span>
       ${backup}
     </div>
     ${kinds ? `<div class="opt-run-kinds">${kinds}</div>` : ''}
@@ -256,7 +275,7 @@ function renderOptRun(view, initialMeta) {
     <div class="panel" style="margin-bottom:14px">
       <div class="list-toolbar" style="align-items:center;margin-bottom:0">
         <span id="optSummary" class="panel-aside"></span>
-        <span style="flex:1"></span>
+        <span class="opt-foot-gap"></span>
         <button type="button" class="btn btn-sm" id="optHideApplied" aria-pressed="false"></button>
         <button type="button" class="btn btn-sm" id="optApplyAll">${t('op.applyAll')}</button>
         <button type="button" class="btn btn-danger btn-sm" id="optDiscard">${t('op.discard')}</button>
@@ -309,19 +328,37 @@ function renderOptRun(view, initialMeta) {
 
       const groups = new Map();
       shown.forEach(s => { if (!groups.has(s.kind)) groups.set(s.kind, []); groups.get(s.kind).push(s); });
-      body.innerHTML = [...groups.entries()].map(([kind, list]) => {
+      const entries = [...groups.entries()];
+      /* A first read opens ONE group: the first with something pending, or
+         the first group when everything is already decided. Opening all of
+         them put six simultaneous Apply/Reject decisions and 2377px on
+         screen while exactly one complete decision fitted in it. */
+      const leadKind = (entries.find(([, l]) => l.some(s => s.status === 'pending')) || entries[0] || [])[0];
+      /* Answering the last pending suggestion in the only open group would
+         otherwise leave the page folded shut, and the reader hunting for
+         where the queue continues. Their open groups are still theirs; this
+         only adds the next one with work left in it. */
+      const openSet = new Set(wasOpen);
+      if (rerender && leadKind
+          && !entries.some(([k, l]) => openSet.has(k) && l.some(s => s.status === 'pending'))) {
+        openSet.add(leadKind);
+      }
+      body.innerHTML = entries.map(([kind, list]) => {
         const pend = list.filter(s => s.status === 'pending').length;
         const count = pend ? t('op.group.countPending', { p: pend, t: list.length })
           : t('op.group.countAll', { t: list.length });
-        /* open by default on a first read, and as the reader left it after */
-        const open = rerender ? wasOpen.has(kind) : true;
+        /* one group on a first read, and as the reader left it after */
+        const open = rerender ? openSet.has(kind) : kind === leadKind;
         return `<details class="opt-group" data-kind="${esc(kind)}"${open ? ' open' : ''}>
           <summary>
             ${icon('chevron-right', { cls: 'opt-group-caret' })}
             <span class="opt-group-kind">${esc(kind)}</span>
             <span class="opt-group-count">${count}</span>
-            <span style="flex:1"></span>
-            ${pend ? `<button class="btn btn-sm" data-applykind="${esc(kind)}" data-npend="${pend}">${t('op.group.apply', { n: pend })}</button>` : ''}
+            <span class="opt-foot-gap"></span>
+            ${/* With one pending suggestion this is the Apply on the card two
+                 lines below it -- the same operation on the same item, forty
+                 pixels apart, one behind a confirm and one without. */''}
+            ${pend > 1 ? `<button class="btn btn-sm" data-applykind="${esc(kind)}" data-npend="${pend}">${t('op.group.apply', { n: pend })}</button>` : ''}
           </summary>
           <div class="opt-group-body">${list.map(optCard).join('')}</div>
         </details>`;
@@ -329,18 +366,36 @@ function renderOptRun(view, initialMeta) {
       if (scroller) scroller.scrollTop = keepScroll;
       wireCopyChips(body);
 
-      const act = (btn, path, bodyObj) => async () => {
+      /* `msg` names the action instead of saying "done": three different
+         writes shared one word, and the loudest of them was an AI rewriting a
+         memory. `undo` is the inverse call, offered in the toast the way every
+         other reversible write in this app offers it -- applying a single
+         suggestion was the one that did not, even though the card grows a
+         revert button and /revert has existed all along. Recovery meant
+         re-finding that card. */
+      const act = (btn, path, bodyObj, msg, undo) => async () => {
         btn.disabled = true;
         try {
           const res = await api(path, { body: bodyObj });
-          toast(res && res.backup ? t('op.toast.appliedBackup') : t('op.toast.done'), 'ok');
+          toast(res && res.backup ? t('op.toast.appliedBackup') : msg, 'ok', undo ? {
+            action: {
+              label: t('common.undo'),
+              run: () => api(undo, { body: bodyObj })
+                .then(async () => { toast(t('op.toast.reverted'), 'ok'); await refreshMeta(); await loadRun(); })
+                .catch(err => failed('err.optimize', err)),
+            },
+          } : {});
           await refreshMeta();
           await loadRun();
         } catch (err) { failed('err.optimize', err); btn.disabled = false; }
       };
-      body.querySelectorAll('[data-apply]').forEach(b => b.addEventListener('click', act(b, '/api/optimization/apply', { id: +b.dataset.apply })));
-      body.querySelectorAll('[data-reject]').forEach(b => b.addEventListener('click', act(b, '/api/optimization/reject', { id: +b.dataset.reject })));
-      body.querySelectorAll('[data-revert]').forEach(b => b.addEventListener('click', act(b, '/api/optimization/revert', { id: +b.dataset.revert })));
+      body.querySelectorAll('[data-apply]').forEach(b => b.addEventListener('click',
+        act(b, '/api/optimization/apply', { id: +b.dataset.apply },
+            t('op.toast.applied1'), '/api/optimization/revert')));
+      body.querySelectorAll('[data-reject]').forEach(b => b.addEventListener('click',
+        act(b, '/api/optimization/reject', { id: +b.dataset.reject }, t('op.toast.rejected1'))));
+      body.querySelectorAll('[data-revert]').forEach(b => b.addEventListener('click',
+        act(b, '/api/optimization/revert', { id: +b.dataset.revert }, t('op.toast.reverted'))));
       body.querySelectorAll('[data-openopt]').forEach(b => b.addEventListener('click', () => openRecord(b.dataset.openopt)));
       body.querySelectorAll('[data-applykind]').forEach(b => b.addEventListener('click', async e => {
         e.preventDefault();   /* keep the <details> from toggling */

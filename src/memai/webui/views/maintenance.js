@@ -17,9 +17,15 @@ const OPS = {
   'reembed-all': { path: '/api/maintenance/reembed', body: { mode: 'all' },
                    confirm: t('mn.confirm.reembedAll'),
                    msg: r => t('mn.msg.recomputed', { n: fmtInt(r.total) }) },
+  /* Both of these delete, both are irreversible, and both used to fire on the
+     first click from a flat row of six identical buttons where only
+     reembed-all asked. Clean orphans DELETES rows; VACUUM rewrites the file
+     and discards the free pages an undo would have needed. */
   'orphans': { path: '/api/maintenance/clean-orphans', body: {},
+               confirm: t('mn.confirm.orphans'),
                msg: r => t('mn.msg.orphans', { r: r.relations_removed, v: r.vectors_removed }) },
   'vacuum': { path: '/api/maintenance/vacuum', body: {},
+              confirm: t('mn.confirm.vacuum'),
               msg: r => t('mn.msg.vacuum', { a: fmtBytes(r.before), b: fmtBytes(r.after) }) },
   'backup': { path: '/api/maintenance/backup', body: {},
               msg: r => t('mn.msg.backup', { name: r.path.split(/[\\/]/).pop(), size: fmtBytes(r.size) }) },
