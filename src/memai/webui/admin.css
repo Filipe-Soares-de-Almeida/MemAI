@@ -2077,7 +2077,12 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
   border: 1px solid var(--line-soft);
   border-radius: var(--r-sm); padding: var(--sp-0) var(--sp-2);
 }
-.dg-edges { display: grid; gap: var(--sp-1); }
+/* minmax(0, 1fr) and not the default `auto` track, on all three of these
+   row lists: an auto track is at least as wide as its widest item's
+   min-content, and a row of nowrap parts (a step key, a diagram title, a
+   condition) has a large one -- so the track grew past the 327px inspector
+   column and scrolled it sideways instead of the rows shrinking. */
+.dg-edges { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--sp-1); }
 .dg-edge {
   display: flex; align-items: center; gap: var(--sp-2);
   font-size: var(--fs-sm); color: var(--ink-2);
@@ -2089,7 +2094,7 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
 .dg-edge .dg-label { color: var(--ink-3); font: 500 var(--fs-label) var(--font-m); }
 .dg-edge .spacer { flex: 1; }
 
-.dg-links { display: grid; gap: var(--sp-2); }
+.dg-links { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--sp-2); }
 .dg-link {
   display: flex; align-items: center; gap: var(--sp-2);
   background: var(--inset);
@@ -2108,7 +2113,7 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
    the destination is in the status bar before it is clicked, ctrl-click
    opens it in another tab, and the accent colour says the same thing every
    other link in this app says with it. */
-.dg-jumps { display: grid; gap: var(--sp-2); }
+.dg-jumps { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--sp-2); }
 .dg-jump {
   display: flex; align-items: center; gap: var(--sp-2);
   background: var(--inset);
@@ -2123,11 +2128,17 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
   text-decoration: none;
 }
 .dg-jump-to:hover .dg-jump-title { text-decoration: underline; }
-.dg-jump-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Every nowrap item on this row needs min-width:0 to be allowed below its
+   min-content width, or the row refuses to shrink and the whole inspector
+   column scrolls sideways -- which is what a diagram title, a step key, a
+   step label and a condition on one 327px row did. */
+.dg-jump-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dg-jump-to > .dg-key { flex: none; }
 .dg-jump-whole { font-size: var(--fs-label); color: var(--ink-3); flex: none; }
 .dg-jump .dg-label {
+  flex: 0 1 auto; min-width: 0; max-width: 34%;
   color: var(--ink-3); font: 500 var(--fs-label) var(--font-m);
-  max-width: 40%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 
 /* the inspector's minimum plus a usable canvas needs this much window; below
