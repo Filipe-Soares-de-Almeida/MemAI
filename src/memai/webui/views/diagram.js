@@ -484,7 +484,8 @@ export async function renderDiagram(view, params, ctx) {
       <span class="dg-arrow" title="${j.direction === 'out' ? t('dg.jump.out') : t('dg.jump.in')}"
             >${icon(j.direction === 'out' ? 'arrow-right' : 'arrow-left')}</span>
       <a class="dg-jump-to" href="${jumpHref(j, uid)}"
-         title="${esc(t('dg.jump.open', { title: j.peer_title }))}">
+         title="${esc(t(j.direction === 'out' ? 'dg.jump.open' : 'dg.jump.openFrom',
+                        { title: j.peer_title }))}">
         <span class="dg-jump-title">${esc(j.peer_title)}</span>
         ${j.peer_node
           ? `<span class="dg-key">${esc(j.peer_node)}</span>`
@@ -552,9 +553,18 @@ export async function renderDiagram(view, params, ctx) {
     const mine = (node ? data.jumps.filter(j => j.node_key === node.key) : [])
       .filter(j => j !== back);
 
-    const chip = (href, dir, title, step, hint) => `
-      <a class="dg-navchip${dir === 'back' ? ' back' : ''}" href="${href}" title="${esc(hint)}">
-        <span class="dg-navchip-mark">${icon(dir === 'out' ? 'arrow-right' : 'arrow-left')}</span>
+    /* The arrow says what the CLICK does, not which way the tie points:
+       right is "open that flow", left is "back to the one that sent you
+       here", and nothing else. It used to carry the tie's direction --
+       right for a jump out, left for one in -- so left meant two different
+       things on the same corner, and the same act of opening a related
+       flow pointed one way or the other depending on which end had
+       recorded the jump. Which end recorded it is a fact about the data,
+       not about where this button takes you; the inspector's panel is
+       where it belongs and still shows it. */
+    const chip = (href, kind, title, step, hint) => `
+      <a class="dg-navchip${kind === 'back' ? ' back' : ''}" href="${href}" title="${esc(hint)}">
+        <span class="dg-navchip-mark">${icon(kind === 'back' ? 'arrow-left' : 'arrow-right')}</span>
         <span class="dg-navchip-text">${esc(title)}</span>
         ${step ? `<span class="dg-key">${esc(step)}</span>` : ''}
       </a>`;
@@ -562,8 +572,11 @@ export async function renderDiagram(view, params, ctx) {
     bar.innerHTML = [
       back ? chip(backHref(back.peer_uid, back.peer_node), 'back', back.peer_title,
                   back.peer_node, t('dg.jump.backTitle', { title: back.peer_title })) : '',
-      ...mine.map(j => chip(jumpHref(j, uid), j.direction, j.peer_title, j.peer_node,
-                            t('dg.jump.open', { title: j.peer_title }))),
+      /* the direction survives in the tooltip, which is where a reader asks
+         "why is this flow on my screen" rather than "where does this go" */
+      ...mine.map(j => chip(jumpHref(j, uid), 'go', j.peer_title, j.peer_node,
+        t(j.direction === 'out' ? 'dg.jump.open' : 'dg.jump.openFrom',
+          { title: j.peer_title }))),
     ].filter(Boolean).join('');
     bar.hidden = !bar.innerHTML;
   }
