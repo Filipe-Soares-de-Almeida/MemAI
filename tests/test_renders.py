@@ -10,6 +10,7 @@ environment variable says it is.
 from __future__ import annotations
 
 import os
+from pathlib import Path
 import time
 
 import pytest
@@ -234,12 +235,72 @@ def test_the_token_cost_is_never_offered_as_a_reason_to_skip_display(mcp):
     """
     uid = mcp.diagram(title="Nightly export", nodes=NODES, edges=EDGES)["uid"]
     step = mcp.get_diagram(uid, format="svg-interactive")["next_step"]
-    assert "does NOT display it" in step
+    assert "does NOT display anything" in step
     assert "that is the work" in step
 
     doc = mcp.get_diagram.__doc__
     assert "IT IS NOT A REASON TO AVOID EMITTING THE MARKUP" in doc
     assert "is NOT showing it" in doc
+
+
+def test_interactive_writes_a_document_and_a_fragment(mcp):
+    """One file to open, one to embed, because the two cannot be one file.
+
+    Opening needs a document: doctype, charset (the titles carry accents),
+    and a body that is not white behind a dark drawing. Embedding needs the
+    opposite -- no doctype and no <body>, which inline renderers reject, and
+    no styling that would reach the host page. Shipping the document alone
+    and asking the caller to cut the middle out of it is the version that
+    breaks without saying so.
+    """
+    uid = mcp.diagram(title="Título com acento", nodes=NODES, edges=EDGES)["uid"]
+    out = mcp.get_diagram(uid, format="svg-interactive")
+
+    document = Path(out["path"]).read_text(encoding="utf-8")
+    fragment = Path(out["inline_path"]).read_text(encoding="utf-8")
+
+    assert document.startswith("<!doctype html>")
+    assert 'charset="utf-8"' in document
+    assert "Título com acento" in document
+    assert "<body>" in document
+
+    assert not fragment.lstrip().startswith("<!doctype")
+    assert "<body" not in fragment
+    assert "<html" not in fragment
+
+    # and they are the same drawing, not two renders that could drift
+    marker = '<svg id="dg"'
+    assert fragment[fragment.index(marker):] in document
+
+
+def test_the_shell_waits_for_a_measurable_box(mcp):
+    """The opening scale is computed FROM the box's own transform matrix.
+
+    Run against a box that has not been laid out, that matrix means nothing
+    and the flow opens fitted -- at a scale where the canvas draws no labels
+    at all, which is what "renders broken inline" looked like.
+    """
+    uid = mcp.diagram(title="Nightly export", nodes=NODES, edges=EDGES)["uid"]
+    fragment = Path(
+        mcp.get_diagram(uid, format="svg-interactive")["inline_path"]
+    ).read_text(encoding="utf-8")
+    assert "r.width<2" in fragment            # the guard
+    assert "requestAnimationFrame(place)" in fragment
+    assert "ResizeObserver" in fragment
+    # and the readout starts at the no-script state rather than blank, so a
+    # shell that never ran is visible instead of just looking zoomed out
+    assert 'id="dg-z">fit<' in fragment
+
+
+def test_both_render_files_are_swept_by_retention(mcp, home):
+    """The fragment is a render too; leaving it out would make the folder
+    grow at half the rate it looks like it is growing."""
+    uid = mcp.diagram(title="Nightly export", nodes=NODES, edges=EDGES)["uid"]
+    out = mcp.get_diagram(uid, format="svg-interactive")
+    for path in (Path(out["path"]), Path(out["inline_path"])):
+        os.utime(path, (time.time() - 40 * DAY,) * 2)
+    assert db.prune_renders("7d")["pruned"] == 2
+    assert db.renders_usage()["files"] == 0
 
 
 def test_interactive_and_static_draw_the_same_flow(mcp):
