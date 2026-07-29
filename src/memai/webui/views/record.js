@@ -234,15 +234,18 @@ export async function openRecord(uid) {
         </div>
       </div>
 
+      <!-- Archive rides in the heading with every other section's action,
+           not in the body beside the confidence scale: down there it ended
+           wherever the scale happened to end, so the one button in this
+           column that is an action sat short of the two that are. -->
       <div class="section">
-        <div class="section-label">${t('dr.curation')}</div>
-        <div class="act-row">
-          <div class="seg" id="dConf" role="group" aria-label="${t('dr.curation')}">
-            ${Object.keys(CONF).map(c => `<button type="button" data-c="${c}" aria-pressed="${m.confidence === c}"><span class="conf-pill c-${c}">${icon(CONF[c].icon)}</span>${CONF[c].label}</button>`).join('')}
-          </div>
+        <div class="section-label">${t('dr.curation')}
           ${m.status === 'active'
-            ? `<button class="btn" id="dArchive">${t('dr.archiveSoft')}</button>`
-            : `<button class="btn" id="dRestore">${t('common.restore')}</button>`}
+            ? `<button class="btn btn-sm" id="dArchive">${t('dr.archiveSoft')}</button>`
+            : `<button class="btn btn-sm" id="dRestore">${t('common.restore')}</button>`}
+        </div>
+        <div class="seg" id="dConf" role="group" aria-label="${t('dr.curation')}">
+          ${Object.keys(CONF).map(c => `<button type="button" data-c="${c}" aria-pressed="${m.confidence === c}"><span class="conf-pill c-${c}">${icon(CONF[c].icon)}</span>${CONF[c].label}</button>`).join('')}
         </div>
       </div>
 

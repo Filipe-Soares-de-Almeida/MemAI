@@ -741,7 +741,13 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
   padding: var(--sp-0) var(--sp-2);
 }
 
+/* A seal, so it never shrinks and never wraps -- and never grows either:
+   as a flex child with the default `flex: 0 1 auto` it could not shrink
+   below its own text, so on a tight row it burst out of its cell instead
+   and painted over whatever sat next to it. The text that CAN give way is
+   the snippet beside it, which is already clipped with an ellipsis. */
 .status-tag {
+  flex: none; white-space: nowrap;
   color: var(--ink-3);
   border: 1px solid var(--line);
   border-radius: var(--r-sm); padding: var(--sp-0) var(--sp-2);
@@ -1274,6 +1280,9 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
   display: flex; align-items: center; gap: var(--sp-2);
   cursor: pointer; border-radius: var(--r-md); padding: var(--sp-1) var(--sp-2);
   transition: background .12s;
+  /* a cell paints inside itself: whatever cannot fit here is this cell's
+     problem to clip, never the next cell's to be covered by */
+  overflow: hidden;
 }
 .rel-peer:hover { background: var(--hover-2); }
 .rel-peer .snippet { color: var(--ink-2); font-size: var(--fs-sm); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -1283,6 +1292,20 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
 /* the relative time on a recent-memories row: it must not be squeezed by a
    long snippet, which is what the inline flex:none used to say */
 .rel-row > .hint-sm { flex: none; }
+
+/* A relation row is five cells -- direction, type, peer, note, remove --
+   and five do not fit a 356px dialog: the peer was squeezed to 49px, its
+   snippet to nothing, and its archived seal clipped away with it. The peer
+   takes a line of its own down here, because the identity of the other end
+   is the one cell on the row nothing else can stand in for.
+
+   Below .rel-peer rather than up with the record's own breakpoint: `flex: 1`
+   above expands to a flex-basis of 0%, so a basis declared earlier in the
+   file loses to it at equal specificity no matter what the media query says. */
+@media (max-width: 980px) {
+  .rel-row { flex-wrap: wrap; }
+  .rel-peer { flex-basis: 100%; }
+}
 /* The note on a relation, on the page. It used to be a title on a span
    dressed as a button: unreachable by keyboard, invisible on touch, and
    announced by nothing. Text that matters is text. */
@@ -1448,10 +1471,17 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
   .lp-prev { max-height: 40vh; }
 }
 
-/* the relation type, and the free-text escape that keeps the vocabulary open */
+/* The relation type, the free-text escape that keeps the vocabulary open,
+   and the note -- the three controls on the link picker's form row.
+   `.lp-note` and not `.rel-note`: this width rule was written for the note
+   INPUT and the class it used is also worn by the note SPAN on a relation
+   row, where `flex: 1; min-width: 140px` overrode that span's own
+   `flex: none; max-width: 28%` and took 140px of a row it was supposed to
+   ride along the end of. That is what pushed the archived tag out of the
+   peer cell and let it draw over the note beside it. */
 .rel-type-sel { flex: none; min-width: 150px; }
 .rel-type-custom { flex: 1; min-width: 140px; }
-.rel-note { flex: 1; min-width: 140px; }
+.lp-note { flex: 1; min-width: 140px; }
 
 .hist-item { position: relative; padding: 0 0 var(--sp-4) var(--sp-5); }
 .hist-item::before {
@@ -1821,8 +1851,12 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
 }
 .modal:focus-visible { outline: none; }
 /* A form with columns rather than one column of fields: the record and the
-   link picker both put two panes side by side, and 540px is a stack. */
-.modal-wide { width: min(1120px, 95vw); }
+   link picker both put two panes side by side, and 540px is a stack. Wide
+   enough that the pair of panes is the point -- a memory's content is a
+   wall of prose and the panels beside it are rows of chips and snippets,
+   and at 1120px both were still clipping things they had room for in a
+   window this dialog was only using two thirds of. */
+.modal-wide { width: min(1340px, 95vw); }
 /* Head and foot pinned, body scrolling -- for a dialog tall enough that
    the buttons would otherwise be somewhere down the page. The plain modal
    scrolls as one piece, which is right for four fields. */
