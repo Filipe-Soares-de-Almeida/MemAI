@@ -68,16 +68,12 @@
 </aside>
 
 <div class="frame">
+  <!-- No search field here. It was a shortcut to the Memories tab and nothing
+       else: Enter navigated there, cleared itself on the way, and on that tab
+       it sat above a second search field that actually filters and actually
+       keeps what you typed. `/` still reaches the search -- it focuses the
+       real field now (see app.js). -->
   <header class="topbar">
-    <div class="searchbox">
-      <svg data-icon="search"></svg>
-      <input id="globalSearch" type="search" spellcheck="false" autocomplete="off"
-             placeholder="Search memories — keywords + vectors"
-             aria-label="Global search"
-             data-i18n-placeholder="search.placeholder" data-i18n-aria="search.aria">
-      <!-- a hint for the eye; the input is already named -->
-      <kbd aria-hidden="true">/</kbd>
-    </div>
     <div class="topbar-right">
       <span id="dbBadge" class="db-badge" title=""></span>
       <select id="langSel" class="lang-sel" aria-label="Language"></select>
