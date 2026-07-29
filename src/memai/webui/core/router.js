@@ -81,8 +81,12 @@ export async function route({ focus = true } = {}) {
      stays on the rail link that was pressed: a screen reader announces
      nothing, and Tab walks the rail again instead of entering the view.
      #view is tabindex="-1" for exactly this, and programmatic focus on it
-     draws no ring. Never while something is layered over the view. */
-  if (focus && !modalOpen() && $('#drawer').hidden) view.focus({ preventScroll: true });
+     draws no ring. Never while something is layered over the view, and never
+     over a view that already put the caret somewhere inside itself -- `/`
+     asks Memories for its search field, and this used to take it straight
+     back. A view that has aimed the caret has aimed it better than this can. */
+  if (focus && !modalOpen() && $('#drawer').hidden && !view.contains(document.activeElement))
+    view.focus({ preventScroll: true });
   /* deep link: #/any-view?record=<uid> opens the record drawer on top */
   if (params.get('record')) onRecord?.(params.get('record'));
 }

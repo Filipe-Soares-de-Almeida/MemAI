@@ -476,7 +476,7 @@ def graph(request, payload) -> dict:
         # node below counts only edges between nodes that made it in, so
         # what the legend says matches what is drawn.
         rows = conn.execute(
-            f"SELECT uid, type, domain, status, confidence, content, created_at, "
+            f"SELECT uid, type, domain, status, confidence, content, tags, created_at, "
             f"       (SELECT COUNT(*) FROM relations r "
             f"        WHERE r.from_uid = memories.uid OR r.to_uid = memories.uid) AS deg "
             f"FROM memories WHERE {' '.join(where)} "
@@ -491,9 +491,13 @@ def graph(request, payload) -> dict:
     for e in edges:
         degree[e["from_uid"]] = degree.get(e["from_uid"], 0) + 1
         degree[e["to_uid"]] = degree.get(e["to_uid"], 0) + 1
+    # `tags` is here for the graph's spotlight filter, which matches on what a
+    # human would type to find a node again: its opening line, its domain, or
+    # a tag. Everything else on this row is already drawn.
     nodes = [{
         "uid": r["uid"], "type": r["type"], "domain": r["domain"],
         "status": r["status"], "confidence": r["confidence"],
+        "tags": r["tags"],
         "label": _snip(r["content"].split("\n", 1)[0], 90),
         "degree": degree.get(r["uid"], 0),
         "created_at": r["created_at"],

@@ -20,6 +20,20 @@ import { t } from '../i18n.js';
 const PAGE = 50;
 const selection = new Set();
 
+/* `/` from anywhere in the app asks for this view's search field. When the
+   view is not up yet there is nothing to focus, so the request is held and
+   the next render honours it -- which is why this returns whether it could
+   act: app.js navigates here only when it could not. */
+let wantsCaret = false;
+
+export function focusMemorySearch() {
+  const el = document.getElementById('fQ');
+  if (!el) { wantsCaret = true; return false; }
+  el.focus();
+  el.select();
+  return true;
+}
+
 /* The toast stack has to clear this bar, so the bar publishes its own height
    instead of the stylesheet guessing at it -- at 375px it wraps to two rows,
    and a toast used to land squarely on top of Archive / Restore / clear. */
@@ -77,6 +91,8 @@ export async function renderMemories(view, params, ctx) {
 
     <div class="list-toolbar">
       <input id="fQ" type="search" placeholder="${t('mem.search.placeholder')}" value="${esc(state.q)}" spellcheck="false">
+      <!-- the app's one remaining accelerator, taught where it lands -->
+      <kbd class="toolbar-kbd" aria-hidden="true">/</kbd>
       <select id="fType">${typeOpts.join('')}</select>
       <select id="fDomain">${domainOpts.join('')}</select>
       <div class="seg" id="fStatus" role="group" aria-label="${t('mem.status.aria')}">
@@ -122,6 +138,8 @@ export async function renderMemories(view, params, ctx) {
     else out.status = p.status || '';
     go('memories', out);
   };
+
+  if (wantsCaret) { wantsCaret = false; $('#fQ').focus(); $('#fQ').select(); }
 
   $('#fQ').addEventListener('keydown', e => { if (e.key === 'Enter') navigate({ q: e.target.value.trim(), page: 0 }); });
   $('#fQ').addEventListener('input', debounce(e => {

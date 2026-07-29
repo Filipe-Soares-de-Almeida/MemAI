@@ -6,7 +6,7 @@
    computed here and never stored -- unlike the diagram editor, whose
    coordinates come from the store; see diagram.js for that contrast. */
 
-import { $, esc, fmtInt, cssVar } from '../core/dom.js';
+import { $, esc, fmtInt, cssVar, debounce } from '../core/dom.js';
 import { api, query } from '../core/api.js';
 import { icon } from '../core/icons.js';
 import { toast, failed, tipShow, tipHide, openModal, closeModal, setPressed } from '../core/ui.js';
@@ -22,6 +22,10 @@ import { t } from '../i18n.js';
 const SETTLE = 0.02;
 /* pair-distance checks to spend on the pre-paint settle, total */
 const SETTLE_BUDGET = 2e6;
+/* what a node the spotlight missed fades to. Low enough that the matches read
+   as the figure, high enough that the store's overall shape survives -- the
+   whole reason this view is a canvas. */
+const DIM = 0.14;
 
 export async function renderGraph(view, params, ctx) {
   const state = {
@@ -56,6 +60,14 @@ export async function renderGraph(view, params, ctx) {
       <canvas id="gCanvas" role="img"
               aria-label="${esc(t('g.canvasAlt', { n: fmtInt(data.nodes.length), m: fmtInt(data.edges.length) }))}"></canvas>
       <div class="graph-controls">
+        <!-- The spotlight, and it leads the row because it is the filter that
+             answers the most questions. This view exists for the macro read --
+             the shape of the store, where the clusters and the loose ends are
+             -- so finding one memory must not destroy that shape: matching
+             nodes keep their colour and radius and everything else fades.
+             Nothing is removed, no request is made, the layout never moves. -->
+        <input type="search" id="gFind" class="graph-find" spellcheck="false" autocomplete="off"
+               placeholder="${t('g.find')}" aria-label="${t('g.find')}">
         <select id="gDomain" aria-label="${t('common.allDomains')}">
           <option value="">${t('common.allDomains')}</option>
           ${domains.map(d => `<option value="${esc(d.domain)}" ${d.domain === state.domain ? 'selected' : ''}>${esc(d.domain)}</option>`).join('')}
@@ -70,6 +82,9 @@ export async function renderGraph(view, params, ctx) {
         </div>
         <button type="button" class="btn btn-sm" id="gLink" aria-pressed="false">${icon('pencil')}${t('g.linkMode')}</button>
         <button type="button" class="btn btn-sm" id="gFit">${t('g.center')}</button>
+        <!-- last, and pushed to the far end: a count that appeared between two
+             controls would shove the whole row sideways on the first keystroke -->
+        <span id="gFindCount" class="graph-find-count" aria-live="polite"></span>
       </div>
       <div class="graph-legend">
         ${TYPE_ORDER.filter(tp => counts[tp]).map(tp =>
@@ -105,6 +120,15 @@ export async function renderGraph(view, params, ctx) {
   onTeardown(() => engine.destroy());
   $('#gFit').addEventListener('click', () => engine.fit());
   $('#gLink').addEventListener('click', () => engine.toggleLinkMode());
+
+  /* Every term has to match, the same as the diagram list's filter -- one
+     boolean for every client-side filter in the app rather than one each. */
+  const find = $('#gFind');
+  find.addEventListener('input', debounce(() => {
+    const n = engine.spotlight(find.value);
+    $('#gFindCount').textContent = find.value.trim()
+      ? t('g.findCount', { n: fmtInt(n), total: fmtInt(engine.nodes.length) }) : '';
+  }, 160));
 }
 
 class ForceGraph {
@@ -356,6 +380,22 @@ class ForceGraph {
     setPressed($('#gLink'), this.linkMode);
     this.requestDraw();
   }
+  /* Marks which nodes are OUT rather than filtering any out: the physics, the
+     positions and the legend counts all stay exactly as they were, so what
+     you learned from the shape before typing is still true after. Returns how
+     many matched. */
+  spotlight(qRaw) {
+    const terms = qRaw.toLowerCase().split(/\s+/).filter(Boolean);
+    let hit = 0;
+    for (const n of this.nodes) {
+      if (!terms.length) { n.dim = false; hit++; continue; }
+      const hay = `${n.label} ${n.domain || ''} ${n.tags || ''}`.toLowerCase();
+      n.dim = !terms.every(w => hay.includes(w));
+      if (!n.dim) hit++;
+    }
+    this.requestDraw();
+    return hit;
+  }
   promptLink(a, b) {
     const modal = openModal({
       title: t('g.modal.title'),
@@ -453,6 +493,9 @@ class ForceGraph {
     cx.lineWidth = 1 / this.scale;
     for (const e of this.edges) {
       const a = this.byUid[e.from_uid], b = this.byUid[e.to_uid];
+      /* an edge is only as bright as its dimmer end: a match keeps the lines
+         that reach it, so you still see what it is connected to */
+      cx.globalAlpha = (a.dim || b.dim) ? DIM : 1;
       cx.beginPath(); cx.moveTo(a.x, a.y); cx.lineTo(b.x, b.y); cx.stroke();
       const d = Math.hypot(b.x - a.x, b.y - a.y) || 1;
       const ux = (b.x - a.x) / d, uy = (b.y - a.y) / d;
@@ -466,9 +509,11 @@ class ForceGraph {
       cx.fillStyle = this.colArrow;
       cx.fill();
     }
+    cx.globalAlpha = 1;
 
     for (const n of this.nodes) {
       const color = typeColor(n.type);
+      cx.globalAlpha = n.dim ? DIM : 1;
       cx.beginPath();
       if (n.type === 'anti_pattern') {          /* diamond: secondary encoding for the red↔green CVD pair */
         cx.moveTo(n.x, n.y - n.r); cx.lineTo(n.x + n.r, n.y);
@@ -495,6 +540,9 @@ class ForceGraph {
       }
     }
 
+    /* full strength even on a faded node: you hover to check what something
+       is, and the answer must not be faded too */
+    cx.globalAlpha = 1;
     if (this.hover && this.scale > .35) {
       const n = this.hover;
       cx.font = `${11 / this.scale}px 'Roboto Mono', monospace`;

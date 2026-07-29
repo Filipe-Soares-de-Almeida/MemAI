@@ -26,7 +26,7 @@ import { registerViews, route, go, parseHash } from './core/router.js';
 import { I18N, t } from './i18n.js';
 
 import { renderOverview } from './views/overview.js';
-import { renderMemories } from './views/memories.js';
+import { renderMemories, focusMemorySearch } from './views/memories.js';
 import { renderGraph } from './views/graph.js';
 import { renderDiagrams } from './views/diagrams.js';
 import { renderDiagram } from './views/diagram.js';
@@ -74,13 +74,6 @@ $('#langSel').addEventListener('change', async e => {
   I18N.set(code);
 });
 
-$('#globalSearch').addEventListener('keydown', e => {
-  if (e.key === 'Enter' && e.target.value.trim()) {
-    go('memories', { q: e.target.value.trim(), status: '' });
-    e.target.value = '';
-    e.target.blur();
-  }
-});
 
 document.addEventListener('keydown', e => {
   if (e.key === 'Escape') {
@@ -89,9 +82,14 @@ document.addEventListener('keydown', e => {
     if (drawerOpen()) closeDrawer();
     return;
   }
+  /* `/` reaches the search wherever you are. It used to focus a field in the
+     topbar that only forwarded you here anyway; it takes the caret to the
+     real one now, and brings the view along when you are somewhere else.
+     focusMemorySearch() claims the caret on the next render when the field
+     does not exist yet, so the order is: ask first, then navigate. */
   if (e.key === '/' && !/^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement.tagName)) {
     e.preventDefault();
-    $('#globalSearch').focus();
+    if (!focusMemorySearch()) go('memories');
   }
 });
 

@@ -203,6 +203,11 @@
   --sp-7: 48px;   /* the air an empty state or a loading block needs */
 
   --rail-w: 228px;
+  /* The rail's brand block and the topbar are one horizontal band across the
+     window, and each of them draws the bottom border that ends it. They were
+     sized independently -- 66px against 58px -- so the two rules met at the
+     rail's edge eight pixels apart. One floor, and they cannot drift. */
+  --head-h: 66px;
   --shadow-drawer: -16px 0 48px rgba(0, 0, 0, .55);
   --shadow-pop: 0 8px 28px rgba(0, 0, 0, .55);
 
@@ -414,6 +419,7 @@ kbd {
 
 .brand {
   display: flex; align-items: center; gap: var(--sp-3);
+  min-height: var(--head-h);
   padding: var(--sp-4) var(--sp-4) var(--sp-4);
   border-bottom: 1px solid var(--line-soft);
 }
@@ -477,34 +483,19 @@ kbd {
 /* ── topbar ──────────────────────────────────────────────────────────── */
 
 .topbar {
-  /* wraps, because it cannot shrink: search, the count, the language picker
-     and the new-memory button ask for ~520px and a 375px window offers 281.
-     Without a wrap they all collapsed to min-content at once and the row
-     became unreadable -- and body{overflow:hidden} left nothing to scroll
-     to. */
-  display: flex; align-items: center; justify-content: space-between;
+  /* It still wraps, but it no longer has to: the ~430px search field that
+     made this row unshrinkable is gone (it only forwarded to the Memories
+     tab), so what is left -- the count, the language picker and the
+     new-memory button -- fits a 375px window without collapsing to
+     min-content. The wrap stays as the floor for a longer localized label. */
+  display: flex; align-items: center; justify-content: flex-end;
   flex-wrap: wrap; gap: var(--sp-2) var(--sp-4);
+  min-height: var(--head-h);
   padding: var(--sp-3) var(--sp-6);
   border-bottom: 1px solid var(--line-soft);
   background: var(--bg);
   z-index: 5;
 }
-.searchbox {
-  display: flex; align-items: center; gap: var(--sp-2);
-  width: min(430px, 46vw);
-  padding: var(--sp-2) var(--sp-3);
-  background: var(--surface);
-  border: 1px solid transparent;
-  border-radius: var(--r-md);
-  transition: border-color .15s, background .15s;
-}
-.searchbox:focus-within { border-color: var(--accent); background: var(--raised); }
-.searchbox svg { width: 15px; height: 15px; stroke: var(--ink-3); fill: none; stroke-width: 1.6; stroke-linecap: round; flex: none; }
-.searchbox input {
-  flex: 1; background: none; border: none; outline: none;
-  color: var(--ink); font: 400 var(--fs-body) var(--font-ui);
-}
-.searchbox input::placeholder { color: var(--ink-3); }
 .topbar-right { display: flex; align-items: center; gap: var(--sp-4); }
 .db-badge { font-size: var(--fs-sm); color: var(--ink-3); }
 .lang-sel { font-size: var(--fs-sm); padding: var(--sp-1) var(--sp-5) var(--sp-1) var(--sp-2); }
@@ -569,6 +560,12 @@ kbd {
 .row-open {
   display: block; width: 100%;
   padding: 0;
+  /* One line of small text is under 19px, and this is the control that opens
+     the record. The leading, not a min-height, because it has to CENTRE the
+     line in the 24px it claims -- a min-height would leave the text at the top
+     of the box and misalign it against everything beside it. Overridden where
+     the same button wraps to two lines (see the narrow block). */
+  line-height: var(--tap);
   cursor: pointer;
 }
 
@@ -1095,8 +1092,13 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
    uid chip sitting beside it. The SIZE stays at --fs-sm though: at --fs-body the
    snippet dominated the row instead of leading it. Brightness is what makes it
    the primary thing here; it does not also need to be the biggest. */
+/* The line-height is the target: this button is the row's primary control and
+   one line of --fs-sm is 18.75px, under the pointer floor. 24px of leading
+   centres the same single line inside a 24px box, so the row does not grow
+   (the domain chip is still the tallest child) and the ellipsis still works,
+   which it would not inside a flex box. */
 .mem-snippet {
-  color: var(--ink); font-size: var(--fs-sm); line-height: 1.5;
+  color: var(--ink); font-size: var(--fs-sm); line-height: 24px;
   display: block; width: 100%;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   text-align: left;
@@ -1431,11 +1433,49 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
 .graph-wrap canvas.dragging { cursor: grabbing; }
 .graph-wrap canvas.linkmode { cursor: crosshair; }
 
+/* One toolbar, one control height. It held four -- selects at 38px, the
+   segment at 30 and the buttons at 25 -- because each borrowed its size from
+   whatever it was elsewhere in the app, and side by side on a floating strip
+   that reads as a ragged edge. --ctl-h is the row's own height and every
+   child answers to it.
+
+   It spans the canvas rather than hugging its content so the search field can
+   take the space left over: it is the filter that answers the most questions
+   here, so it leads the row and it is the widest thing in it. */
 .graph-controls {
-  position: absolute; top: 12px; left: 12px; z-index: 3;
+  --ctl-h: 32px;
+  position: absolute; top: 12px; left: 12px; right: 12px; z-index: 3;
   display: flex; flex-wrap: wrap; gap: var(--sp-2); align-items: center;
-  max-width: calc(100% - 24px);
 }
+.graph-controls > select,
+.graph-controls > input,
+.graph-controls > .seg,
+.graph-controls > .btn { height: var(--ctl-h); }
+/* the height comes from --ctl-h, so vertical padding would only fight it */
+.graph-controls > select,
+.graph-controls > input { padding-top: 0; padding-bottom: 0; font-size: var(--fs-sm); }
+.graph-controls > .seg > button { height: 100%; min-height: 0; }
+/* Both selects the same width -- a row of controls that each sizes to its own
+   longest option is the ragged edge again -- and wide enough for the longest
+   PLACEHOLDER, not the shortest: "Todos os domínios" plus the chevron's
+   reserved 32px needs 180, and at 150 pt-BR clipped its own first option. */
+.graph-controls > select { flex: none; width: 180px; }
+/* Capped rather than allowed to eat the row: the leftover has to stay free so
+   the match count can sit at the far end without shoving anything when it
+   appears. 380px is roughly what the domain select used to occupy before it
+   was pinned, which is the width this field was asked for. */
+.graph-find { flex: 1 1 240px; min-width: 150px; max-width: 340px; }
+/* A reserved slot at the far end of the toolbar, held whether it has text in
+   it or not. Sizing it to its content and pushing it right was not enough:
+   the leftover it needed existed in English and not in pt-BR, where the
+   longer labels left none, so the first keystroke shrank the search field and
+   slid the row. A fixed box cannot do that in any language. */
+.graph-find-count {
+  margin-left: auto; flex: none;
+  width: 96px; text-align: right;
+  font-size: var(--fs-label); color: var(--ink-2); white-space: nowrap;
+}
+
 .graph-legend {
   position: absolute; right: 12px; bottom: 12px; z-index: 3;
   display: flex; flex-direction: column; gap: var(--sp-1);
@@ -2027,7 +2067,9 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
 
 .dgl-top { display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; }
 .dgl-title {
-  font: 500 var(--fs-md) var(--font-ui);
+  /* same reason as .row-open: it opens the diagram, so it clears the pointer
+     floor, and the leading is what centres its one line inside that */
+  font: 500 var(--fs-md)/var(--tap) var(--font-ui);
   color: var(--ink);
   cursor: pointer;
   flex: 1; min-width: 0;
@@ -2073,7 +2115,13 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
 
 @media (max-width: 940px) {
   :root { --rail-w: 62px; }
-  .brand-text, .nav a { font-size: 0; }
+  /* display, not font-size: 0. The wordmark's two lines set their own sizes
+     (--fs-md and --fs-label), so they overrode the 0 they were supposed to
+     inherit and went on rendering -- 72px of text inside a 62px rail, wrapped,
+     which pushed the brand block to 83px and broke it out of the header band.
+     A nav label IS a bare text node, so there the 0 does work. */
+  .brand-text { display: none; }
+  .nav a { font-size: 0; }
   .nav a { justify-content: center; padding: var(--sp-3); gap: 0; }
   .nav a svg { width: 17px; height: 17px; }
   .rail-foot { display: none; }
@@ -2092,8 +2140,8 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
    window probably does not have. */
 @media (max-width: 640px) {
   .topbar { padding: var(--sp-2) var(--sp-3); }
-  .searchbox { order: 3; flex: 1 1 100%; width: auto; }
-  .searchbox kbd { display: none; }
+  /* a keyboard hint is for a window that probably has one */
+  .toolbar-kbd { display: none; }
   .db-badge { display: none; }
   .topbar-right { flex: 1; justify-content: flex-end; gap: var(--sp-3); }
   .view {
@@ -2114,7 +2162,7 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
   .mem-check { padding-top: var(--sp-0); }
   .mem-main { grid-column: 2; grid-row: 1; }
   .mem-snippet {
-    white-space: normal;
+    white-space: normal; line-height: 1.5;   /* two clamped lines, not two 24px ones */
     display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
     word-break: break-word;
   }
@@ -2122,6 +2170,14 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
   .mem-right { grid-column: 2; grid-row: 3; flex-wrap: wrap; white-space: normal; }
   .drawer-head, .drawer-body { padding-left: var(--sp-4); padding-right: var(--sp-4); }
   .graph-wrap { height: calc(100vh - 250px); }
+  /* Five controls wrapped to four rows here and covered 28% of the canvas --
+     on the one view whose whole job is the shape of the whole store. The strip
+     scrolls sideways instead: one row at any width, and the artifact keeps its
+     pixels. */
+  .graph-controls { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; }
+  .graph-controls::-webkit-scrollbar { display: none; }
+  .graph-controls > * { flex: none; }
+  .graph-find { width: 130px; }
   /* a floating bar with four controls does not fit a phone as a pill. It is
      no longer centred by a transform here, so it takes the plain entrance --
      bulk-rise would put the translateX(-50%) back. */
