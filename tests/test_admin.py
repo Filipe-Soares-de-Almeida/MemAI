@@ -303,3 +303,71 @@ def test_form_content_type_write_is_refused(client):
 
     # DELETE needs no body, and cross-origin DELETE always preflights
     assert client.delete("/api/relations/999").status_code in (400, 404)
+
+
+def test_lookup_carries_what_the_picker_renders(client):
+    """A uid is not something a human recognizes, so the row needs the rest."""
+    a = _create(client, content="source memory")
+    b = _create(client, content="target memory", domain="parser-core", tags="loader,schema")
+
+    items = client.get(f"/api/lookup?q=target&exclude={a}").json()["items"]
+    assert [it["uid"] for it in items] == [b]
+    row = items[0]
+    assert row["domain"] == "parser-core"
+    assert row["status"] == "active"
+    assert row["snippet"]
+    assert row["match_source"]          # why this row is in the list
+
+
+def test_lookup_filters_narrow_the_candidate_set(client):
+    _create(client, content="loader memory alpha", domain="parser-core", tags="loader,schema")
+    _create(client, content="loader memory beta", domain="web-shell", tags="loader")
+    _create(client, content="loader memory gamma", domain="parser-core", type="checkpoint",
+            tags="batch")
+
+    by_domain = client.get("/api/lookup?q=loader&domain=web-shell").json()["items"]
+    assert [it["domain"] for it in by_domain] == ["web-shell"]
+
+    by_type = client.get("/api/lookup?q=loader&type=checkpoint").json()["items"]
+    assert [it["type"] for it in by_type] == ["checkpoint"]
+
+    by_tag = client.get("/api/lookup?q=loader&tag=schema").json()["items"]
+    assert len(by_tag) == 1
+    assert by_tag[0]["domain"] == "parser-core"
+
+
+def test_lookup_defaults_to_active_but_can_include_archived(client):
+    live = _create(client, content="live memory")
+    gone = _create(client, content="retired memory")
+    assert client.post(f"/api/memories/{gone}/status",
+                       json={"status": "archived"}).status_code == 200
+
+    default = client.get("/api/lookup").json()["items"]
+    assert [it["uid"] for it in default] == [live]
+
+    with_archived = client.get("/api/lookup?status=").json()["items"]
+    assert {it["uid"] for it in with_archived} == {live, gone}
+    assert [it["status"] for it in with_archived if it["uid"] == gone] == ["archived"]
+
+
+def test_lookup_exact_uid_answers_past_every_filter(client):
+    """Naming a row explicitly is not something a filter should overrule."""
+    gone = _create(client, content="retired memory", domain="infra")
+    assert client.post(f"/api/memories/{gone}/status",
+                       json={"status": "archived"}).status_code == 200
+
+    items = client.get(f"/api/lookup?q={gone}&domain=parser-core&type=checkpoint").json()["items"]
+    assert [it["uid"] for it in items] == [gone]
+
+
+def test_lookup_reports_more_without_a_count_query(client):
+    for i in range(6):
+        _create(client, content=f"batch memory number {i}")
+
+    page = client.get("/api/lookup?limit=3").json()
+    assert len(page["items"]) == 3
+    assert page["has_more"] is True
+
+    whole = client.get("/api/lookup?limit=50").json()
+    assert len(whole["items"]) == 6
+    assert whole["has_more"] is False

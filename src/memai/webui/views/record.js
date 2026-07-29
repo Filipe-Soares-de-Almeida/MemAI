@@ -12,8 +12,8 @@ import { icon } from '../core/icons.js';
 import { toast, failed, openModal, closeModal, confirmModal, promptModal,
          inertBackground } from '../core/ui.js';
 import { typeTag, typeClass, confPill, uidChip, statusTag, wireCopyChips, wireUidPicker,
-         failedHTML, TYPE_ORDER, CONF, relOptions, cachedDomains,
-         invalidateDomains } from '../core/shared.js';
+         failedHTML, TYPE_ORDER, CONF, REL_SUGGEST, relTypeField, wireRelTypeField,
+         cachedDomains, invalidateDomains } from '../core/shared.js';
 import { go, refreshBehind } from '../core/router.js';
 import { t } from '../i18n.js';
 
@@ -159,7 +159,7 @@ export async function openRecord(uid) {
           <div class="act-row">
             <button class="btn btn-solid" id="dEditSave">${t('dr.saveVersion')}</button>
             <button class="btn" id="dEditCancel">${t('common.cancel')}</button>
-            <span style="font-size:11px;color:var(--ink-3)">${t('dr.prevKept')}</span>
+            <span class="hint-sm">${t('dr.prevKept')}</span>
           </div>
         </div>`}
       </div>
@@ -205,23 +205,26 @@ export async function openRecord(uid) {
       <div class="section">
         <div class="section-label">${t('dr.relations')} <span class="panel-aside">(${m.relations.length})</span></div>
         ${rels}
+        <!-- the search owns its own row: it is the field with the longest
+             input and the widest output, and it used to be the narrowest
+             control on a three-up flex line -->
         <div class="rel-add">
-          <div class="act-row" style="align-items:stretch">
-            <div class="picker" style="flex:2;min-width:200px">
-              <input type="text" id="relTarget" placeholder="${t('dr.rel.target.placeholder')}"
-                     aria-label="${t('dr.rel.target.placeholder')}" autocomplete="off">
-              <div class="picker-results" id="relResults" hidden></div>
-            </div>
-            <input type="text" id="relType" list="relTypesDL" placeholder="${t('dr.rel.type.placeholder')}"
-                   aria-label="${t('dr.rel.type.placeholder')}" style="flex:1;min-width:130px">
+          <div class="picker">
+            <input type="text" id="relTarget" placeholder="${t('dr.rel.target.placeholder')}"
+                   aria-label="${t('dr.rel.target.placeholder')}" autocomplete="off">
+            <div class="picker-results" id="relResults" hidden></div>
+          </div>
+          <div class="act-row">
+            ${relTypeField({
+              selId: 'relType', customId: 'relTypeCustom', options: REL_SUGGEST,
+              ariaLabel: t('dr.rel.type.placeholder') })}
+            <input type="text" id="relNote" class="rel-note" placeholder="${t('dr.rel.note.placeholder')}"
+                   aria-label="${t('dr.rel.note.placeholder')}">
             <button class="btn" id="relCreate">${t('dr.rel.link')}</button>
           </div>
-          <input type="text" id="relNote" placeholder="${t('dr.rel.note.placeholder')}"
-                 aria-label="${t('dr.rel.note.placeholder')}">
           <!-- said as a corner toast until this round, about two fields the
                caret was already sitting in -->
           <div class="field-error" id="relError" role="alert" hidden></div>
-          <datalist id="relTypesDL">${relOptions()}</datalist>
         </div>
       </div>
 
@@ -357,37 +360,52 @@ export async function openRecord(uid) {
     } catch (err) { failed('err.relation', err); }
   }));
 
-  const relPicked = wireUidPicker({
+  const relResolve = wireUidPicker({
     input: dq('#relTarget'), results: dq('#relResults'), exclude: uid,
     label: t('dr.rel.target.placeholder'),
   });
+  const relTypeValue = wireRelTypeField(dq('#relType'), dq('#relTypeCustom'));
 
-  /* Marks the field that is actually empty, next to itself, and clears the
-     moment you start fixing it. Returns true when there is nothing to report. */
+  /* Marks the field that is actually wrong, next to itself, and clears the
+     moment you start fixing it. */
   const relFields = [dq('#relTarget'), dq('#relType')];
-  function checkRel(target, relType) {
-    const wrong = [!target, !relType];
-    relFields.forEach((el, i) => el.setAttribute('aria-invalid', wrong[i] ? 'true' : 'false'));
+  const relFail = (msg, which) => {
+    relFields.forEach((el, i) => el.setAttribute('aria-invalid', i === which ? 'true' : 'false'));
     const box = dq('#relError');
-    const bad = wrong.some(Boolean);
-    box.textContent = bad ? t('dr.rel.pickBoth') : '';
-    box.hidden = !bad;
-    if (bad) relFields[wrong[0] ? 0 : 1].focus();
-    return !bad;
-  }
-  relFields.forEach(el => el.addEventListener('input', () => {
-    el.setAttribute('aria-invalid', 'false');
+    box.textContent = msg;
+    box.hidden = false;
+    relFields[which].focus();
+  };
+  const relClear = () => {
+    relFields.forEach(el => el.setAttribute('aria-invalid', 'false'));
     dq('#relError').hidden = true;
-  }));
+  };
+  [dq('#relTarget'), dq('#relTypeCustom')].forEach(el => el.addEventListener('input', relClear));
+  dq('#relType').addEventListener('change', relClear);
+
+  /* Why the target uid is resolved rather than read: a typed value has to be
+     checked against the store before it is sent, and that is a round trip. */
+  const RESOLVE_MSG = {
+    empty: 'dr.rel.pickTarget',
+    self: 'dr.rel.selfTarget',
+    unknown: 'dr.rel.unknownTarget',
+    failed: 'dr.rel.lookupFailed',
+  };
 
   dq('#relCreate').addEventListener('click', async () => {
-    const target = relPicked() || dq('#relTarget').value.trim();
-    const relType = dq('#relType').value.trim();
-    if (!checkRel(target, relType)) return;
+    relClear();
+    const btn = dq('#relCreate');
+    const relType = relTypeValue();
+    if (!dq('#relTarget').value.trim()) return relFail(t('dr.rel.pickTarget'), 0);
+    if (!relType) return relFail(t('dr.rel.pickType'), 1);
+    btn.disabled = true;
     try {
+      const { uid: target, reason } = await relResolve();
+      if (!target) return relFail(t(RESOLVE_MSG[reason] || 'dr.rel.unknownTarget'), 0);
       await api('/api/relations', { body: { from_uid: uid, to_uid: target, relation_type: relType, note: dq('#relNote').value } });
       toast(t('dr.rel.created'), 'ok'); openRecord(uid);
     } catch (err) { failed('err.relation', err); }
+    finally { if (drawer.contains(btn)) btn.disabled = false; }
   });
 
   /* history diffs (lazy) */
@@ -428,7 +446,7 @@ function openMetaModal(m) {
         <input type="text" id="mmTags" value="${esc(m.tags)}"></div>
       <div class="field"><label for="mmSession">${t('dr.meta.session')}</label>
         <input type="text" id="mmSession" value="${esc(m.session)}"></div>
-      <div style="font-size:11px;color:var(--ink-3)">${t('mm.hint')}</div>`,
+      <div class="hint-sm">${t('mm.hint')}</div>`,
     footHTML: `<button class="btn" data-x>${t('common.cancel')}</button><button class="btn btn-solid" data-ok>${t('common.save')}</button>`,
   });
   const mq = s => modal.querySelector(s);

@@ -1558,12 +1558,36 @@ def _fts_query(raw: str) -> str:
     return " OR ".join(escaped)
 
 
+def _tag_clause(tag: str, alias: str = "m") -> tuple[str, str]:
+    """SQL fragment + bound value for "this row carries this tag".
+
+    `tags` is one comma-separated string, so a bare LIKE '%flag%' also
+    matches 'flagged' and 'feature-flag'. Padding both the column and the
+    needle with commas makes the boundaries explicit.
+
+    Two details the shape forces. Spaces are stripped from both sides
+    because the column is hand-written and 'a, b' is as common as 'a,b';
+    the cost is that a tag with an interior space matches without it,
+    which is a trade the alternative (a tags table) is not worth here.
+    And % _ \\ are escaped, because a tag like 'anti_pattern' would
+    otherwise be a LIKE pattern matching 'anti-pattern' too.
+    """
+    col = f"{alias}.tags" if alias else "tags"
+    needle = (tag.replace(" ", "")
+                 .replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_"))
+    return (
+        f"AND (',' || REPLACE({col}, ' ', '') || ',') LIKE ('%,' || ? || ',%') ESCAPE '\\'",
+        needle,
+    )
+
+
 def search_memories(
     conn: sqlite3.Connection,
     query: str,
     *,
     domain: str = "",
     type: str = "",
+    tag: str = "",
     status: str = "active",
     limit: int = 30,
 ) -> list[sqlite3.Row]:
@@ -1580,6 +1604,10 @@ def search_memories(
     if type:
         sql.append("AND m.type = ?")
         params.append(type)
+    if tag:
+        clause, needle = _tag_clause(tag)
+        sql.append(clause)
+        params.append(needle)
     if status:
         sql.append("AND m.status = ?")
         params.append(status)
@@ -1597,20 +1625,21 @@ def search_semantic(
     *,
     domain: str = "",
     type: str = "",
+    tag: str = "",
     status: str = "active",
     limit: int = 30,
 ) -> list[sqlite3.Row]:
     """Brute-force KNN over the vector table, filtered post-KNN.
 
     Returns [] when vectors are unavailable, so callers can always call
-    this unconditionally. domain/type/status filters apply *after* the
+    this unconditionally. domain/type/tag/status filters apply *after* the
     nearest-neighbor pass, so a fixed limit*4 over-fetch can starve a
     small, selective domain: if every one of the limit*4 global nearest
     neighbors belongs to another domain, the filter leaves nothing even
     when relevant in-domain vectors exist just outside that window. When a
-    domain/type filter narrows the result we therefore widen k to the whole
-    vector set (capped at _KNN_MAX_K) so the post-KNN filter keeps the right
-    rows in correct distance order; unfiltered searches keep the cheap
+    domain/type/tag filter narrows the result we therefore widen k to the
+    whole vector set (capped at _KNN_MAX_K) so the post-KNN filter keeps the
+    right rows in correct distance order; unfiltered searches keep the cheap
     fixed over-fetch.
     """
     if not _vec_ready(conn):
@@ -1618,7 +1647,7 @@ def search_semantic(
     blobs = embed.embed_texts([query])
     if not blobs:
         return []
-    if domain or type:
+    if domain or type or tag:
         total = conn.execute("SELECT COUNT(*) FROM memories_vec").fetchone()[0]
         k = min(max(total, 1), _KNN_MAX_K)
     else:
@@ -1637,6 +1666,10 @@ def search_semantic(
     if type:
         sql.append("AND m.type = ?")
         params.append(type)
+    if tag:
+        clause, needle = _tag_clause(tag)
+        sql.append(clause)
+        params.append(needle)
     if status:
         sql.append("AND m.status = ?")
         params.append(status)
@@ -1670,6 +1703,7 @@ def search_hybrid(
     *,
     domain: str = "",
     type: str = "",
+    tag: str = "",
     status: str = "active",
     limit: int = 30,
     diagrams_first: bool = True,
@@ -1725,14 +1759,16 @@ def search_hybrid(
                 seen["match_source"] = "both"
                 seen["_rrf"] += contribution
 
-    fold(search_memories(conn, query, domain=domain, type=type, status=status, limit=limit), "fts")
-    fold(search_semantic(conn, query, domain=domain, type=type, status=status, limit=limit), "vec")
+    fold(search_memories(conn, query, domain=domain, type=type, tag=tag,
+                         status=status, limit=limit), "fts")
+    fold(search_semantic(conn, query, domain=domain, type=type, tag=tag,
+                         status=status, limit=limit), "vec")
 
     # only with no type filter: an explicit type='note' means the caller
     # asked for notes, and backfilling diagrams would break that contract
     # (recall() is exactly that call, and must never surface one)
     if diagrams_first and not type:
-        scoped = dict(domain=domain, type=DIAGRAM_TYPE, status=status, limit=limit)
+        scoped = dict(domain=domain, type=DIAGRAM_TYPE, tag=tag, status=status, limit=limit)
         fold(search_memories(conn, query, **scoped), "fts", backfill=True)
         fold(search_semantic(conn, query, **scoped), "vec", backfill=True)
 
@@ -1762,7 +1798,8 @@ def list_by_domain(
 
 
 def list_recent(
-    conn: sqlite3.Connection, *, type: str = "", domain: str = "", status: str = "active", limit: int = 20
+    conn: sqlite3.Connection, *, type: str = "", domain: str = "", tag: str = "",
+    status: str = "active", limit: int = 20
 ) -> list[sqlite3.Row]:
     sql = ["SELECT * FROM memories WHERE 1=1"]
     params: list = []
@@ -1772,6 +1809,10 @@ def list_recent(
     if domain:
         sql.append("AND domain = ?")
         params.append(domain)
+    if tag:
+        clause, needle = _tag_clause(tag, alias="")
+        sql.append(clause)
+        params.append(needle)
     if status:
         sql.append("AND status = ?")
         params.append(status)

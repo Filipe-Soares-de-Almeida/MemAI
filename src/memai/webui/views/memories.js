@@ -10,7 +10,7 @@ import { $, esc, fmtInt, fmtDate, debounce } from '../core/dom.js';
 import { api, query } from '../core/api.js';
 import { icon } from '../core/icons.js';
 import { toast, failed, promptModal } from '../core/ui.js';
-import { typeTag, uidChip, statusTag, confPill, wireCopyChips, getDomains,
+import { typeTag, statusTag, confPill, getDomains,
          TYPE_ORDER, TYPE_LABEL, CONF } from '../core/shared.js';
 import { go, refreshBehind } from '../core/router.js';
 import { onTeardown } from '../core/lifecycle.js';
@@ -144,7 +144,6 @@ export async function renderMemories(view, params, ctx) {
   $('#pgNext').addEventListener('click', () => navigate({ page: state.page + 1 }));
 
   const list = $('#memList');
-  wireCopyChips(list);
   list.querySelectorAll('.mem-row').forEach(row => {
     row.addEventListener('click', () => openRecord(row.dataset.uid));
     const cb = row.querySelector('input[type=checkbox]');
@@ -161,7 +160,6 @@ export async function renderMemories(view, params, ctx) {
 function renderRows(items) {
   if (!items.length) return `<div class="empty">${t('mem.empty')}</div>`;
   return items.map(m => {
-    const tags = (m.tags || '').split(',').map(s => s.trim()).filter(Boolean).slice(0, 5);
     const match = m.match_source
       ? `<span class="match-badge" title="${m.fts_rank !== undefined ? `bm25 ${Number(m.fts_rank).toFixed(2)} ` : ''}${m.vec_distance !== undefined ? `cos ${Number(m.vec_distance).toFixed(3)}` : ''}">${esc(m.match_source)}</span>` : '';
     /* The row keeps its click for the mouse, but the thing that OPENS the
@@ -176,19 +174,16 @@ function renderRows(items) {
            whispers stacked in .mem-right, at 60% white, quieter than the uid
            beside it -- in a store whose whole point is that a human vets what
            an agent wrote, the vetting was the faintest thing in the row. -->
-      <div class="mem-col-type">${confPill(m.confidence)}${typeTag(m.type)}${uidChip(m.uid)}${statusTag(m.status)}</div>
+      <div class="mem-col-type">${confPill(m.confidence, true)}${typeTag(m.type)}</div>
       <div class="mem-main">
         <button type="button" class="row-open mem-snippet"
                 aria-label="${esc(t('a11y.openRecord', { uid: m.uid }))}">${esc(m.content)}</button>
-        ${tags.length || m.domain ? `<div class="mem-tags">
-          ${m.domain ? `<span class="chip">${esc(m.domain)}</span>` : ''}
-          ${tags.map(tg => `<span class="chip" style="color:var(--ink-3)">#${esc(tg)}</span>`).join('')}
-        </div>` : ''}
       </div>
       <div class="mem-right">
         ${match}
+        ${statusTag(m.status)}
+        ${m.domain ? `<span class="chip">${esc(m.domain)}</span>` : ''}
         <span title="${esc(m.created_at)}">${fmtDate(m.created_at)}</span>
-        ${m.content_len > 300 ? `<span style="color:var(--ink-3)">${fmtInt(m.content_len)} ${t('common.chars')}</span>` : ''}
       </div>
     </div>`;
   }).join('');
