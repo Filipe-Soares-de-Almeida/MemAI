@@ -102,7 +102,7 @@
      AA in every place it was used: 4.36:1 on --raised (.btn-danger, the
      danger-zone summary), 3.99:1 on its own tinted pill (contradicted
      confidence, ten per list page) and 3.86:1 on the deletion tint
-     (.dz-hint code). A red that cannot be read is the wrong red for words.
+     (.dz-type code). A red that cannot be read is the wrong red for words.
 
      --bad-ink is Red 300, which also settles an inconsistency: --ok is
      Green 300 and --warn is Amber 300, so the ink tier of the status scale
@@ -1474,16 +1474,55 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
 .diff-add { background: var(--diff-add-bg); color: var(--diff-add-ink); display: block; }
 .diff-ctx { color: var(--ink-3); display: block; }
 
-.danger-zone { border: 1px solid var(--bad-line); border-radius: var(--r-md); }
+/* A card like every other section now, and pointedly not like them:
+   --bad-tint is this file's token for "a whole box the eye should treat as
+   risky", and it is what keeps this from reading as one more panel of
+   metadata now that every panel has an edge of its own. */
+.danger-zone {
+  background: var(--bad-tint);
+  border: 1px solid var(--bad-line);
+  border-radius: var(--r-lg);
+}
 .danger-zone summary {
   cursor: pointer; padding: var(--sp-3) var(--sp-4);
   color: var(--bad-ink);
   list-style: none;
 }
+.danger-zone summary:hover { text-decoration: underline; }
 .danger-zone summary::-webkit-details-marker { display: none; }
-.danger-zone .dz-body { padding: var(--sp-1) var(--sp-4) var(--sp-4); display: grid; gap: var(--sp-2); }
-.dz-hint { font-size: var(--fs-sm); color: var(--ink-2); }
-.dz-hint code { font-family: var(--font-m); color: var(--bad-ink); background: var(--bad-tint); padding: var(--sp-0) var(--sp-1); border-radius: var(--r-sm); }
+/* the rule appears only while it is open, so a closed zone is one quiet bar */
+.danger-zone[open] summary { border-bottom: 1px solid var(--bad-line); }
+.danger-zone .dz-body { padding: var(--sp-3) var(--sp-4) var(--sp-4); display: grid; gap: var(--sp-3); }
+.dz-hint, .dz-type { font-size: var(--fs-sm); color: var(--ink-2); }
+.dz-row { display: flex; flex-wrap: wrap; gap: var(--sp-2); align-items: center; }
+/* the phrase is 23 characters and the button's label is long: the field
+   takes the room and the button never shrinks to fit around it */
+.dz-row > input { flex: 1; min-width: 170px; }
+.dz-row > .btn { flex: none; }
+/* Why the button is grey. It reserves its line whether or not it has
+   something to say, so arming the control does not move it -- hence the
+   min-height matching its own line box.
+
+   Quiet while the phrase is merely unfinished, which is the state you are
+   in for every keystroke but the last: red there would spend the alarm
+   colour on nothing, and there would be none left for the line that says
+   the button now works. */
+.dz-state {
+  font: 400 var(--fs-label)/1.4 var(--font-ui);
+  color: var(--ink-3); min-height: 1.4em;
+}
+.dz-state.armed { color: var(--bad-ink); font-weight: 500; }
+/* the phrase to type, and the one place it appears -- see the note in
+   record.js on why it is not also the field's placeholder. --chip-fill and
+   not --bad-tint: the box around it is that tint now, and a tint on a tint
+   of itself is a chip you cannot see. */
+.dz-type code {
+  font-family: var(--font-m); color: var(--bad-ink);
+  background: var(--chip-fill);
+  border: 1px solid var(--bad-line);
+  padding: var(--sp-0) var(--sp-1); border-radius: var(--r-sm);
+  white-space: nowrap;
+}
 
 /* ── graph ───────────────────────────────────────────────────────────── */
 

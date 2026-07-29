@@ -267,12 +267,18 @@ export async function openRecord(uid) {
         <details class="danger-zone">
           <summary>${t('dz.summary')}</summary>
           <div class="dz-body">
-            <div class="dz-hint">${t('dz.hint', { uid: esc(m.uid) })}</div>
-            <div class="act-row">
-              <input type="text" id="dzPhrase" placeholder="DELETE ${esc(m.uid)}"
-                     aria-label="${t('dz.phrase.aria')}" style="flex:1" autocomplete="off">
+            <div class="dz-hint">${t('dz.hint')}</div>
+            <!-- The phrase is printed HERE and nowhere else. It used to be
+                 the field's placeholder as well, so an empty field showed
+                 the exact text you were being asked for: nothing on screen
+                 told a typed phrase from an untyped one, and the button
+                 beside it read as broken rather than as waiting. -->
+            <div class="dz-type">${t('dz.typeThis', { phrase: `<code>DELETE ${esc(m.uid)}</code>` })}</div>
+            <div class="dz-row">
+              <input type="text" id="dzPhrase" aria-label="${t('dz.phrase.aria')}" autocomplete="off">
               <button class="btn btn-danger" id="dzGo" disabled>${t('dz.button')}</button>
             </div>
+            <div class="dz-state" id="dzState" role="status"></div>
           </div>
         </details>
       </div>
@@ -448,8 +454,19 @@ export async function openRecord(uid) {
   }));
 
   /* purge */
-  const dzPhrase = dq('#dzPhrase'), dzGo = dq('#dzGo');
-  dzPhrase.addEventListener('input', () => { dzGo.disabled = dzPhrase.value !== `DELETE ${uid}`; });
+  const dzPhrase = dq('#dzPhrase'), dzGo = dq('#dzGo'), dzState = dq('#dzState');
+  const dzWant = `DELETE ${uid}`;
+  dzPhrase.addEventListener('input', () => {
+    const typed = dzPhrase.value;
+    const ok = typed === dzWant;
+    dzGo.disabled = !ok;
+    /* A greyed-out button cannot say why it is grey, and this one guards the
+       only irreversible act in the app. So the field answers for it: silent
+       until something is typed, then either what is still wrong or that the
+       button is now live. */
+    dzState.className = `dz-state${ok ? ' armed' : ''}`;
+    dzState.textContent = ok ? t('dz.armed') : typed ? t('dz.mismatch') : '';
+  });
   dzGo.addEventListener('click', async () => {
     try {
       await api(`/api/memories/${seg(uid)}/purge`, { body: { confirm: dzPhrase.value } });
