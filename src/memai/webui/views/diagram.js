@@ -61,10 +61,20 @@ function dgStepModal({ title, key = '', label = '', shape = 'step', lockKey = fa
    the flow you are leaving is worth keeping, so ctrl-click and the middle
    button have to open the destination in another tab -- which they do for
    free on an <a>, and cannot be made to do on a <span>. `node` is what the
-   arriving view focuses (see the deep link in renderDiagram). */
-const jumpHref = j =>
-  `#/diagram?uid=${encodeURIComponent(j.peer_uid)}`
-  + (j.peer_node ? `&node=${encodeURIComponent(j.peer_node)}` : '');
+   arriving view focuses; `from`/`fromNode` are the step being left, which
+   is what lets the arriving canvas offer the way back (see renderDiagram). */
+const enc = encodeURIComponent;
+const jumpHref = (j, from) =>
+  `#/diagram?uid=${enc(j.peer_uid)}`
+  + (j.peer_node ? `&node=${enc(j.peer_node)}` : '')
+  + `&from=${enc(from)}`
+  + (j.node_key ? `&fromNode=${enc(j.node_key)}` : '');
+
+/* The way back, with no `from` of its own: this is a RETURN, and a return
+   that announced a way back to where it returned from would leave both
+   flows offering to go to the other one forever. */
+const backHref = (uid, node) =>
+  `#/diagram?uid=${enc(uid)}` + (node ? `&node=${enc(node)}` : '');
 
 /* Which step of the target flow to arrive on, and why the flow continues
    there. Second half of adding a jump: the first half picked the diagram,
@@ -101,9 +111,12 @@ function dgJumpTargetModal(target) {
 
 export async function renderDiagram(view, params, ctx) {
   const uid = params.get('uid') || '';
-  /* Arrived from a jump on another flow: the step to land on. Read once --
-     it is where this render starts, not a filter the view keeps applying. */
+  /* Arrived from a jump on another flow: the step to land on, and the step
+     it was left from. Read once -- they are where this render starts, not a
+     filter the view keeps applying. */
   const landOn = params.get('node') || '';
+  const cameFrom = params.get('from') || '';
+  const cameFromNode = params.get('fromNode') || '';
   if (!uid) {
     view.innerHTML = `<div class="empty">${t('dg.noUid')}</div>`;
     return;
@@ -151,6 +164,12 @@ export async function renderDiagram(view, params, ctx) {
                graph. The label says so rather than claiming the picture is
                navigable. -->
           <canvas id="dgCanvas" role="img" aria-label="${esc(t('dg.canvasAlt', { title: data.title }))}"></canvas>
+          <!-- Top-left corner: the way OUT of this flow, and the way back
+               into the one that sent you here. It is on the canvas because
+               that is where the card you clicked is -- the same tie listed
+               in the inspector was four panels down a column you had to
+               scroll to reach. -->
+          <div class="dg-jumpnav" id="dgJumpNav" hidden></div>
           <div class="dg-overlay" id="dgOverlay">
             <div class="dg-hint" id="dgHint" hidden></div>
             <div class="dg-legend" id="dgLegend"></div>
@@ -344,7 +363,7 @@ export async function renderDiagram(view, params, ctx) {
     const jumpItems = (node ? data.jumps.filter(j => j.node_key === node.key) : [])
       .map(j => ({
         label: t('dg.ctx.openJump', { title: j.peer_title }),
-        run: () => { location.hash = jumpHref(j); },
+        run: () => { location.hash = jumpHref(j, uid); },
       }));
     if (!editing) {
       openCtxMenu(x, y, [
@@ -464,7 +483,7 @@ export async function renderDiagram(view, params, ctx) {
     <div class="dg-jump">
       <span class="dg-arrow" title="${j.direction === 'out' ? t('dg.jump.out') : t('dg.jump.in')}"
             >${icon(j.direction === 'out' ? 'arrow-right' : 'arrow-left')}</span>
-      <a class="dg-jump-to" href="${jumpHref(j)}"
+      <a class="dg-jump-to" href="${jumpHref(j, uid)}"
          title="${esc(t('dg.jump.open', { title: j.peer_title }))}">
         <span class="dg-jump-title">${esc(j.peer_title)}</span>
         ${j.peer_node
@@ -507,7 +526,50 @@ export async function renderDiagram(view, params, ctx) {
       b.onclick = () => deleteJump(list[Number(b.dataset.deljump)]));
   }
 
+  /* ── the corridor on the canvas ──────────────────────────────────────
+     A card whose step continues in another flow already says so -- it
+     carries a mark. What it did not carry was a way to ACT on that: the
+     tie was listed in the inspector, in the last panel of a column tall
+     enough to scroll, so the shortest path from "this card leads
+     somewhere" to going there was to scroll past everything else.
+
+     So the offer follows the selection, beside the card it is about.
+     Nothing is drawn for a card with no jumps -- most cards -- and
+     nothing at all until one is clicked. The way BACK is the exception:
+     it belongs to the arrival, not to a selection, so it stays put for as
+     long as you are on the flow something sent you to. */
+  function paintJumpNav() {
+    const bar = $('#dgJumpNav');
+    const node = data.nodes.find(n => n.key === selected);
+    /* Which jump brought us here, so the chip can name the flow rather
+       than say "back". Matched on the step as well when the address said
+       one: two flows can hand off to the same step from different places. */
+    const back = cameFrom && data.jumps.find(j => j.peer_uid === cameFrom
+      && (!cameFromNode || j.peer_node === cameFromNode));
+    /* and then NOT offered a second time as a way out: arriving on a step
+       whose only tie is the one you just followed put two chips pointing at
+       the same flow on the same corner */
+    const mine = (node ? data.jumps.filter(j => j.node_key === node.key) : [])
+      .filter(j => j !== back);
+
+    const chip = (href, dir, title, step, hint) => `
+      <a class="dg-navchip${dir === 'back' ? ' back' : ''}" href="${href}" title="${esc(hint)}">
+        <span class="dg-navchip-mark">${icon(dir === 'out' ? 'arrow-right' : 'arrow-left')}</span>
+        <span class="dg-navchip-text">${esc(title)}</span>
+        ${step ? `<span class="dg-key">${esc(step)}</span>` : ''}
+      </a>`;
+
+    bar.innerHTML = [
+      back ? chip(backHref(back.peer_uid, back.peer_node), 'back', back.peer_title,
+                  back.peer_node, t('dg.jump.backTitle', { title: back.peer_title })) : '',
+      ...mine.map(j => chip(jumpHref(j, uid), j.direction, j.peer_title, j.peer_node,
+                            t('dg.jump.open', { title: j.peer_title }))),
+    ].filter(Boolean).join('');
+    bar.hidden = !bar.innerHTML;
+  }
+
   function paintSide() {
+    paintJumpNav();
     const side = $('#dgSide');
     const node = data.nodes.find(n => n.key === selected);
     const metaBtn = editing
@@ -678,9 +740,11 @@ export async function renderDiagram(view, params, ctx) {
     routing,
     onEditEdgeLabel: editEdgeLabel,
     onContextMenu: canvasMenu,
-    /* the toolbar has its own row now; the hint strip and the legend still
-       float on the canvas, so the fit stays clear of that corner */
+    /* the toolbar has its own row now; the hint strip, the legend and the
+       jump nav still float on the canvas, so the fit stays clear of both
+       corners. A hidden bar measures zero, which is the common case. */
     insets: () => ({
+      top: ($('#dgJumpNav')?.offsetHeight || 0) + 18,
       bottom: ($('#dgOverlay')?.offsetHeight || 0) + 18,
     }),
     onSelect: node => { selected = node ? node.key : null; paintSide(); },
@@ -734,8 +798,16 @@ export async function renderDiagram(view, params, ctx) {
   /* Arrived from a jump on another flow: land on the step it named rather
      than on the whole-diagram fit the constructor just did. A key that no
      longer exists is ignored on purpose -- the flow that pointed here is
-     stale, and a red toast about a step nobody asked for is noise. */
-  if (landOn && engine.focusNode(landOn)) selected = landOn;
+     stale, and a red toast about a step nobody asked for is noise.
+
+     The nav is painted BEFORE the centring, not after: focusNode() asks
+     insets() how much of the corner is taken, and a bar that appears a
+     moment later is a bar the centring did not know about. */
+  if (landOn && data.nodes.some(n => n.key === landOn)) {
+    selected = landOn;
+    paintJumpNav();
+    engine.focusNode(landOn);
+  }
 
   paintRouting();
   paintFont();

@@ -449,6 +449,7 @@
     "dg.jump.out": "sai desta etapa",
     "dg.jump.in": "chega nesta etapa",
     "dg.jump.open": "Abrir {title}",
+    "dg.jump.backTitle": "Voltar para {title}, de onde este fluxo foi aberto",
     "dg.jump.wholeDiagram": "o diagrama inteiro",
     "dg.jump.pickTitle": "Em qual fluxo '{key}' continua?",
     "dg.jump.step.title": "Onde em {title}?",

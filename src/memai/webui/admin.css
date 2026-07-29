@@ -2030,6 +2030,42 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
   font-size: var(--fs-label); color: var(--ink-3); letter-spacing: .02em;
 }
 .dg-legend-item { display: inline-flex; align-items: center; gap: var(--sp-1); white-space: nowrap; }
+
+/* Top-left corner of the stage, opposite the legend and built the same
+   way: the same glass over the dot grid, transparent to the pointer except
+   on the chips themselves, so a drag near the corner still pans.
+
+   It holds the ways off this flow for the selected step, and the way back
+   into whichever flow sent you here. Empty and hidden for a step that
+   continues nowhere -- which is most of them, and the reason this can sit
+   on the drawing at all. */
+.dg-jumpnav {
+  position: absolute; left: 12px; top: 12px; z-index: 3;
+  max-width: calc(100% - 24px);
+  display: flex; flex-direction: column; gap: var(--sp-2); align-items: flex-start;
+  pointer-events: none;
+}
+.dg-jumpnav > * { pointer-events: auto; }
+
+.dg-navchip {
+  max-width: 100%;
+  display: inline-flex; align-items: center; gap: var(--sp-2);
+  background: var(--glass);
+  border: 1px solid var(--accent);
+  border-radius: var(--r-pill); padding: var(--sp-1) var(--sp-3);
+  font-size: var(--fs-label); color: var(--accent);
+  text-decoration: none;
+}
+/* the return trip is a way OUT of a detour, not another offer to take one:
+   same shape, quieter edge, so the two never compete for the same glance */
+.dg-navchip.back { border-color: var(--line); color: var(--ink-2); }
+.dg-navchip:hover { background: var(--accent-dim); }
+.dg-navchip.back:hover { color: var(--ink); }
+.dg-navchip-mark { display: inline-flex; flex: none; --ico: 13px; }
+.dg-navchip-text {
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.dg-navchip > .dg-key { flex: none; }
 /* a line sample is wide and flat, not a square icon */
 .ico-line { width: 22px; height: 7px; }
 
