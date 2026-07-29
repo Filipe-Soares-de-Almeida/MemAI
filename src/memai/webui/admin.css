@@ -1153,6 +1153,13 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
   display: flex; align-items: center; gap: var(--sp-3); flex-wrap: wrap;
 }
 .record-head .spacer { flex: 1; }
+/* The way back to the memory you opened this one FROM. Named rather than a
+   bare arrow, and capped rather than allowed to push the head's chips onto
+   a second line. */
+.record-back { max-width: 260px; }
+.record-back .record-back-text {
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
 
 .record-grid {
   display: grid;
@@ -1173,17 +1180,42 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
   .record-grid { grid-template-columns: 1fr; gap: 0; }
 }
 
-.section { margin-bottom: var(--sp-5); }
-/* Six of these stacked down one 760px drawer, each announced by an identical
-   ruled line, so Content, Metadata, Curation, Relations, Edit history and the
-   danger zone all read as peers -- and a panel where everything is announced
-   the same way has no shape. The rules are gone: the heading voice and the
-   space around it separate the sections, and --sp-5 above each one against
-   --sp-3 below it ties a heading to the section it names. */
+/* Each section is a CARD, not a stretch of the dialog.
+
+   Down one 760px drawer, the heading voice and the space around it were
+   enough: there was a single reading order and each heading claimed
+   everything under it until the next. A 1120px dialog with two columns has
+   no single reading order, and whitespace alone left six panels floating on
+   one flat sheet of --overlay grey with no edge saying where any of them
+   began or ended -- least of all which column a heading belonged to.
+
+   --surface under --overlay is the ladder at the top of this file: a
+   content card recessed below the floating chrome it sits in, hence the
+   well edge. The reading pane inside stays at --inset, one step down
+   again, so the three tones still rank. */
+.section {
+  background: var(--surface);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--r-lg);
+  padding: var(--sp-4);
+  margin-bottom: var(--sp-4);
+}
+/* the danger zone draws its own red edge; a card around it is two borders
+   saying one thing */
+.section-bare {
+  background: none; border: none; border-radius: 0; padding: 0;
+}
 .section-label {
   margin-bottom: var(--sp-3);
-  display: flex; justify-content: space-between; align-items: center; gap: var(--sp-3);
+  display: flex; align-items: center; gap: var(--sp-2);
 }
+/* The count belongs to the heading it counts, and the button to the edge.
+   `justify-content: space-between` decided that by CHILD COUNT instead:
+   with three children it parked the count in the middle of the row, with
+   two it threw it to the far edge -- so "Relations (2)" and "Edit history
+   (0)" put their own counts in different places, and no two buttons in a
+   column started at the same x. */
+.section-label > .btn { margin-left: auto; }
 .content-pre {
   font: 400 var(--fs-sm)/1.65 var(--font-m);
   color: var(--ink);
