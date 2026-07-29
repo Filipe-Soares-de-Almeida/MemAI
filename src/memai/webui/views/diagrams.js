@@ -121,6 +121,9 @@ export async function renderDiagrams(view, params, ctx) {
         <span>${t('dgl.steps', { n: d.nodes })}</span>
         <span>${t('dgl.conns', { n: d.edges })}</span>
         <span>${t('dgl.linked', { n: d.links })}</span>
+        <!-- counted from both ends: a flow nothing leaves but three arrive
+             into is as tied into the set as the one that made those jumps -->
+        ${d.jumps ? `<span title="${t('dgl.jumpsWhy')}">${t('dgl.jumps', { n: d.jumps })}</span>` : ''}
         <span title="${t('dgl.documentedWhy')}">${t('dgl.documented', { n: d.documented, total: d.nodes })}</span>
       </div>
       <div class="dgl-issues">

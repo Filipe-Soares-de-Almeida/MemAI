@@ -20,7 +20,7 @@
 import { $ } from './core/dom.js';
 import { api } from './core/api.js';
 import { paintIcons } from './core/icons.js';
-import { modalOpen, closeModal, confirmModal, toast } from './core/ui.js';
+import { modalOpen, closeModal, toast } from './core/ui.js';
 import { updateRail } from './core/shared.js';
 import { registerViews, route, go, parseHash } from './core/router.js';
 import { I18N, t } from './i18n.js';
@@ -33,7 +33,7 @@ import { renderDiagram } from './views/diagram.js';
 import { renderDomains } from './views/domains.js';
 import { renderMaintenance } from './views/maintenance.js';
 import { renderOptimization } from './views/optimization.js';
-import { openRecord, closeDrawer, drawerOpen } from './views/record.js';
+import { openRecord } from './views/record.js';
 import { openNewMemory } from './views/new-memory.js';
 
 registerViews({
@@ -54,21 +54,15 @@ paintIcons();
 $('#btnNew').addEventListener('click', openNewMemory);
 
 /* Language. The reload that applies it discards whatever is on screen and
-   unsaved, so it asks -- except when a modal is holding the form, because
-   opening a confirmation would itself close that modal. Then it waits. */
-$('#langSel').addEventListener('change', async e => {
+   unsaved, so it refuses while a dialog is holding a form -- including the
+   memory record, which is one of them now. Asking instead is not an option:
+   the confirmation would itself be a dialog over the form it is asking
+   about, and answering it would leave the stack pointing at nothing. */
+$('#langSel').addEventListener('change', e => {
   const code = e.target.value;
   if (modalOpen()) {
     e.target.value = I18N.locale;
     toast(t('lang.busy'), 'bad');
-    return;
-  }
-  if (drawerOpen() && !(await confirmModal({
-    title: t('lang.switch.title'),
-    body: t('lang.switch.body'),
-    okLabel: t('lang.switch.ok'),
-  }))) {
-    e.target.value = I18N.locale;
     return;
   }
   I18N.set(code);
@@ -77,9 +71,9 @@ $('#langSel').addEventListener('change', async e => {
 
 document.addEventListener('keydown', e => {
   if (e.key === 'Escape') {
-    /* innermost first: a modal opened from the drawer closes back to it */
-    if (modalOpen()) { closeModal(); return; }
-    if (drawerOpen()) closeDrawer();
+    /* One level, innermost first: a sub-form opened from the record closes
+       back to the record rather than dismissing both. */
+    if (modalOpen()) closeModal();
     return;
   }
   /* `/` reaches the search wherever you are. It used to focus a field in the

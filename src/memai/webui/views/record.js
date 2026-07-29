@@ -1,25 +1,41 @@
-/* The memory record: a right-hand drawer over whatever view is showing,
-   plus its metadata editor and the edit-history diff.
+/* The memory record: a centred dialog over whatever view is showing, plus
+   its metadata editor and the edit-history diff.
 
-   Every lookup below is scoped to the drawer (dq) rather than to the
-   document. The drawer and a modal can be on screen at once, so a bare
-   getElementById is a collision waiting for the day two of them pick the
-   same id. */
+   It was a 760px drawer down the right-hand edge. Everything in it fitted
+   in one column and nothing was meant to: the content of a memory is a
+   wall of prose, and beside that wall the metadata, the curation controls,
+   the relations and the whole edit history were queued underneath it,
+   below the fold, on a screen with 500 unused pixels to the left. It is a
+   wide two-column dialog now -- the memory on one side, everything ABOUT
+   the memory on the other -- and it opens over the middle of the window
+   because that is where a form belongs.
+
+   That also makes it a member of the modal stack (core/ui.js), which is
+   what lets it raise the link picker as a sub-form instead of having a
+   lookup field wedged into a column.
+
+   Every lookup below is scoped to the dialog (dq) rather than to the
+   document. The record and a modal it raised are on screen at once, so a
+   bare getElementById is a collision waiting for the day two of them pick
+   the same id. */
 
 import { esc, fmtDate, fmtInt } from '../core/dom.js';
 import { api, seg } from '../core/api.js';
 import { icon } from '../core/icons.js';
-import { toast, failed, openModal, closeModal, confirmModal, promptModal,
-         inertBackground } from '../core/ui.js';
-import { typeTag, typeClass, confPill, uidChip, statusTag, wireCopyChips, wireUidPicker,
-         failedHTML, TYPE_ORDER, CONF, REL_SUGGEST, relTypeField, wireRelTypeField,
+import { toast, failed, openModal, closeModal, confirmModal, promptModal } from '../core/ui.js';
+import { typeTag, typeClass, confPill, uidChip, statusTag, wireCopyChips,
+         failedHTML, TYPE_ORDER, CONF, REL_SUGGEST,
          cachedDomains, invalidateDomains } from '../core/shared.js';
+import { pickMemories } from '../core/link-picker.js';
 import { go, refreshBehind } from '../core/router.js';
 import { t } from '../i18n.js';
 
-const drawer = document.getElementById('drawer');
-const scrim = document.getElementById('scrim');
-const dq = s => drawer.querySelector(s);
+/* The record's own scrim while it is open, so a re-render can write into
+   the dialog that is already there rather than closing and reopening it --
+   which would lose the reader's place and, once a sub-form is open above,
+   the sub-form with it. */
+let rec = null;
+const dq = s => rec.querySelector(s);
 
 /* One path per write, shared by the button that performs it and by the Undo
    that reverses it. An undo which reimplements the call it is undoing is an
@@ -40,62 +56,49 @@ const relink = (uid, rel) => api('/api/relations', {
   },
 });
 
-/* The close animation outlives the click that started it: the drawer is
-   emptied 300ms later, once it has slid off. Reopening a record inside
-   that window used to land in the middle of it -- the record rendered,
-   then the pending timeout hid the drawer and threw the markup away, so
-   clicking a row right after pressing Escape opened nothing at all. */
-let closeTimer = 0;
-/* whatever was focused when the drawer took over the screen, so closing it
-   puts the caret back on the row that opened it rather than at the top of
-   the document */
-let opener = null;
+export const recordOpen = () => Boolean(rec && document.contains(rec));
 
-export function closeDrawer() {
-  drawer.classList.remove('open');
-  scrim.classList.remove('show');
-  /* released before the focus call below: an inert subtree cannot take focus,
-     so restoring it first would silently do nothing */
-  inertBackground(false);
-  if (opener && document.contains(opener)) opener.focus();
-  opener = null;
-  clearTimeout(closeTimer);
-  closeTimer = setTimeout(() => {
-    closeTimer = 0;
-    drawer.hidden = true;
-    scrim.hidden = true;
-    drawer.innerHTML = '';
-  }, 300);
+/* Closes the record AND anything it raised: a confirmation opened from it
+   sits above it in the stack, and leaving that behind over a dialog that
+   no longer exists is not a state this app should be able to reach. */
+export function closeRecord() {
+  while (recordOpen()) closeModal();
+  rec = null;
 }
 
-scrim.addEventListener('click', closeDrawer);
-
-export const drawerOpen = () => !drawer.hidden;
+/* Where a render writes. The dialog exists once; opening the same record
+   again, or saving from inside it, repaints these two rather than tearing
+   the dialog down -- see the note on `rec`. */
+const paint = (head, body) => {
+  rec.querySelector('.modal-head').innerHTML = head;
+  rec.querySelector('.modal-body').innerHTML = body;
+};
 
 export async function openRecord(uid) {
-  clearTimeout(closeTimer);         /* see closeDrawer */
-  closeTimer = 0;
   /* Opening and re-rendering are the same call here -- every save ends with
      openRecord(uid) -- so the two have to be told apart. A re-render must
-     not yank the caret back to the top of the panel, must not lose the place
-     the reader had scrolled to, and must not overwrite the element that
-     closing will return focus to. */
-  const reopening = !drawer.hidden;
-  const keepScroll = reopening ? (dq('.drawer-body')?.scrollTop || 0) : 0;
+     not yank the caret back to the top of the dialog, and must not lose the
+     place the reader had scrolled to. */
+  const reopening = recordOpen();
+  const keepScroll = reopening ? (rec.querySelector('.modal-body')?.scrollTop || 0) : 0;
   if (!reopening) {
-    opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    inertBackground(true);
+    rec = openModal({
+      ariaLabel: t('dr.dialogAria'),
+      title: '',
+      bodyHTML: '<div class="loading"><span class="spin"></span></div>',
+      wide: true, tall: true,
+    });
   }
-  drawer.hidden = false; scrim.hidden = false;
-  requestAnimationFrame(() => { drawer.classList.add('open'); scrim.classList.add('show'); });
-  drawer.innerHTML = '<div class="loading"><span class="spin"></span></div>';
   let m;
   try { m = await api(`/api/memories/${seg(uid)}`); }
   catch (err) {
-    drawer.innerHTML = failedHTML(err);
-    drawer.querySelector('[data-retry]').addEventListener('click', () => openRecord(uid));
+    /* the dialog may have been dismissed while this was in flight */
+    if (!recordOpen()) return;
+    paint('', failedHTML(err));
+    dq('[data-retry]').addEventListener('click', () => openRecord(uid));
     return;
   }
+  if (!recordOpen()) return;
 
   /* a diagram's content is generated from its graph, so the drawer shows
      it read-only and sends editing to the canvas; every other type gets
@@ -134,8 +137,8 @@ export async function openRecord(uid) {
            <div class="hist-diff" id="histDiff${i}" data-diffbody="${i}" hidden></div>` : ''}
     </div>`).join('') || `<div class="empty" style="padding:18px">${t('dr.hist.empty')}</div>`;
 
-  drawer.innerHTML = `
-    <div class="drawer-head">
+  paint(`
+    <div class="record-head">
       ${typeTag(m.type)}
       ${uidChip(m.uid)}
       ${statusTag(m.status)}
@@ -143,8 +146,13 @@ export async function openRecord(uid) {
       <span class="spacer"></span>
       <button type="button" class="icon-btn" id="dClose" title="${t('dr.close.title')}"
               aria-label="${t('dr.close.title')}" style="--ico:17px">${icon('close')}</button>
-    </div>
-    <div class="drawer-body">
+    </div>`, `
+    <!-- The memory on the left, everything ABOUT it on the right. One
+         column put five panels of metadata under a wall of prose, so
+         curating a record meant scrolling past the record to reach the
+         controls for it and back up to check what they applied to. -->
+    <div class="record-grid">
+      <div class="record-col">
 
       <div class="section">
         <div class="section-label">${t('dr.content')}
@@ -179,6 +187,9 @@ export async function openRecord(uid) {
         </div>
       </div>` : ''}
 
+      </div>
+      <div class="record-col">
+
       <div class="section">
         <div class="section-label">${t('dr.metadata')}
           <button class="btn btn-sm" id="dMeta">${t('common.edit')}</button>
@@ -206,30 +217,16 @@ export async function openRecord(uid) {
         </div>
       </div>
 
+      <!-- Linking opens a form of its own (core/link-picker.js). What was
+           here -- a lookup field, a type select, a note field and an error
+           line -- asked for the type and the note of a relation before the
+           memory it describes had been chosen, offered one pick per pass,
+           and showed 280 characters of the candidate to decide on. -->
       <div class="section">
-        <div class="section-label">${t('dr.relations')} <span class="panel-aside">(${m.relations.length})</span></div>
-        ${rels}
-        <!-- the search owns its own row: it is the field with the longest
-             input and the widest output, and it used to be the narrowest
-             control on a three-up flex line -->
-        <div class="rel-add">
-          <div class="picker">
-            <input type="text" id="relTarget" placeholder="${t('dr.rel.target.placeholder')}"
-                   aria-label="${t('dr.rel.target.placeholder')}" autocomplete="off">
-            <div class="picker-results" id="relResults" hidden></div>
-          </div>
-          <div class="act-row">
-            ${relTypeField({
-              selId: 'relType', customId: 'relTypeCustom', options: REL_SUGGEST,
-              ariaLabel: t('dr.rel.type.placeholder') })}
-            <input type="text" id="relNote" class="rel-note" placeholder="${t('dr.rel.note.placeholder')}"
-                   aria-label="${t('dr.rel.note.placeholder')}">
-            <button class="btn" id="relCreate">${t('dr.rel.link')}</button>
-          </div>
-          <!-- said as a corner toast until this round, about two fields the
-               caret was already sitting in -->
-          <div class="field-error" id="relError" role="alert" hidden></div>
+        <div class="section-label">${t('dr.relations')} <span class="panel-aside">(${m.relations.length})</span>
+          <button class="btn btn-sm" id="relAdd">${t('dr.rel.link')}</button>
         </div>
+        ${rels}
       </div>
 
       <div class="section">
@@ -250,26 +247,27 @@ export async function openRecord(uid) {
           </div>
         </details>
       </div>
-    </div>`;
 
-  /* the panel itself takes the caret, so a screen reader announces the
-     dialog and its label instead of staying on the covered list behind it.
-     tabindex="-1" in index.html is what makes it focusable. */
-  if (!reopening) drawer.focus({ preventScroll: true });
-  else if (keepScroll) dq('.drawer-body').scrollTop = keepScroll;
+      </div>
+    </div>`);
 
-  wireCopyChips(drawer);
-  dq('#dClose').addEventListener('click', closeDrawer);
-  drawer.querySelectorAll('[data-open]').forEach(el =>
+  /* the dialog takes the caret, so a screen reader announces it and its
+     label instead of staying on the covered list behind it. openModal has
+     already done that for a fresh one; a re-render must not repeat it. */
+  if (reopening && keepScroll) rec.querySelector('.modal-body').scrollTop = keepScroll;
+
+  wireCopyChips(rec);
+  dq('#dClose').addEventListener('click', closeRecord);
+  rec.querySelectorAll('[data-open]').forEach(el =>
     el.addEventListener('click', () => openRecord(el.dataset.open)));
-  drawer.querySelectorAll('[data-fdomain]').forEach(el =>
-    el.addEventListener('click', () => { closeDrawer(); go('memories', { domain: el.dataset.fdomain }); }));
-  drawer.querySelectorAll('[data-fsession]').forEach(el =>
-    el.addEventListener('click', () => { closeDrawer(); go('memories', { session: el.dataset.fsession, status: '' }); }));
+  rec.querySelectorAll('[data-fdomain]').forEach(el =>
+    el.addEventListener('click', () => { closeRecord(); go('memories', { domain: el.dataset.fdomain }); }));
+  rec.querySelectorAll('[data-fsession]').forEach(el =>
+    el.addEventListener('click', () => { closeRecord(); go('memories', { session: el.dataset.fsession, status: '' }); }));
 
   /* edit content — a diagram is edited on its canvas instead */
   if (isDiagram) {
-    dq('#dOpenEditor').addEventListener('click', () => { closeDrawer(); go('diagram', { uid }); });
+    dq('#dOpenEditor').addEventListener('click', () => { closeRecord(); go('diagram', { uid }); });
   } else {
     const editBtn = dq('#dEdit');
     const syncEdit = open => {
@@ -343,7 +341,7 @@ export async function openRecord(uid) {
   });
 
   /* relations */
-  drawer.querySelectorAll('[data-delrel]').forEach(b => b.addEventListener('click', async () => {
+  rec.querySelectorAll('[data-delrel]').forEach(b => b.addEventListener('click', async () => {
     const ok = await confirmModal({
       title: t('dr.rel.removeModal.title'),
       body: t('dr.rel.removeModal.body'),
@@ -364,59 +362,46 @@ export async function openRecord(uid) {
     } catch (err) { failed('err.relation', err); }
   }));
 
-  const relResolve = wireUidPicker({
-    input: dq('#relTarget'), results: dq('#relResults'), exclude: uid,
-    label: t('dr.rel.target.placeholder'),
-  });
-  const relTypeValue = wireRelTypeField(dq('#relType'), dq('#relTypeCustom'));
+  /* Several relations in one pass, all of the same type and note: the type
+     and the note describe WHY these memories belong together, and a batch
+     the operator chose in one go is one such statement. Anything with its
+     own reason is its own trip through the picker.
 
-  /* Marks the field that is actually wrong, next to itself, and clears the
-     moment you start fixing it. */
-  const relFields = [dq('#relTarget'), dq('#relType')];
-  const relFail = (msg, which) => {
-    relFields.forEach((el, i) => el.setAttribute('aria-invalid', i === which ? 'true' : 'false'));
-    const box = dq('#relError');
-    box.textContent = msg;
-    box.hidden = false;
-    relFields[which].focus();
-  };
-  const relClear = () => {
-    relFields.forEach(el => el.setAttribute('aria-invalid', 'false'));
-    dq('#relError').hidden = true;
-  };
-  [dq('#relTarget'), dq('#relTypeCustom')].forEach(el => el.addEventListener('input', relClear));
-  dq('#relType').addEventListener('change', relClear);
-
-  /* Why the target uid is resolved rather than read: a typed value has to be
-     checked against the store before it is sent, and that is a round trip. */
-  const RESOLVE_MSG = {
-    empty: 'dr.rel.pickTarget',
-    self: 'dr.rel.selfTarget',
-    unknown: 'dr.rel.unknownTarget',
-    failed: 'dr.rel.lookupFailed',
-  };
-
-  dq('#relCreate').addEventListener('click', async () => {
-    relClear();
-    const btn = dq('#relCreate');
-    const relType = relTypeValue();
-    if (!dq('#relTarget').value.trim()) return relFail(t('dr.rel.pickTarget'), 0);
-    if (!relType) return relFail(t('dr.rel.pickType'), 1);
-    btn.disabled = true;
+     Peers already related are deliberately NOT excluded: two memories can
+     be tied twice under different types ('relates_to' and 'supersedes'),
+     and only an identical triple is refused by the API. */
+  dq('#relAdd').addEventListener('click', async () => {
+    const chosen = await pickMemories({
+      title: t('dr.rel.pickTitle'),
+      exclude: uid,
+      relOptions: REL_SUGGEST,
+      relValue: 'relates_to',
+      withNote: true,
+      okLabel: t('dr.rel.link'),
+    });
+    if (!chosen?.uids.length) return;
+    const relType = chosen.relation || 'relates_to';
+    let made = 0;
     try {
-      const { uid: target, reason } = await relResolve();
-      if (!target) return relFail(t(RESOLVE_MSG[reason] || 'dr.rel.unknownTarget'), 0);
-      await api('/api/relations', { body: { from_uid: uid, to_uid: target, relation_type: relType, note: dq('#relNote').value } });
-      toast(t('dr.rel.created'), 'ok'); openRecord(uid);
-    } catch (err) { failed('err.relation', err); }
-    finally { if (drawer.contains(btn)) btn.disabled = false; }
+      for (const target of chosen.uids) {
+        await api('/api/relations', { body: {
+          from_uid: uid, to_uid: target, relation_type: relType, note: chosen.note } });
+        made++;
+      }
+      toast(t('dr.rel.createdN', { n: made }), 'ok');
+    } catch (err) {
+      /* the ones before the failure are real relations and stay; the count
+         says how far it got rather than implying all or nothing */
+      failed('err.relation', err, made ? { detail: t('dr.rel.createdN', { n: made }) } : {});
+    }
+    openRecord(uid);
   });
 
   /* history diffs (lazy) */
   const histRev = m.edit_history.slice().reverse();
-  drawer.querySelectorAll('[data-diff]').forEach(b => b.addEventListener('click', () => {
+  rec.querySelectorAll('[data-diff]').forEach(b => b.addEventListener('click', () => {
     const i = b.dataset.diff;
-    const body = drawer.querySelector(`[data-diffbody="${i}"]`);
+    const body = rec.querySelector(`[data-diffbody="${i}"]`);
     if (body.hidden && !body.innerHTML)
       body.innerHTML = renderDiff(histRev[i].prev_content, histRev[i].new_content);
     body.hidden = !body.hidden;
@@ -431,7 +416,7 @@ export async function openRecord(uid) {
     try {
       await api(`/api/memories/${seg(uid)}/purge`, { body: { confirm: dzPhrase.value } });
       toast(t('dz.purged'), 'ok');
-      closeDrawer(); refreshBehind();
+      closeRecord(); refreshBehind();
     } catch (err) { failed('err.purge', err); }
   });
 }

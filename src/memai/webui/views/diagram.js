@@ -11,8 +11,8 @@ import { api, seg } from '../core/api.js';
 import { icon } from '../core/icons.js';
 import { toast, failed, openModal, closeModal, confirmModal, promptModal,
          openCtxMenu, tipShow, tipHide, setPressed } from '../core/ui.js';
-import { typeClass, wireUidPicker, relTypeField, wireRelTypeField,
-         DG_REL_SUGGEST } from '../core/shared.js';
+import { typeClass, DG_REL_SUGGEST } from '../core/shared.js';
+import { pickMemories } from '../core/link-picker.js';
 import { onTeardown } from '../core/lifecycle.js';
 import { openRecord } from './record.js';
 import { DiagramEditor, NODE_SHAPES, ROUTINGS, FONT_SCALES } from '../diagram-engine.js';
@@ -57,8 +57,53 @@ function dgStepModal({ title, key = '', label = '', shape = 'step', lockKey = fa
   });
 }
 
+/* Where a jump goes, as an address. A real href and not a click handler:
+   the flow you are leaving is worth keeping, so ctrl-click and the middle
+   button have to open the destination in another tab -- which they do for
+   free on an <a>, and cannot be made to do on a <span>. `node` is what the
+   arriving view focuses (see the deep link in renderDiagram). */
+const jumpHref = j =>
+  `#/diagram?uid=${encodeURIComponent(j.peer_uid)}`
+  + (j.peer_node ? `&node=${encodeURIComponent(j.peer_node)}` : '');
+
+/* Which step of the target flow to arrive on, and why the flow continues
+   there. Second half of adding a jump: the first half picked the diagram,
+   and only that diagram knows what its steps are called. */
+function dgJumpTargetModal(target) {
+  return new Promise(resolve => {
+    const m = openModal({
+      title: t('dg.jump.step.title', { title: esc(target.title) }),
+      bodyHTML: `
+        <div class="field"><label for="dgjNode">${t('dg.jump.step.label')}</label>
+          <select id="dgjNode">
+            <option value="">${t('dg.jump.wholeDiagram')}</option>
+            ${target.nodes.map(n =>
+              `<option value="${esc(n.key)}">${esc(n.key)} · ${esc(n.label)}</option>`).join('')}
+          </select></div>
+        <div class="field"><label for="dgjLabel">${t('dg.jump.label')}</label>
+          <input type="text" id="dgjLabel" placeholder="${t('dg.jump.labelPh')}"
+                 autocomplete="off"></div>
+        <div class="dg-empty">${t('dg.jump.step.hint')}</div>`,
+      footHTML: `<button class="btn" data-x>${t('common.cancel')}</button>
+                 <button class="btn btn-solid" data-ok>${t('dg.jump.add')}</button>`,
+    });
+    m.querySelector('[data-x]').onclick = () => { closeModal(); resolve(null); };
+    m.querySelector('[data-ok]').onclick = () => {
+      const out = {
+        node: m.querySelector('#dgjNode').value,
+        label: m.querySelector('#dgjLabel').value.trim(),
+      };
+      closeModal();
+      resolve(out);
+    };
+  });
+}
+
 export async function renderDiagram(view, params, ctx) {
   const uid = params.get('uid') || '';
+  /* Arrived from a jump on another flow: the step to land on. Read once --
+     it is where this render starts, not a filter the view keeps applying. */
+  const landOn = params.get('node') || '';
   if (!uid) {
     view.innerHTML = `<div class="empty">${t('dg.noUid')}</div>`;
     return;
@@ -197,6 +242,7 @@ export async function renderDiagram(view, params, ctx) {
     }
     $('#dgSub').textContent = t('dg.sub', {
       n: data.nodes.length, m: data.edges.length, l: data.links.length,
+      j: data.jumps.length,
     });
   }
 
@@ -292,8 +338,18 @@ export async function renderDiagram(view, params, ctx) {
      a line by the LINE is the only way to label one that has none yet, so
      there is nothing to click for. */
   function canvasMenu({ world, x, y, node, edge }) {
+    /* Following a jump is READING, so it is on the menu in read-only too --
+       and it is the first thing on it, because a step that continues
+       somewhere else is a step whose next question is "where". */
+    const jumpItems = (node ? data.jumps.filter(j => j.node_key === node.key) : [])
+      .map(j => ({
+        label: t('dg.ctx.openJump', { title: j.peer_title }),
+        run: () => { location.hash = jumpHref(j); },
+      }));
     if (!editing) {
       openCtxMenu(x, y, [
+        ...jumpItems,
+        jumpItems.length && { sep: true },
         { label: t('dg.enableEditing'), run: () => { editing = true; applyMode(); } },
         { label: t('dg.center'), run: () => engine.fit() },
       ]);
@@ -312,6 +368,8 @@ export async function renderDiagram(view, params, ctx) {
     if (node) {
       const stored = data.nodes.find(n => n.key === node.key);
       openCtxMenu(x, y, [
+        ...jumpItems,
+        jumpItems.length && { sep: true },
         { label: t('dg.ctx.nodeEdit'), run: () => editStep(node) },
         { label: stored?.note ? t('dg.ctx.nodeNoteEdit') : t('dg.ctx.nodeNoteAdd'),
           run: () => editNote(node) },
@@ -398,12 +456,69 @@ export async function renderDiagram(view, params, ctx) {
   }
 
   /* ── inspector ─────────────────────────────────────────────────────── */
+  /* One jump, from whichever end this diagram is on. The arrow is the
+     direction, the link is the address, and the step at the far end is
+     named rather than implied -- coming back means arriving on the step
+     that left, not on a diagram and a hunt for it. */
+  const jumpRow = (j, i) => `
+    <div class="dg-jump">
+      <span class="dg-arrow" title="${j.direction === 'out' ? t('dg.jump.out') : t('dg.jump.in')}"
+            >${icon(j.direction === 'out' ? 'arrow-right' : 'arrow-left')}</span>
+      <a class="dg-jump-to" href="${jumpHref(j)}"
+         title="${esc(t('dg.jump.open', { title: j.peer_title }))}">
+        <span class="dg-jump-title">${esc(j.peer_title)}</span>
+        ${j.peer_node
+          ? `<span class="dg-key">${esc(j.peer_node)}</span>`
+          : `<span class="dg-jump-whole">${t('dg.jump.wholeDiagram')}</span>`}
+        ${j.peer_node_label ? `<span class="dg-label">${esc(j.peer_node_label)}</span>` : ''}
+      </a>
+      ${j.label ? `<span class="dg-label" title="${esc(j.label)}">${esc(j.label)}</span>` : ''}
+      ${editing ? `<button class="icon-btn danger" data-deljump="${i}"
+              title="${t('dg.jump.remove')}">${icon('close')}</button>` : ''}
+    </div>`;
+
+  /* Deleting works from either end, so the payload is always "my side, the
+     other side" -- see db.delete_diagram_jump. */
+  const deleteJump = j => act(() => api(`/api/diagrams/${seg(uid)}/jump`, {
+    body: { node_key: j.node_key, peer_uid: j.peer_uid, peer_node: j.peer_node,
+            delete: true } }), t('dg.jump.removed'));
+
+  async function addJump(nodeKey) {
+    const chosen = await pickMemories({
+      title: t('dg.jump.pickTitle', { key: nodeKey }),
+      exclude: uid, multi: false, type: 'diagram', okLabel: t('common.next'),
+    });
+    if (!chosen?.uids.length) return;
+    const peer = chosen.uids[0];
+    let target;
+    try { target = await api(`/api/diagrams/${seg(peer)}`); }
+    catch (err) { failed('err.load', err); return; }
+    const step = await dgJumpTargetModal(target);
+    if (!step) return;
+    await act(() => api(`/api/diagrams/${seg(uid)}/jump`, { body: {
+      node_key: nodeKey, peer_uid: peer, peer_node: step.node,
+      label: step.label } }), t('dg.jump.added'));
+  }
+
+  /* Rendered after every paint of a panel that can hold jump rows: the rows
+     are the same in both, and so is what clicking one has to do. */
+  function wireJumps(host, list) {
+    host.querySelectorAll('[data-deljump]').forEach(b =>
+      b.onclick = () => deleteJump(list[Number(b.dataset.deljump)]));
+  }
+
   function paintSide() {
     const side = $('#dgSide');
     const node = data.nodes.find(n => n.key === selected);
     const metaBtn = editing
       ? `<button class="btn btn-sm" id="dgMetaBtn">${t('common.edit')}</button>` : '';
     if (!node) {
+      /* Jumps aimed at this diagram as a WHOLE belong to no step, so no step
+         can show them. They are how another flow says "continues here", and
+         without this panel the only sign of one was on the diagram that made
+         it. Step-level jumps stay on their step, where the arrow means
+         something. */
+      const loose = data.jumps.filter(j => !j.node_key);
       side.innerHTML = `<div class="dg-panel">
         <h3>${t('dg.step')}</h3>
         <div class="dg-empty">${t('dg.selectPrompt')}</div>
@@ -411,8 +526,13 @@ export async function renderDiagram(view, params, ctx) {
       <div class="dg-panel">
         <h3>${t('dg.summary')} ${metaBtn}</h3>
         <div class="dg-empty">${data.summary ? esc(data.summary) : t('dg.noSummary')}</div>
-      </div>`;
+      </div>
+      ${loose.length ? `<div class="dg-panel">
+        <h3>${t('dg.jumps.whole')}</h3>
+        <div class="dg-jumps">${loose.map(jumpRow).join('')}</div>
+      </div>` : ''}`;
       side.querySelector('#dgMetaBtn')?.addEventListener('click', openDiagramMeta);
+      wireJumps(side, loose);
       return;
     }
     const out = data.edges.filter(e => e.from === node.key);
@@ -429,6 +549,7 @@ export async function renderDiagram(view, params, ctx) {
                 title="${t('dg.edge.remove')}">${icon('close')}</button>` : ''}
       </div>`;
     const links = data.links.filter(l => l.node_key === node.key);
+    const jumps = data.jumps.filter(j => j.node_key === node.key);
 
     const ro = editing ? '' : ' disabled';
     side.innerHTML = `
@@ -468,19 +589,23 @@ export async function renderDiagram(view, params, ctx) {
                       title="${t('dg.link.remove')}">${icon('close')}</button>` : ''}
             </div>`).join('') || `<div class="dg-empty">${t('dg.links.empty')}</div>`}
         </div>
-        ${editing ? `<div class="rel-add">
-          <div class="picker">
-            <input type="text" id="dgTarget" placeholder="${t('dg.link.target')}"
-                   aria-label="${t('dg.link.target')}" autocomplete="off">
-            <div class="picker-results" id="dgResults" hidden></div>
-          </div>
-          <div class="act-row">
-            ${relTypeField({
-              selId: 'dgRelType', customId: 'dgRelTypeCustom', options: DG_REL_SUGGEST,
-              value: 'explains', ariaLabel: t('dg.link.relType') })}
-            <button class="btn btn-sm" id="dgAttach">${t('dg.link.attach')}</button>
-          </div>
-          <div class="field-error" id="dgLinkError" role="alert" hidden></div>
+        ${editing ? `<div class="act-row">
+          <button class="btn btn-sm" id="dgAttach">${t('dg.link.attach')}</button>
+        </div>` : ''}
+      </div>
+
+      <!-- Its own panel, and not a row in the one above: a linked memory is
+           something to READ about this step, a jump is somewhere to GO from
+           it. They were the same list, so the only way out of a flow looked
+           like a footnote and behaved like one. -->
+      <div class="dg-panel">
+        <h3>${t('dg.jumps')}</h3>
+        <div class="dg-empty">${t('dg.jumpsHint')}</div>
+        <div class="dg-jumps">
+          ${jumps.map(jumpRow).join('') || `<div class="dg-empty">${t('dg.jumps.empty')}</div>`}
+        </div>
+        ${editing ? `<div class="act-row">
+          <button class="btn btn-sm" id="dgAddJump">${t('dg.jump.add')}</button>
         </div>` : ''}
       </div>`;
 
@@ -510,52 +635,35 @@ export async function renderDiagram(view, params, ctx) {
       act(() => api(`/api/diagrams/${seg(uid)}/link`, { body: {
         node_key: node.key, target_uid: b.dataset.dellink, delete: true } }), t('dg.unlinked')));
 
-    /* the same picker the relations editor in a record uses -- it was a second
-       copy of it here, with the same keyboard hole in both */
-    const resolveTarget = wireUidPicker({
-      input: side.querySelector('#dgTarget'),
-      results: side.querySelector('#dgResults'),
-      exclude: uid,
-      label: t('dg.link.target'),
-    });
-    const dgRelValue = wireRelTypeField(
-      side.querySelector('#dgRelType'), side.querySelector('#dgRelTypeCustom'));
-
-    /* Beside the field, not in the corner: the two things that can be wrong
-       here are both fields the caret is already in or next to. */
-    const linkErr = side.querySelector('#dgLinkError');
-    const targetEl = side.querySelector('#dgTarget');
-    const linkFail = msg => {
-      targetEl.setAttribute('aria-invalid', 'true');
-      linkErr.textContent = msg;
-      linkErr.hidden = false;
-      targetEl.focus();
-    };
-    targetEl.addEventListener('input', () => {
-      targetEl.setAttribute('aria-invalid', 'false');
-      linkErr.hidden = true;
-    });
-    const LINK_MSG = {
-      empty: 'dg.link.pickTarget',
-      self: 'dr.rel.selfTarget',
-      unknown: 'dr.rel.unknownTarget',
-      failed: 'dr.rel.lookupFailed',
+    /* Attaching is a form of its own now (core/link-picker.js), so several
+       memories can go onto one step in one pass and each candidate can be
+       read in full before it is chosen. What used to be here was a lookup
+       field, a type select and an error line, wedged into a 320px column. */
+    side.querySelector('#dgAttach').onclick = async () => {
+      const chosen = await pickMemories({
+        title: t('dg.link.pickTitle', { key: node.key }),
+        exclude: uid,
+        linked: links.map(l => l.target_uid),
+        relOptions: DG_REL_SUGGEST,
+        relValue: 'explains',
+        okLabel: t('dg.link.attach'),
+      });
+      if (!chosen?.uids.length) return;
+      await act(async () => {
+        /* one call per memory: the API links one at a time, and a partial
+           failure leaves the ones that landed rather than rolling back a
+           batch the operator chose deliberately */
+        for (const target of chosen.uids) {
+          await api(`/api/diagrams/${seg(uid)}/link`, { body: {
+            node_key: node.key, target_uid: target,
+            relation_type: chosen.relation || 'explains' } });
+        }
+      }, t('dg.linkedN', { n: chosen.uids.length }));
     };
 
-    const attach = side.querySelector('#dgAttach');
-    attach.onclick = async () => {
-      targetEl.setAttribute('aria-invalid', 'false');
-      linkErr.hidden = true;
-      if (!targetEl.value.trim()) return linkFail(t('dg.link.pickTarget'));
-      attach.disabled = true;
-      try {
-        const { uid: target, reason } = await resolveTarget();
-        if (!target) return linkFail(t(LINK_MSG[reason] || 'dr.rel.unknownTarget'));
-        act(() => api(`/api/diagrams/${seg(uid)}/link`, { body: {
-          node_key: node.key, target_uid: target,
-          relation_type: dgRelValue() } }), t('dg.linked'));
-      } finally { attach.disabled = false; }
-    };
+    /* jumps */
+    wireJumps(side, jumps);
+    side.querySelector('#dgAddJump').onclick = () => addJump(node.key);
   }
 
   /* ── engine ──────────────────────────────────────────────────────────
@@ -623,6 +731,12 @@ export async function renderDiagram(view, params, ctx) {
   /* the heading and the summary panel are where you reach for these, so both
      open the same editor -- the toolbar is no longer the only way in */
   $('#dgTitle').onclick = () => { if (editing) openDiagramMeta(); };
+  /* Arrived from a jump on another flow: land on the step it named rather
+     than on the whole-diagram fit the constructor just did. A key that no
+     longer exists is ignored on purpose -- the flow that pointed here is
+     stale, and a red toast about a step nobody asked for is noise. */
+  if (landOn && engine.focusNode(landOn)) selected = landOn;
+
   paintRouting();
   paintFont();
   applyMode();
