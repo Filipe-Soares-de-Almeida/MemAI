@@ -29,7 +29,17 @@ const OPS = {
               msg: r => t('mn.msg.vacuum', { a: fmtBytes(r.before), b: fmtBytes(r.after) }) },
   'backup': { path: '/api/maintenance/backup', body: {},
               msg: r => t('mn.msg.backup', { name: r.path.split(/[\\/]/).pop(), size: fmtBytes(r.size) }) },
+  /* Clearing renders is NOT in the confirm-first group above: a render is a
+     cache of a diagram that is still there, so the worst case is that the
+     next read redraws it. */
+  'prune-renders': { path: '/api/maintenance/prune-renders', body: {},
+                     msg: r => t('mn.msg.pruned', { n: fmtInt(r.pruned), size: fmtBytes(r.bytes) }) },
+  'prune-renders-all': { path: '/api/maintenance/prune-renders', body: { all: true },
+                         msg: r => t('mn.msg.pruned', { n: fmtInt(r.pruned), size: fmtBytes(r.bytes) }) },
 };
+
+/* Must match db.SVG_RETENTION_MODES; the server rejects anything else. */
+const RETENTION = ['1d', '7d', '30d', 'never'];
 
 export async function renderMaintenance(view) {
   view.innerHTML = `<div class="anim">
@@ -54,6 +64,22 @@ export async function renderMaintenance(view) {
         </div>
         <h3 class="panel-title" style="margin-top:20px">${t('mn.backups')}</h3>
         <div id="backupsBody" class="hint">—</div>
+
+        <!-- Renders are the one thing here that accumulates on disk without
+             anyone asking, so the setting sits next to what it affects
+             rather than in a settings page nobody opens. -->
+        <h3 class="panel-title" style="margin-top:20px">${t('mn.rn.title')}
+          <span class="panel-aside">${t('mn.rn.aside')}</span></h3>
+        <div class="list-toolbar" style="margin-bottom:6px">
+          <label class="inline-label">${t('mn.rn.keep')}
+            <select id="rnKeep" aria-label="${t('mn.rn.keep')}">
+              ${RETENTION.map(m =>
+                `<option value="${m}">${t('mn.rn.mode.' + m)}</option>`).join('')}
+            </select></label>
+          <button class="btn btn-sm" data-op="prune-renders">${t('mn.rn.now')}</button>
+          <button class="btn btn-sm" data-op="prune-renders-all">${t('mn.rn.all')}</button>
+        </div>
+        <div id="rnBody" class="hint">—</div>
       </div>
     </div>
 
@@ -111,8 +137,27 @@ export async function renderMaintenance(view) {
     $('#backupsBody').innerHTML = h.backups.length
       ? h.backups.map(b => `<div class="backup-row"><span>${esc(b.name)}</span><span>${fmtBytes(b.size)}</span></div>`).join('')
       : t('mn.backups.empty');
+    /* health already carries the count, the size and the active window, so
+       the renders row rides the same fetch rather than adding one */
+    const rn = $('#rnBody');
+    if (rn) {
+      rn.innerHTML = h.renders.files
+        ? t('mn.rn.usage', { n: fmtInt(h.renders.files), size: fmtBytes(h.renders.bytes) })
+        : t('mn.rn.empty');
+      const keep = $('#rnKeep');
+      /* the select reflects the stored value; only a change writes one */
+      if (keep && RETENTION.includes(h.renders.retention)) keep.value = h.renders.retention;
+    }
   });
   loadHealth();
+
+  $('#rnKeep').addEventListener('change', async e => {
+    const mode = e.target.value;
+    try {
+      await api('/api/config', { body: { svg_retention: mode } });
+      toast(t('mn.msg.retention', { mode: t('mn.rn.mode.' + mode) }), 'ok');
+    } catch (err) { failed('err.maintenance', err); }
+  });
   /* the same wrapped loader the failure's own Retry calls, so Refresh and Retry
      cannot end up doing two different things */
   $('#hRefresh').addEventListener('click', loadHealth);

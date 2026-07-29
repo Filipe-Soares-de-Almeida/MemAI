@@ -870,7 +870,8 @@ def test_mcp_reports_validation_errors_instead_of_raising(mcp):
     res = mcp.diagram(title="T", nodes=[{"key": "a", "label": "x"}], edges=[])
     assert res["ok"] is False and "no 'start' node" in res["errors"][0]
     assert "not a diagram" in mcp.get_diagram("nope")["errors"][0]
-    assert "unknown format" in mcp.get_diagram("nope", format="svg")["errors"][0]
+    # 'svg' used to stand in for "not a format" here; it is one now
+    assert "unknown format" in mcp.get_diagram("nope", format="pdf")["errors"][0]
 
 
 def test_mcp_get_diagram_formats(mcp):
