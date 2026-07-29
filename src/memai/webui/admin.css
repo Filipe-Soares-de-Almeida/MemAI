@@ -118,6 +118,16 @@
   --warn: #ffd54f;   /* Amber 300 */
   --bad:  #cf6679;   /* Material dark error */
   --bad-ink: #e57373;   /* Red 300 */
+  /* --bad with alpha, for the outlines and washes around a destructive
+     control. It was written out as rgba(207, 102, 121, …) in eleven places at
+     six alphas -- .07 .1 .12 .3 .4 .6 -- which is eleven values the theme
+     cannot reach and six nobody chose next to each other. Four steps by role;
+     .07/.1 collapse into the tint and .3 into the line, because at those
+     distances the difference was drift rather than intent. */
+  --bad-line:    rgba(207, 102, 121, .4);    /* the outline of a danger control */
+  --bad-line-hi: rgba(207, 102, 121, .6);    /* the same outline, hovered */
+  --bad-wash:    rgba(207, 102, 121, .12);   /* its hover fill, or a marked pill */
+  --bad-tint:    rgba(207, 102, 121, .08);   /* a whole box the eye should treat as risky */
 
   /* edit-history diff: a tinted row, plus ink light enough to read on it */
   --diff-add-bg:  rgba(129, 199, 132, .12);
@@ -520,8 +530,8 @@ kbd {
 .btn-ghost { border-color: transparent; color: var(--ink-2); }
 .btn-ghost:hover { background: var(--hover-2); border-color: transparent; color: var(--ink); }
 /* declared after .btn-ghost so btn-ghost + btn-danger combos still read as dangerous */
-.btn-danger { color: var(--bad-ink); border-color: rgba(207, 102, 121, .4); background: transparent; }
-.btn-danger:hover { background: rgba(207, 102, 121, .12); border-color: rgba(207, 102, 121, .6); }
+.btn-danger { color: var(--bad-ink); border-color: var(--bad-line); background: transparent; }
+.btn-danger:hover { background: var(--bad-wash); border-color: var(--bad-line-hi); }
 .btn-sm { padding: var(--sp-1) var(--sp-3); font-size: var(--fs-sm); min-height: var(--tap); }
 
 .icon-btn {
@@ -537,7 +547,7 @@ kbd {
   --ico: 13px;
 }
 .icon-btn:hover { color: var(--ink); background: var(--hover-3); }
-.icon-btn.danger:hover { color: var(--bad-ink); background: rgba(207, 102, 121, .12); }
+.icon-btn.danger:hover { color: var(--bad-ink); background: var(--bad-wash); }
 
 /* ── controls that do not look like buttons ───────────────────────────────
    A chip, a uid, a row's own text, a result in a picker: each of these does
@@ -584,7 +594,9 @@ select {
   background-position: right 10px center;
 }
 select option { background: var(--overlay); color: var(--ink); }
-input[type="range"] { accent-color: var(--accent); }
+/* the track is thin by design, but the thing you grab has to clear the --tap
+   floor like every other control; the browser centres the track inside it */
+input[type="range"] { accent-color: var(--accent); min-height: var(--tap); }
 /* text inputs backed by a <datalist> get a stray native arrow in Chromium — hide it */
 input::-webkit-calendar-picker-indicator { display: none !important; }
 
@@ -729,7 +741,7 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
    `unverified` stays neutral because it is a question, not a problem. */
 .conf-pill.c-contradicted {
   color: var(--bad-ink);
-  background: rgba(207, 102, 121, .12);
+  background: var(--bad-wash);
   border-radius: var(--r-pill);
   padding: var(--sp-0) var(--sp-2);
 }
@@ -1237,6 +1249,9 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
 }
 .rel-peer:hover { background: var(--hover-2); }
 .rel-peer .snippet { color: var(--ink-2); font-size: var(--fs-sm); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.rel-peer .type-tag { flex: none; }
+/* the other end of this relation is gone from the store */
+.rel-gone { color: var(--bad-ink); }
 /* the relative time on a recent-memories row: it must not be squeezed by a
    long snippet, which is what the inline flex:none used to say */
 .rel-row > .hint-sm { flex: none; }
@@ -1368,7 +1383,7 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
 .diff-add { background: var(--diff-add-bg); color: var(--diff-add-ink); display: block; }
 .diff-ctx { color: var(--ink-3); display: block; }
 
-.danger-zone { border: 1px solid rgba(207, 102, 121, .3); border-radius: var(--r-md); }
+.danger-zone { border: 1px solid var(--bad-line); border-radius: var(--r-md); }
 .danger-zone summary {
   cursor: pointer; padding: var(--sp-3) var(--sp-4);
   color: var(--bad-ink);
@@ -1377,7 +1392,7 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
 .danger-zone summary::-webkit-details-marker { display: none; }
 .danger-zone .dz-body { padding: var(--sp-1) var(--sp-4) var(--sp-4); display: grid; gap: var(--sp-2); }
 .dz-hint { font-size: var(--fs-sm); color: var(--ink-2); }
-.dz-hint code { font-family: var(--font-m); color: var(--bad-ink); background: rgba(207, 102, 121, .1); padding: var(--sp-0) var(--sp-1); border-radius: var(--r-sm); }
+.dz-hint code { font-family: var(--font-m); color: var(--bad-ink); background: var(--bad-tint); padding: var(--sp-0) var(--sp-1); border-radius: var(--r-sm); }
 
 /* ── graph ───────────────────────────────────────────────────────────── */
 
@@ -1546,11 +1561,24 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
 .status-tag.opt-applied { color: var(--ok); border-color: rgba(129, 199, 132, .35); }
 .opt-rationale { color: var(--ink); font-size: var(--fs-sm); line-height: 1.5; }
 
-/* memory-under-review preview: lets you judge a suggestion against the actual content */
-.opt-preview { margin-bottom: var(--sp-3); }
+.opt-card-head { display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; }
+/* the decision, after the evidence. The dashed rule was on .opt-verified,
+   which used to be a row of its own below the card; it separates evidence
+   from answer here instead. */
+.opt-card-foot {
+  display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap;
+  border-top: 1px dashed var(--line-soft); padding-top: var(--sp-2);
+}
+.opt-foot-gap { flex: 1; }
+.opt-peer-meta { display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; }
+
+/* memory-under-review preview: which memory this is about. It is no longer
+   shown for the kinds whose Before pane is that same content, so it only has
+   to identify a memory now, not reproduce it -- hence the shorter well. */
+.opt-preview { margin-bottom: var(--sp-1); }
 .opt-preview .snippet {
   background: var(--inset); border: 1px solid var(--line-soft); border-radius: var(--r-md);
-  padding: var(--sp-2) var(--sp-3); color: var(--ink); line-height: 1.55; max-height: 200px; overflow: auto;
+  padding: var(--sp-2) var(--sp-3); color: var(--ink); line-height: 1.55; max-height: 92px; overflow: auto;
 }
 
 .opt-diff {
@@ -1594,7 +1622,11 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
 .opt-distill .opt-peer-body,
 .opt-distill > .snippet { padding: var(--sp-2) var(--sp-3); background: var(--inset); border-radius: var(--r-md); }
 .opt-distill .opt-arrow { align-self: flex-start; white-space: nowrap; }
-.opt-verified { font-size: var(--fs-label); color: var(--ok); border-top: 1px dashed var(--line-soft); padding-top: var(--sp-2); display: flex; align-items: center; gap: var(--sp-1); --ico: 12px; }
+.opt-verified {
+  font-size: var(--fs-label); color: var(--ok);
+  display: inline-flex; align-items: center; gap: var(--sp-1); --ico: 12px;
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
 .opt-verified.muted { color: var(--ink-3); }
 
 /* ── modal ───────────────────────────────────────────────────────────── */
@@ -1691,8 +1723,8 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
 .toast.warn .toast-mark { color: var(--warn); }
 .toast.bad  .toast-mark { color: var(--bad-ink); }
 .toast.bad {
-  background-image: linear-gradient(rgba(207, 102, 121, .1), rgba(207, 102, 121, .1));
-  border-color: rgba(207, 102, 121, .4);
+  background-image: linear-gradient(var(--bad-tint), var(--bad-tint));
+  border-color: var(--bad-line);
 }
 .toast.bad .toast-msg { font-weight: 500; }
 
@@ -1741,7 +1773,7 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
 }
 .ctx-item:hover { background: var(--hover-2); color: var(--accent); }
 .ctx-item.danger { color: var(--bad-ink); }
-.ctx-item.danger:hover { background: rgba(207, 102, 121, .12); color: var(--bad-ink); }
+.ctx-item.danger:hover { background: var(--bad-wash); color: var(--bad-ink); }
 .ctx-sep { height: 1px; margin: var(--sp-1) var(--sp-2); background: var(--line); }
 
 .empty {
@@ -1759,7 +1791,7 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
   display: flex; align-items: flex-start; gap: var(--sp-3);
   padding: var(--sp-4);
   margin: var(--sp-2) 0;
-  background-image: linear-gradient(rgba(207, 102, 121, .07), rgba(207, 102, 121, .07));
+  background-image: linear-gradient(var(--bad-tint), var(--bad-tint));
   border-radius: var(--r-md);
   font-size: var(--fs-body); color: var(--ink);
 }

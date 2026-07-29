@@ -108,10 +108,14 @@ export async function openRecord(uid) {
       <span class="rel-dir" title="${r.direction === 'out' ? t('dr.rel.out.title') : t('dr.rel.in.title')}">${icon(r.direction === 'out' ? 'arrow-right' : 'arrow-left')}</span>
       <span class="rel-type-chip">${esc(r.relation_type)}</span>
       ${r.peer.missing
-        ? `<span class="rel-peer"><span class="snippet" style="color:var(--bad)">${t('dr.rel.missing', { uid: esc(r.peer.uid) })}</span></span>`
+        ? `<span class="rel-peer"><span class="snippet rel-gone">${t('dr.rel.missing', { uid: esc(r.peer.uid) })}</span></span>`
         : `<span class="rel-peer" data-open="${esc(r.peer.uid)}">
-             <span class="type-tag ${typeClass(r.peer.type)}" style="flex:none"><span class="dot"></span>${esc(r.peer.type)}</span>
-             <span class="snippet">${esc(r.peer.snippet)}</span>
+             <span class="type-tag ${typeClass(r.peer.type)}"><span class="dot"></span>${esc(r.peer.type)}</span>
+             ${/* The peer is nowrap + ellipsis and truncates in most rows; the
+                  note beside it already carried a title and this did not, so
+                  the identity of the memory on the other end of a relation was
+                  the one thing on the row you could not recover. */''}
+             <span class="snippet" title="${esc(r.peer.snippet)}">${esc(r.peer.snippet)}</span>
              ${r.peer.status === 'archived' ? statusTag('archived') : ''}
            </span>`}
       ${r.note ? `<span class="rel-note" title="${esc(r.note)}">${esc(r.note)}</span>` : ''}
