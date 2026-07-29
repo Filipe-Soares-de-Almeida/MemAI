@@ -132,6 +132,7 @@
     "bulk.updated": "{n} memórias atualizadas",
     "bulk.undone": "{n} memórias restauradas",
     "dr.close.title": "fechar (Esc)",
+    "dr.back.title": "Voltar para {label}",
     "dr.content": "Conteúdo",
     "dr.editNote.placeholder": "nota da edição (por que mudou?)",
     "dr.saveVersion": "Salvar nova versão",

@@ -132,6 +132,7 @@
     "bulk.updated": "{n} memories updated",
     "bulk.undone": "{n} memories restored",
     "dr.close.title": "close (Esc)",
+    "dr.back.title": "Back to {label}",
     "dr.content": "Content",
     "dr.editNote.placeholder": "edit note (why did it change?)",
     "dr.saveVersion": "Save new version",

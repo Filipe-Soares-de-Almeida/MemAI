@@ -37,6 +37,19 @@ import { t } from '../i18n.js';
 let rec = null;
 const dq = s => rec.querySelector(s);
 
+/* Where you have been inside this dialog, oldest first.
+
+   The dialog is ONE panel, so opening the memory on the other end of a
+   relation replaces what is on screen. Without a trail that cost you the
+   memory you were reading it from: checking a link meant losing the record
+   the link was on, and the only way back was to go and find it again --
+   which is the whole reason you were following the link.
+
+   Entries are {uid, label}; the label is filled in once that record has
+   rendered, so the button naming it can name it. */
+let trail = [];
+const trailTop = () => trail[trail.length - 1] || null;
+
 /* One path per write, shared by the button that performs it and by the Undo
    that reverses it. An undo which reimplements the call it is undoing is an
    undo that drifts away from it on the next change. */
@@ -64,6 +77,7 @@ export const recordOpen = () => Boolean(rec && document.contains(rec));
 export function closeRecord() {
   while (recordOpen()) closeModal();
   rec = null;
+  trail = [];
 }
 
 /* Where a render writes. The dialog exists once; opening the same record
@@ -81,6 +95,11 @@ export async function openRecord(uid) {
      place the reader had scrolled to. */
   const reopening = recordOpen();
   const keepScroll = reopening ? (rec.querySelector('.modal-body')?.scrollTop || 0) : 0;
+  /* A save re-renders the SAME record -- every write here ends with
+     openRecord(uid) -- and that is not a step in the trail. Only a move to
+     a different memory is. */
+  if (!reopening) trail = [{ uid }];
+  else if (trailTop().uid !== uid) trail.push({ uid });
   if (!reopening) {
     rec = openModal({
       ariaLabel: t('dr.dialogAria'),
@@ -137,8 +156,18 @@ export async function openRecord(uid) {
            <div class="hist-diff" id="histDiff${i}" data-diffbody="${i}" hidden></div>` : ''}
     </div>`).join('') || `<div class="empty" style="padding:18px">${t('dr.hist.empty')}</div>`;
 
+  /* what a back button one step further in would call this record */
+  const here = trailTop();
+  if (here?.uid === uid) here.label = m.content.split('\n', 1)[0].slice(0, 70);
+  const behind = trail.length > 1 ? trail[trail.length - 2] : null;
+
   paint(`
     <div class="record-head">
+      ${behind ? `<button type="button" class="btn btn-sm record-back" id="dBack"
+              title="${esc(t('dr.back.title', { label: behind.label || behind.uid }))}"
+              aria-label="${esc(t('dr.back.title', { label: behind.label || behind.uid }))}"
+              >${icon('arrow-left')}<span class="record-back-text"
+              >${esc(behind.label || behind.uid)}</span></button>` : ''}
       ${typeTag(m.type)}
       ${uidChip(m.uid)}
       ${statusTag(m.status)}
@@ -234,7 +263,7 @@ export async function openRecord(uid) {
         ${hist}
       </div>
 
-      <div class="section">
+      <div class="section section-bare">
         <details class="danger-zone">
           <summary>${t('dz.summary')}</summary>
           <div class="dz-body">
@@ -258,6 +287,15 @@ export async function openRecord(uid) {
 
   wireCopyChips(rec);
   dq('#dClose').addEventListener('click', closeRecord);
+  /* Drops the step being left rather than pushing another one, so walking
+     three links deep and back leaves the trail where it started instead of
+     six entries long. openRecord() below sees the previous uid already on
+     top and does not re-push it. */
+  dq('#dBack')?.addEventListener('click', () => {
+    trail.pop();
+    const prev = trailTop();
+    if (prev) openRecord(prev.uid);
+  });
   rec.querySelectorAll('[data-open]').forEach(el =>
     el.addEventListener('click', () => openRecord(el.dataset.open)));
   rec.querySelectorAll('[data-fdomain]').forEach(el =>
