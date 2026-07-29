@@ -449,6 +449,7 @@
     "dg.jump.out": "leaves this step",
     "dg.jump.in": "arrives at this step",
     "dg.jump.open": "Open {title}",
+    "dg.jump.backTitle": "Back to {title}, where this was reached from",
     "dg.jump.wholeDiagram": "the whole diagram",
     "dg.jump.pickTitle": "Which flow does '{key}' continue in?",
     "dg.jump.step.title": "Where in {title}?",
