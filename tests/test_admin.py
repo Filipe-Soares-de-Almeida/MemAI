@@ -186,3 +186,188 @@ def test_static_ui_served(client):
     assert "MemAI" in res.text
     assert client.get("/static/app.js").status_code == 200
     assert client.get("/static/admin.css").status_code == 200
+
+
+def test_fonts_css_never_names_a_missing_file(client):
+    """webui/fonts/ is untracked and normally absent.
+
+    A url() in a stylesheet is a request whether the file is there or not,
+    so naming an unfetched face means a 404 in the console for something
+    working exactly as designed. Every face still gets a local() src.
+    """
+    res = client.get("/fonts.css")
+    assert res.status_code == 200
+    assert "text/css" in res.headers["content-type"]
+    body = res.text
+    assert body.count("@font-face") == len(admin.WEBFONTS)
+    assert "local('Roboto')" in body
+
+    fonts_dir = admin.WEBUI_DIR / "fonts"
+    for _family, _weight, filename, _locals in admin.WEBFONTS:
+        if (fonts_dir / filename).is_file():
+            assert f"url('/static/fonts/{filename}')" in body
+        else:
+            assert filename not in body
+
+
+def test_fonts_css_uses_a_face_once_fetched(client, tmp_path, monkeypatch):
+    webui = tmp_path / "webui"
+    (webui / "fonts").mkdir(parents=True)
+    (webui / "fonts" / "roboto-400.woff2").write_bytes(b"not really a font")
+    monkeypatch.setattr(admin, "WEBUI_DIR", webui)
+
+    body = client.get("/fonts.css").text
+    assert "url('/static/fonts/roboto-400.woff2') format('woff2')" in body
+    # the ones still absent stay out of it
+    assert "roboto-mono-400.woff2" not in body
+    assert "roboto-700.woff2" not in body
+
+
+def test_graph_is_capped_and_says_so(client):
+    """An uncapped graph freezes the browser: the layout is O(n^2)."""
+    for i in range(6):
+        _create(client, content=f"graph node {i}", domain="proj-1042")
+
+    full = client.get("/api/graph").json()
+    assert full["total"] == 6
+    assert full["truncated"] is False
+    assert len(full["nodes"]) == 6
+
+    capped = client.get("/api/graph?limit=2").json()
+    assert len(capped["nodes"]) == 2
+    assert capped["total"] == 6
+    assert capped["truncated"] is True
+
+
+def test_graph_cap_keeps_the_connected_nodes(client):
+    """If it has to cut, cut the isolated dots -- they graph nothing."""
+    lonely = [_create(client, content=f"isolated {i}") for i in range(4)]
+    a = _create(client, content="linked one")
+    b = _create(client, content="linked two")
+    client.post("/api/relations", json={"from_uid": a, "to_uid": b,
+                                        "relation_type": "relates_to"})
+
+    kept = {n["uid"] for n in client.get("/api/graph?limit=2").json()["nodes"]}
+    assert kept == {a, b}
+    assert not kept & set(lonely)
+
+
+# ------------------------------------------------------- same-origin guard
+
+def test_cross_origin_write_is_refused(client):
+    """A page you happen to be visiting must not be able to drive this.
+
+    There is no login on the admin API, so the browser's own labelling is
+    the guard: Sec-Fetch-Site on everything, Origin on anything
+    cross-origin. See admin.SameOriginMiddleware.
+    """
+    uid = _create(client)
+
+    res = client.post("/api/memories", json={"type": "note", "content": "x"},
+                      headers={"Sec-Fetch-Site": "cross-site"})
+    assert res.status_code == 403
+
+    res = client.post(f"/api/memories/{uid}/status", json={"status": "archived"},
+                      headers={"Origin": "https://evil.example.com"})
+    assert res.status_code == 403
+
+    # reads are refused the same way -- the store is not public either
+    assert client.get("/api/overview",
+                      headers={"Sec-Fetch-Site": "cross-site"}).status_code == 403
+
+    # and nothing happened to the record
+    assert client.get(f"/api/memories/{uid}").json()["status"] == "active"
+
+
+def test_same_origin_write_is_allowed(client):
+    """The UI's own requests carry both headers and must sail through."""
+    res = client.post("/api/memories",
+                      json={"type": "note", "content": "from the real UI"},
+                      headers={"Sec-Fetch-Site": "same-origin",
+                               "Origin": "http://testserver"})
+    assert res.status_code == 200, res.text
+
+
+def test_form_content_type_write_is_refused(client):
+    """The whole point of requiring JSON.
+
+    A cross-origin POST skips the CORS preflight only while it looks like
+    a form. request.json() parses any content type, so text/plain used to
+    be a working way to reach a destructive endpoint from another page.
+    """
+    for ctype in ("text/plain", "application/x-www-form-urlencoded",
+                  "multipart/form-data"):
+        res = client.post("/api/maintenance/vacuum", content=b"{}",
+                          headers={"Content-Type": ctype})
+        assert res.status_code == 415, ctype
+
+    # DELETE needs no body, and cross-origin DELETE always preflights
+    assert client.delete("/api/relations/999").status_code in (400, 404)
+
+
+def test_lookup_carries_what_the_picker_renders(client):
+    """A uid is not something a human recognizes, so the row needs the rest."""
+    a = _create(client, content="source memory")
+    b = _create(client, content="target memory", domain="parser-core", tags="loader,schema")
+
+    items = client.get(f"/api/lookup?q=target&exclude={a}").json()["items"]
+    assert [it["uid"] for it in items] == [b]
+    row = items[0]
+    assert row["domain"] == "parser-core"
+    assert row["status"] == "active"
+    assert row["snippet"]
+    assert row["match_source"]          # why this row is in the list
+
+
+def test_lookup_filters_narrow_the_candidate_set(client):
+    _create(client, content="loader memory alpha", domain="parser-core", tags="loader,schema")
+    _create(client, content="loader memory beta", domain="web-shell", tags="loader")
+    _create(client, content="loader memory gamma", domain="parser-core", type="checkpoint",
+            tags="batch")
+
+    by_domain = client.get("/api/lookup?q=loader&domain=web-shell").json()["items"]
+    assert [it["domain"] for it in by_domain] == ["web-shell"]
+
+    by_type = client.get("/api/lookup?q=loader&type=checkpoint").json()["items"]
+    assert [it["type"] for it in by_type] == ["checkpoint"]
+
+    by_tag = client.get("/api/lookup?q=loader&tag=schema").json()["items"]
+    assert len(by_tag) == 1
+    assert by_tag[0]["domain"] == "parser-core"
+
+
+def test_lookup_defaults_to_active_but_can_include_archived(client):
+    live = _create(client, content="live memory")
+    gone = _create(client, content="retired memory")
+    assert client.post(f"/api/memories/{gone}/status",
+                       json={"status": "archived"}).status_code == 200
+
+    default = client.get("/api/lookup").json()["items"]
+    assert [it["uid"] for it in default] == [live]
+
+    with_archived = client.get("/api/lookup?status=").json()["items"]
+    assert {it["uid"] for it in with_archived} == {live, gone}
+    assert [it["status"] for it in with_archived if it["uid"] == gone] == ["archived"]
+
+
+def test_lookup_exact_uid_answers_past_every_filter(client):
+    """Naming a row explicitly is not something a filter should overrule."""
+    gone = _create(client, content="retired memory", domain="infra")
+    assert client.post(f"/api/memories/{gone}/status",
+                       json={"status": "archived"}).status_code == 200
+
+    items = client.get(f"/api/lookup?q={gone}&domain=parser-core&type=checkpoint").json()["items"]
+    assert [it["uid"] for it in items] == [gone]
+
+
+def test_lookup_reports_more_without_a_count_query(client):
+    for i in range(6):
+        _create(client, content=f"batch memory number {i}")
+
+    page = client.get("/api/lookup?limit=3").json()
+    assert len(page["items"]) == 3
+    assert page["has_more"] is True
+
+    whole = client.get("/api/lookup?limit=50").json()
+    assert len(whole["items"]) == 6
+    assert whole["has_more"] is False

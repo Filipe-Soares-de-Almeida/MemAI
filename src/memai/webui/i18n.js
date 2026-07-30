@@ -58,14 +58,20 @@ const applyStatic = () => {
       .map(([code, name]) => `<option value="${code}" ${code === locale ? 'selected' : ''}>${name}</option>`).join('');
     sel.title = t('lang.title');
     sel.setAttribute('aria-label', t('lang.title'));
-    sel.addEventListener('change', () => set(sel.value));
+    /* The change handler lives in app.js, NOT here. Switching reloads the
+       page and throws away anything typed and unsaved, so the switch has to
+       ask first -- and asking means the modal machinery, which imports this
+       module. Populating the options is all this layer can own. */
   }
 };
 
+/* month names and the number locale fall back per-key like strings do: a
+   new catalog that ships `strings` and forgets `months` degrades to
+   English month names instead of rendering every date as undefined */
 const I18N = {
   t, set, applyStatic, locale,
-  months: active.months,
-  numberLocale: active.numberLocale,
+  months: active.months || en.months,
+  numberLocale: active.numberLocale || en.numberLocale,
 };
 
 applyStatic();

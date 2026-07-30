@@ -1,0 +1,2616 @@
+{
+ "_": "Recorded from webui/diagram-engine.js by tools/route-parity.mjs. Do not hand-edit.",
+ "orthogonal": {
+  "routing": "orthogonal",
+  "font_scale": 1,
+  "lane_span": {
+   "left": -775,
+   "right": 2638.5
+  },
+  "orphans": [
+   "stranded"
+  ],
+  "nodes": [
+   {
+    "key": "start",
+    "shape": "start",
+    "sized": false,
+    "x": 0,
+    "y": 0,
+    "w": 170,
+    "h": 48
+   },
+   {
+    "key": "load",
+    "shape": "step",
+    "sized": false,
+    "x": 0,
+    "y": 200,
+    "w": 170,
+    "h": 48
+   },
+   {
+    "key": "check",
+    "shape": "decision",
+    "sized": false,
+    "x": 0,
+    "y": 400,
+    "w": 170,
+    "h": 66
+   },
+   {
+    "key": "write",
+    "shape": "io",
+    "sized": false,
+    "x": -300,
+    "y": 600,
+    "w": 170,
+    "h": 48
+   },
+   {
+    "key": "audit",
+    "shape": "step",
+    "sized": true,
+    "x": 300,
+    "y": 600,
+    "w": 210,
+    "h": 60
+   },
+   {
+    "key": "merge",
+    "shape": "step",
+    "sized": false,
+    "x": 0,
+    "y": 800,
+    "w": 170,
+    "h": 48
+   },
+   {
+    "key": "retry",
+    "shape": "step",
+    "sized": true,
+    "x": -600,
+    "y": 400,
+    "w": 170,
+    "h": 63
+   },
+   {
+    "key": "hold",
+    "shape": "step",
+    "sized": false,
+    "x": 0,
+    "y": 1000,
+    "w": 170,
+    "h": 48
+   },
+   {
+    "key": "wait",
+    "shape": "step",
+    "sized": false,
+    "x": 0,
+    "y": 1200,
+    "w": 170,
+    "h": 48
+   },
+   {
+    "key": "guard",
+    "shape": "step",
+    "sized": true,
+    "x": -300,
+    "y": 1000,
+    "w": 520,
+    "h": 48
+   },
+   {
+    "key": "gate",
+    "shape": "step",
+    "sized": true,
+    "x": 300,
+    "y": 1200,
+    "w": 520,
+    "h": 48
+   },
+   {
+    "key": "far",
+    "shape": "step",
+    "sized": false,
+    "x": 0,
+    "y": 1600,
+    "w": 170,
+    "h": 48
+   },
+   {
+    "key": "done",
+    "shape": "end",
+    "sized": false,
+    "x": 0,
+    "y": 1800,
+    "w": 170,
+    "h": 48
+   },
+   {
+    "key": "stranded",
+    "shape": "step",
+    "sized": false,
+    "x": 600,
+    "y": 1000,
+    "w": 170,
+    "h": 48
+   },
+   {
+    "key": "side_a",
+    "shape": "step",
+    "sized": false,
+    "x": 1200,
+    "y": 200,
+    "w": 170,
+    "h": 48
+   },
+   {
+    "key": "side_b",
+    "shape": "step",
+    "sized": false,
+    "x": 1200,
+    "y": 400,
+    "w": 170,
+    "h": 48
+   },
+   {
+    "key": "side_c",
+    "shape": "step",
+    "sized": false,
+    "x": 1200,
+    "y": 600,
+    "w": 170,
+    "h": 48
+   },
+   {
+    "key": "tiny_a",
+    "shape": "step",
+    "sized": false,
+    "x": 2000,
+    "y": 200,
+    "w": 170,
+    "h": 48
+   },
+   {
+    "key": "tiny_b",
+    "shape": "step",
+    "sized": false,
+    "x": 2030,
+    "y": 276,
+    "w": 170,
+    "h": 48
+   },
+   {
+    "key": "snap_a",
+    "shape": "step",
+    "sized": false,
+    "x": 2400,
+    "y": 200,
+    "w": 170,
+    "h": 48
+   },
+   {
+    "key": "snap_b",
+    "shape": "step",
+    "sized": false,
+    "x": 2418.5,
+    "y": 600,
+    "w": 170,
+    "h": 48
+   }
+  ],
+  "edges": [
+   {
+    "from": "start",
+    "to": "load",
+    "back": false,
+    "loops": false,
+    "lane": 0,
+    "bow": 0,
+    "via": null,
+    "fan_from": -11,
+    "fan_to": 0,
+    "stub_from": 0,
+    "stub_to": 0,
+    "corridor": null,
+    "curve": null,
+    "pts": [
+     {
+      "x": 0,
+      "y": 24
+     },
+     {
+      "x": 0,
+      "y": 33
+     },
+     {
+      "x": -11,
+      "y": 54
+     },
+     {
+      "x": -11,
+      "y": 112.5
+     },
+     {
+      "x": 0,
+      "y": 112.5
+     },
+     {
+      "x": 0,
+      "y": 171
+     }
+    ],
+    "label_at": {
+     "x": -11,
+     "y": 101.64673
+    },
+    "short_label": ""
+   },
+   {
+    "from": "load",
+    "to": "check",
+    "back": false,
+    "loops": false,
+    "lane": 0,
+    "bow": 0,
+    "via": null,
+    "fan_from": -22,
+    "fan_to": 0,
+    "stub_from": 0,
+    "stub_to": 0,
+    "corridor": null,
+    "curve": null,
+    "pts": [
+     {
+      "x": 0,
+      "y": 224
+     },
+     {
+      "x": 0,
+      "y": 233
+     },
+     {
+      "x": -22,
+      "y": 254
+     },
+     {
+      "x": -22,
+      "y": 308
+     },
+     {
+      "x": 0,
+      "y": 308
+     },
+     {
+      "x": 0,
+      "y": 362
+     }
+    ],
+    "label_at": {
+     "x": -22,
+     "y": 299.293094
+    },
+    "short_label": ""
+   },
+   {
+    "from": "check",
+    "to": "write",
+    "back": false,
+    "loops": false,
+    "lane": 0,
+    "bow": 0,
+    "via": null,
+    "fan_from": 0,
+    "fan_to": -11,
+    "stub_from": 0,
+    "stub_to": 0,
+    "corridor": null,
+    "curve": null,
+    "pts": [
+     {
+      "x": -85,
+      "y": 400
+     },
+     {
+      "x": -136,
+      "y": 400
+     },
+     {
+      "x": -136,
+      "y": 589
+     },
+     {
+      "x": -187,
+      "y": 589
+     },
+     {
+      "x": -208,
+      "y": 600
+     },
+     {
+      "x": -217,
+      "y": 600
+     }
+    ],
+    "label_at": {
+     "x": -136,
+     "y": 510.85327
+    },
+    "short_label": "no"
+   },
+   {
+    "from": "check",
+    "to": "audit",
+    "back": false,
+    "loops": false,
+    "lane": 0,
+    "bow": 0,
+    "via": null,
+    "fan_from": 0,
+    "fan_to": -11,
+    "stub_from": 0,
+    "stub_to": 0,
+    "corridor": null,
+    "curve": null,
+    "pts": [
+     {
+      "x": 85,
+      "y": 400
+     },
+     {
+      "x": 122.5,
+      "y": 400
+     },
+     {
+      "x": 122.5,
+      "y": 589
+     },
+     {
+      "x": 160,
+      "y": 589
+     },
+     {
+      "x": 181,
+      "y": 600
+     },
+     {
+      "x": 190,
+      "y": 600
+     }
+    ],
+    "label_at": {
+     "x": 122.5,
+     "y": 510.85327
+    },
+    "short_label": "yes, and keep going"
+   },
+   {
+    "from": "write",
+    "to": "merge",
+    "back": false,
+    "loops": false,
+    "lane": 0,
+    "bow": 0,
+    "via": null,
+    "fan_from": 11,
+    "fan_to": 0,
+    "stub_from": 14,
+    "stub_to": 0,
+    "corridor": null,
+    "curve": null,
+    "pts": [
+     {
+      "x": -222,
+      "y": 600
+     },
+     {
+      "x": -213,
+      "y": 600
+     },
+     {
+      "x": -192,
+      "y": 611
+     },
+     {
+      "x": -141,
+      "y": 611
+     },
+     {
+      "x": -141,
+      "y": 800
+     },
+     {
+      "x": -90,
+      "y": 800
+     }
+    ],
+    "label_at": {
+     "x": -141,
+     "y": 689.14673
+    },
+    "short_label": ""
+   },
+   {
+    "from": "audit",
+    "to": "merge",
+    "back": false,
+    "loops": false,
+    "lane": 0,
+    "bow": 0,
+    "via": null,
+    "fan_from": 11,
+    "fan_to": 0,
+    "stub_from": 14,
+    "stub_to": 0,
+    "corridor": null,
+    "curve": null,
+    "pts": [
+     {
+      "x": 195,
+      "y": 600
+     },
+     {
+      "x": 186,
+      "y": 600
+     },
+     {
+      "x": 165,
+      "y": 611
+     },
+     {
+      "x": 127.5,
+      "y": 611
+     },
+     {
+      "x": 127.5,
+      "y": 800
+     },
+     {
+      "x": 90,
+      "y": 800
+     }
+    ],
+    "label_at": {
+     "x": 127.5,
+     "y": 689.14673
+    },
+    "short_label": ""
+   },
+   {
+    "from": "merge",
+    "to": "hold",
+    "back": false,
+    "loops": false,
+    "lane": 0,
+    "bow": 0,
+    "via": null,
+    "fan_from": 0,
+    "fan_to": 0,
+    "stub_from": 0,
+    "stub_to": 0,
+    "corridor": null,
+    "curve": null,
+    "pts": [
+     {
+      "x": 0,
+      "y": 824
+     },
+     {
+      "x": 0,
+      "y": 971
+     }
+    ],
+    "label_at": {
+     "x": 0,
+     "y": 897.5
+    },
+    "short_label": ""
+   },
+   {
+    "from": "hold",
+    "to": "guard",
+    "back": true,
+    "loops": false,
+    "lane": 0,
+    "bow": 0,
+    "via": null,
+    "fan_from": 0,
+    "fan_to": 0,
+    "stub_from": 0,
+    "stub_to": 0,
+    "corridor": null,
+    "curve": null,
+    "pts": [
+     {
+      "x": -85,
+      "y": 1000
+     },
+     {
+      "x": -35,
+      "y": 1000
+     }
+    ],
+    "label_at": {
+     "x": -60,
+     "y": 1000
+    },
+    "short_label": ""
+   },
+   {
+    "from": "hold",
+    "to": "wait",
+    "back": false,
+    "loops": false,
+    "lane": 0,
+    "bow": 0,
+    "via": null,
+    "fan_from": 0,
+    "fan_to": -11,
+    "stub_from": 0,
+    "stub_to": 0,
+    "corridor": null,
+    "curve": null,
+    "pts": [
+     {
+      "x": 0,
+      "y": 1024
+     },
+     {
+      "x": 0,
+      "y": 1082.5
+     },
+     {
+      "x": -11,
+      "y": 1082.5
+     },
+     {
+      "x": -11,
+      "y": 1141
+     },
+     {
+      "x": 0,
+      "y": 1162
+     },
+     {
+      "x": 0,
+      "y": 1171
+     }
+    ],
+    "label_at": {
+     "x": -11,
+     "y": 1093.35327
+    },
+    "short_label": ""
+   },
+   {
+    "from": "wait",
+    "to": "gate",
+    "back": true,
+    "loops": false,
+    "lane": 0,
+    "bow": 0,
+    "via": null,
+    "fan_from": 0,
+    "fan_to": 0,
+    "stub_from": 0,
+    "stub_to": 0,
+    "corridor": null,
+    "curve": null,
+    "pts": [
+     {
+      "x": 85,
+      "y": 1200
+     },
+     {
+      "x": 35,
+      "y": 1200
+     }
+    ],
+    "label_at": {
+     "x": 60,
+     "y": 1200
+    },
+    "short_label": ""
+   },
+   {
+    "from": "wait",
+    "to": "far",
+    "back": false,
+    "loops": false,
+    "lane": 0,
+    "bow": 0,
+    "via": null,
+    "fan_from": 0,
+    "fan_to": -22,
+    "stub_from": 0,
+    "stub_to": 0,
+    "corridor": null,
+    "curve": null,
+    "pts": [
+     {
+      "x": 0,
+      "y": 1224
+     },
+     {
+      "x": 0,
+      "y": 1382.5
+     },
+     {
+      "x": -22,
+      "y": 1382.5
+     },
+     {
+      "x": -22,
+      "y": 1541
+     },
+     {
+      "x": 0,
+      "y": 1562
+     },
+     {
+      "x": 0,
+      "y": 1571
+     }
+    ],
+    "label_at": {
+     "x": -22,
+     "y": 1391.206906
+    },
+    "short_label": ""
+   },
+   {
+    "from": "far",
+    "to": "done",
+    "back": false,
+    "loops": false,
+    "lane": 0,
+    "bow": 0,
+    "via": null,
+    "fan_from": 0,
+    "fan_to": -11,
+    "stub_from": 0,
+    "stub_to": 0,
+    "corridor": null,
+    "curve": null,
+    "pts": [
+     {
+      "x": 0,
+      "y": 1624
+     },
+     {
+      "x": 0,
+      "y": 1682.5
+     },
+     {
+      "x": -11,
+      "y": 1682.5
+     },
+     {
+      "x": -11,
+      "y": 1741
+     },
+     {
+      "x": 0,
+      "y": 1762
+     },
+     {
+      "x": 0,
+      "y": 1771
+     }
+    ],
+    "label_at": {
+     "x": -11,
+     "y": 1693.35327
+    },
+    "short_label": ""
+   },
+   {
+    "from": "done",
+    "to": "start",
+    "back": true,
+    "loops": true,
+    "lane": 1,
+    "bow": 2573.5,
+    "via": null,
+    "fan_from": 11,
+    "fan_to": 11,
+    "stub_from": 14,
+    "stub_to": 14,
+    "corridor": 2573.5,
+    "curve": null,
+    "pts": [
+     {
+      "x": 0,
+      "y": 1776
+     },
+     {
+      "x": 0,
+      "y": 1767
+     },
+     {
+      "x": 11,
+      "y": 1746
+     },
+     {
+      "x": 11,
+      "y": 1706
+     },
+     {
+      "x": 2573.5,
+      "y": 1706
+     },
+     {
+      "x": 2573.5,
+      "y": 99
+     },
+     {
+      "x": 11,
+      "y": 99
+     },
+     {
+      "x": 11,
+      "y": 59
+     },
+     {
+      "x": 0,
+      "y": 38
+     },
+     {
+      "x": 0,
+      "y": 29
+     }
+    ],
+    "label_at": {
+     "x": 2573.5,
+     "y": 902.5
+    },
+    "short_label": "restart the whole…"
+   },
+   {
+    "from": "far",
+    "to": "check",
+    "back": true,
+    "loops": true,
+    "lane": -1,
+    "bow": -755,
+    "via": null,
+    "fan_from": 0,
+    "fan_to": -22,
+    "stub_from": 14,
+    "stub_to": 0,
+    "corridor": -755,
+    "curve": null,
+    "pts": [
+     {
+      "x": 0,
+      "y": 1576
+     },
+     {
+      "x": 0,
+      "y": 1536
+     },
+     {
+      "x": -755,
+      "y": 1536
+     },
+     {
+      "x": -755,
+      "y": 494
+     },
+     {
+      "x": -22,
+      "y": 494
+     },
+     {
+      "x": -22,
+      "y": 468
+     },
+     {
+      "x": 0,
+      "y": 447
+     },
+     {
+      "x": 0,
+      "y": 438
+     }
+    ],
+    "label_at": {
+     "x": -755,
+     "y": 1013.293094
+    },
+    "short_label": "revalidate"
+   },
+   {
+    "from": "write",
+    "to": "retry",
+    "back": true,
+    "loops": false,
+    "lane": 0,
+    "bow": 0,
+    "via": null,
+    "fan_from": 0,
+    "fan_to": 11,
+    "stub_from": 0,
+    "stub_to": 14,
+    "corridor": null,
+    "curve": null,
+    "pts": [
+     {
+      "x": -378,
+      "y": 600
+     },
+     {
+      "x": -429,
+      "y": 600
+     },
+     {
+      "x": -429,
+      "y": 411
+     },
+     {
+      "x": -480,
+      "y": 411
+     },
+     {
+      "x": -501,
+      "y": 400
+     },
+     {
+      "x": -510,
+      "y": 400
+     }
+    ],
+    "label_at": {
+     "x": -429,
+     "y": 489.14673
+    },
+    "short_label": "failed"
+   },
+   {
+    "from": "retry",
+    "to": "load",
+    "back": true,
+    "loops": true,
+    "lane": 0,
+    "bow": 0,
+    "via": null,
+    "fan_from": -11,
+    "fan_to": 0,
+    "stub_from": 0,
+    "stub_to": 0,
+    "corridor": null,
+    "curve": null,
+    "pts": [
+     {
+      "x": -515,
+      "y": 400
+     },
+     {
+      "x": -506,
+      "y": 400
+     },
+     {
+      "x": -485,
+      "y": 389
+     },
+     {
+      "x": -287.5,
+      "y": 389
+     },
+     {
+      "x": -287.5,
+      "y": 200
+     },
+     {
+      "x": -90,
+      "y": 200
+     }
+    ],
+    "label_at": {
+     "x": -287.5,
+     "y": 310.85327
+    },
+    "short_label": "again"
+   },
+   {
+    "from": "check",
+    "to": "far",
+    "back": false,
+    "loops": false,
+    "lane": 1,
+    "bow": 2618.5,
+    "via": null,
+    "fan_from": 0,
+    "fan_to": 22,
+    "stub_from": 14,
+    "stub_to": 28,
+    "corridor": 2618.5,
+    "curve": null,
+    "pts": [
+     {
+      "x": 0,
+      "y": 433
+     },
+     {
+      "x": 0,
+      "y": 473
+     },
+     {
+      "x": 2618.5,
+      "y": 473
+     },
+     {
+      "x": 2618.5,
+      "y": 1487
+     },
+     {
+      "x": 22,
+      "y": 1487
+     },
+     {
+      "x": 22,
+      "y": 1541
+     },
+     {
+      "x": 0,
+      "y": 1562
+     },
+     {
+      "x": 0,
+      "y": 1571
+     }
+    ],
+    "label_at": {
+     "x": 2618.5,
+     "y": 995.706906
+    },
+    "short_label": "skip the reconcile…"
+   },
+   {
+    "from": "merge",
+    "to": "check",
+    "back": true,
+    "loops": true,
+    "lane": 0,
+    "bow": 0,
+    "via": null,
+    "fan_from": 0,
+    "fan_to": 22,
+    "stub_from": 0,
+    "stub_to": 28,
+    "corridor": null,
+    "curve": null,
+    "pts": [
+     {
+      "x": 0,
+      "y": 776
+     },
+     {
+      "x": 0,
+      "y": 622
+     },
+     {
+      "x": 22,
+      "y": 622
+     },
+     {
+      "x": 22,
+      "y": 468
+     },
+     {
+      "x": 0,
+      "y": 447
+     },
+     {
+      "x": 0,
+      "y": 438
+     }
+    ],
+    "label_at": {
+     "x": 22,
+     "y": 613.293094
+    },
+    "short_label": "recheck"
+   },
+   {
+    "from": "load",
+    "to": "audit",
+    "back": false,
+    "loops": false,
+    "lane": 0,
+    "bow": 0,
+    "via": {
+     "crossY": 342.5
+    },
+    "fan_from": 0,
+    "fan_to": -11,
+    "stub_from": 14,
+    "stub_to": 0,
+    "corridor": null,
+    "curve": null,
+    "pts": [
+     {
+      "x": 0,
+      "y": 224
+     },
+     {
+      "x": 0,
+      "y": 356.5
+     },
+     {
+      "x": 289,
+      "y": 356.5
+     },
+     {
+      "x": 289,
+      "y": 535
+     },
+     {
+      "x": 300,
+      "y": 556
+     },
+     {
+      "x": 300,
+      "y": 565
+     }
+    ],
+    "label_at": {
+     "x": 183.85327,
+     "y": 356.5
+    },
+    "short_label": "branch"
+   },
+   {
+    "from": "audit",
+    "to": "load",
+    "back": true,
+    "loops": true,
+    "lane": 0,
+    "bow": 0,
+    "via": {
+     "crossY": 342.5
+    },
+    "fan_from": 11,
+    "fan_to": 22,
+    "stub_from": 14,
+    "stub_to": 28,
+    "corridor": null,
+    "curve": null,
+    "pts": [
+     {
+      "x": 300,
+      "y": 570
+     },
+     {
+      "x": 300,
+      "y": 561
+     },
+     {
+      "x": 311,
+      "y": 540
+     },
+     {
+      "x": 311,
+      "y": 356.5
+     },
+     {
+      "x": 22,
+      "y": 356.5
+     },
+     {
+      "x": 22,
+      "y": 259
+     },
+     {
+      "x": 0,
+      "y": 238
+     },
+     {
+      "x": 0,
+      "y": 229
+     }
+    ],
+    "label_at": {
+     "x": 206.146363,
+     "y": 356.5
+    },
+    "short_label": "re-read"
+   },
+   {
+    "from": "audit",
+    "to": "side_a",
+    "back": true,
+    "loops": false,
+    "lane": 0,
+    "bow": 0,
+    "via": null,
+    "fan_from": 0,
+    "fan_to": 0,
+    "stub_from": 0,
+    "stub_to": 0,
+    "corridor": null,
+    "curve": null,
+    "pts": [
+     {
+      "x": 405,
+      "y": 600
+     },
+     {
+      "x": 757.5,
+      "y": 600
+     },
+     {
+      "x": 757.5,
+      "y": 200
+     },
+     {
+      "x": 1110,
+      "y": 200
+     }
+    ],
+    "label_at": {
+     "x": 757.5,
+     "y": 400
+    },
+    "short_label": ""
+   },
+   {
+    "from": "side_a",
+    "to": "side_b",
+    "back": false,
+    "loops": false,
+    "lane": 0,
+    "bow": 0,
+    "via": null,
+    "fan_from": -11,
+    "fan_to": 0,
+    "stub_from": 0,
+    "stub_to": 0,
+    "corridor": null,
+    "curve": null,
+    "pts": [
+     {
+      "x": 1200,
+      "y": 224
+     },
+     {
+      "x": 1200,
+      "y": 233
+     },
+     {
+      "x": 1189,
+      "y": 254
+     },
+     {
+      "x": 1189,
+      "y": 312.5
+     },
+     {
+      "x": 1200,
+      "y": 312.5
+     },
+     {
+      "x": 1200,
+      "y": 371
+     }
+    ],
+    "label_at": {
+     "x": 1189,
+     "y": 301.64673
+    },
+    "short_label": ""
+   },
+   {
+    "from": "side_a",
+    "to": "side_c",
+    "back": false,
+    "loops": false,
+    "lane": 0,
+    "bow": 0,
+    "via": {
+     "corridor": 1076
+    },
+    "fan_from": 11,
+    "fan_to": -11,
+    "stub_from": 14,
+    "stub_to": 0,
+    "corridor": 1076,
+    "curve": null,
+    "pts": [
+     {
+      "x": 1200,
+      "y": 224
+     },
+     {
+      "x": 1200,
+      "y": 233
+     },
+     {
+      "x": 1211,
+      "y": 254
+     },
+     {
+      "x": 1211,
+      "y": 294
+     },
+     {
+      "x": 1076,
+      "y": 294
+     },
+     {
+      "x": 1076,
+      "y": 515
+     },
+     {
+      "x": 1189,
+      "y": 515
+     },
+     {
+      "x": 1189,
+      "y": 541
+     },
+     {
+      "x": 1200,
+      "y": 562
+     },
+     {
+      "x": 1200,
+      "y": 571
+     }
+    ],
+    "label_at": {
+     "x": 1076,
+     "y": 386.5
+    },
+    "short_label": "past the blocker"
+   },
+   {
+    "from": "side_b",
+    "to": "side_c",
+    "back": false,
+    "loops": false,
+    "lane": 0,
+    "bow": 0,
+    "via": null,
+    "fan_from": 0,
+    "fan_to": 11,
+    "stub_from": 0,
+    "stub_to": 14,
+    "corridor": null,
+    "curve": null,
+    "pts": [
+     {
+      "x": 1200,
+      "y": 424
+     },
+     {
+      "x": 1200,
+      "y": 482.5
+     },
+     {
+      "x": 1211,
+      "y": 482.5
+     },
+     {
+      "x": 1211,
+      "y": 541
+     },
+     {
+      "x": 1200,
+      "y": 562
+     },
+     {
+      "x": 1200,
+      "y": 571
+     }
+    ],
+    "label_at": {
+     "x": 1211,
+     "y": 493.35327
+    },
+    "short_label": ""
+   },
+   {
+    "from": "side_c",
+    "to": "wait",
+    "back": false,
+    "loops": false,
+    "lane": 0,
+    "bow": 0,
+    "via": {
+     "corridor": 124
+    },
+    "fan_from": 0,
+    "fan_to": 11,
+    "stub_from": 0,
+    "stub_to": 14,
+    "corridor": 124,
+    "curve": null,
+    "pts": [
+     {
+      "x": 1200,
+      "y": 624
+     },
+     {
+      "x": 1200,
+      "y": 650
+     },
+     {
+      "x": 124,
+      "y": 650
+     },
+     {
+      "x": 124,
+      "y": 1101
+     },
+     {
+      "x": 11,
+      "y": 1101
+     },
+     {
+      "x": 11,
+      "y": 1141
+     },
+     {
+      "x": 0,
+      "y": 1162
+     },
+     {
+      "x": 0,
+      "y": 1171
+     }
+    ],
+    "label_at": {
+     "x": 356.64673,
+     "y": 650
+    },
+    "short_label": ""
+   },
+   {
+    "from": "side_c",
+    "to": "tiny_a",
+    "back": true,
+    "loops": false,
+    "lane": 0,
+    "bow": 0,
+    "via": null,
+    "fan_from": 0,
+    "fan_to": 0,
+    "stub_from": 0,
+    "stub_to": 0,
+    "corridor": null,
+    "curve": null,
+    "pts": [
+     {
+      "x": 1285,
+      "y": 600
+     },
+     {
+      "x": 1597.5,
+      "y": 600
+     },
+     {
+      "x": 1597.5,
+      "y": 200
+     },
+     {
+      "x": 1910,
+      "y": 200
+     }
+    ],
+    "label_at": {
+     "x": 1597.5,
+     "y": 400
+    },
+    "short_label": ""
+   },
+   {
+    "from": "tiny_a",
+    "to": "tiny_b",
+    "back": false,
+    "loops": false,
+    "lane": 0,
+    "bow": 0,
+    "via": null,
+    "fan_from": 0,
+    "fan_to": 0,
+    "stub_from": 0,
+    "stub_to": 0,
+    "corridor": null,
+    "curve": null,
+    "pts": [
+     {
+      "x": 2000,
+      "y": 224
+     },
+     {
+      "x": 2000,
+      "y": 235.5
+     },
+     {
+      "x": 2030,
+      "y": 235.5
+     },
+     {
+      "x": 2030,
+      "y": 247
+     }
+    ],
+    "label_at": {
+     "x": 2015,
+     "y": 235.5
+    },
+    "short_label": ""
+   },
+   {
+    "from": "tiny_b",
+    "to": "snap_a",
+    "back": true,
+    "loops": false,
+    "lane": 0,
+    "bow": 0,
+    "via": null,
+    "fan_from": 0,
+    "fan_to": 0,
+    "stub_from": 0,
+    "stub_to": 0,
+    "corridor": null,
+    "curve": null,
+    "pts": [
+     {
+      "x": 2115,
+      "y": 276
+     },
+     {
+      "x": 2212.5,
+      "y": 276
+     },
+     {
+      "x": 2212.5,
+      "y": 200
+     },
+     {
+      "x": 2310,
+      "y": 200
+     }
+    ],
+    "label_at": {
+     "x": 2212.5,
+     "y": 238
+    },
+    "short_label": ""
+   },
+   {
+    "from": "snap_a",
+    "to": "snap_b",
+    "back": false,
+    "loops": false,
+    "lane": 0,
+    "bow": 0,
+    "via": null,
+    "fan_from": 0,
+    "fan_to": 0,
+    "stub_from": 0,
+    "stub_to": 0,
+    "corridor": null,
+    "curve": null,
+    "pts": [
+     {
+      "x": 2400,
+      "y": 224
+     },
+     {
+      "x": 2400,
+      "y": 397.5
+     },
+     {
+      "x": 2418.5,
+      "y": 397.5
+     },
+     {
+      "x": 2418.5,
+      "y": 571
+     }
+    ],
+    "label_at": {
+     "x": 2409.25,
+     "y": 397.5
+    },
+    "short_label": ""
+   }
+  ]
+ },
+ "curved": {
+  "routing": "curved",
+  "font_scale": 1,
+  "lane_span": {
+   "left": -775,
+   "right": 2638.5
+  },
+  "orphans": [
+   "stranded"
+  ],
+  "nodes": [
+   {
+    "key": "start",
+    "shape": "start",
+    "sized": false,
+    "x": 0,
+    "y": 0,
+    "w": 170,
+    "h": 48
+   },
+   {
+    "key": "load",
+    "shape": "step",
+    "sized": false,
+    "x": 0,
+    "y": 200,
+    "w": 170,
+    "h": 48
+   },
+   {
+    "key": "check",
+    "shape": "decision",
+    "sized": false,
+    "x": 0,
+    "y": 400,
+    "w": 170,
+    "h": 66
+   },
+   {
+    "key": "write",
+    "shape": "io",
+    "sized": false,
+    "x": -300,
+    "y": 600,
+    "w": 170,
+    "h": 48
+   },
+   {
+    "key": "audit",
+    "shape": "step",
+    "sized": true,
+    "x": 300,
+    "y": 600,
+    "w": 210,
+    "h": 60
+   },
+   {
+    "key": "merge",
+    "shape": "step",
+    "sized": false,
+    "x": 0,
+    "y": 800,
+    "w": 170,
+    "h": 48
+   },
+   {
+    "key": "retry",
+    "shape": "step",
+    "sized": true,
+    "x": -600,
+    "y": 400,
+    "w": 170,
+    "h": 63
+   },
+   {
+    "key": "hold",
+    "shape": "step",
+    "sized": false,
+    "x": 0,
+    "y": 1000,
+    "w": 170,
+    "h": 48
+   },
+   {
+    "key": "wait",
+    "shape": "step",
+    "sized": false,
+    "x": 0,
+    "y": 1200,
+    "w": 170,
+    "h": 48
+   },
+   {
+    "key": "guard",
+    "shape": "step",
+    "sized": true,
+    "x": -300,
+    "y": 1000,
+    "w": 520,
+    "h": 48
+   },
+   {
+    "key": "gate",
+    "shape": "step",
+    "sized": true,
+    "x": 300,
+    "y": 1200,
+    "w": 520,
+    "h": 48
+   },
+   {
+    "key": "far",
+    "shape": "step",
+    "sized": false,
+    "x": 0,
+    "y": 1600,
+    "w": 170,
+    "h": 48
+   },
+   {
+    "key": "done",
+    "shape": "end",
+    "sized": false,
+    "x": 0,
+    "y": 1800,
+    "w": 170,
+    "h": 48
+   },
+   {
+    "key": "stranded",
+    "shape": "step",
+    "sized": false,
+    "x": 600,
+    "y": 1000,
+    "w": 170,
+    "h": 48
+   },
+   {
+    "key": "side_a",
+    "shape": "step",
+    "sized": false,
+    "x": 1200,
+    "y": 200,
+    "w": 170,
+    "h": 48
+   },
+   {
+    "key": "side_b",
+    "shape": "step",
+    "sized": false,
+    "x": 1200,
+    "y": 400,
+    "w": 170,
+    "h": 48
+   },
+   {
+    "key": "side_c",
+    "shape": "step",
+    "sized": false,
+    "x": 1200,
+    "y": 600,
+    "w": 170,
+    "h": 48
+   },
+   {
+    "key": "tiny_a",
+    "shape": "step",
+    "sized": false,
+    "x": 2000,
+    "y": 200,
+    "w": 170,
+    "h": 48
+   },
+   {
+    "key": "tiny_b",
+    "shape": "step",
+    "sized": false,
+    "x": 2030,
+    "y": 276,
+    "w": 170,
+    "h": 48
+   },
+   {
+    "key": "snap_a",
+    "shape": "step",
+    "sized": false,
+    "x": 2400,
+    "y": 200,
+    "w": 170,
+    "h": 48
+   },
+   {
+    "key": "snap_b",
+    "shape": "step",
+    "sized": false,
+    "x": 2418.5,
+    "y": 600,
+    "w": 170,
+    "h": 48
+   }
+  ],
+  "edges": [
+   {
+    "from": "start",
+    "to": "load",
+    "back": false,
+    "loops": false,
+    "lane": 0,
+    "bow": 0,
+    "via": null,
+    "fan_from": -11,
+    "fan_to": 0,
+    "stub_from": 0,
+    "stub_to": 0,
+    "corridor": null,
+    "curve": null,
+    "pts": [
+     {
+      "x": 0,
+      "y": 24
+     },
+     {
+      "x": 0,
+      "y": 171
+     }
+    ],
+    "label_at": {
+     "x": 0,
+     "y": 97.5
+    },
+    "short_label": ""
+   },
+   {
+    "from": "load",
+    "to": "check",
+    "back": false,
+    "loops": false,
+    "lane": 0,
+    "bow": 0,
+    "via": null,
+    "fan_from": -22,
+    "fan_to": 0,
+    "stub_from": 0,
+    "stub_to": 0,
+    "corridor": null,
+    "curve": null,
+    "pts": [
+     {
+      "x": 0,
+      "y": 224
+     },
+     {
+      "x": 0,
+      "y": 362
+     }
+    ],
+    "label_at": {
+     "x": 0,
+     "y": 293
+    },
+    "short_label": ""
+   },
+   {
+    "from": "check",
+    "to": "write",
+    "back": false,
+    "loops": false,
+    "lane": 0,
+    "bow": 0,
+    "via": null,
+    "fan_from": 0,
+    "fan_to": -11,
+    "stub_from": 0,
+    "stub_to": 0,
+    "corridor": null,
+    "curve": null,
+    "pts": [
+     {
+      "x": -85,
+      "y": 400
+     },
+     {
+      "x": -217,
+      "y": 600
+     }
+    ],
+    "label_at": {
+     "x": -151,
+     "y": 500
+    },
+    "short_label": "no"
+   },
+   {
+    "from": "check",
+    "to": "audit",
+    "back": false,
+    "loops": false,
+    "lane": 0,
+    "bow": 0,
+    "via": null,
+    "fan_from": 0,
+    "fan_to": -11,
+    "stub_from": 0,
+    "stub_to": 0,
+    "corridor": null,
+    "curve": null,
+    "pts": [
+     {
+      "x": 85,
+      "y": 400
+     },
+     {
+      "x": 190,
+      "y": 600
+     }
+    ],
+    "label_at": {
+     "x": 137.5,
+     "y": 500
+    },
+    "short_label": "yes, and keep going"
+   },
+   {
+    "from": "write",
+    "to": "merge",
+    "back": false,
+    "loops": false,
+    "lane": 0,
+    "bow": 0,
+    "via": null,
+    "fan_from": 11,
+    "fan_to": 0,
+    "stub_from": 14,
+    "stub_to": 0,
+    "corridor": null,
+    "curve": null,
+    "pts": [
+     {
+      "x": -222,
+      "y": 600
+     },
+     {
+      "x": -90,
+      "y": 800
+     }
+    ],
+    "label_at": {
+     "x": -156,
+     "y": 700
+    },
+    "short_label": ""
+   },
+   {
+    "from": "audit",
+    "to": "merge",
+    "back": false,
+    "loops": false,
+    "lane": 0,
+    "bow": 0,
+    "via": null,
+    "fan_from": 11,
+    "fan_to": 0,
+    "stub_from": 14,
+    "stub_to": 0,
+    "corridor": null,
+    "curve": null,
+    "pts": [
+     {
+      "x": 195,
+      "y": 600
+     },
+     {
+      "x": 90,
+      "y": 800
+     }
+    ],
+    "label_at": {
+     "x": 142.5,
+     "y": 700
+    },
+    "short_label": ""
+   },
+   {
+    "from": "merge",
+    "to": "hold",
+    "back": false,
+    "loops": false,
+    "lane": 0,
+    "bow": 0,
+    "via": null,
+    "fan_from": 0,
+    "fan_to": 0,
+    "stub_from": 0,
+    "stub_to": 0,
+    "corridor": null,
+    "curve": null,
+    "pts": [
+     {
+      "x": 0,
+      "y": 824
+     },
+     {
+      "x": 0,
+      "y": 971
+     }
+    ],
+    "label_at": {
+     "x": 0,
+     "y": 897.5
+    },
+    "short_label": ""
+   },
+   {
+    "from": "hold",
+    "to": "guard",
+    "back": true,
+    "loops": false,
+    "lane": 0,
+    "bow": 0,
+    "via": null,
+    "fan_from": 0,
+    "fan_to": 0,
+    "stub_from": 0,
+    "stub_to": 0,
+    "corridor": null,
+    "curve": null,
+    "pts": [
+     {
+      "x": -85,
+      "y": 1000
+     },
+     {
+      "x": -35,
+      "y": 1000
+     }
+    ],
+    "label_at": {
+     "x": -60,
+     "y": 1000
+    },
+    "short_label": ""
+   },
+   {
+    "from": "hold",
+    "to": "wait",
+    "back": false,
+    "loops": false,
+    "lane": 0,
+    "bow": 0,
+    "via": null,
+    "fan_from": 0,
+    "fan_to": -11,
+    "stub_from": 0,
+    "stub_to": 0,
+    "corridor": null,
+    "curve": null,
+    "pts": [
+     {
+      "x": 0,
+      "y": 1024
+     },
+     {
+      "x": 0,
+      "y": 1171
+     }
+    ],
+    "label_at": {
+     "x": 0,
+     "y": 1097.5
+    },
+    "short_label": ""
+   },
+   {
+    "from": "wait",
+    "to": "gate",
+    "back": true,
+    "loops": false,
+    "lane": 0,
+    "bow": 0,
+    "via": null,
+    "fan_from": 0,
+    "fan_to": 0,
+    "stub_from": 0,
+    "stub_to": 0,
+    "corridor": null,
+    "curve": null,
+    "pts": [
+     {
+      "x": 85,
+      "y": 1200
+     },
+     {
+      "x": 35,
+      "y": 1200
+     }
+    ],
+    "label_at": {
+     "x": 60,
+     "y": 1200
+    },
+    "short_label": ""
+   },
+   {
+    "from": "wait",
+    "to": "far",
+    "back": false,
+    "loops": false,
+    "lane": 0,
+    "bow": 0,
+    "via": null,
+    "fan_from": 0,
+    "fan_to": -22,
+    "stub_from": 0,
+    "stub_to": 0,
+    "corridor": null,
+    "curve": null,
+    "pts": [
+     {
+      "x": 0,
+      "y": 1224
+     },
+     {
+      "x": 0,
+      "y": 1571
+     }
+    ],
+    "label_at": {
+     "x": 0,
+     "y": 1397.5
+    },
+    "short_label": ""
+   },
+   {
+    "from": "far",
+    "to": "done",
+    "back": false,
+    "loops": false,
+    "lane": 0,
+    "bow": 0,
+    "via": null,
+    "fan_from": 0,
+    "fan_to": -11,
+    "stub_from": 0,
+    "stub_to": 0,
+    "corridor": null,
+    "curve": null,
+    "pts": [
+     {
+      "x": 0,
+      "y": 1624
+     },
+     {
+      "x": 0,
+      "y": 1771
+     }
+    ],
+    "label_at": {
+     "x": 0,
+     "y": 1697.5
+    },
+    "short_label": ""
+   },
+   {
+    "from": "done",
+    "to": "start",
+    "back": true,
+    "loops": true,
+    "lane": 1,
+    "bow": 2573.5,
+    "via": null,
+    "fan_from": 11,
+    "fan_to": 11,
+    "stub_from": 14,
+    "stub_to": 14,
+    "corridor": 2573.5,
+    "curve": {
+     "x": 5147,
+     "y": 902.5
+    },
+    "pts": [
+     {
+      "x": 0,
+      "y": 1776
+     },
+     {
+      "x": 0,
+      "y": 29
+     }
+    ],
+    "label_at": {
+     "x": 0,
+     "y": 902.5
+    },
+    "short_label": "restart the whole…"
+   },
+   {
+    "from": "far",
+    "to": "check",
+    "back": true,
+    "loops": true,
+    "lane": -1,
+    "bow": -755,
+    "via": null,
+    "fan_from": 0,
+    "fan_to": -22,
+    "stub_from": 14,
+    "stub_to": 0,
+    "corridor": -755,
+    "curve": {
+     "x": -1510,
+     "y": 1007
+    },
+    "pts": [
+     {
+      "x": 0,
+      "y": 1576
+     },
+     {
+      "x": 0,
+      "y": 438
+     }
+    ],
+    "label_at": {
+     "x": 0,
+     "y": 1007
+    },
+    "short_label": "revalidate"
+   },
+   {
+    "from": "write",
+    "to": "retry",
+    "back": true,
+    "loops": false,
+    "lane": 0,
+    "bow": 0,
+    "via": null,
+    "fan_from": 0,
+    "fan_to": 11,
+    "stub_from": 0,
+    "stub_to": 14,
+    "corridor": null,
+    "curve": null,
+    "pts": [
+     {
+      "x": -378,
+      "y": 600
+     },
+     {
+      "x": -510,
+      "y": 400
+     }
+    ],
+    "label_at": {
+     "x": -444,
+     "y": 500
+    },
+    "short_label": "failed"
+   },
+   {
+    "from": "retry",
+    "to": "load",
+    "back": true,
+    "loops": true,
+    "lane": 0,
+    "bow": 0,
+    "via": null,
+    "fan_from": -11,
+    "fan_to": 0,
+    "stub_from": 0,
+    "stub_to": 0,
+    "corridor": null,
+    "curve": null,
+    "pts": [
+     {
+      "x": -515,
+      "y": 400
+     },
+     {
+      "x": -90,
+      "y": 200
+     }
+    ],
+    "label_at": {
+     "x": -302.5,
+     "y": 300
+    },
+    "short_label": "again"
+   },
+   {
+    "from": "check",
+    "to": "far",
+    "back": false,
+    "loops": false,
+    "lane": 1,
+    "bow": 2618.5,
+    "via": null,
+    "fan_from": 0,
+    "fan_to": 22,
+    "stub_from": 14,
+    "stub_to": 28,
+    "corridor": 2618.5,
+    "curve": {
+     "x": 5237,
+     "y": 1002
+    },
+    "pts": [
+     {
+      "x": 0,
+      "y": 433
+     },
+     {
+      "x": 0,
+      "y": 1571
+     }
+    ],
+    "label_at": {
+     "x": 0,
+     "y": 1002
+    },
+    "short_label": "skip the reconcile…"
+   },
+   {
+    "from": "merge",
+    "to": "check",
+    "back": true,
+    "loops": true,
+    "lane": 0,
+    "bow": 0,
+    "via": null,
+    "fan_from": 0,
+    "fan_to": 22,
+    "stub_from": 0,
+    "stub_to": 28,
+    "corridor": null,
+    "curve": null,
+    "pts": [
+     {
+      "x": 0,
+      "y": 776
+     },
+     {
+      "x": 0,
+      "y": 438
+     }
+    ],
+    "label_at": {
+     "x": 0,
+     "y": 607
+    },
+    "short_label": "recheck"
+   },
+   {
+    "from": "load",
+    "to": "audit",
+    "back": false,
+    "loops": false,
+    "lane": 0,
+    "bow": 0,
+    "via": null,
+    "fan_from": 0,
+    "fan_to": -11,
+    "stub_from": 14,
+    "stub_to": 0,
+    "corridor": null,
+    "curve": null,
+    "pts": [
+     {
+      "x": 0,
+      "y": 224
+     },
+     {
+      "x": 300,
+      "y": 565
+     }
+    ],
+    "label_at": {
+     "x": 150,
+     "y": 394.5
+    },
+    "short_label": "branch"
+   },
+   {
+    "from": "audit",
+    "to": "load",
+    "back": true,
+    "loops": true,
+    "lane": 0,
+    "bow": 0,
+    "via": null,
+    "fan_from": 11,
+    "fan_to": 22,
+    "stub_from": 14,
+    "stub_to": 28,
+    "corridor": null,
+    "curve": null,
+    "pts": [
+     {
+      "x": 300,
+      "y": 570
+     },
+     {
+      "x": 0,
+      "y": 229
+     }
+    ],
+    "label_at": {
+     "x": 150,
+     "y": 399.5
+    },
+    "short_label": "re-read"
+   },
+   {
+    "from": "audit",
+    "to": "side_a",
+    "back": true,
+    "loops": false,
+    "lane": 0,
+    "bow": 0,
+    "via": null,
+    "fan_from": 0,
+    "fan_to": 0,
+    "stub_from": 0,
+    "stub_to": 0,
+    "corridor": null,
+    "curve": null,
+    "pts": [
+     {
+      "x": 405,
+      "y": 600
+     },
+     {
+      "x": 1110,
+      "y": 200
+     }
+    ],
+    "label_at": {
+     "x": 757.5,
+     "y": 400
+    },
+    "short_label": ""
+   },
+   {
+    "from": "side_a",
+    "to": "side_b",
+    "back": false,
+    "loops": false,
+    "lane": 0,
+    "bow": 0,
+    "via": null,
+    "fan_from": -11,
+    "fan_to": 0,
+    "stub_from": 0,
+    "stub_to": 0,
+    "corridor": null,
+    "curve": null,
+    "pts": [
+     {
+      "x": 1200,
+      "y": 224
+     },
+     {
+      "x": 1200,
+      "y": 371
+     }
+    ],
+    "label_at": {
+     "x": 1200,
+     "y": 297.5
+    },
+    "short_label": ""
+   },
+   {
+    "from": "side_a",
+    "to": "side_c",
+    "back": false,
+    "loops": false,
+    "lane": 0,
+    "bow": 0,
+    "via": {
+     "corridor": 1076
+    },
+    "fan_from": 11,
+    "fan_to": -11,
+    "stub_from": 14,
+    "stub_to": 0,
+    "corridor": 1076,
+    "curve": {
+     "x": 952,
+     "y": 397.5
+    },
+    "pts": [
+     {
+      "x": 1200,
+      "y": 224
+     },
+     {
+      "x": 1200,
+      "y": 571
+     }
+    ],
+    "label_at": {
+     "x": 1200,
+     "y": 397.5
+    },
+    "short_label": "past the blocker"
+   },
+   {
+    "from": "side_b",
+    "to": "side_c",
+    "back": false,
+    "loops": false,
+    "lane": 0,
+    "bow": 0,
+    "via": null,
+    "fan_from": 0,
+    "fan_to": 11,
+    "stub_from": 0,
+    "stub_to": 14,
+    "corridor": null,
+    "curve": null,
+    "pts": [
+     {
+      "x": 1200,
+      "y": 424
+     },
+     {
+      "x": 1200,
+      "y": 571
+     }
+    ],
+    "label_at": {
+     "x": 1200,
+     "y": 497.5
+    },
+    "short_label": ""
+   },
+   {
+    "from": "side_c",
+    "to": "wait",
+    "back": false,
+    "loops": false,
+    "lane": -1,
+    "bow": -675,
+    "via": null,
+    "fan_from": 0,
+    "fan_to": 11,
+    "stub_from": 0,
+    "stub_to": 14,
+    "corridor": -675,
+    "curve": {
+     "x": -1950,
+     "y": 897.5
+    },
+    "pts": [
+     {
+      "x": 1200,
+      "y": 624
+     },
+     {
+      "x": 0,
+      "y": 1171
+     }
+    ],
+    "label_at": {
+     "x": 600,
+     "y": 897.5
+    },
+    "short_label": ""
+   },
+   {
+    "from": "side_c",
+    "to": "tiny_a",
+    "back": true,
+    "loops": false,
+    "lane": 0,
+    "bow": 0,
+    "via": null,
+    "fan_from": 0,
+    "fan_to": 0,
+    "stub_from": 0,
+    "stub_to": 0,
+    "corridor": null,
+    "curve": null,
+    "pts": [
+     {
+      "x": 1285,
+      "y": 600
+     },
+     {
+      "x": 1910,
+      "y": 200
+     }
+    ],
+    "label_at": {
+     "x": 1597.5,
+     "y": 400
+    },
+    "short_label": ""
+   },
+   {
+    "from": "tiny_a",
+    "to": "tiny_b",
+    "back": false,
+    "loops": false,
+    "lane": 0,
+    "bow": 0,
+    "via": null,
+    "fan_from": 0,
+    "fan_to": 0,
+    "stub_from": 0,
+    "stub_to": 0,
+    "corridor": null,
+    "curve": null,
+    "pts": [
+     {
+      "x": 2000,
+      "y": 224
+     },
+     {
+      "x": 2030,
+      "y": 247
+     }
+    ],
+    "label_at": {
+     "x": 2015,
+     "y": 235.5
+    },
+    "short_label": ""
+   },
+   {
+    "from": "tiny_b",
+    "to": "snap_a",
+    "back": true,
+    "loops": false,
+    "lane": 0,
+    "bow": 0,
+    "via": null,
+    "fan_from": 0,
+    "fan_to": 0,
+    "stub_from": 0,
+    "stub_to": 0,
+    "corridor": null,
+    "curve": null,
+    "pts": [
+     {
+      "x": 2115,
+      "y": 276
+     },
+     {
+      "x": 2310,
+      "y": 200
+     }
+    ],
+    "label_at": {
+     "x": 2212.5,
+     "y": 238
+    },
+    "short_label": ""
+   },
+   {
+    "from": "snap_a",
+    "to": "snap_b",
+    "back": false,
+    "loops": false,
+    "lane": 0,
+    "bow": 0,
+    "via": null,
+    "fan_from": 0,
+    "fan_to": 0,
+    "stub_from": 0,
+    "stub_to": 0,
+    "corridor": null,
+    "curve": null,
+    "pts": [
+     {
+      "x": 2400,
+      "y": 224
+     },
+     {
+      "x": 2418.5,
+      "y": 571
+     }
+    ],
+    "label_at": {
+     "x": 2409.25,
+     "y": 397.5
+    },
+    "short_label": ""
+   }
+  ]
+ }
+}

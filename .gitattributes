@@ -1,0 +1,8 @@
+# The webfonts are not just binary, they are load-bearing binary:
+# src/memai/roboto_metrics.json is a width table extracted from these exact
+# files, and diagram_svg wraps text against it. A byte that changes on the
+# way through git -- an eol filter that decides a woff2 looks like text --
+# would not fail loudly; it would make the SVG renderer break a line where
+# the canvas does not. Say it explicitly rather than trust autodetection.
+*.woff2 binary
+*.safetensors binary

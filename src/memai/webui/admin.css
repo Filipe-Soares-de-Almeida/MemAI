@@ -3,29 +3,61 @@
    Spec: m2.material.io dark theme. Background #121212; surfaces are white
    elevation overlays on it (1dp 5% → #1E1E1E, 2dp 7%, 4dp 9%, 8dp 12%,
    16dp 15%); primary Purple 200 #BB86FC (on-primary #000); secondary
-   Teal 200 #03DAC6; error #CF6679; text = white at 87% / 60% / 38%
-   emphasis; dividers white 12%. Roboto UI + Roboto Mono for data.
+   Teal 200 #03DAC6; error #CF6679; text = white at 87% / 60% / 50%
+   emphasis, every tier at or above 4.6:1 on #1E1E1E; dividers white 12%.
+   Roboto UI + Roboto Mono for data.
    Memory-type palette drawn from Material color ramps and validated
    (dataviz six checks, all-pairs, surface #1E1E1E — no warnings):
    Blue 500 / Purple 400 / Orange 800↓ (interpolated one step toward 900
    to enter the dark lightness band) / Teal 500 / Green 800 / Red 600.
    ========================================================================== */
 
+/* The @font-face rules are NOT here: they are generated per request by
+   memai.admin (see fonts_css and the <link> in index.html), because a face
+   whose file has not been fetched must not be named in a url() -- the
+   browser would request it and log a 404 for something working as
+   designed. Roboto resolves as: installed copy, then webui/fonts/ if
+   populated, then the system stack in --font-ui / --font-m. */
+
 :root {
-  /* surfaces — #121212 + white elevation overlays */
+  /* surfaces — #121212 + white elevation overlays.
+
+     What each step MEANS, because for a long time the ladder was built
+     correctly and then spent entirely on chrome: hover, menus, popovers. Every
+     card in every view sat at 1dp, so a broken diagram, a run waiting on a
+     decision and a backup filename were all the same tone, and rank had to be
+     read rather than seen. Depth is the rank now:
+
+       --bg        the page — and a card whose work is DONE, sunk back out
+       --surface   an ordinary content card, the default
+       --raised    a card that WANTS A DECISION from you  ·  the record drawer
+       --overlay   floating chrome: menus, popovers, toasts, modal, bulk bar
+       --inset     a recessed well inside any of the above
+
+     The corollary is that a container on one of these tones needs no outline.
+     There used to be 57 hairlines drawn around things the overlay already
+     separated -- two elevation systems running at once, neither winning, and
+     an outline around everything is what you reach for when you have not
+     decided what should be forward. --line and --line-soft are for DIVIDERS
+     (a row, a table cell, a section rule) and for WELL EDGES (something
+     recessed below its own parent), and for nothing else. */
   --bg:        #121212;   /* 0dp  */
-  --surface:   #1e1e1e;   /* 1dp  · panels, cards */
-  --raised:    #232323;   /* 2dp  · hover, chips */
-  --overlay:   #2e2e2e;   /* 8dp  · menus, popovers, toasts */
+  --surface:   #1e1e1e;   /* 1dp  */
+  --raised:    #232323;   /* 2dp  */
+  --overlay:   #2e2e2e;   /* 8dp  */
   --inset:     #171717;   /* recessed wells (inputs, pre) */
   --line:      rgba(255, 255, 255, .12);   /* divider spec */
   --line-soft: rgba(255, 255, 255, .07);
 
-  /* text — white emphasis levels */
+  /* text — white emphasis levels. Three tiers, and all three are readable:
+     12.9:1, 6.8:1 and 5.1:1 on --surface. There used to be a fourth at 26%
+     (2.3:1) carrying the comment "ornament only, never body text", and
+     thirteen call sites used it for text regardless -- a rule a stylesheet
+     cannot enforce is a rule that gets broken, so the tier is gone and the
+     quietest thing the UI can say is --ink-3. */
   --ink:   rgba(255, 255, 255, .87);
   --ink-2: rgba(255, 255, 255, .60);
-  --ink-3: rgba(255, 255, 255, .38);
-  --ink-4: rgba(255, 255, 255, .26);   /* ornament only, never body text */
+  --ink-3: rgba(255, 255, 255, .50);
 
   /* primary — Purple 200, black on top */
   --accent:     #bb86fc;
@@ -34,25 +66,158 @@
   --accent-dim: rgba(187, 134, 252, .16);
   --secondary:  #03dac6;
 
+  /* the relations canvas draws its own strokes. Tokens, read back with
+     cssVar(), so the graph follows the theme like the rest of the UI --
+     these were three rgba literals inside views/graph.js. */
+  --canvas-edge:  rgba(255, 255, 255, .25);
+  --canvas-arrow: rgba(255, 255, 255, .38);
+
+  /* the white washes every hover state uses. Three values, spelled out
+     inline nine times before they had names. */
+  --hover-1: rgba(255, 255, 255, .04);
+  --hover-2: rgba(255, 255, 255, .06);
+  --hover-3: rgba(255, 255, 255, .08);
+
+  /* A chip has to read one step above whatever it is sitting on, and the same
+     chip turns up on --surface in a list, on --raised in the drawer and on
+     --overlay in a menu. These used to be filled with a literal --raised,
+     which can only be correct on one of the three -- in the drawer it made
+     the chip exactly the tone of its own background. A wash composites
+     against its parent, so it is right on all of them. */
+  --chip-fill: rgba(255, 255, 255, .05);
+
   /* memory-type palette (categorical, validated all-pairs on #1E1E1E) */
   --t-note:         #e86a00;
   --t-checkpoint:   #2196f3;
   --t-anti_pattern: #e53935;
   --t-reasoning:    #ab47bc;
   --t-handoff:      #2e7d32;
+  --t-diagram:      #009688;   /* Teal 500 — the sixth hue of the same check */
 
-  /* status scale (fixed, reserved; always icon + label) */
+  /* status scale (fixed, reserved; always icon + label).
+
+     Two reds, by role, because one cannot do both jobs on a dark theme.
+     #CF6679 is Material's dark-theme error and it is the right colour for a
+     BORDER or a FILL, where the bar is 3:1 for non-text. As TEXT it failed
+     AA in every place it was used: 4.36:1 on --raised (.btn-danger, the
+     danger-zone summary), 3.99:1 on its own tinted pill (contradicted
+     confidence, ten per list page) and 3.86:1 on the deletion tint
+     (.dz-type code). A red that cannot be read is the wrong red for words.
+
+     --bad-ink is Red 300, which also settles an inconsistency: --ok is
+     Green 300 and --warn is Amber 300, so the ink tier of the status scale
+     is now three steps of one ramp instead of two 300s and an error token.
+     It clears 4.5:1 on every surface this UI puts it on -- 5.58 on
+     --surface, 5.26 on --raised, 4.81 on the contradicted pill, 4.65 on the
+     deletion tint. The diff row keeps --diff-del-ink, which is tuned for
+     that one background.
+
+       --bad      borders, fills, marks on a plain surface
+       --bad-ink  anything a human reads */
   --ok:   #81c784;   /* Green 300 */
   --warn: #ffd54f;   /* Amber 300 */
   --bad:  #cf6679;   /* Material dark error */
+  --bad-ink: #e57373;   /* Red 300 */
+  /* --bad with alpha, for the outlines and washes around a destructive
+     control. It was written out as rgba(207, 102, 121, …) in eleven places at
+     six alphas -- .07 .1 .12 .3 .4 .6 -- which is eleven values the theme
+     cannot reach and six nobody chose next to each other. Four steps by role;
+     .07/.1 collapse into the tint and .3 into the line, because at those
+     distances the difference was drift rather than intent. */
+  --bad-line:    rgba(207, 102, 121, .4);    /* the outline of a danger control */
+  --bad-line-hi: rgba(207, 102, 121, .6);    /* the same outline, hovered */
+  --bad-wash:    rgba(207, 102, 121, .12);   /* its hover fill, or a marked pill */
+  --bad-tint:    rgba(207, 102, 121, .08);   /* a whole box the eye should treat as risky */
+
+  /* edit-history diff: a tinted row, plus ink light enough to read on it */
+  --diff-add-bg:  rgba(129, 199, 132, .12);
+  --diff-add-ink: #a9d6ab;
+  --diff-del-bg:  rgba(207, 102, 121, .14);
+  --diff-del-ink: #e8a4b0;
 
   --font-ui: 'Roboto', 'Segoe UI', system-ui, sans-serif;
   --font-m:  'Roboto Mono', ui-monospace, Consolas, monospace;
 
+  /* type scale. There were thirteen sizes here, ten of them packed into the
+     9.5-14px band in half-pixel steps -- 9.5 vs 10 vs 10.5 vs 11 is a
+     distinction no reader perceives, so the effort bought four sizes that all
+     read as "small" and zero perceived steps. Six text steps now, each one
+     visibly not the one below it, plus two display sizes for the numbers a
+     dashboard exists to show. --fs-body matches the body rule below; a size
+     not on this list is a size that has to argue for itself. */
+  --fs-label: 11px;     /* uppercase micro-label, table head, quietest caption */
+  --fs-sm:    12.5px;   /* dense data, chips, explanatory text */
+  --fs-body:  13.5px;
+  --fs-md:    14px;     /* panel and section titles */
+  --fs-read:  15px;     /* prose someone sits and READS -- see below */
+  --fs-lg:    18px;     /* modal title */
+  --fs-xl:    22px;     /* view title */
+  --fs-num:   26px;     /* a tile's value */
+  --fs-hero:  42px;     /* one per view, at most */
+
+  /* Why --fs-md came DOWN to 14 and why --fs-read exists.
+     The consolidation that produced this scale rounded almost every rule UP
+     -- fifteen sizes rose, one fell -- and the loudest of those was the
+     heading: 11px uppercase tracked became 15px sentence case, five or six
+     times per view. That is not a 4px change, it is a different object on
+     the screen, and it is what made the whole UI read as if it were zoomed.
+
+     14 is deliberately NOT a perceptible size step over --fs-body's 13.5,
+     and it does not need to be. Most text a heading actually sits above is
+     --fs-sm or --fs-label, so the real gap is 1.5px, and three other
+     channels are already carrying this role: weight 500 against 400, --ink
+     against --ink-2, and --sp-5 above the heading against --sp-3 below it.
+     Size was the one asked to do all the work when it went to 15.
+
+     Roboto's weights are worth checking with the right instrument, because
+     the wrong one is convincing: this face keeps its ADVANCE WIDTHS nearly
+     constant across weights, so measuring a string at 400 / 500 / 700 gives
+     109.89 / 109.81 / 109.70 and reads as "weight does nothing". Rendered
+     ink at 100px tells the truth -- 7601 / 9068 / 10359 pixels. Weight is
+     the strongest channel here; it just cannot be measured by width.
+
+     And the reading surfaces were split off rather than dragged down with
+     the chrome: a memory's own text and the no-script page are prose, they
+     are capped at a measure, and they have no reason to shrink because a
+     panel title did. */
+
+  /* radii. Nineteen values across 68 rules before this, with `--radius`
+     declared once and ignored by 33 of 43 declarations, and the pill spelled
+     three different ways (999px, 28px, 16px). Four steps, by role. */
+  --r-sm:   3px;    /* inline marks and square tags */
+  --r-md:   6px;    /* controls: buttons, inputs, wells */
+  --r-lg:   8px;    /* containers */
+  --r-pill: 999px;
+
+  /* spacing on a 4px grid. Seventeen gap values and ninety distinct paddings
+     ran through consecutive odd and even pixels, chosen per component rather
+     than from a ramp -- and there was no spacing token at all. --sp-0 is the
+     one sub-grid step, for gaps between things that are meant to touch. */
+  --sp-0: 2px;
+  --sp-1: 4px;
+  --sp-2: 8px;
+  --sp-3: 12px;
+  --sp-4: 16px;
+  --sp-5: 24px;
+  --sp-6: 32px;
+  --sp-7: 48px;   /* the air an empty state or a loading block needs */
+
   --rail-w: 228px;
-  --radius: 8px;
-  --shadow-drawer: -16px 0 48px rgba(0, 0, 0, .55);
+  /* The rail's brand block and the topbar are one horizontal band across the
+     window, and each of them draws the bottom border that ends it. They were
+     sized independently -- 66px against 58px -- so the two rules met at the
+     rail's edge eight pixels apart. One floor, and they cannot drift. */
+  --head-h: 66px;
   --shadow-pop: 0 8px 28px rgba(0, 0, 0, .55);
+
+  /* --surface with alpha, for the strips that float ON a canvas and have to
+     let its dot grid read through. A token rather than a literal, because
+     the same colour written out inline is one the theme cannot reach. */
+  --glass:      rgba(30, 30, 30, .92);
+  --glass-soft: rgba(30, 30, 30, .82);
+
+  /* smallest pointer target the UI ships (WCAG 2.5.8) */
+  --tap: 24px;
 }
 
 * { box-sizing: border-box; }
@@ -60,34 +225,113 @@
 
 html, body { height: 100%; }
 
+/* color-scheme so the native half of the UI -- select popups, date pickers,
+   the caret, Firefox's scrollbars -- renders dark without being restyled.
+   The ::-webkit-scrollbar rules below only ever reached Chromium. */
+html {
+  color-scheme: dark;
+  scrollbar-color: rgba(255, 255, 255, .16) transparent;
+  scrollbar-width: thin;
+}
+
 body {
   margin: 0;
   background: var(--bg);
   color: var(--ink);
-  font: 400 13.5px/1.55 var(--font-ui);
+  font: 400 var(--fs-body)/1.55 var(--font-ui);
   -webkit-font-smoothing: antialiased;
   overflow: hidden;
 }
 
 ::selection { background: rgba(187, 134, 252, .32); color: var(--ink); }
 
-:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 3px; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: var(--r-sm); }
+
+/* The rows and results that carry a role of their own sit full-bleed inside
+   a parent that clips, so an outset ring is drawn half outside and lost. It
+   goes inside instead, with a wash behind it -- a `tr` outline alone is not
+   something every browser paints the same way. */
+.mem-row:focus-visible,
+.table tbody tr:focus-visible,
+.rel-row:focus-visible,
+.picker-item:focus-visible {
+  outline-offset: -2px;
+  border-radius: 0;
+  background: var(--hover-2);
+}
+
+/* ── icons ───────────────────────────────────────────────────────────────
+   Shapes come from core/icons.js; this is the single place that says how
+   they are DRAWN, so a new icon inherits the set's look by existing.
+   Every icon() call carries .ico.
+
+   Size is a custom property rather than width/height on each call: a
+   context sets --ico once (see .icon-btn, .conf-pill) and every icon
+   inside it follows. currentColor means an icon tints with its own text,
+   which is how the active rail item and a danger button work. */
+.ico {
+  width: var(--ico, 14px); height: var(--ico, 14px);
+  flex: none;
+  fill: none; stroke: currentColor;
+  stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round;
+}
 
 ::-webkit-scrollbar { width: 10px; height: 10px; }
 ::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, .16); border-radius: 6px; border: 2px solid var(--bg); }
+::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, .16); border-radius: var(--r-md); border: 2px solid var(--bg); }
 ::-webkit-scrollbar-thumb:hover { background: rgba(255, 255, 255, .28); }
 
 h1, h2, h3 { margin: 0; font-weight: 500; }
 a { color: inherit; text-decoration: none; }
 p { margin: 0; }
 kbd {
-  font: 500 10.5px var(--font-m);
+  font: 500 var(--fs-label) var(--font-m);
   color: var(--ink-3);
   border: 1px solid var(--line);
-  border-radius: 4px;
-  padding: 1px 5px;
-  background: var(--raised);
+  border-radius: var(--r-sm);
+  padding: var(--sp-0) var(--sp-1);
+  background: var(--chip-fill);
+}
+
+/* ── the two text voices ──────────────────────────────────────────────────
+   There were eleven implementations of "small uppercase label" here:
+   .field>label, .status-tag, .match-badge, .panel-title, .tile-label,
+   .table th, .section-label, .mg-label, .danger-zone summary, .opt-label and
+   .dg-panel>h3 -- across five sizes (9.5 / 10 / 10.5 / 11 / 12px) and four
+   trackings (.06 / .07 / .08 / .09em). Eleven ways to say one thing, no two
+   agreeing. And because uppercase-tracked was the ONLY label voice, nothing on
+   any screen was a heading: an h3 rendered at 11px, smaller than 13.5px body
+   text, while an h2 rendered at 22px. Heading level ran opposite to visual
+   weight, so the document outline and the eye disagreed on every view.
+
+   Two voices now, and the distance between them is the hierarchy:
+
+     the label    names a FIELD    · uppercase, tracked, quiet, --fs-label
+     the heading  names a SECTION  · sentence case, --fs-md, --ink
+
+   Nothing else may be uppercase. The catalog already stores these strings
+   sentence-cased -- "Content", "Edit history", "Recent memories" -- so the
+   uppercase was CSS shouting over copy that was already written correctly. */
+.field > label,
+.tile-label,
+.mg-label,
+.opt-label,
+.table th,
+.status-tag,
+.match-badge,
+.danger-zone summary {
+  font: 500 var(--fs-label)/1.4 var(--font-ui);
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+
+.panel-title,
+.section-label,
+.dg-panel > h3 {
+  font: 500 var(--fs-md)/1.3 var(--font-ui);
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--ink);
 }
 
 /* ── layout ──────────────────────────────────────────────────────────── */
@@ -110,10 +354,37 @@ kbd {
 .view {
   flex: 1;
   overflow-y: auto;
-  padding: 24px 32px 90px;
+  /* The bottom padding is clearance, not rhythm: whatever the floating bulk
+     bar and the toast stack are currently taking, over the normal gutter.
+
+     It was a flat 90px on all seven views for a bar that appears on ONE, and
+     views.memories already publishes --bulk-h (its own measured height, and
+     0px on teardown) precisely so the stylesheet would not have to guess.
+     Nothing read it. At 200% zoom that dead 90px was 27% of a 328px work
+     area, on views that could never show the bar it was reserved for. */
+  padding: var(--sp-5) var(--sp-6)
+           calc(var(--sp-5) + var(--bulk-h, 0px) + var(--toast-h, 0px));
   outline: none;
 }
 .view > * { max-width: 1340px; margin-left: auto; margin-right: auto; }
+/* Reading width is right for prose and lists; a canvas is worth every pixel
+   it can get, so the diagram editor opts out of the cap -- and, on a window
+   wide enough for the two-column layout, fills the height instead of being
+   sized by a guess at everything stacked above it. */
+/* the auto margins that centre a capped view would, in the flex column
+   below, shrink it back to its content width instead of filling */
+.view.wide > * { max-width: none; margin-left: 0; margin-right: 0; }
+@media (min-width: 1181px) {
+  .view.wide {
+    padding-bottom: var(--sp-4);
+    overflow: hidden;
+    display: flex; flex-direction: column;
+  }
+  .view.wide > .anim { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+  .view.wide .dg-shell { flex: 1; min-height: 0; align-items: stretch; }
+  .view.wide .dg-side { align-content: start; overflow-y: auto; }
+  .view.wide .dg-stage { height: auto; min-height: 320px; }
+}
 
 .anim > * { animation: rise .32s cubic-bezier(.2, .7, .3, 1) both; }
 .anim > *:nth-child(1) { animation-delay: .02s; }
@@ -122,40 +393,57 @@ kbd {
 .anim > *:nth-child(4) { animation-delay: .11s; }
 .anim > *:nth-child(5) { animation-delay: .14s; }
 .anim > *:nth-child(n+6) { animation-delay: .17s; }
-@keyframes rise { from { opacity: 0; transform: translateY(6px); } }
+/* the travel is a variable so that reduced motion can take it away and
+   leave the fade -- see the media query below */
+@keyframes rise { from { opacity: 0; transform: translateY(var(--rise-y, 6px)); } }
 
 @media (prefers-reduced-motion: reduce) {
-  *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; }
+  /* Not a blanket kill. `animation-duration: .01ms !important` on every
+     element also hit .spin, whose animation is INFINITE: one rotation per
+     hundredth of a millisecond paints an arbitrary angle each frame, so
+     every loading state in the UI lost the only thing saying it was
+     working. What is unwelcome here is travel, so travel is what goes --
+     entrances keep their fade and lose their slide, panels arrive in
+     place, and the spinner breathes instead of turning. */
+  :root { --rise-y: 0px; }
+  .opt-run-card:hover { transform: none; }
+  .opt-group-caret { transition: none; }
+  .rh-fill, .bar-fill, .ratio-fill { transition: none; }
+  .spin { animation: breathe 1.5s ease-in-out infinite; }
 }
+@keyframes breathe { 50% { opacity: .25; } }
 
 /* ── brand ───────────────────────────────────────────────────────────── */
 
 .brand {
-  display: flex; align-items: center; gap: 11px;
-  padding: 18px 18px 16px;
+  display: flex; align-items: center; gap: var(--sp-3);
+  min-height: var(--head-h);
+  padding: var(--sp-4) var(--sp-4) var(--sp-4);
   border-bottom: 1px solid var(--line-soft);
 }
 .brand-seal { width: 30px; height: 30px; color: var(--accent); flex: none; }
+/* the wordmark, not the page's loudest heading -- the view title is, and at
+   --fs-xl it stays louder than this on purpose */
 .brand-name {
-  font: 500 16px/1.2 var(--font-ui);
+  font: 500 var(--fs-md)/1.2 var(--font-ui);
   letter-spacing: .01em;
   display: block;
 }
 .brand-sub {
-  font: 400 11px/1.5 var(--font-ui);
+  font: 400 var(--fs-label)/1.5 var(--font-ui);
   color: var(--ink-3);
   display: block;
 }
 
 /* ── nav ─────────────────────────────────────────────────────────────── */
 
-.nav { padding: 12px 10px; display: flex; flex-direction: column; gap: 2px; }
+.nav { padding: var(--sp-3) var(--sp-3); display: flex; flex-direction: column; gap: var(--sp-0); }
 .nav a {
-  display: flex; align-items: center; gap: 11px;
-  padding: 9px 12px;
-  border-radius: 6px;
+  display: flex; align-items: center; gap: var(--sp-3);
+  padding: var(--sp-2) var(--sp-3);
+  border-radius: var(--r-md);
   color: var(--ink-2);
-  font-size: 13px;
+  font-size: var(--fs-body);
   font-weight: 500;
   letter-spacing: .01em;
   position: relative;
@@ -167,88 +455,125 @@ kbd {
   stroke-width: 1.4; stroke-linecap: round; stroke-linejoin: round;
   opacity: .85;
 }
-.nav a:hover { background: rgba(255, 255, 255, .06); color: var(--ink); }
-.nav a.active { background: var(--accent-dim); color: var(--accent); }
+.nav a:hover { background: var(--hover-2); color: var(--ink); }
+/* keyed off aria-current rather than a class, so the state a screen reader
+   is told and the state the eye is shown cannot drift apart -- there is only
+   one attribute for the router to set */
+.nav a[aria-current="page"] { background: var(--accent-dim); color: var(--accent); }
 
 /* ── rail foot / health capsule ──────────────────────────────────────── */
 
-.rail-foot { margin-top: auto; padding: 14px 16px 16px; border-top: 1px solid var(--line-soft); }
-.rail-health { display: flex; flex-direction: column; gap: 8px; font-size: 11px; color: var(--ink-3); }
-.rh-row { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+.rail-foot { margin-top: auto; padding: var(--sp-4) var(--sp-4) var(--sp-4); border-top: 1px solid var(--line-soft); }
+.rail-health { display: flex; flex-direction: column; gap: var(--sp-2); font-size: var(--fs-label); color: var(--ink-3); }
+.rh-row { display: flex; justify-content: space-between; align-items: baseline; gap: var(--sp-2); }
 .rh-row b { color: var(--ink-2); font-weight: 500; font-family: var(--font-m); }
-.rh-meter { height: 3px; border-radius: 2px; background: var(--raised); overflow: hidden; }
-.rh-fill { height: 100%; background: var(--accent); border-radius: 2px; transition: width .6s ease; }
+.rh-meter { height: 3px; border-radius: var(--r-sm); background: var(--raised); overflow: hidden; }
+/* scaleX rather than width: animating width is a layout animation, and it
+   is the track that clips to the rounded shape, so the fill needs no radius
+   of its own. --v is the fraction, written by updateRail(). */
+.rh-fill {
+  height: 100%; width: 100%;
+  background: var(--accent);
+  transform-origin: left center; transform: scaleX(var(--v, 0));
+  transition: transform .6s ease;
+}
 
 /* ── topbar ──────────────────────────────────────────────────────────── */
 
 .topbar {
-  display: flex; align-items: center; justify-content: space-between; gap: 16px;
-  padding: 10px 32px;
+  /* It still wraps, but it no longer has to: the ~430px search field that
+     made this row unshrinkable is gone (it only forwarded to the Memories
+     tab), so what is left -- the count, the language picker and the
+     new-memory button -- fits a 375px window without collapsing to
+     min-content. The wrap stays as the floor for a longer localized label. */
+  display: flex; align-items: center; justify-content: flex-end;
+  flex-wrap: wrap; gap: var(--sp-2) var(--sp-4);
+  min-height: var(--head-h);
+  padding: var(--sp-3) var(--sp-6);
   border-bottom: 1px solid var(--line-soft);
   background: var(--bg);
   z-index: 5;
 }
-.searchbox {
-  display: flex; align-items: center; gap: 9px;
-  width: min(430px, 46vw);
-  padding: 8px 12px;
-  background: var(--surface);
-  border: 1px solid transparent;
-  border-radius: 6px;
-  transition: border-color .15s, background .15s;
-}
-.searchbox:focus-within { border-color: var(--accent); background: var(--raised); }
-.searchbox svg { width: 15px; height: 15px; stroke: var(--ink-3); fill: none; stroke-width: 1.6; stroke-linecap: round; flex: none; }
-.searchbox input {
-  flex: 1; background: none; border: none; outline: none;
-  color: var(--ink); font: 400 13px var(--font-ui);
-}
-.searchbox input::placeholder { color: var(--ink-3); }
-.topbar-right { display: flex; align-items: center; gap: 14px; }
-.db-badge { font-size: 12px; color: var(--ink-3); }
-.lang-sel { font-size: 12px; padding: 5px 26px 5px 9px; }
+.topbar-right { display: flex; align-items: center; gap: var(--sp-4); }
+.db-badge { font-size: var(--fs-sm); color: var(--ink-3); }
+.lang-sel { font-size: var(--fs-sm); padding: var(--sp-1) var(--sp-5) var(--sp-1) var(--sp-2); }
 
 /* ── buttons & inputs ────────────────────────────────────────────────── */
 
 .btn {
-  font: 500 12.5px var(--font-ui);
+  font: 500 var(--fs-sm) var(--font-ui);
   letter-spacing: .02em;
   color: var(--accent);
   background: transparent;
   border: 1px solid var(--line);
-  border-radius: 6px;
-  padding: 7px 14px;
+  border-radius: var(--r-md);
+  padding: var(--sp-2) var(--sp-4);
   cursor: pointer;
   transition: background .15s, border-color .15s, color .15s;
-  display: inline-flex; align-items: center; gap: 6px;
+  display: inline-flex; align-items: center; gap: var(--sp-2);
 }
 .btn:hover { background: var(--accent-dim); border-color: rgba(187, 134, 252, .4); }
 .btn:disabled { opacity: .38; cursor: default; }
 .btn-solid { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
 .btn-solid:hover { background: var(--accent-hi); border-color: var(--accent-hi); color: var(--accent-ink); }
 .btn-ghost { border-color: transparent; color: var(--ink-2); }
-.btn-ghost:hover { background: rgba(255, 255, 255, .06); border-color: transparent; color: var(--ink); }
+.btn-ghost:hover { background: var(--hover-2); border-color: transparent; color: var(--ink); }
 /* declared after .btn-ghost so btn-ghost + btn-danger combos still read as dangerous */
-.btn-danger { color: var(--bad); border-color: rgba(207, 102, 121, .4); background: transparent; }
-.btn-danger:hover { background: rgba(207, 102, 121, .12); border-color: rgba(207, 102, 121, .6); }
-.btn-sm { padding: 4px 10px; font-size: 11.5px; }
+.btn-danger { color: var(--bad-ink); border-color: var(--bad-line); background: transparent; }
+.btn-danger:hover { background: var(--bad-wash); border-color: var(--bad-line-hi); }
+.btn-sm { padding: var(--sp-1) var(--sp-3); font-size: var(--fs-sm); min-height: var(--tap); }
 
 .icon-btn {
   background: none; border: none; cursor: pointer;
-  color: var(--ink-3); font-size: 15px; line-height: 1;
-  padding: 4px 6px; border-radius: 5px;
+  color: var(--ink-3); font-size: var(--fs-md); line-height: 1;
+  /* --tap wide and tall even though the glyph inside is 13px: a 21px target
+     is below the 24x24 floor (WCAG 2.5.8) and these are the controls that
+     delete a relation and close a drawer */
+  min-width: var(--tap); min-height: var(--tap);
+  padding: var(--sp-1) var(--sp-2); border-radius: var(--r-md);
   transition: all .12s;
+  display: inline-flex; align-items: center; justify-content: center;
+  --ico: 13px;
 }
-.icon-btn:hover { color: var(--ink); background: rgba(255, 255, 255, .08); }
-.icon-btn.danger:hover { color: var(--bad); background: rgba(207, 102, 121, .12); }
+.icon-btn:hover { color: var(--ink); background: var(--hover-3); }
+.icon-btn.danger:hover { color: var(--bad-ink); background: var(--bad-wash); }
+
+/* ── controls that do not look like buttons ───────────────────────────────
+   A chip, a uid, a row's own text, a result in a picker: each of these does
+   something when you press it, so each of them IS a <button> in the markup.
+   They used to be spans and divs with click handlers -- unreachable by
+   keyboard and nameless to a screen reader -- and the fix costs only the
+   browser styling this strips back. Declared here, ahead of the components
+   themselves, so each still owns its own look. */
+.chip, .uid-chip, .collide-chip, .dgl-title, .picker-item, .row-open, .type-tag {
+  font: inherit;
+  color: inherit;
+  text-align: inherit;
+  background: none;
+  border: none;
+  margin: 0;
+}
+/* the primary target of a list row: its own text, stretched across whatever
+   space the row gives it so the hit area matches what the mouse already had */
+.row-open {
+  display: block; width: 100%;
+  padding: 0;
+  /* One line of small text is under 19px, and this is the control that opens
+     the record. The leading, not a min-height, because it has to CENTRE the
+     line in the 24px it claims -- a min-height would leave the text at the top
+     of the box and misalign it against everything beside it. Overridden where
+     the same button wraps to two lines (see the narrow block). */
+  line-height: var(--tap);
+  cursor: pointer;
+}
 
 input[type="text"], input[type="search"], input[type="number"], select, textarea {
-  font: 400 13px/1.5 var(--font-ui);
+  font: 400 var(--fs-body)/1.5 var(--font-ui);
   color: var(--ink);
   background: var(--inset);
   border: 1px solid var(--line);
-  border-radius: 6px;
-  padding: 7px 10px;
+  border-radius: var(--r-md);
+  padding: var(--sp-2) var(--sp-3);
   outline: none;
   transition: border-color .15s;
 }
@@ -258,13 +583,15 @@ select {
   cursor: pointer;
   appearance: none;
   -webkit-appearance: none;
-  padding-right: 30px;
+  padding-right: var(--sp-6);
   background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'><path d='M1 1l4 4 4-4' fill='none' stroke='%23ffffff' stroke-opacity='.55' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/></svg>");
   background-repeat: no-repeat;
   background-position: right 10px center;
 }
 select option { background: var(--overlay); color: var(--ink); }
-input[type="range"] { accent-color: var(--accent); }
+/* the track is thin by design, but the thing you grab has to clear the --tap
+   floor like every other control; the browser centres the track inside it */
+input[type="range"] { accent-color: var(--accent); min-height: var(--tap); }
 /* text inputs backed by a <datalist> get a stray native arrow in Chromium — hide it */
 input::-webkit-calendar-picker-indicator { display: none !important; }
 
@@ -275,7 +602,7 @@ input[type="checkbox"] {
   width: 16px; height: 16px;
   margin: 0;
   border: 2px solid rgba(255, 255, 255, .45);
-  border-radius: 3px;
+  border-radius: var(--r-sm);
   background: transparent;
   cursor: pointer;
   position: relative;
@@ -283,128 +610,215 @@ input[type="checkbox"] {
   vertical-align: middle;
   transition: background .13s, border-color .13s;
 }
-input[type="checkbox"]:hover { border-color: rgba(255, 255, 255, .75); background: rgba(255, 255, 255, .06); }
+/* The MARK is 16px because that is the Material checkbox; the TARGET has to
+   be 24 (WCAG 2.5.8), and there are fifty of these on one page of the
+   memories list -- the entry point to every bulk action. A centred
+   transparent ::before grows the hit area without moving anything: hit
+   testing on a pseudo-element resolves to the element that owns it, and the
+   checkmark stays on top because ::after paints after ::before. Not a
+   wrapping <label>, which would have meant touching every call site for a
+   property that belongs to the control. */
+input[type="checkbox"]::before {
+  content: "";
+  position: absolute; top: 50%; left: 50%;
+  width: var(--tap); height: var(--tap);
+  transform: translate(-50%, -50%);
+}
+input[type="checkbox"]:hover { border-color: rgba(255, 255, 255, .75); background: var(--hover-2); }
 input[type="checkbox"]:checked { background: var(--accent); border-color: var(--accent); }
 input[type="checkbox"]:checked::after {
   content: "";
   position: absolute; inset: 0;
   background: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'><path d='M2.5 6.3l2.4 2.4 4.6-5.2' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/></svg>") center / 10px 10px no-repeat;
 }
-textarea { resize: vertical; min-height: 110px; width: 100%; font-family: var(--font-m); font-size: 12.5px; }
+textarea { resize: vertical; min-height: 110px; width: 100%; font-family: var(--font-m); font-size: var(--fs-sm); }
 
-.field { display: flex; flex-direction: column; gap: 5px; }
-.field > label {
-  font-size: 11px; letter-spacing: .08em; text-transform: uppercase;
-  color: var(--ink-2); font-weight: 500;
+/* A field that is wrong says so beside itself. Two of these used to fire as a
+   toast in the opposite corner of the window, about a field the caret was
+   already in -- the message and the problem were 400px apart. */
+.field-error { font-size: var(--fs-label); color: var(--bad-ink); }
+input[aria-invalid="true"], select[aria-invalid="true"], textarea[aria-invalid="true"] {
+  border-color: var(--bad);
 }
 
-.seg { display: inline-flex; background: var(--inset); border: 1px solid var(--line); border-radius: 6px; padding: 2px; gap: 2px; }
+.field { display: flex; flex-direction: column; gap: var(--sp-1); }
+.field > label { color: var(--ink-2); }
+
+.seg { display: inline-flex; background: var(--inset); border: 1px solid var(--line); border-radius: var(--r-md); padding: var(--sp-0); gap: var(--sp-0); }
 .seg button {
-  font: 500 12px var(--font-ui);
+  font: 500 var(--fs-sm) var(--font-ui);
   color: var(--ink-2);
-  background: none; border: none; border-radius: 4px;
-  padding: 5px 12px; cursor: pointer;
-  display: inline-flex; align-items: center; gap: 6px;
+  background: none; border: none; border-radius: var(--r-sm);
+  padding: var(--sp-1) var(--sp-3); cursor: pointer;
+  /* the --tap floor, which this control was declared to honour and did not:
+     it measured 23px, one pixel under, and it is the Active/Archived/All
+     filter and the drawer's confidence setter -- two of the most-pressed
+     targets in the app */
+  min-height: var(--tap);
+  display: inline-flex; align-items: center; gap: var(--sp-2);
   transition: all .13s;
 }
 .seg button:hover { color: var(--ink); }
-.seg button.active { background: var(--accent-dim); color: var(--accent); }
+/* same rule as the rail: aria-pressed IS the selected state, not a mirror
+   of a class that says so separately */
+.seg button[aria-pressed="true"] { background: var(--accent-dim); color: var(--accent); }
 
 /* ── chips, tags, pills ──────────────────────────────────────────────── */
 
 .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--c, var(--ink-3)); flex: none; }
 
 .type-tag {
-  display: inline-flex; align-items: center; gap: 6px;
-  font: 500 11.5px var(--font-m);
+  display: inline-flex; align-items: center; gap: var(--sp-2);
+  font: 500 var(--fs-sm) var(--font-m);
   color: var(--ink-2);
   white-space: nowrap;
 }
+/* the audit table uses one as its row's own control */
+button.type-tag { cursor: pointer; min-height: var(--tap); }
 .t-note         { --c: var(--t-note); }
 .t-checkpoint   { --c: var(--t-checkpoint); }
 .t-anti_pattern { --c: var(--t-anti_pattern); }
 .t-reasoning    { --c: var(--t-reasoning); }
 .t-handoff      { --c: var(--t-handoff); }
+.t-diagram      { --c: var(--t-diagram); }
 
 .uid-chip {
-  font: 500 10.5px var(--font-m);
+  display: inline-flex; align-items: center;
+  min-height: var(--tap);          /* it is a copy button, so it is a target */
+  font: 500 var(--fs-label) var(--font-m);
   letter-spacing: .02em;
-  color: var(--ink-2);
-  background: var(--raised);
-  border: 1px solid var(--line-soft);
-  border-radius: 4px;
-  padding: 1px 7px;
+  /* An identifier is reference, not the point of the row. This had a border, a
+     raised fill and an accent hover -- more decoration than the memory's own
+     content, which is the thing a human is here to read. It keeps its fill and
+     its copy cursor, because it IS a button, and loses the outline and the
+     accent, because it is not an action anyone came here to take. */
+  color: var(--ink-3);
+  background: var(--chip-fill);
+  border-radius: var(--r-sm);
+  padding: var(--sp-0) var(--sp-2);
   cursor: copy;
   white-space: nowrap;
 }
-.uid-chip:hover { color: var(--accent); border-color: rgba(187, 134, 252, .4); }
+.uid-chip:hover { color: var(--ink); background: var(--hover-3); }
 
 .chip {
-  display: inline-flex; align-items: center; gap: 5px;
-  font-size: 11px; color: var(--ink-2);
-  background: var(--raised);
+  display: inline-flex; align-items: center; gap: var(--sp-1);
+  font-size: var(--fs-label); color: var(--ink-2);
+  background: var(--chip-fill);
   border: 1px solid var(--line-soft);
-  border-radius: 12px;
-  padding: 2px 10px;
+  border-radius: var(--r-pill);
+  padding: var(--sp-0) var(--sp-3);
   white-space: nowrap;
   max-width: 240px; overflow: hidden; text-overflow: ellipsis;
 }
-.chip.clickable { cursor: pointer; }
+.chip.clickable { cursor: pointer; min-height: var(--tap); }
 .chip.clickable:hover { border-color: rgba(187, 134, 252, .4); color: var(--accent); }
 
-.conf-pill { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; color: var(--ink-2); white-space: nowrap; }
-.conf-pill i { font-style: normal; font-weight: 700; font-size: 10px; }
-.c-confirmed i    { color: var(--ok); }
-.c-unverified i   { color: var(--warn); }
-.c-contradicted i { color: var(--bad); }
+.conf-pill { display: inline-flex; align-items: center; gap: var(--sp-1); font-size: var(--fs-label); color: var(--ink-2); white-space: nowrap; --ico: 12px; }
+/* mark only, for a list row. Slightly larger, because it is now carrying the
+   state on its own and 12px of ring is small to read at a glance. */
+.conf-pill.compact { gap: 0; --ico: 14px; }
 
+/* These three rules used to target `<i>`. There is no `<i>` anywhere in the JS
+   tree -- confPill() in core/shared.js and the drawer's curation row both emit
+   an `<svg class="ico">` -- so the colour never rendered once, and confirmed,
+   unverified and contradicted all computed the identical rgba(255,255,255,.60)
+   in every list row, every drawer and every card. The single field that makes
+   this a curated store rather than a filing cabinet was invisible for as long
+   as the rule existed, and the rule looked like it worked. */
+.c-confirmed    .ico { color: var(--ok); }
+.c-unverified   .ico { color: var(--warn); }
+.c-contradicted .ico { color: var(--bad-ink); }
+
+/* Only one of the three gets a fill. A contradicted memory is the state you
+   must not scroll past, so it is loud enough to catch you at fifty rows;
+   `confirmed` stays quiet because a good default should never shout, and
+   `unverified` stays neutral because it is a question, not a problem. */
+.conf-pill.c-contradicted {
+  color: var(--bad-ink);
+  background: var(--bad-wash);
+  border-radius: var(--r-pill);
+  padding: var(--sp-0) var(--sp-2);
+}
+
+/* A seal, so it never shrinks and never wraps -- and never grows either:
+   as a flex child with the default `flex: 0 1 auto` it could not shrink
+   below its own text, so on a tight row it burst out of its cell instead
+   and painted over whatever sat next to it. The text that CAN give way is
+   the snippet beside it, which is already clipped with an ellipsis. */
 .status-tag {
-  font-size: 10px; letter-spacing: .08em; text-transform: uppercase;
+  flex: none; white-space: nowrap;
   color: var(--ink-3);
   border: 1px solid var(--line);
-  border-radius: 3px; padding: 1px 6px;
-  font-weight: 500;
+  border-radius: var(--r-sm); padding: var(--sp-0) var(--sp-2);
 }
 .status-tag.archived { color: var(--warn); border-color: rgba(255, 213, 79, .35); }
 
 .match-badge {
-  font-size: 9.5px; letter-spacing: .08em; text-transform: uppercase;
   color: var(--secondary);
   border: 1px solid rgba(3, 218, 198, .3);
-  border-radius: 3px; padding: 1px 5px;
-  font-weight: 500;
+  border-radius: var(--r-sm); padding: var(--sp-0) var(--sp-1);
 }
 
 /* ── view head ───────────────────────────────────────────────────────── */
 
-.view-head { margin-bottom: 20px; }
+.view-head { margin-bottom: var(--sp-5); }
 .view-title {
-  font: 500 22px/1.25 var(--font-ui);
+  font: 500 var(--fs-xl)/1.25 var(--font-ui);
   letter-spacing: 0;
   color: var(--ink);
 }
 .view-title em { font-style: normal; color: var(--ink); }
-.view-sub { margin-top: 4px; font-size: 12.5px; color: var(--ink-2); }
+.view-sub { margin-top: var(--sp-1); font-size: var(--fs-sm); color: var(--ink-2); }
 
 /* ── panels ──────────────────────────────────────────────────────────── */
 
 .panel {
   background: var(--surface);
-  border: 1px solid var(--line-soft);
-  border-radius: var(--radius);
-  padding: 18px 20px;
+  border-radius: var(--r-lg);
+  padding: var(--sp-4) var(--sp-5);
 }
 .panel-title {
-  font: 500 11px var(--font-ui);
-  letter-spacing: .09em; text-transform: uppercase;
-  color: var(--ink-2);
-  margin: 0 0 14px;
-  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  margin: 0 0 var(--sp-4);
+  display: flex; align-items: center; justify-content: space-between; gap: var(--sp-3);
   flex-wrap: wrap;
 }
-.panel-title .panel-aside { font-weight: 400; letter-spacing: .01em; text-transform: none; color: var(--ink-3); }
+/* the count or hint that rides on a heading. Standalone, not scoped to
+   .panel-title, because the drawer's section headings want the same thing --
+   record.js was patching three of them inline with the two properties the
+   uppercase voice used to force. */
+.panel-aside { font-weight: 400; font-size: var(--fs-sm); color: var(--ink-3); }
 
-.grid { display: grid; gap: 14px; }
+/* ── the explanatory line ─────────────────────────────────────────────────
+   The sentence that opens a panel, the note beside a control, the caption on
+   a row. Fifteen inline `font-size` declarations said this in five values --
+   10, 10.5, 11, 11.5 and 12 -- three of them inside the half-pixel band the
+   scale above exists to have removed, and two of them below the floor for
+   text a person has to read. Five values for one job, none of them reachable
+   from :root.
+
+   Two steps now, chosen by how quiet the line is meant to be, plus the
+   opening sentence of a panel or modal, which owns its own bottom margin
+   because that space belongs to the sentence and not to whatever follows. */
+.intro   { font-size: var(--fs-sm); color: var(--ink-2); margin-bottom: var(--sp-3); }
+.hint    { font-size: var(--fs-sm); color: var(--ink-3); }
+.hint-sm { font-size: var(--fs-label); color: var(--ink-3); }
+.intro.warn, .hint.warn, .hint-sm.warn { color: var(--warn); }
+
+/* a control and the words naming it, on one line and as one target */
+.inline-label {
+  display: inline-flex; align-items: center; gap: var(--sp-2);
+  min-height: var(--tap);
+  font-size: var(--fs-label); color: var(--ink-2);
+  white-space: nowrap; cursor: pointer;
+}
+.inline-label b { color: var(--ink); font-weight: 500; }
+.inline-label input[type="range"] { width: 130px; }
+
+/* the two memories a link is about to join, stacked in the graph's modal */
+.gl-peers { display: grid; gap: var(--sp-1); font-size: var(--fs-sm); }
+
+.grid { display: grid; gap: var(--sp-4); }
 .grid > * { min-width: 0; } /* long nowrap snippets must ellipsize, not blow the track */
 .grid-2 { grid-template-columns: 1fr 1fr; }
 .grid-3232 { grid-template-columns: 3fr 2fr; }
@@ -412,88 +826,108 @@ textarea { resize: vertical; min-height: 110px; width: 100%; font-family: var(--
 
 /* ── stat tiles ──────────────────────────────────────────────────────── */
 
-.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(148px, 1fr)); gap: 14px; margin-bottom: 14px; }
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(148px, 1fr)); gap: var(--sp-4); margin-bottom: var(--sp-4); }
 .tile {
   background: var(--surface);
-  border: 1px solid var(--line-soft);
-  border-radius: var(--radius);
-  padding: 14px 16px 12px;
+  border-radius: var(--r-lg);
+  padding: var(--sp-4) var(--sp-4) var(--sp-3);
 }
-.tile-label { font-size: 11px; letter-spacing: .07em; text-transform: uppercase; color: var(--ink-2); font-weight: 500; }
-.tile-value { font: 500 26px/1.3 var(--font-ui); margin-top: 3px; color: var(--ink); }
-.tile-sub { font-size: 11px; color: var(--ink-3); margin-top: 1px; }
-.tile-hero { border-color: rgba(187, 134, 252, .35); }
-.tile-hero .tile-value { font-size: 42px; font-weight: 500; color: var(--accent); }
+.tile-label { color: var(--ink-2); }
+.tile-value { font: 500 var(--fs-num)/1.3 var(--font-ui); margin-top: var(--sp-1); color: var(--ink); }
+.tile-sub { font-size: var(--fs-label); color: var(--ink-3); margin-top: var(--sp-0); }
+/* the one tile that leads a view. It used to be marked by an accent outline;
+   with the outlines gone it is marked by standing one step forward instead,
+   which is what the ladder is for. */
+.tile-hero { background: var(--raised); }
+.tile-hero .tile-value { font-size: var(--fs-hero); font-weight: 500; color: var(--accent); }
 
 /* ── charts ──────────────────────────────────────────────────────────── */
 
 /* confidence meter: stacked 100% bar, 2px surface gaps */
-.meter { display: flex; gap: 2px; height: 12px; border-radius: 6px; overflow: hidden; background: var(--inset); }
+.meter { display: flex; gap: var(--sp-0); height: 12px; border-radius: var(--r-md); overflow: hidden; background: var(--inset); }
 .meter-seg { min-width: 3px; }
-.meter-seg:first-child { border-radius: 6px 0 0 6px; }
-.meter-seg:last-child { border-radius: 0 6px 6px 0; }
-.legend { display: flex; flex-wrap: wrap; gap: 7px 18px; margin-top: 11px; }
-.legend-item { display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--ink-2); }
+.meter-seg:first-child { border-radius: var(--r-md) 0 0 var(--r-md); }
+.meter-seg:last-child { border-radius: 0 var(--r-md) var(--r-md) 0; }
+.legend { display: flex; flex-wrap: wrap; gap: var(--sp-2) var(--sp-4); margin-top: var(--sp-3); }
+.legend-item { display: inline-flex; align-items: center; gap: var(--sp-2); font-size: var(--fs-sm); color: var(--ink-2); }
 .legend-item b { color: var(--ink); font-weight: 500; font-family: var(--font-m); }
-.legend-item i { font-style: normal; font-weight: 700; font-size: 10px; }
+/* was `.legend-item i`, dead for the same reason as the .c-* rules above --
+   overview.js worked around it with an inline style per legend entry. The
+   entry carries its own c-* class now and the mark colours itself. */
+.legend-item { --ico: 12px; }
 
 /* per-type horizontal bars */
-.bars { display: flex; flex-direction: column; gap: 9px; }
-.bar-row { display: grid; grid-template-columns: 128px 1fr 48px; align-items: center; gap: 12px; }
-.bar-track { height: 10px; background: var(--inset); border-radius: 0 5px 5px 0; position: relative; }
+.bars { display: flex; flex-direction: column; gap: var(--sp-2); }
+.bar-row { display: grid; grid-template-columns: 128px 1fr 48px; align-items: center; gap: var(--sp-3); }
+.bar-track { height: 10px; background: var(--inset); border-radius: 0 var(--r-md) var(--r-md) 0; position: relative; overflow: hidden; }
+/* the same scaleX as .rh-fill, for the same reason. A share too small to
+   see is floored by the caller, not by a min-width -- an element already
+   stretched across the track has no width left for one to raise. */
 .bar-fill {
-  position: absolute; inset: 0 auto 0 0;
+  position: absolute; inset: 0;
   background: var(--c, var(--ink-3));
-  border-radius: 0 4px 4px 0;
-  min-width: 2px;
-  transition: width .6s cubic-bezier(.25, .9, .3, 1);
+  transform-origin: left center; transform: scaleX(var(--v, 0));
+  transition: transform .6s cubic-bezier(.25, .9, .3, 1);
 }
-.bar-val { font: 400 12px var(--font-m); color: var(--ink-2); text-align: right; font-variant-numeric: tabular-nums; }
+.bar-val { font: 400 var(--fs-sm) var(--font-m); color: var(--ink-2); text-align: right; font-variant-numeric: tabular-nums; }
 
 /* activity sparkbars */
-.spark { display: flex; align-items: flex-end; gap: 2px; height: 62px; padding-bottom: 1px; border-bottom: 1px solid var(--line); }
+.spark { display: flex; align-items: flex-end; gap: var(--sp-0); height: 62px; padding-bottom: var(--sp-0); border-bottom: 1px solid var(--line); }
 .spark-bar {
-  flex: 1; min-width: 3px; max-width: 22px;
-  background: rgba(255, 255, 255, .30);
-  border-radius: 3px 3px 0 0;
+  /* .38, not .30: these bars ARE the data, so they answer to the 3:1 floor
+     for meaningful graphics (WCAG 1.4.11) and .30 measured 2.65:1 on the
+     panel. min-width gives the pointer something to land on. */
+  flex: 1; min-width: 5px; max-width: 22px;
+  background: rgba(255, 255, 255, .38);
+  border-radius: var(--r-sm) var(--r-sm) 0 0;
   cursor: default;
   transition: background .12s;
 }
 .spark-bar:hover { background: var(--accent-hi); }
 .spark-bar.today { background: var(--accent); }
-.spark-foot { display: flex; justify-content: space-between; font-size: 10.5px; color: var(--ink-3); margin-top: 5px; }
+.spark-foot { display: flex; justify-content: space-between; font-size: var(--fs-label); color: var(--ink-3); margin-top: var(--sp-1); }
 .spark-stats {
-  display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px;
-  margin-top: 16px; padding-top: 13px;
+  display: grid; grid-template-columns: repeat(3, 1fr); gap: var(--sp-3);
+  margin-top: var(--sp-4); padding-top: var(--sp-3);
   border-top: 1px solid var(--line-soft);
 }
-.spark-stat { font: 500 17px var(--font-ui); margin-top: 2px; color: var(--ink); }
+.spark-stat { font: 500 var(--fs-lg) var(--font-ui); margin-top: var(--sp-0); color: var(--ink); }
 
 /* ── tables ──────────────────────────────────────────────────────────── */
 
-.table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+.table { width: 100%; border-collapse: collapse; font-size: var(--fs-sm); }
 .table th {
-  text-align: left; font-weight: 500;
-  font-size: 10.5px; letter-spacing: .08em; text-transform: uppercase;
+  text-align: left;
   color: var(--ink-3);
-  padding: 4px 10px 8px;
+  padding: var(--sp-1) var(--sp-3) var(--sp-2);
   border-bottom: 1px solid var(--line);
 }
-.table td { padding: 9px 10px; border-bottom: 1px solid var(--line-soft); color: var(--ink-2); vertical-align: middle; }
+.table td { padding: var(--sp-2) var(--sp-3); border-bottom: 1px solid var(--line-soft); color: var(--ink-2); vertical-align: middle; }
 .table tr:last-child td { border-bottom: none; }
 .table tbody tr { transition: background .12s; }
-.table tbody tr:hover { background: rgba(255, 255, 255, .04); }
-.table .num { text-align: right; font-variant-numeric: tabular-nums; font-family: var(--font-m); font-size: 12px; }
+.table tbody tr:hover { background: var(--hover-1); }
+.table .num { text-align: right; font-variant-numeric: tabular-nums; font-family: var(--font-m); font-size: var(--fs-sm); }
 .table .actions { text-align: right; white-space: nowrap; }
+/* a row that goes somewhere when clicked. The views used to write this as an
+   inline style from JS, one row at a time. */
+.table tr.clickable, .rel-row.clickable { cursor: pointer; }
 
-.type-dots { display: inline-flex; gap: 3px; align-items: center; }
+/* A table has a minimum width its own columns need, and at 375px the domains
+   table wanted 508px inside a 313px column -- so it pushed 281px past its
+   container with nothing anywhere to scroll. A table scrolls sideways in its own
+   box; the page never does. A wrapper and not `display: block` on the <table>
+   itself, because that swaps the table formatting context for a block one and
+   the column widths stop agreeing with the header. */
+.table-scroll { overflow-x: auto; }
+
+.type-dots { display: inline-flex; gap: var(--sp-1); align-items: center; }
 .type-dots .dot { width: 7px; height: 7px; }
 
 /* ── memories list ───────────────────────────────────────────────────── */
 
 .list-toolbar {
-  display: flex; flex-wrap: wrap; gap: 9px; align-items: center;
-  margin-bottom: 14px;
+  display: flex; flex-wrap: wrap; gap: var(--sp-2); align-items: center;
+  margin-bottom: var(--sp-4);
 }
 .list-toolbar input[type="search"] { flex: 1 1 220px; min-width: 180px; }
 .list-toolbar select { max-width: 190px; }
@@ -502,42 +936,47 @@ textarea { resize: vertical; min-height: 110px; width: 100%; font-family: var(--
 
 .opt-run-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
-  gap: 12px;
+  /* min(), because a bare 340px track is a MINIMUM the grid must honour even
+     when the container is 313px wide -- which is what a 375px phone leaves
+     after the rail. The card then pushed 39px past its own scroll container.
+     min(340px, 100%) keeps the intent (two columns once there is room for two)
+     and drops the floor to the container when there is not. */
+  grid-template-columns: repeat(auto-fill, minmax(min(340px, 100%), 1fr));
+  gap: var(--sp-3);
 }
 .opt-run-grid > * { min-width: 0; }
 
 .opt-run-card {
-  display: flex; flex-direction: column; gap: 9px;
+  display: flex; flex-direction: column; gap: var(--sp-2);
   background: var(--surface);
-  border: 1px solid var(--line-soft);
-  border-radius: var(--radius);
-  padding: 14px 16px 13px;
+  border-radius: var(--r-lg);
+  padding: var(--sp-4) var(--sp-4) var(--sp-3);
   cursor: pointer;
-  transition: border-color .15s, background .15s, transform .15s;
+  transition: background .15s, transform .15s;
 }
-.opt-run-card:hover {
-  background: var(--raised);
-  border-color: rgba(187, 134, 252, .4);
-  transform: translateY(-1px);
-}
+/* A run with suggestions still waiting on you is the reason to open this view,
+   so it stands forward of the runs that are already settled -- and hover lifts
+   from wherever the card rests, one step either way. */
+.opt-run-card.has-pending { background: var(--raised); }
+.opt-run-card:hover { background: var(--raised); transform: translateY(-1px); }
+.opt-run-card.has-pending:hover { background: var(--overlay); }
 
-.opt-run-top { display: flex; align-items: center; gap: 9px; }
-.opt-run-id { font: 500 13px var(--font-m); color: var(--accent); }
-.opt-run-date { font-size: 11.5px; color: var(--ink-3); white-space: nowrap; }
+.opt-run-top { display: flex; align-items: center; gap: var(--sp-2); }
+.opt-run-id { font: 500 var(--fs-body) var(--font-m); color: var(--accent); }
+.opt-run-date { font-size: var(--fs-sm); color: var(--ink-3); white-space: nowrap; }
 
 .opt-run-state {
-  font: 500 10.5px var(--font-m);
-  padding: 2px 8px; border-radius: 999px;
+  font: 500 var(--fs-label) var(--font-m);
+  padding: var(--sp-0) var(--sp-2); border-radius: var(--r-pill);
   border: 1px solid var(--line);
   white-space: nowrap;
 }
 .opt-run-state.s-pending { color: var(--warn); border-color: rgba(255, 213, 79, .4); }
 .opt-run-state.s-done    { color: var(--ok);   border-color: rgba(129, 199, 132, .4); }
-.opt-run-state.s-empty   { color: var(--ink-4); }
+.opt-run-state.s-empty   { color: var(--ink-3); }
 
 .opt-run-note {
-  font-size: 12.5px; line-height: 1.5; color: var(--ink-2);
+  font-size: var(--fs-sm); line-height: 1.5; color: var(--ink-2);
   display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
   overflow: hidden;
 }
@@ -545,20 +984,20 @@ textarea { resize: vertical; min-height: 110px; width: 100%; font-family: var(--
 .opt-run-meter { height: 7px; }
 
 .opt-run-foot {
-  display: flex; align-items: center; gap: 9px;
-  font-size: 11px; color: var(--ink-3);
+  display: flex; align-items: center; gap: var(--sp-2);
+  font-size: var(--fs-label); color: var(--ink-3);
 }
-.opt-run-backup { color: var(--ok); font-size: 10.5px; font-family: var(--font-m); }
+.opt-run-backup { color: var(--ok); font-size: var(--fs-label); font-family: var(--font-m); display: inline-flex; align-items: center; gap: var(--sp-1); --ico: 11px; }
 
-.opt-run-kinds { display: flex; flex-wrap: wrap; gap: 5px; }
+.opt-run-kinds { display: flex; flex-wrap: wrap; gap: var(--sp-1); }
 .opt-kind-chip {
-  display: inline-flex; align-items: center; gap: 5px;
-  font: 500 10.5px var(--font-m);
+  display: inline-flex; align-items: center; gap: var(--sp-1);
+  font: 500 var(--fs-label) var(--font-m);
   color: var(--ink-3);
   background: var(--inset);
   border: 1px solid var(--line-soft);
-  border-radius: 4px;
-  padding: 2px 7px;
+  border-radius: var(--r-sm);
+  padding: var(--sp-0) var(--sp-2);
 }
 .opt-kind-chip b { font-weight: 500; color: var(--ink-2); }
 .opt-kind-chip.has-pending { color: var(--ink-2); border-color: rgba(255, 213, 79, .35); }
@@ -566,210 +1005,554 @@ textarea { resize: vertical; min-height: 110px; width: 100%; font-family: var(--
 
 /* ── optimization · run detail (level 2) ────────────────────────────── */
 
+#optBackup { margin-top: var(--sp-2); }
+
 .opt-back {
   display: inline-flex; align-items: center;
-  font-size: 12px; color: var(--ink-3);
+  font-size: var(--fs-sm); color: var(--ink-3);
   text-decoration: none;
 }
 .opt-back:hover { color: var(--accent); }
-.opt-run-when { font-style: normal; font-weight: 400; font-size: 14px; color: var(--ink-3); }
+.opt-run-when { font-style: normal; font-weight: 400; font-size: var(--fs-md); color: var(--ink-3); }
 
 .opt-group {
-  border: 1px solid var(--line-soft);
-  border-radius: var(--radius);
+  border-radius: var(--r-lg);
   background: var(--surface);
-  margin-bottom: 12px;
+  margin-bottom: var(--sp-3);
   overflow: hidden;
 }
 .opt-group > summary {
-  display: flex; align-items: center; gap: 10px;
-  padding: 10px 14px;
+  display: flex; align-items: center; gap: var(--sp-3);
+  padding: var(--sp-3) var(--sp-4);
   cursor: pointer;
   list-style: none;
   user-select: none;
 }
 .opt-group > summary::-webkit-details-marker { display: none; }
-.opt-group > summary:hover { background: rgba(255, 255, 255, .04); }
+.opt-group > summary:hover { background: var(--hover-1); }
+/* The disclosure arrow. It was a hand-built CSS triangle -- three borders
+   pretending to be a shape -- in a UI whose every other mark comes from
+   core/icons.js. It is the set's chevron now, so it strokes and scales like
+   the rest of them. */
 .opt-group-caret {
-  width: 0; height: 0; flex: none;
-  border-left: 5px solid var(--ink-3);
-  border-top: 4px solid transparent;
-  border-bottom: 4px solid transparent;
+  color: var(--ink-3);
+  --ico: 12px;
   transition: transform .15s;
 }
 .opt-group[open] > summary .opt-group-caret { transform: rotate(90deg); }
-.opt-group-kind { font: 500 12px var(--font-m); color: var(--accent); }
-.opt-group-count { font-size: 11px; color: var(--ink-3); }
-.opt-group-body { padding: 12px 14px 2px; border-top: 1px solid var(--line-soft); }
+.opt-group-kind { font: 500 var(--fs-sm) var(--font-m); color: var(--accent); }
+.opt-group-count { font-size: var(--fs-label); color: var(--ink-3); }
+.opt-group-body { padding: var(--sp-3) var(--sp-4) var(--sp-0); border-top: 1px solid var(--line-soft); }
 
-.mem-list { border: 1px solid var(--line-soft); border-radius: var(--radius); background: var(--surface); overflow: hidden; }
+/* ── memories list ───────────────────────────────────────────────────────
+   One line per memory, because the memory is the only thing on the row that
+   anyone came here to read.
+
+   It used to be four annotations stacked in a fixed 140px column beside a
+   two-line snippet clamp, and the stack -- not the memory -- set the height:
+   65px of chips (confidence 17, type 14, uid 24, status) against 19px of
+   actual memory, inside a 90px row. Eight of fifty rows fitted above the
+   fold and one page was 4849px, six screens, with the pager at the bottom of
+   all of it. The clamp was not the culprit either: 41 of 50 snippets
+   measured one line.
+
+   The annotations lie BESIDE the snippet now, so the tallest thing in the
+   row is the snippet itself and the row costs what one line of text costs.
+   Two of them left the row entirely and live in the record:
+     the uid    -- 110px of fixed width for a string nobody reads, and its
+                   --tap floor was what made the row 24px tall at minimum
+     the tags   -- there is no tag filter on this view, so they were chips
+                   you could look at and not act on
+   Confidence keeps the lead position and loses its word: three ringed marks
+   in three fixed colours, named on hover and in the drawer. The column stays
+   a FIXED width so the snippet's left edge does not jitter from row to row,
+   which is the whole point of a list. */
+.mem-list { border-radius: var(--r-lg); background: var(--surface); overflow: hidden; }
 .mem-row {
-  display: grid; grid-template-columns: 34px 140px 1fr auto;
-  gap: 12px; align-items: start;
-  padding: 12px 16px 12px 10px;
+  display: grid; grid-template-columns: var(--tap) 150px 1fr auto;
+  gap: var(--sp-3); align-items: center;
+  /* --sp-2 vertical, the same as .rel-row: the app already had a dense
+     memory row and it lived in a side panel on Overview at 44px while this
+     one owned the view whose only job is listing memories */
+  padding: var(--sp-2) var(--sp-4);
   border-bottom: 1px solid var(--line-soft);
   cursor: pointer;
   transition: background .13s;
 }
 .mem-row:last-child { border-bottom: none; }
-.mem-row:hover { background: rgba(255, 255, 255, .04); }
+.mem-row:hover { background: var(--hover-1); }
 .mem-row.selected { background: var(--accent-dim); }
-.mem-check { display: flex; justify-content: center; padding-top: 2px; }
+.mem-check { display: flex; justify-content: center; }
 .mem-check input { cursor: pointer; }
-.mem-col-type { padding-top: 1px; display: flex; flex-direction: column; gap: 5px; align-items: flex-start; }
-.mem-main { min-width: 0; }
-.mem-snippet {
-  color: var(--ink-2); font-size: 13px; line-height: 1.5;
-  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
-  overflow: hidden;
-  word-break: break-word;
+/* fixed width and clipped rather than wrapping: a row that grows because its
+   type has a longer name is a row that broke the column */
+.mem-col-type {
+  display: flex; align-items: center; gap: var(--sp-2);
+  min-width: 0; overflow: hidden;
 }
-.mem-tags { margin-top: 6px; display: flex; gap: 5px; flex-wrap: wrap; }
-.mem-right { display: flex; flex-direction: column; align-items: flex-end; gap: 5px; font-size: 11px; color: var(--ink-3); white-space: nowrap; }
+.mem-main { min-width: 0; }
+/* also a .row-open button -- the clamp works the same on one */
+/* --ink, not --ink-2: this is the memory, and it was two tiers quieter than the
+   uid chip sitting beside it. The SIZE stays at --fs-sm though: at --fs-body the
+   snippet dominated the row instead of leading it. Brightness is what makes it
+   the primary thing here; it does not also need to be the biggest. */
+/* The line-height is the target: this button is the row's primary control and
+   one line of --fs-sm is 18.75px, under the pointer floor. 24px of leading
+   centres the same single line inside a 24px box, so the row does not grow
+   (the domain chip is still the tallest child) and the ellipsis still works,
+   which it would not inside a flex box. */
+.mem-snippet {
+  color: var(--ink); font-size: var(--fs-sm); line-height: 24px;
+  display: block; width: 100%;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  text-align: left;
+}
+.mem-right { display: flex; align-items: center; gap: var(--sp-2); font-size: var(--fs-label); color: var(--ink-3); white-space: nowrap; }
+.mem-right .chip { max-width: 150px; }
 
-.list-foot { display: flex; justify-content: space-between; align-items: center; margin-top: 12px; font-size: 12px; color: var(--ink-2); }
+.list-foot { display: flex; justify-content: space-between; align-items: center; margin-top: var(--sp-3); font-size: var(--fs-sm); color: var(--ink-2); }
 .list-foot b { font-family: var(--font-m); }
-.pager { display: flex; gap: 6px; align-items: center; }
+.pager { display: flex; gap: var(--sp-2); align-items: center; }
+/* paging and back links put their chevron beside the word */
+.pager .btn, .opt-back, #gLink, .chip.clickable {
+  display: inline-flex; align-items: center; gap: var(--sp-1); --ico: 12px;
+}
 
 .bulkbar {
-  position: fixed; bottom: 22px; left: calc(var(--rail-w) + 50%); transform: translateX(-50%);
-  display: flex; align-items: center; gap: 10px;
+  /* Centred on the CONTENT, which is half a rail to the right of the middle
+     of the window -- not a whole one. `--rail-w + 50%` put the bar 114px
+     right of where it belonged at every window size, and the narrow
+     breakpoint then corrected it to a plain 50%, which was 31px off the
+     other way. One formula, and it follows --rail-w through the breakpoint. */
+  position: fixed; bottom: 22px;
+  left: calc(50% + var(--rail-w) / 2); transform: translateX(-50%);
+  display: flex; align-items: center; gap: var(--sp-3);
   background: var(--overlay);
   border: 1px solid var(--line);
-  border-radius: 28px;
-  padding: 8px 10px 8px 18px;
+  border-radius: var(--r-pill);
+  padding: var(--sp-2) var(--sp-3) var(--sp-2) var(--sp-4);
   box-shadow: var(--shadow-pop);
   z-index: 30;
-  animation: rise .25s both;
-  font-size: 12.5px;
+  /* Its own entrance keyframe, because `rise` sets `transform` and this is the
+     one element whose transform is load-bearing: it is what centres the bar.
+     Animating with `rise` replaced translateX(-50%) with translateY(6px) for
+     the length of the animation, so the bar flew in sideways from 114px off
+     centre and only landed once the animation finished. */
+  animation: bulk-rise .25s both;
+  font-size: var(--fs-sm);
+}
+@keyframes bulk-rise {
+  from { opacity: 0; transform: translateX(-50%) translateY(var(--rise-y, 6px)); }
 }
 .bulkbar b { color: var(--accent); font-family: var(--font-m); }
 
-/* ── drawer (memory record) ──────────────────────────────────────────── */
+/* ── memory record (a dialog in the modal stack) ───────────────────────
+   This was a 760px drawer down the right edge with everything in one
+   column: the content of a memory, and then five panels ABOUT that memory
+   queued below the fold -- on windows with 500 unused pixels beside them.
 
-.scrim {
-  position: fixed; inset: 0; z-index: 40;
-  background: rgba(0, 0, 0, .55);
-  opacity: 0; transition: opacity .25s;
+   It is a wide centred dialog now (see .modal-wide / .modal-tall), and the
+   two columns are the point of the change: the memory on one side and
+   everything that curates it on the other, both on screen at once. */
+
+.record-head {
+  display: flex; align-items: center; gap: var(--sp-3); flex-wrap: wrap;
 }
-.scrim.show { opacity: 1; }
+.record-head .spacer { flex: 1; }
+/* The way back to the memory you opened this one FROM. Named rather than a
+   bare arrow, and capped rather than allowed to push the head's chips onto
+   a second line. */
+.record-back { max-width: 260px; }
+.record-back .record-back-text {
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
 
-.drawer {
-  position: fixed; top: 0; right: 0; bottom: 0; z-index: 45;
-  width: min(760px, 94vw);
+.record-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr);
+  gap: var(--sp-5);
+  align-items: start;
+  /* the bottom padding is the toast stack's reserved space -- core/ui.js
+     publishes --toast-h, so a toast lands on padding you can scroll past
+     instead of on a control. It is 0 whenever nothing is on screen. */
+  padding-bottom: var(--toast-h, 0px);
+}
+.record-col { min-width: 0; }
+.record-col > .section:last-child { margin-bottom: 0; }
+
+/* One column again below this, in the order that reads: the memory itself,
+   then the record of it. */
+@media (max-width: 980px) {
+  .record-grid { grid-template-columns: 1fr; gap: 0; }
+}
+
+/* Each section is a CARD, not a stretch of the dialog.
+
+   Down one 760px drawer, the heading voice and the space around it were
+   enough: there was a single reading order and each heading claimed
+   everything under it until the next. A 1120px dialog with two columns has
+   no single reading order, and whitespace alone left six panels floating on
+   one flat sheet of --overlay grey with no edge saying where any of them
+   began or ended -- least of all which column a heading belonged to.
+
+   --surface under --overlay is the ladder at the top of this file: a
+   content card recessed below the floating chrome it sits in, hence the
+   well edge. The reading pane inside stays at --inset, one step down
+   again, so the three tones still rank. */
+.section {
   background: var(--surface);
-  border-left: 1px solid var(--line-soft);
-  box-shadow: var(--shadow-drawer);
-  transform: translateX(103%);
-  transition: transform .28s cubic-bezier(.3, .75, .25, 1);
-  display: flex; flex-direction: column;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--r-lg);
+  padding: var(--sp-4);
+  margin-bottom: var(--sp-4);
 }
-.drawer.open { transform: translateX(0); }
-.drawer-head {
-  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
-  padding: 16px 22px;
-  border-bottom: 1px solid var(--line-soft);
+/* the danger zone draws its own red edge; a card around it is two borders
+   saying one thing */
+.section-bare {
+  background: none; border: none; border-radius: 0; padding: 0;
 }
-.drawer-head .spacer { flex: 1; }
-.drawer-body { flex: 1; overflow-y: auto; padding: 20px 22px 48px; }
-
-.section { margin-bottom: 26px; }
 .section-label {
-  font: 500 11px var(--font-ui);
-  letter-spacing: .09em; text-transform: uppercase;
-  color: var(--ink-2);
-  padding-bottom: 7px; margin-bottom: 12px;
-  border-bottom: 1px solid var(--line-soft);
-  display: flex; justify-content: space-between; align-items: center;
+  margin-bottom: var(--sp-3);
+  display: flex; align-items: center; gap: var(--sp-2);
 }
+/* The count belongs to the heading it counts, and the button to the edge.
+   `justify-content: space-between` decided that by CHILD COUNT instead:
+   with three children it parked the count in the middle of the row, with
+   two it threw it to the far edge -- so "Relations (2)" and "Edit history
+   (0)" put their own counts in different places, and no two buttons in a
+   column started at the same x. */
+.section-label > .btn { margin-left: auto; }
 .content-pre {
-  font: 400 12.5px/1.65 var(--font-m);
+  font: 400 var(--fs-sm)/1.65 var(--font-m);
   color: var(--ink);
   background: var(--inset);
   border: 1px solid var(--line-soft);
-  border-radius: 6px;
-  padding: 14px 16px;
+  border-radius: var(--r-md);
+  padding: var(--sp-4) var(--sp-4);
   white-space: pre-wrap; word-break: break-word;
   margin: 0;
   max-height: 420px; overflow-y: auto;
 }
+/* A memory is prose an agent wrote in sentences, and it was rendered in
+   monospace inside a bordered recessed well -- which says "payload", not "a
+   note someone left you". Every atom AROUND it had a container of its own
+   (uid, domain, tag, type, session), so the decoration went to the metadata
+   and the substance got none. It stays a <pre>, because an author's line
+   breaks carry meaning, and it drops the costume. The well is right for
+   exactly one type -- `diagram`, whose content genuinely is machine output. */
+.content-prose {
+  font: 400 var(--fs-read)/1.65 var(--font-ui);
+  color: var(--ink);
+  /* The WELL STAYS. It was removed here along with the monospace, and that was
+     one change too many: this box scrolls (max-height + overflow-y above), and a
+     scrolling region with no edge has no visible beginning or end -- the text
+     just dissolved into the panel behind it. What was wrong was the costume,
+     not the container. Only the typography changes; --inset keeps the reading
+     pane recessed below the surface it sits on, which is what tells you it is
+     a pane you can scroll and not the page itself.
+     Measure is capped rather than left to the column's width, which would run
+     the line to ~100 characters. */
+  max-width: 68ch;
+}
 
-.meta-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px 20px; }
-.mg-label { font-size: 10px; letter-spacing: .08em; text-transform: uppercase; color: var(--ink-3); font-weight: 500; }
-.mg-val { font-size: 12.5px; color: var(--ink-2); margin-top: 2px; word-break: break-word; }
+.meta-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: var(--sp-3) var(--sp-5); }
+.mg-label { color: var(--ink-3); }
+.mg-val { font-size: var(--fs-sm); color: var(--ink-2); margin-top: var(--sp-0); word-break: break-word; }
 .mg-val .chip { max-width: 100%; }
 
-.act-row { display: flex; flex-wrap: wrap; gap: 9px; align-items: center; }
+.act-row { display: flex; flex-wrap: wrap; gap: var(--sp-2); align-items: center; }
 
 .rel-row {
-  display: flex; align-items: center; gap: 10px;
-  padding: 9px 4px;
+  display: flex; align-items: center; gap: var(--sp-3);
+  padding: var(--sp-2) var(--sp-1);
   border-bottom: 1px solid var(--line-soft);
 }
-.rel-dir { font-size: 14px; color: var(--ink-3); flex: none; width: 18px; text-align: center; }
+.rel-dir { color: var(--ink-3); flex: none; width: 18px; display: inline-flex; justify-content: center; --ico: 14px; }
 .rel-type-chip {
-  font: 500 10.5px var(--font-m);
+  font: 500 var(--fs-label) var(--font-m);
   color: var(--secondary);
   border: 1px solid rgba(3, 218, 198, .3);
-  border-radius: 4px; padding: 1px 7px;
+  border-radius: var(--r-sm); padding: var(--sp-0) var(--sp-2);
   white-space: nowrap; flex: none;
 }
 .rel-peer {
   flex: 1; min-width: 0;
-  display: flex; align-items: center; gap: 8px;
-  cursor: pointer; border-radius: 5px; padding: 3px 6px;
+  display: flex; align-items: center; gap: var(--sp-2);
+  cursor: pointer; border-radius: var(--r-md); padding: var(--sp-1) var(--sp-2);
   transition: background .12s;
+  /* a cell paints inside itself: whatever cannot fit here is this cell's
+     problem to clip, never the next cell's to be covered by */
+  overflow: hidden;
 }
-.rel-peer:hover { background: rgba(255, 255, 255, .06); }
-.rel-peer .snippet { color: var(--ink-2); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.rel-peer:hover { background: var(--hover-2); }
+.rel-peer .snippet { color: var(--ink-2); font-size: var(--fs-sm); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.rel-peer .type-tag { flex: none; }
+/* the other end of this relation is gone from the store */
+.rel-gone { color: var(--bad-ink); }
+/* the relative time on a recent-memories row: it must not be squeezed by a
+   long snippet, which is what the inline flex:none used to say */
+.rel-row > .hint-sm { flex: none; }
 
-.rel-add { display: grid; gap: 9px; margin-top: 12px; }
-.picker { position: relative; }
-.picker-results {
-  position: absolute; top: calc(100% + 4px); left: 0; right: 0; z-index: 20;
-  background: var(--overlay);
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  box-shadow: var(--shadow-pop);
-  max-height: 260px; overflow-y: auto;
+/* A relation row is five cells -- direction, type, peer, note, remove --
+   and five do not fit a 356px dialog: the peer was squeezed to 49px, its
+   snippet to nothing, and its archived seal clipped away with it. The peer
+   takes a line of its own down here, because the identity of the other end
+   is the one cell on the row nothing else can stand in for.
+
+   Below .rel-peer rather than up with the record's own breakpoint: `flex: 1`
+   above expands to a flex-basis of 0%, so a basis declared earlier in the
+   file loses to it at equal specificity no matter what the media query says. */
+@media (max-width: 980px) {
+  .rel-row { flex-wrap: wrap; }
+  .rel-peer { flex-basis: 100%; }
 }
-.picker-item { display: flex; gap: 8px; align-items: center; padding: 8px 11px; cursor: pointer; font-size: 12px; border-bottom: 1px solid var(--line-soft); }
+/* The note on a relation, on the page. It used to be a title on a span
+   dressed as a button: unreachable by keyboard, invisible on touch, and
+   announced by nothing. Text that matters is text. */
+.rel-note {
+  flex: none; max-width: 28%;
+  font-size: var(--fs-label); color: var(--ink-3);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+
+/* ── result rows for the memory picker ─────────────────────────────────
+   Shared by the picker dialog (.lp, below). They were the rows of a popover
+   anchored to a lookup field, in a column narrow enough that the list of
+   TITLES ran at roughly half the width of a 760px drawer -- which is most
+   of why choosing the right memory was guesswork. */
+
+/* Filters sit above the list they filter, in their own strip: they cost a
+   row of chrome and they are the difference between finding one memory in
+   a store of hundreds and scrolling for it. */
+.picker-filters {
+  display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2);
+  padding: var(--sp-2) var(--sp-3);
+  border-bottom: 1px solid var(--line);
+  background: var(--raised);
+}
+.picker-filters select,
+.picker-filters input[type="text"] {
+  font-size: var(--fs-sm);
+  padding: var(--sp-1) var(--sp-2);
+  min-height: var(--tap);
+}
+.picker-filters select { padding-right: var(--sp-5); }
+.picker-filters input[type="text"] { flex: 1; min-width: 90px; }
+/* the archived toggle is an .inline-label; only its wrapping differs */
+.picker-filters .inline-label { flex: none; }
+
+/* mark | snippet
+   mark | domain · type · match · uid · archived
+   The snippet leads and takes the width. Everything that separates two
+   near-identical memories sits under it in one quiet line -- present, and
+   not competing with the sentence you are actually reading. */
+.picker-item {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: var(--sp-0) var(--sp-2);
+  width: 100%;
+  padding: var(--sp-2) var(--sp-3);
+  cursor: pointer;
+  font-size: var(--fs-sm);
+  border-bottom: 1px solid var(--line-soft);
+  text-align: left;
+}
+.picker-item:last-child { border-bottom: none; }
 .picker-item:hover { background: var(--accent-dim); }
-.picker-item .snippet { color: var(--ink-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 1; }
+.picker-item > .dot { grid-column: 1; grid-row: 1; margin-top: 5px; }
+.picker-snippet {
+  grid-column: 2; grid-row: 1;
+  color: var(--ink); line-height: 1.45;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+  overflow: hidden;
+  word-break: break-word;
+}
+.picker-meta {
+  grid-column: 2; grid-row: 2;
+  display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-1);
+  font-size: var(--fs-label); color: var(--ink-2);
+}
+.picker-domain { font-weight: 500; }
+.picker-uid { font-family: var(--font-m); color: var(--ink-3); }
+.picker-sep { color: var(--ink-3); }
 
-.hist-item { position: relative; padding: 0 0 16px 22px; }
+.picker-note {
+  display: flex; align-items: center; justify-content: space-between; gap: var(--sp-3);
+  padding: var(--sp-3);
+  font-size: var(--fs-sm); color: var(--ink-2);
+}
+.picker-note-bad { color: var(--bad-ink); }
+
+/* ── link picker (core/link-picker.js) ─────────────────────────────────
+   Find on the left, the whole memory on the right, what you chose along
+   the bottom. The two panes are the point: judging a candidate needs its
+   full content, and a 280-character snippet in a dropdown was the only
+   thing this decision used to have to go on. */
+
+.lp {
+  flex: 1; min-height: 0;        /* both panes scroll; the grid must not grow */
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: var(--sp-4);
+}
+.lp-find { display: flex; flex-direction: column; gap: var(--sp-2); min-height: 0; }
+.lp-q { width: 100%; }
+.lp-list {
+  flex: 1; overflow-y: auto; min-height: 180px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--inset);
+}
+.lp-foot-note { font-size: var(--fs-label); color: var(--ink-3); }
+
+/* mark | snippet | meta -- the same row as .picker-item, plus the mark that
+   says whether it is chosen. aria-pressed carries the state; this draws it.
+   The bar as well as the tint, because the tint alone is what .picker-item
+   already uses for HOVER -- a chosen row and the row under the pointer
+   would have looked the same. */
+.lp-item[aria-pressed="true"] {
+  background: var(--accent-dim);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+.lp-check { grid-column: 1; grid-row: 1; display: inline-flex; margin-top: 3px; --ico: 15px; color: var(--ink-3); }
+.lp-item[aria-pressed="true"] .lp-check { color: var(--accent); }
+/* already tied to this thing: listed so it is not hunted for twice, and
+   not pickable, because linking it again is not a thing that can happen */
+.lp-linked { opacity: .55; cursor: default; }
+.lp-linked:hover { background: none; }
+
+.lp-prev {
+  display: flex; flex-direction: column; gap: var(--sp-3);
+  min-height: 0; overflow-y: auto;
+  padding: var(--sp-3);
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--inset);
+}
+.lp-prev-head { display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; }
+.lp-prev-meta {
+  display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap;
+  font-size: var(--fs-label); color: var(--ink-2);
+}
+.lp-prev-tags { font-family: var(--font-m); color: var(--ink-3); }
+.lp-prev-body { margin: 0; background: none; border: none; padding: 0; }
+
+/* What the tie itself says -- its type, its note. Beside the choice it
+   describes, not on the form behind this one. */
+.lp-form {
+  flex: none;
+  display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap;
+}
+
+/* The tray: the answer to "which memories am I about to link?", in the one
+   place a reader looks before pressing the button -- beside the button. */
+.lp-tray {
+  flex: none;
+  display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap;
+  padding-top: var(--sp-3);
+  border-top: 1px solid var(--line-soft);
+}
+.lp-tray-label { font-size: var(--fs-label); color: var(--ink-2); }
+.lp-chip {
+  display: inline-flex; align-items: center; gap: var(--sp-1);
+  max-width: 300px;
+  padding: var(--sp-1) var(--sp-1) var(--sp-1) var(--sp-2);
+  font-size: var(--fs-label); color: var(--ink);
+  background: var(--accent-dim);
+  border: 1px solid var(--accent);
+  border-radius: var(--r-pill);
+}
+.lp-chip-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lp-count { margin-right: auto; font-size: var(--fs-label); color: var(--ink-2); }
+
+@media (max-width: 900px) {
+  /* one column, and the preview under the list rather than beside it */
+  .lp { grid-template-columns: 1fr; }
+  .lp-prev { max-height: 40vh; }
+}
+
+/* The relation type, the free-text escape that keeps the vocabulary open,
+   and the note -- the three controls on the link picker's form row.
+   `.lp-note` and not `.rel-note`: this width rule was written for the note
+   INPUT and the class it used is also worn by the note SPAN on a relation
+   row, where `flex: 1; min-width: 140px` overrode that span's own
+   `flex: none; max-width: 28%` and took 140px of a row it was supposed to
+   ride along the end of. That is what pushed the archived tag out of the
+   peer cell and let it draw over the note beside it. */
+.rel-type-sel { flex: none; min-width: 150px; }
+.rel-type-custom { flex: 1; min-width: 140px; }
+.lp-note { flex: 1; min-width: 140px; }
+
+.hist-item { position: relative; padding: 0 0 var(--sp-4) var(--sp-5); }
 .hist-item::before {
   content: ""; position: absolute; left: 5px; top: 5px;
   width: 7px; height: 7px; border-radius: 50%;
-  background: var(--raised); border: 1.5px solid var(--ink-3);
+  background: var(--chip-fill); border: 1.5px solid var(--ink-3);
 }
 .hist-item:not(:last-child)::after {
   content: ""; position: absolute; left: 8px; top: 16px; bottom: 2px;
   width: 1px; background: var(--line-soft);
 }
-.hist-when { font: 400 11px var(--font-m); color: var(--ink-3); }
-.hist-note { font-size: 12.5px; color: var(--ink-2); margin-top: 2px; }
+.hist-when { font: 400 var(--fs-label) var(--font-m); color: var(--ink-3); }
+.hist-note { font-size: var(--fs-sm); color: var(--ink-2); margin-top: var(--sp-0); }
 .hist-diff {
-  margin-top: 8px; font: 400 11.5px/1.55 var(--font-m);
-  background: var(--inset); border: 1px solid var(--line-soft); border-radius: 6px;
-  padding: 10px 12px; overflow-x: auto; white-space: pre-wrap; word-break: break-word;
+  margin-top: var(--sp-2); font: 400 var(--fs-sm)/1.55 var(--font-m);
+  background: var(--inset); border: 1px solid var(--line-soft); border-radius: var(--r-md);
+  padding: var(--sp-3) var(--sp-3); overflow-x: auto; white-space: pre-wrap; word-break: break-word;
 }
-.diff-del { background: rgba(207, 102, 121, .14); color: #e8a4b0; display: block; }
-.diff-add { background: rgba(129, 199, 132, .12); color: #a9d6ab; display: block; }
+.diff-del { background: var(--diff-del-bg); color: var(--diff-del-ink); display: block; }
+.diff-add { background: var(--diff-add-bg); color: var(--diff-add-ink); display: block; }
 .diff-ctx { color: var(--ink-3); display: block; }
 
-.danger-zone { border: 1px solid rgba(207, 102, 121, .3); border-radius: 6px; }
+/* A card like every other section now, and pointedly not like them:
+   --bad-tint is this file's token for "a whole box the eye should treat as
+   risky", and it is what keeps this from reading as one more panel of
+   metadata now that every panel has an edge of its own. */
+.danger-zone {
+  background: var(--bad-tint);
+  border: 1px solid var(--bad-line);
+  border-radius: var(--r-lg);
+}
 .danger-zone summary {
-  cursor: pointer; padding: 10px 14px;
-  font: 500 11px var(--font-ui);
-  letter-spacing: .08em; text-transform: uppercase;
-  color: var(--bad);
+  cursor: pointer; padding: var(--sp-3) var(--sp-4);
+  color: var(--bad-ink);
   list-style: none;
 }
+.danger-zone summary:hover { text-decoration: underline; }
 .danger-zone summary::-webkit-details-marker { display: none; }
-.danger-zone .dz-body { padding: 4px 14px 14px; display: grid; gap: 9px; }
-.dz-hint { font-size: 12px; color: var(--ink-2); }
-.dz-hint code { font-family: var(--font-m); color: var(--bad); background: rgba(207, 102, 121, .1); padding: 1px 5px; border-radius: 4px; }
+/* the rule appears only while it is open, so a closed zone is one quiet bar */
+.danger-zone[open] summary { border-bottom: 1px solid var(--bad-line); }
+.danger-zone .dz-body { padding: var(--sp-3) var(--sp-4) var(--sp-4); display: grid; gap: var(--sp-3); }
+.dz-hint, .dz-type { font-size: var(--fs-sm); color: var(--ink-2); }
+.dz-row { display: flex; flex-wrap: wrap; gap: var(--sp-2); align-items: center; }
+/* the phrase is 23 characters and the button's label is long: the field
+   takes the room and the button never shrinks to fit around it */
+.dz-row > input { flex: 1; min-width: 170px; }
+.dz-row > .btn { flex: none; }
+/* Why the button is grey. It reserves its line whether or not it has
+   something to say, so arming the control does not move it -- hence the
+   min-height matching its own line box.
+
+   Quiet while the phrase is merely unfinished, which is the state you are
+   in for every keystroke but the last: red there would spend the alarm
+   colour on nothing, and there would be none left for the line that says
+   the button now works. */
+.dz-state {
+  font: 400 var(--fs-label)/1.4 var(--font-ui);
+  color: var(--ink-3); min-height: 1.4em;
+}
+.dz-state.armed { color: var(--bad-ink); font-weight: 500; }
+/* the phrase to type, and the one place it appears -- see the note in
+   record.js on why it is not also the field's placeholder. --chip-fill and
+   not --bad-tint: the box around it is that tint now, and a tint on a tint
+   of itself is a chip you cannot see. */
+.dz-type code {
+  font-family: var(--font-m); color: var(--bad-ink);
+  background: var(--chip-fill);
+  border: 1px solid var(--bad-line);
+  padding: var(--sp-0) var(--sp-1); border-radius: var(--r-sm);
+  white-space: nowrap;
+}
 
 /* ── graph ───────────────────────────────────────────────────────────── */
 
@@ -777,68 +1560,130 @@ textarea { resize: vertical; min-height: 110px; width: 100%; font-family: var(--
   position: relative;
   height: calc(100vh - 200px); min-height: 480px;
   border: 1px solid var(--line-soft);
-  border-radius: var(--radius);
+  border-radius: var(--r-lg);
   background:
     radial-gradient(circle at 1px 1px, rgba(255, 255, 255, .05) 1.1px, transparent 0) 0 0 / 26px 26px,
     var(--bg);
   overflow: hidden;
 }
-.graph-wrap canvas { position: absolute; inset: 0; cursor: grab; }
+/* touch-action: none so a drag on the canvas is a drag ON the canvas and not
+   the browser scrolling the page out from under it -- the engines listen on
+   pointer events, which covers mouse, pen and finger with one path */
+/* width/height 100% for the same reason .dg-stage canvas has them, and this
+   is the canvas that went without. A canvas's width/height ATTRIBUTES act as
+   a CSS width, and an absolutely-positioned REPLACED element with width:auto
+   resolves from its intrinsic size rather than stretching between left and
+   right -- so `cv.width = r.width * dpr` (views/graph.js) was also setting
+   the displayed width, and .graph-wrap's overflow:hidden quietly clipped the
+   difference. At devicePixelRatio 1 the attribute happened to equal the wrap
+   and the bug was a one-pixel sliver; at 2 the element laid out at twice its
+   frame and three quarters of the graph was painted off-screen, with no
+   scrollbar and nothing on screen saying so. Every 125% / 150% / 200%
+   Windows scaling and every Retina panel had it; the machine it was written
+   on did not. resize() already reads the WRAP for its coordinate space, so
+   pinning the CSS size to the wrap is what the drawing code always assumed. */
+.graph-wrap canvas {
+  position: absolute; inset: 0;
+  width: 100%; height: 100%;
+  cursor: grab;
+  touch-action: none;
+}
 .graph-wrap canvas.dragging { cursor: grabbing; }
 .graph-wrap canvas.linkmode { cursor: crosshair; }
 
+/* One toolbar, one control height. It held four -- selects at 38px, the
+   segment at 30 and the buttons at 25 -- because each borrowed its size from
+   whatever it was elsewhere in the app, and side by side on a floating strip
+   that reads as a ragged edge. --ctl-h is the row's own height and every
+   child answers to it.
+
+   It spans the canvas rather than hugging its content so the search field can
+   take the space left over: it is the filter that answers the most questions
+   here, so it leads the row and it is the widest thing in it. */
 .graph-controls {
-  position: absolute; top: 12px; left: 12px; z-index: 3;
-  display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
-  max-width: calc(100% - 24px);
+  --ctl-h: 32px;
+  position: absolute; top: 12px; left: 12px; right: 12px; z-index: 3;
+  display: flex; flex-wrap: wrap; gap: var(--sp-2); align-items: center;
 }
+.graph-controls > select,
+.graph-controls > input,
+.graph-controls > .seg,
+.graph-controls > .btn { height: var(--ctl-h); }
+/* the height comes from --ctl-h, so vertical padding would only fight it */
+.graph-controls > select,
+.graph-controls > input { padding-top: 0; padding-bottom: 0; font-size: var(--fs-sm); }
+.graph-controls > .seg > button { height: 100%; min-height: 0; }
+/* Both selects the same width -- a row of controls that each sizes to its own
+   longest option is the ragged edge again -- and wide enough for the longest
+   PLACEHOLDER, not the shortest: "Todos os domínios" plus the chevron's
+   reserved 32px needs 180, and at 150 pt-BR clipped its own first option. */
+.graph-controls > select { flex: none; width: 180px; }
+/* Capped rather than allowed to eat the row: the leftover has to stay free so
+   the match count can sit at the far end without shoving anything when it
+   appears. 380px is roughly what the domain select used to occupy before it
+   was pinned, which is the width this field was asked for. */
+.graph-find { flex: 1 1 240px; min-width: 150px; max-width: 340px; }
+/* A reserved slot at the far end of the toolbar, held whether it has text in
+   it or not. Sizing it to its content and pushing it right was not enough:
+   the leftover it needed existed in English and not in pt-BR, where the
+   longer labels left none, so the first keystroke shrank the search field and
+   slid the row. A fixed box cannot do that in any language. */
+.graph-find-count {
+  margin-left: auto; flex: none;
+  width: 96px; text-align: right;
+  font-size: var(--fs-label); color: var(--ink-2); white-space: nowrap;
+}
+
 .graph-legend {
   position: absolute; right: 12px; bottom: 12px; z-index: 3;
-  display: flex; flex-direction: column; gap: 4px;
-  background: rgba(30, 30, 30, .92);
+  display: flex; flex-direction: column; gap: var(--sp-1);
+  background: var(--glass);
   border: 1px solid var(--line-soft);
-  border-radius: 6px; padding: 9px 12px;
-  font-size: 11px; color: var(--ink-2);
+  border-radius: var(--r-md); padding: var(--sp-2) var(--sp-3);
+  font-size: var(--fs-label); color: var(--ink-2);
 }
-.graph-legend .legend-item { font-size: 11px; }
+.graph-legend .legend-item { font-size: var(--fs-label); }
 .graph-card {
   position: absolute; left: 12px; bottom: 12px; z-index: 4;
   width: min(420px, calc(100% - 24px));
   background: var(--overlay);
   border: 1px solid var(--line);
-  border-radius: 8px;
-  padding: 13px 15px;
+  border-radius: var(--r-lg);
+  padding: var(--sp-3) var(--sp-4);
   box-shadow: var(--shadow-pop);
   animation: rise .2s both;
 }
-.graph-card .snippet { font-size: 12px; color: var(--ink-2); margin: 8px 0 10px; line-height: 1.5; }
+.graph-card .snippet { font-size: var(--fs-sm); color: var(--ink-2); margin: var(--sp-2) 0 var(--sp-3); line-height: 1.5; }
 .link-banner {
   position: absolute; top: 12px; right: 12px; z-index: 4;
   background: var(--accent-dim);
   border: 1px solid rgba(187, 134, 252, .45);
   color: var(--accent);
-  border-radius: 6px; padding: 7px 12px;
-  font-size: 11.5px; font-weight: 500;
+  border-radius: var(--r-md); padding: var(--sp-2) var(--sp-3);
+  font-size: var(--fs-sm); font-weight: 500;
 }
 
 /* ── domains ─────────────────────────────────────────────────────────── */
 
 .collide-chip {
-  font-size: 10px; letter-spacing: .03em;
+  font-size: var(--fs-label); letter-spacing: .03em;
   color: var(--warn);
   border: 1px dashed rgba(255, 213, 79, .4);
-  border-radius: 4px; padding: 1px 6px;
+  border-radius: var(--r-sm); padding: var(--sp-0) var(--sp-2);
   cursor: pointer;
+  display: inline-flex; align-items: center; gap: var(--sp-1);
+  min-height: var(--tap);
+  --ico: 11px;
 }
-.rename-form { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.rename-form { display: flex; gap: var(--sp-2); align-items: center; flex-wrap: wrap; }
 
 /* ── maintenance ─────────────────────────────────────────────────────── */
 
 .check-row {
-  display: flex; align-items: baseline; gap: 11px;
-  padding: 9px 2px;
+  display: flex; align-items: baseline; gap: var(--sp-3);
+  padding: var(--sp-2) var(--sp-0);
   border-bottom: 1px solid var(--line-soft);
-  font-size: 12.5px;
+  font-size: var(--fs-sm);
 }
 .check-row:last-child { border-bottom: none; }
 .check-dot { width: 9px; height: 9px; border-radius: 50%; flex: none; align-self: center; }
@@ -846,41 +1691,92 @@ textarea { resize: vertical; min-height: 110px; width: 100%; font-family: var(--
 .check-dot.warn { background: var(--warn); }
 .check-dot.bad { background: var(--bad); }
 .check-name { color: var(--ink); min-width: 150px; font-weight: 500; }
-.check-detail { color: var(--ink-2); font-size: 12px; flex: 1; }
+.check-detail { color: var(--ink-2); font-size: var(--fs-sm); flex: 1; }
 
-.mnt-actions { display: flex; flex-wrap: wrap; gap: 9px; }
+.mnt-actions { display: flex; flex-wrap: wrap; gap: var(--sp-2); }
 
-.backup-row { display: flex; justify-content: space-between; gap: 10px; padding: 7px 2px; border-bottom: 1px solid var(--line-soft); font: 400 11.5px var(--font-m); color: var(--ink-2); }
+.backup-row { display: flex; justify-content: space-between; gap: var(--sp-3); padding: var(--sp-2) var(--sp-0); border-bottom: 1px solid var(--line-soft); font: 400 var(--fs-sm) var(--font-m); color: var(--ink-2); }
 .backup-row:last-child { border-bottom: none; }
 
 .dedup-pair {
-  border: 1px solid var(--line-soft); border-radius: var(--radius);
+  border-radius: var(--r-lg);
   background: var(--surface);
-  padding: 14px 16px; margin-bottom: 12px;
+  padding: var(--sp-4); margin-bottom: var(--sp-3);
 }
-.ratio-bar { height: 4px; border-radius: 2px; background: var(--inset); margin: 8px 0 12px; overflow: hidden; }
-.ratio-fill { height: 100%; background: var(--warn); border-radius: 2px; }
-.pair-cards { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.ratio-bar { height: 4px; border-radius: var(--r-sm); background: var(--inset); margin: var(--sp-2) 0 var(--sp-3); overflow: hidden; }
+.ratio-fill {
+  height: 100%; width: 100%;
+  background: var(--warn);
+  transform-origin: left center; transform: scaleX(var(--v, 0));
+}
+.pair-cards { display: grid; grid-template-columns: 1fr 1fr; gap: var(--sp-3); }
 @media (max-width: 900px) { .pair-cards { grid-template-columns: 1fr; } }
 .pair-card {
-  background: var(--inset); border: 1px solid var(--line-soft); border-radius: 6px;
-  padding: 11px 13px; font-size: 12px;
-  display: flex; flex-direction: column; gap: 8px;
+  background: var(--inset); border: 1px solid var(--line-soft); border-radius: var(--r-md);
+  padding: var(--sp-3) var(--sp-3); font-size: var(--fs-sm);
+  display: flex; flex-direction: column; gap: var(--sp-2);
 }
 .pair-card .snippet { color: var(--ink-2); line-height: 1.5; max-height: 130px; overflow: hidden; }
+/* a pair you have already ruled on. maintenance.js used to write
+   `style.opacity = .4` here, which dims the text along with the box; sinking
+   the surface instead keeps every word readable and still says "handled". */
+.pair-card.decided { background: var(--bg); }
 
 /* ── optimization ────────────────────────────────────────────────────── */
 
-.opt-card { margin-bottom: 12px; }
-.opt-card.decided { opacity: .62; }
+/* A suggestion is the one thing in this product a human accepts or rejects, so
+   it rests one step forward and drops two steps back once it is answered --
+   replacing an `opacity: .62` that dimmed the reasoning you might want to
+   re-read. It still borrows its box from .pair-card in the dedup block above;
+   that coupling is known and deliberate for now. */
+.opt-card {
+  margin-bottom: var(--sp-3);
+  background: var(--raised);
+  border-color: transparent;
+}
+.opt-card.decided { background: var(--bg); border-color: var(--line-soft); }
+/* What KIND of suggestion this is -- which is not a memory type. It used to
+   be rendered as `type-tag t-note`, so a `compact` or a `retag` was painted
+   with the orange that means "note" everywhere else in the UI. */
+.opt-kind {
+  display: inline-flex; align-items: center;
+  font: 500 var(--fs-sm) var(--font-m);
+  color: var(--ink-2);
+  background: var(--chip-fill);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--r-sm); padding: var(--sp-0) var(--sp-2);
+  white-space: nowrap;
+}
+/* a suggestion of a kind this UI has no renderer for */
+.opt-unknown { display: grid; gap: var(--sp-1); }
+.opt-unknown .snippet {
+  margin: 0; padding: var(--sp-2) var(--sp-3);
+  background: var(--inset); border: 1px solid var(--line-soft); border-radius: var(--r-md);
+  font: 400 var(--fs-sm)/1.5 var(--font-m); color: var(--ink-2);
+  max-height: 200px; overflow: auto;
+  white-space: pre-wrap; word-break: break-word;
+}
 .status-tag.opt-applied { color: var(--ok); border-color: rgba(129, 199, 132, .35); }
-.opt-rationale { color: var(--ink); font-size: 12px; line-height: 1.5; }
+.opt-rationale { color: var(--ink); font-size: var(--fs-sm); line-height: 1.5; }
 
-/* memory-under-review preview: lets you judge a suggestion against the actual content */
-.opt-preview { margin-bottom: 10px; }
+.opt-card-head { display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; }
+/* the decision, after the evidence. The dashed rule was on .opt-verified,
+   which used to be a row of its own below the card; it separates evidence
+   from answer here instead. */
+.opt-card-foot {
+  display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap;
+  border-top: 1px dashed var(--line-soft); padding-top: var(--sp-2);
+}
+.opt-foot-gap { flex: 1; }
+.opt-peer-meta { display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; }
+
+/* memory-under-review preview: which memory this is about. It is no longer
+   shown for the kinds whose Before pane is that same content, so it only has
+   to identify a memory now, not reproduce it -- hence the shorter well. */
+.opt-preview { margin-bottom: var(--sp-1); }
 .opt-preview .snippet {
-  background: var(--inset); border: 1px solid var(--line-soft); border-radius: 5px;
-  padding: 9px 11px; color: var(--ink); line-height: 1.55; max-height: 200px; overflow: auto;
+  background: var(--inset); border: 1px solid var(--line-soft); border-radius: var(--r-md);
+  padding: var(--sp-2) var(--sp-3); color: var(--ink); line-height: 1.55; max-height: 92px; overflow: auto;
 }
 
 .opt-diff {
@@ -888,17 +1784,21 @@ textarea { resize: vertical; min-height: 110px; width: 100%; font-family: var(--
   grid-template-columns: 1fr auto 1fr;
   grid-template-rows: auto 1fr;
   grid-template-areas: "bl . al" "bs arrow as";
-  column-gap: 12px; row-gap: 4px;
+  column-gap: var(--sp-3); row-gap: var(--sp-1);
 }
-@media (max-width: 760px) {
-  .opt-diff { grid-template-columns: 1fr; grid-template-areas: "bl" "bs" "arrow" "al" "as"; }
-  .opt-arrow { transform: rotate(90deg); padding: 4px 0; }
+.opt-arrow {
+  grid-area: arrow; align-self: center; justify-self: center;
+  color: var(--ink-3); font-size: var(--fs-label);
+  display: inline-flex; align-items: center; gap: var(--sp-1);
+  --ico: 14px;
 }
-.opt-arrow { grid-area: arrow; align-self: center; justify-self: center; color: var(--ink-4); font-size: 16px; }
-.opt-label { font-size: 10px; text-transform: uppercase; letter-spacing: .06em; color: var(--ink-4); }
+.opt-label { color: var(--ink-3); }
+/* --inset, not --surface: this is a well showing text the suggestion is about,
+   and on a --raised card a --surface well was only visible because of its
+   border. Every other snippet well in this file is --inset; so is this one. */
 .opt-diff .snippet, .opt-peer-body .snippet {
-  background: var(--surface); border: 1px solid var(--line-soft); border-radius: 5px;
-  padding: 7px 9px; color: var(--ink-2); line-height: 1.5; max-height: 150px; overflow: auto;
+  background: var(--inset); border: 1px solid var(--line-soft); border-radius: var(--r-md);
+  padding: var(--sp-2) var(--sp-2); color: var(--ink-2); line-height: 1.5; max-height: 150px; overflow: auto;
   height: 100%;
 }
 .opt-rel {
@@ -906,19 +1806,26 @@ textarea { resize: vertical; min-height: 110px; width: 100%; font-family: var(--
   grid-template-columns: 1fr auto 1fr;
   grid-template-rows: auto 1fr;
   grid-template-areas: "l1 . l2" "b1 arrow b2";
-  column-gap: 12px; row-gap: 4px;
+  column-gap: var(--sp-3); row-gap: var(--sp-1);
 }
+/* both optimization layouts collapse to one column at the same breakpoint */
 @media (max-width: 760px) {
+  .opt-diff { grid-template-columns: 1fr; grid-template-areas: "bl" "bs" "arrow" "al" "as"; }
   .opt-rel { grid-template-columns: 1fr; grid-template-areas: "l1" "b1" "arrow" "l2" "b2"; }
+  .opt-arrow { transform: rotate(90deg); padding: var(--sp-1) 0; }
 }
 .opt-rel .opt-arrow { white-space: nowrap; }
-.opt-peer-body { display: flex; flex-direction: column; gap: 6px; height: 100%; }
-.opt-distill { display: flex; flex-direction: column; gap: 8px; }
+.opt-peer-body { display: flex; flex-direction: column; gap: var(--sp-2); height: 100%; }
+.opt-distill { display: flex; flex-direction: column; gap: var(--sp-2); }
 .opt-distill .opt-peer-body,
-.opt-distill > .snippet { padding: 8px 10px; background: var(--inset); border-radius: 6px; }
+.opt-distill > .snippet { padding: var(--sp-2) var(--sp-3); background: var(--inset); border-radius: var(--r-md); }
 .opt-distill .opt-arrow { align-self: flex-start; white-space: nowrap; }
-.opt-verified { font-size: 11px; color: var(--ok); border-top: 1px dashed var(--line-soft); padding-top: 7px; }
-.opt-verified.muted { color: var(--ink-4); }
+.opt-verified {
+  font-size: var(--fs-label); color: var(--ok);
+  display: inline-flex; align-items: center; gap: var(--sp-1); --ico: 12px;
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.opt-verified.muted { color: var(--ink-3); }
 
 /* ── modal ───────────────────────────────────────────────────────────── */
 
@@ -928,61 +1835,212 @@ textarea { resize: vertical; min-height: 110px; width: 100%; font-family: var(--
   display: flex; align-items: center; justify-content: center;
   animation: fade .18s both;
 }
+/* A second level over the first: two scrims at .6 stack to near-black and
+   the form underneath -- which is the context for the one on top -- stops
+   being readable. This one only has to separate the two dialogs. */
+.modal-scrim.stacked { background: rgba(0, 0, 0, .32); }
 @keyframes fade { from { opacity: 0; } }
 .modal {
   width: min(540px, 92vw);
   max-height: 88vh; overflow-y: auto;
   background: var(--overlay);
   border: 1px solid var(--line);
-  border-radius: 10px;
+  border-radius: var(--r-lg);
   box-shadow: var(--shadow-pop);
   animation: rise .2s both;
 }
+.modal:focus-visible { outline: none; }
+/* A form with columns rather than one column of fields: the record and the
+   link picker both put two panes side by side, and 540px is a stack. Wide
+   enough that the pair of panes is the point -- a memory's content is a
+   wall of prose and the panels beside it are rows of chips and snippets,
+   and at 1120px both were still clipping things they had room for in a
+   window this dialog was only using two thirds of. */
+.modal-wide { width: min(1340px, 95vw); }
+/* Head and foot pinned, body scrolling -- for a dialog tall enough that
+   the buttons would otherwise be somewhere down the page. The plain modal
+   scrolls as one piece, which is right for four fields. */
+.modal-tall {
+  height: min(88vh, 940px);
+  display: flex; flex-direction: column; overflow: hidden;
+}
+/* flex, not the grid a plain modal body is: a tall dialog has one region
+   that takes the leftover height (a pane pair, a scrolling record) and the
+   rest pinned around it, which rows of auto height cannot express */
+.modal-tall > .modal-body {
+  flex: 1; min-height: 0; overflow-y: auto;
+  display: flex; flex-direction: column; gap: var(--sp-3);
+}
 .modal-head {
-  padding: 18px 20px 0;
-  font: 500 17px/1.3 var(--font-ui);
+  padding: var(--sp-4) var(--sp-5) 0;
+  font: 500 var(--fs-lg)/1.3 var(--font-ui);
   color: var(--ink);
 }
-.modal-body { padding: 14px 20px; display: grid; gap: 12px; font-size: 13px; color: var(--ink-2); }
-.modal-foot { padding: 6px 20px 18px; display: flex; justify-content: flex-end; gap: 9px; }
+.modal-body { padding: var(--sp-4) var(--sp-5); display: grid; gap: var(--sp-3); font-size: var(--fs-body); color: var(--ink-2); }
+.modal-foot { padding: var(--sp-2) var(--sp-5) var(--sp-4); display: flex; justify-content: flex-end; gap: var(--sp-2); }
+/* the memory record has no footer buttons -- each of its sections commits
+   its own change -- and an empty one is 26px of dead space under it */
+.modal-foot:empty { display: none; }
 
 /* ── toasts / tooltip / misc ─────────────────────────────────────────── */
 
-.toasts { position: fixed; right: 20px; bottom: 20px; z-index: 90; display: flex; flex-direction: column; gap: 8px; }
+.toasts {
+  position: fixed; z-index: 90;
+  right: var(--sp-5);
+  /* Lifted clear of the bulk bar. At 375px the toast landed exactly on top of
+     it -- z-index 90 against the bar's 30 -- covering Archive, Restore and the
+     clear button outright. syncBulkbar() publishes --bulk-h; there is no bar
+     most of the time and the fallback is 0.
+     Right-anchored deliberately, and NOT centred on the content: a centred
+     stack would land on the middle of the dialog the toast is usually ABOUT.
+     Down here it clears a centred record's own bottom corner, and the record
+     reserves this much padding for it (see --toast-h on .record-grid). */
+  bottom: calc(var(--sp-5) + var(--bulk-h, 0px));
+  /* max-width, never width: a fixed width made "uid copied" as wide as the
+     longest error the API can return. align-items so each toast hugs the right
+     edge at its own size -- the stack is right-anchored, so they line up on the
+     side the eye is already on. */
+  display: flex; flex-direction: column; align-items: flex-end; gap: var(--sp-2);
+  max-width: min(440px, calc(100vw - var(--sp-6)));
+}
+/* flex, not grid: the mark, the action and the repeat count are each optional,
+   and a fixed set of grid columns leaves an empty track wherever one is absent,
+   sliding the close button out of the corner. */
 .toast {
+  display: flex; align-items: flex-start; gap: var(--sp-3);
   background: var(--overlay);
   border: 1px solid var(--line);
-  border-left: 3px solid var(--accent);
-  border-radius: 6px;
-  padding: 10px 15px;
-  font-size: 12.5px; color: var(--ink);
+  border-radius: var(--r-md);
+  padding: var(--sp-3) var(--sp-3) var(--sp-3) var(--sp-4);
+  /* --fs-body, not --fs-sm: this is the only channel that reports what just
+     happened to the store, and it was set smaller than the list it reports on */
+  font-size: var(--fs-body); color: var(--ink);
   box-shadow: var(--shadow-pop);
-  max-width: 380px;
   animation: toast-in .22s cubic-bezier(.25, .9, .3, 1.1) both;
 }
-.toast.ok { border-left-color: var(--ok); }
-.toast.bad { border-left-color: var(--bad); }
-.toast.out { transition: all .3s; opacity: 0; transform: translateY(6px); }
-@keyframes toast-in { from { opacity: 0; transform: translateY(8px); } }
+/* The mark centres against the FIRST LINE of the message, not against the whole
+   block: its box is one line-height tall and the icon centres inside it. A bare
+   `padding-top` guess left it sitting high, and it drifted further the moment
+   the type scale moved -- this follows the line box instead of a magic number. */
+.toast-mark {
+  display: inline-flex; align-items: center;
+  height: calc(var(--fs-body) * 1.45);
+  --ico: 16px;
+}
+.toast-text { flex: 1; min-width: 0; display: grid; gap: var(--sp-0); }
+.toast-line { display: flex; align-items: baseline; gap: var(--sp-2); }
+.toast-msg { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.toast-n { font: 500 var(--fs-label) var(--font-m); color: var(--ink-3); flex: none; }
+/* where err.message, a uid, or the ids that failed go -- so the headline above
+   can stay short and be the same string every time */
+.toast-detail {
+  font: 400 var(--fs-label)/1.5 var(--font-m);
+  color: var(--ink-3);
+  overflow-wrap: anywhere;
+}
+.toast [data-act] { flex: none; }
+
+/* Three redundant signals, not one of them trim: the mark's SHAPE (a closed,
+   an open or a crossed ring), its colour, and -- for a failure only -- the
+   whole container plus a heavier message. Nothing depends on hue alone, and the
+   3px strip that used to be the only difference between "uid copied" and a
+   rejected write is gone. */
+.toast.ok   .toast-mark { color: var(--ok); }
+.toast.warn .toast-mark { color: var(--warn); }
+.toast.bad  .toast-mark { color: var(--bad-ink); }
+.toast.bad {
+  background-image: linear-gradient(var(--bad-tint), var(--bad-tint));
+  border-color: var(--bad-line);
+}
+.toast.bad .toast-msg { font-weight: 500; }
+
+/* named properties, not `all`: that also animated the border and the shadow of
+   a node already on its way out */
+.toast.out { transition: opacity .3s, transform .3s; opacity: 0; transform: translateY(var(--rise-y, 6px)); }
+@keyframes toast-in { from { opacity: 0; transform: translateY(var(--rise-y, 8px)); } }
 
 .tip {
   position: fixed; z-index: 95; pointer-events: none;
   background: var(--overlay);
   border: 1px solid var(--line);
-  border-radius: 5px;
-  padding: 6px 10px;
-  font-size: 11.5px; color: var(--ink);
+  border-radius: var(--r-md);
+  padding: var(--sp-2) var(--sp-3);
+  font-size: var(--fs-sm); color: var(--ink);
   box-shadow: var(--shadow-pop);
-  white-space: nowrap;
+  /* Wrap, and never grow past the window. This used to be nowrap with no
+     bound, so any long content -- a step's note, a full memory snippet --
+     became one endless line running off the screen. */
+  max-width: min(420px, calc(100vw - 32px));
+  white-space: normal;
+  overflow-wrap: anywhere;
+  line-height: 1.5;
+  /* Bound the other axis too, now that the diagram tip carries a whole note
+     rather than 220 characters of one. The tip is pointer-events:none -- it
+     has to be, it follows the pointer -- so it cannot be scrolled, and a box
+     taller than the window would just run off the bottom with nothing to say
+     so. A note long enough to hit this belongs in the inspector anyway; a
+     screenful is what a tip can honestly carry. */
+  max-height: calc(100vh - 20px);
+  overflow: hidden;
 }
 .tip b { color: var(--accent); font-family: var(--font-m); }
 
+/* right-click menu. Above the tip, because the pointer is over the canvas
+   and a hovered step's note would otherwise sit on top of the menu. */
+.ctx-menu {
+  position: fixed; z-index: 96;
+  min-width: 190px; max-width: min(300px, calc(100vw - 24px));
+  padding: var(--sp-1);
+  background: var(--overlay);
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  box-shadow: var(--shadow-pop);
+  animation: rise .13s both;
+}
+.ctx-item {
+  display: block; width: 100%;
+  padding: var(--sp-2) var(--sp-3);
+  border: 0; border-radius: var(--r-md);
+  background: none; text-align: left;
+  font: 400 var(--fs-sm) var(--font-ui); color: var(--ink);
+  cursor: pointer;
+}
+.ctx-item:hover { background: var(--hover-2); color: var(--accent); }
+.ctx-item.danger { color: var(--bad-ink); }
+.ctx-item.danger:hover { background: var(--bad-wash); color: var(--bad-ink); }
+.ctx-sep { height: 1px; margin: var(--sp-1) var(--sp-2); background: var(--line); }
+
 .empty {
-  padding: 46px 20px; text-align: center;
+  padding: var(--sp-7) var(--sp-5); text-align: center;
   color: var(--ink-3);
-  font: 400 13px var(--font-ui);
+  font: 400 var(--fs-body) var(--font-ui);
 }
 
+/* Deliberately NOT `.empty`. Six places rendered a fatal load failure with
+   that class -- the same grey centred sentence as "nothing matched your
+   filters" -- so a dropped connection on Maintenance read as a clean database.
+   Left-aligned because it is a statement and not a shrug, marked so it is not
+   mistaken for content, and carrying a Retry, which this app had nowhere. */
+.failed {
+  display: flex; align-items: flex-start; gap: var(--sp-3);
+  padding: var(--sp-4);
+  margin: var(--sp-2) 0;
+  background-image: linear-gradient(var(--bad-tint), var(--bad-tint));
+  border-radius: var(--r-md);
+  font-size: var(--fs-body); color: var(--ink);
+}
+.failed-mark { display: inline-flex; color: var(--bad-ink); --ico: 16px; padding-top: 1px; }
+.failed-text { flex: 1; min-width: 0; }
+.failed-detail {
+  margin-top: var(--sp-1);
+  font: 400 var(--fs-label)/1.5 var(--font-m);
+  color: var(--ink-3);
+  overflow-wrap: anywhere;
+}
+.failed [data-retry] { flex: none; }
+
+/* inside a button it sits beside the label, so it is sized to the text */
+.btn .spin { width: 12px; height: 12px; border-width: 1.6px; vertical-align: -1px; }
 .spin {
   width: 17px; height: 17px;
   border: 2px solid var(--line);
@@ -995,16 +2053,407 @@ textarea { resize: vertical; min-height: 110px; width: 100%; font-family: var(--
 
 .loading { padding: 60px; display: flex; justify-content: center; }
 
+/* the <noscript> body. Centred on the page rather than in the view, because
+   without scripts there is no rail, no topbar and no view -- only this. */
+.noscript {
+  position: fixed; inset: 0; z-index: 100;
+  display: flex; align-items: center; justify-content: center;
+  margin: auto; padding: var(--sp-7);
+  max-width: 34em;
+  background: var(--bg);
+  color: var(--ink-2);
+  font-size: var(--fs-read); line-height: 1.6; text-align: center;
+}
+
+/* ── diagram editor ──────────────────────────────────────────────────── */
+
+.dg-shell {
+  display: grid;
+  /* the inspector holds a step's whole note, so it gets real width -- at
+     320px the note was a four-word column with a scrollbar */
+  grid-template-columns: minmax(0, 1fr) clamp(360px, 26vw, 460px);
+  gap: var(--sp-4);
+  align-items: start;
+}
+.dg-main {
+  /* the toolbar is a row of its own above the canvas, so no card can ever
+     be dragged, panned or arranged under it -- reserving space in the fit
+     only kept auto-arrange off the buttons, not a hand drag */
+  display: grid; grid-template-rows: auto 1fr; gap: var(--sp-3);
+  min-width: 0;
+}
+.dg-stage {
+  position: relative;
+  height: calc(100vh - 262px); min-height: 420px;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--r-lg);
+  /* same dotted well as the relations graph, so the two read as siblings */
+  background:
+    radial-gradient(circle at 1px 1px, rgba(255, 255, 255, .05) 1.1px, transparent 0) 0 0 / 26px 26px,
+    var(--bg);
+  overflow: hidden;
+}
+/* width/height 100% on purpose: a canvas's width/height ATTRIBUTES act as
+   a CSS width, so without this the displayed size is whatever the last
+   resize() wrote and any drift shows up as a clipped strip. Pinning the
+   CSS size to the stage leaves the attributes doing only their real job,
+   sizing the backing store. */
+.dg-stage canvas {
+  position: absolute; inset: 0;
+  width: 100%; height: 100%;
+  cursor: grab;
+  touch-action: none;   /* same reason as .graph-wrap canvas */
+}
+.dg-stage canvas.dragging { cursor: grabbing; }
+.dg-stage canvas.linkmode { cursor: crosshair; }
+
+.dg-tools {
+  display: flex; flex-wrap: wrap; gap: var(--sp-2); align-items: center;
+  min-width: 0;
+}
+/* Bottom-left corner of the stage. Both the hint strip and the legend want
+   to live here, so they stack instead of fighting: the legend is always
+   there, the hint appears above it when it has something to say, and
+   insets() measures the pair so fit() never parks a card behind them.
+   Transparent to the pointer, or it would eat drags near the corner. */
+.dg-overlay {
+  position: absolute; left: 12px; bottom: 12px; z-index: 3;
+  max-width: calc(100% - 24px);
+  display: flex; flex-direction: column; gap: var(--sp-2); align-items: flex-start;
+  pointer-events: none;
+}
+.dg-overlay > * { pointer-events: auto; }
+
+.dg-hint {
+  max-width: 100%;
+  background: var(--glass);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--r-md); padding: var(--sp-2) var(--sp-3);
+  font-size: var(--fs-label); color: var(--ink-2);
+}
+.dg-hint.warn { border-color: var(--warn); color: var(--warn); }
+
+/* What the lines mean. Deliberately one short row: it sits ON the canvas,
+   so every pixel it takes is drawing it covers. */
+.dg-legend {
+  display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-1) var(--sp-3);
+  background: var(--glass-soft);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--r-md); padding: var(--sp-1) var(--sp-2);
+  font-size: var(--fs-label); color: var(--ink-3); letter-spacing: .02em;
+}
+.dg-legend-item { display: inline-flex; align-items: center; gap: var(--sp-1); white-space: nowrap; }
+
+/* Top-left corner of the stage, opposite the legend and built the same
+   way: the same glass over the dot grid, transparent to the pointer except
+   on the chips themselves, so a drag near the corner still pans.
+
+   It holds the ways off this flow for the selected step, and the way back
+   into whichever flow sent you here. Empty and hidden for a step that
+   continues nowhere -- which is most of them, and the reason this can sit
+   on the drawing at all. */
+.dg-jumpnav {
+  position: absolute; left: 12px; top: 12px; z-index: 3;
+  max-width: calc(100% - 24px);
+  display: flex; flex-direction: column; gap: var(--sp-2); align-items: flex-start;
+  pointer-events: none;
+}
+.dg-jumpnav > * { pointer-events: auto; }
+
+.dg-navchip {
+  max-width: 100%;
+  display: inline-flex; align-items: center; gap: var(--sp-2);
+  background: var(--glass);
+  border: 1px solid var(--accent);
+  border-radius: var(--r-pill); padding: var(--sp-1) var(--sp-3);
+  font-size: var(--fs-label); color: var(--accent);
+  text-decoration: none;
+}
+/* the return trip is a way OUT of a detour, not another offer to take one:
+   same shape, quieter edge, so the two never compete for the same glance */
+.dg-navchip.back { border-color: var(--line); color: var(--ink-2); }
+.dg-navchip:hover { background: var(--accent-dim); }
+.dg-navchip.back:hover { color: var(--ink); }
+.dg-navchip-mark { display: inline-flex; flex: none; --ico: 13px; }
+.dg-navchip-text {
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.dg-navchip > .dg-key { flex: none; }
+/* a line sample is wide and flat, not a square icon */
+.ico-line { width: 22px; height: 7px; }
+
+/* the heading doubles as the way into the title/summary editor, but only
+   once editing is on -- otherwise it must not look clickable at all */
+.dg-editable { cursor: text; }
+.dg-editable:hover { color: var(--accent); }
+
+.dg-side {
+  display: grid; gap: var(--sp-4);
+  position: sticky; top: 12px;
+  min-width: 0;
+}
+.dg-panel {
+  /* a grid with one gap, rather than margins per child: the panel stacks a
+     heading, hints, fields and a button row, and every one of those used to
+     carry its own spacing (or none, which is how a label ended up sitting
+     on the input above it) */
+  display: grid; gap: var(--sp-3); align-content: start;
+  background: var(--surface);
+  border-radius: var(--r-lg);
+  padding: var(--sp-4) var(--sp-4) var(--sp-4);
+  /* same guard as .dgl-card: a grid item defaults to min-width:auto and
+     would widen past this fixed column rather than clip a long chip */
+  min-width: 0;
+}
+.dg-panel > * { min-width: 0; }
+/* This was the sheet's only weight-600 and its only monospace heading, which
+   made the diagram inspector read as a different product from the rest of the
+   app for no reason anyone could name. It is a panel title like every other
+   panel title now; the inspector's density is a padding question, not a
+   typographic one. */
+.dg-panel > h3 {
+  margin: 0;
+  display: flex; align-items: center; gap: var(--sp-2);
+}
+.dg-panel .field > label { margin-bottom: var(--sp-0); }
+/* the note is the long-form half of a step, so give it room to be read */
+.dg-side textarea { min-height: 210px; line-height: 1.65; }
+.dg-empty { font-size: var(--fs-sm); color: var(--ink-3); line-height: 1.6; }
+.dg-key {
+  font: 500 var(--fs-label) var(--font-m);
+  color: var(--t-diagram);
+  background: var(--chip-fill);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--r-sm); padding: var(--sp-0) var(--sp-2);
+}
+/* minmax(0, 1fr) and not the default `auto` track, on all three of these
+   row lists: an auto track is at least as wide as its widest item's
+   min-content, and a row of nowrap parts (a step key, a diagram title, a
+   condition) has a large one -- so the track grew past the 327px inspector
+   column and scrolled it sideways instead of the rows shrinking. */
+.dg-edges { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--sp-1); }
+.dg-edge {
+  display: flex; align-items: center; gap: var(--sp-2);
+  font-size: var(--fs-sm); color: var(--ink-2);
+  background: var(--inset);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--r-md); padding: var(--sp-1) var(--sp-2);
+}
+.dg-edge .dg-arrow { color: var(--t-diagram); flex: none; display: inline-flex; --ico: 13px; }
+.dg-edge .dg-label { color: var(--ink-3); font: 500 var(--fs-label) var(--font-m); }
+.dg-edge .spacer { flex: 1; }
+
+.dg-links { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--sp-2); }
+.dg-link {
+  display: flex; align-items: center; gap: var(--sp-2);
+  background: var(--inset);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--r-md); padding: var(--sp-1) var(--sp-2);
+}
+.dg-link .snippet {
+  flex: 1; font-size: var(--fs-sm); color: var(--ink-2);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.dg-link .snippet.clickable { cursor: pointer; }
+.dg-link .snippet.clickable:hover { color: var(--ink); }
+
+/* ── jumps: where a step continues in another flow ──────────────────────
+   Built to read as an ADDRESS rather than as a note. The row is an <a> so
+   the destination is in the status bar before it is clicked, ctrl-click
+   opens it in another tab, and the accent colour says the same thing every
+   other link in this app says with it. */
+.dg-jumps { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--sp-2); }
+.dg-jump {
+  display: flex; align-items: center; gap: var(--sp-2);
+  background: var(--inset);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--r-md); padding: var(--sp-1) var(--sp-2);
+}
+.dg-jump .dg-arrow { color: var(--accent); flex: none; display: inline-flex; --ico: 13px; }
+.dg-jump-to {
+  flex: 1; min-width: 0;
+  display: flex; align-items: center; gap: var(--sp-2);
+  font-size: var(--fs-sm); color: var(--accent);
+  text-decoration: none;
+}
+.dg-jump-to:hover .dg-jump-title { text-decoration: underline; }
+/* Every nowrap item on this row needs min-width:0 to be allowed below its
+   min-content width, or the row refuses to shrink and the whole inspector
+   column scrolls sideways -- which is what a diagram title, a step key, a
+   step label and a condition on one 327px row did. */
+.dg-jump-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dg-jump-to > .dg-key { flex: none; }
+.dg-jump-whole { font-size: var(--fs-label); color: var(--ink-3); flex: none; }
+.dg-jump .dg-label {
+  flex: 0 1 auto; min-width: 0; max-width: 34%;
+  color: var(--ink-3); font: 500 var(--fs-label) var(--font-m);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
+/* the inspector's minimum plus a usable canvas needs this much window; below
+   it the two stack rather than squeezing the flow into a slot */
+@media (max-width: 1180px) {
+  .dg-shell { grid-template-columns: 1fr; }
+  .dg-side { position: static; }
+  .dg-stage { height: 58vh; }
+}
+
+/* ── diagram list ────────────────────────────────────────────────────── */
+
+.dgl-grid {
+  display: grid;
+  /* min(), because a bare 340px track is a MINIMUM the grid must honour even
+     when the container is 313px wide -- which is what a 375px phone leaves
+     after the rail. The card then pushed 39px past its own scroll container.
+     min(340px, 100%) keeps the intent (two columns once there is room for two)
+     and drops the floor to the container when there is not. */
+  grid-template-columns: repeat(auto-fill, minmax(min(340px, 100%), 1fr));
+  gap: var(--sp-3);
+}
+/* This card carried a 3px teal left border. Two things were wrong with it:
+   the teal restated "this is a diagram" on a grid where every card is a
+   diagram, and then the same three pixels were recoloured to --warn to mean
+   "this one is broken" -- so the identity mark and the alarm were the same
+   pixel, and neither could be read without the other. Both are gone. */
+.dgl-card {
+  display: grid; gap: var(--sp-2);
+  background: var(--surface);
+  border-radius: var(--r-lg);
+  padding: var(--sp-3) var(--sp-4);
+  min-width: 0;
+}
+/* Grid and flex items default to min-width:auto, so they refuse to shrink
+   below their min-content and spill out of the painted card -- a long
+   title alone was enough. Every row here is meant to clip or wrap to the
+   card, never to widen it. */
+.dgl-card > * { min-width: 0; }
+/* structural problems are the reason this view exists — make them visible
+   from across the grid, not only once a card is read. A card with something
+   wrong stands one step forward of the sound ones; the amber stays on the
+   .dgl-issue chips inside it, which name what is actually wrong. */
+.dgl-card.has-issues { background: var(--raised); }
+
+.dgl-top { display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; }
+.dgl-title {
+  /* same reason as .row-open: it opens the diagram, so it clears the pointer
+     floor, and the leading is what centres its one line inside that */
+  font: 500 var(--fs-md)/var(--tap) var(--font-ui);
+  color: var(--ink);
+  cursor: pointer;
+  flex: 1; min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.dgl-title:hover { color: var(--accent); }
+/* a real routine's summary runs to a paragraph; clamp it so one verbose
+   flow cannot stretch its card past every other card in the row */
+.dgl-summary {
+  font-size: var(--fs-sm); color: var(--ink-2); line-height: 1.5;
+  display: -webkit-box; -webkit-box-orient: vertical;
+  -webkit-line-clamp: 4; line-clamp: 4;
+  overflow: hidden;
+}
+
+.dgl-stats {
+  display: flex; flex-wrap: wrap; gap: var(--sp-1) var(--sp-3);
+  font: 500 var(--fs-label) var(--font-m);
+  color: var(--ink-3);
+}
+.dgl-issues { display: flex; flex-wrap: wrap; gap: var(--sp-1); }
+.dgl-issue {
+  font: 500 var(--fs-label) var(--font-m);
+  color: var(--warn);
+  background: rgba(255, 213, 79, .10);
+  border: 1px solid rgba(255, 213, 79, .35);
+  border-radius: var(--r-sm); padding: var(--sp-0) var(--sp-2);
+  cursor: help;
+}
+.dgl-sound { font: 500 var(--fs-label) var(--font-m); color: var(--ok); display: inline-flex; align-items: center; gap: var(--sp-1); --ico: 12px; }
+
+.dgl-foot {
+  display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap;
+  border-top: 1px solid var(--line-soft);
+  padding-top: var(--sp-2);
+}
+.dgl-foot .spacer { flex: 1; }
+.dgl-when { font: 500 var(--fs-label) var(--font-m); color: var(--ink-3); }
+.dgl-back { color: var(--ink-3); text-decoration: none; }
+.dgl-back:hover { color: var(--accent); }
+
 /* ── responsive squeeze ──────────────────────────────────────────────── */
 
 @media (max-width: 940px) {
   :root { --rail-w: 62px; }
-  .brand-text, .nav a { font-size: 0; }
-  .nav a { justify-content: center; padding: 10px; gap: 0; }
+  /* display, not font-size: 0. The wordmark's two lines set their own sizes
+     (--fs-md and --fs-label), so they overrode the 0 they were supposed to
+     inherit and went on rendering -- 72px of text inside a 62px rail, wrapped,
+     which pushed the brand block to 83px and broke it out of the header band.
+     A nav label IS a bare text node, so there the 0 does work. */
+  .brand-text { display: none; }
+  .nav a { font-size: 0; }
+  .nav a { justify-content: center; padding: var(--sp-3); gap: 0; }
   .nav a svg { width: 17px; height: 17px; }
   .rail-foot { display: none; }
-  .brand { justify-content: center; padding: 16px 8px; }
-  .view { padding: 18px 16px 90px; }
-  .topbar { padding: 10px 16px; }
-  .bulkbar { left: 50%; }
+  .brand { justify-content: center; padding: var(--sp-4) var(--sp-2); }
+  .view {
+    padding: var(--sp-4) var(--sp-4)
+             calc(var(--sp-4) + var(--bulk-h, 0px) + var(--toast-h, 0px));
+  }
+  .topbar { padding: var(--sp-3) var(--sp-4); }
+}
+
+/* One window narrow enough that the header cannot hold a row: the search
+   field takes a line of its own under the actions, and the two things whose
+   value is one tap away elsewhere step aside -- the active count is the
+   first tile on Overview, and the shortcut hint is for a keyboard this
+   window probably does not have. */
+@media (max-width: 640px) {
+  .topbar { padding: var(--sp-2) var(--sp-3); }
+  /* a keyboard hint is for a window that probably has one */
+  .toolbar-kbd { display: none; }
+  .db-badge { display: none; }
+  .topbar-right { flex: 1; justify-content: flex-end; gap: var(--sp-3); }
+  .view {
+    padding: var(--sp-4) var(--sp-3)
+             calc(var(--sp-4) + var(--bulk-h, 0px) + var(--toast-h, 0px));
+  }
+  /* The memory takes the width; its annotations go under it. The four-column
+     grid had no narrow override, so at 375px the fixed metadata column plus
+     the auto date column plus three gaps consumed the whole 276px and the
+     snippet was allotted `0px` -- it wrapped one character per line, rows ran
+     121-175px, and two of them fitted on a phone. */
+  .mem-row {
+    grid-template-columns: var(--tap) 1fr;
+    gap: var(--sp-1) var(--sp-3);
+    align-items: start;
+    padding: var(--sp-3);
+  }
+  .mem-check { padding-top: var(--sp-0); }
+  .mem-main { grid-column: 2; grid-row: 1; }
+  .mem-snippet {
+    white-space: normal; line-height: 1.5;   /* two clamped lines, not two 24px ones */
+    display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+    word-break: break-word;
+  }
+  .mem-col-type { grid-column: 2; grid-row: 2; overflow: visible; }
+  .mem-right { grid-column: 2; grid-row: 3; flex-wrap: wrap; white-space: normal; }
+  .modal-head, .modal-body, .modal-foot {
+    padding-left: var(--sp-4); padding-right: var(--sp-4);
+  }
+  .graph-wrap { height: calc(100vh - 250px); }
+  /* Five controls wrapped to four rows here and covered 28% of the canvas --
+     on the one view whose whole job is the shape of the whole store. The strip
+     scrolls sideways instead: one row at any width, and the artifact keeps its
+     pixels. */
+  .graph-controls { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; }
+  .graph-controls::-webkit-scrollbar { display: none; }
+  .graph-controls > * { flex: none; }
+  .graph-find { width: 130px; }
+  /* a floating bar with four controls does not fit a phone as a pill. It is
+     no longer centred by a transform here, so it takes the plain entrance --
+     bulk-rise would put the translateX(-50%) back. */
+  .bulkbar {
+    left: 12px; right: 12px; transform: none;
+    border-radius: var(--r-pill); flex-wrap: wrap;
+    animation-name: rise;
+  }
 }
