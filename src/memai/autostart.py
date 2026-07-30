@@ -190,6 +190,34 @@ def find_running() -> tuple[str, int] | None:
     return (LOOPBACK, port) if ping(LOOPBACK, port) else None
 
 
+def interpreter() -> str:
+    """The Python to start the dashboard with: pythonw where there is one.
+
+    DETACHED_PROCESS is not enough to keep a console window off the
+    screen. It denies the child its parent's console, but a venv's
+    python.exe is a redirector that launches the real interpreter itself,
+    with ordinary flags -- and Windows gives a console-subsystem process
+    with no inherited console a brand new one. The result is a terminal
+    that flashes up on the desktop every time an agent session starts.
+
+    CREATE_NO_WINDOW does not fix it either: the documentation is
+    explicit that the flag is ignored when combined with
+    DETACHED_PROCESS. What fixes it is not being a console program.
+    pythonw.exe is the same interpreter built for the GUI subsystem, so
+    no console is ever allocated, for it or for what it spawns. Output
+    still reaches the log file, because that is an explicit handle rather
+    than an inherited console.
+
+    Falls back to sys.executable where pythonw is absent -- some
+    embedded and Linux-style layouts ship only the one binary, and a
+    console nobody sees beats a dashboard that never starts.
+    """
+    if sys.platform != "win32":
+        return sys.executable
+    windowless = Path(sys.executable).with_name("pythonw.exe")
+    return str(windowless) if windowless.is_file() else sys.executable
+
+
 def _spawn_admin(host: str, port: int) -> None:
     """Start the dashboard as a process of its own.
 
@@ -214,7 +242,7 @@ def _spawn_admin(host: str, port: int) -> None:
     env["PYTHONPATH"] = os.pathsep.join(
         p for p in (src_root, env.get("PYTHONPATH")) if p)
 
-    argv = [sys.executable, "-u", "-X", "utf8", "-m", "memai.admin",
+    argv = [interpreter(), "-u", "-X", "utf8", "-m", "memai.admin",
             "--host", host, "--port", str(port), "--autostarted"]
 
     # CREATE_BREAKAWAY_FROM_JOB is deliberately absent. It looks like

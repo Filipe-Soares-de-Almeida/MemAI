@@ -15,7 +15,10 @@ from __future__ import annotations
 
 import json
 import socket
+import struct
+import sys
 import threading
+from pathlib import Path
 
 import pytest
 from starlette.testclient import TestClient
@@ -297,6 +300,40 @@ def test_a_failure_looking_up_what_is_running_is_survivable(monkeypatch, capsys)
     monkeypatch.setattr(autostart, "_from_registry", boom)
     autostart.ensure_admin_running()          # must not raise
     assert "could not start the dashboard" in capsys.readouterr().err
+
+
+# --- no console window on the desktop --------------------------------
+
+@pytest.mark.skipif(sys.platform != "win32", reason="console windows are Windows")
+def test_it_starts_the_dashboard_with_a_windowless_interpreter():
+    """DETACHED_PROCESS alone left a terminal flashing up every session.
+
+    A venv's python.exe relaunches the real interpreter itself, and
+    Windows hands a console-subsystem process with no inherited console a
+    fresh one. The fix is not being a console program.
+    """
+    chosen = Path(autostart.interpreter())
+    assert chosen.name == "pythonw.exe"
+    assert chosen.is_file()
+    assert _pe_subsystem(chosen) == 2, "pythonw.exe should be the GUI subsystem"
+    # and the thing it replaced is what caused the window
+    assert _pe_subsystem(Path(sys.executable)) == 3
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="console windows are Windows")
+def test_it_falls_back_when_there_is_no_pythonw(monkeypatch, tmp_path):
+    """Better a console nobody looks at than no dashboard at all."""
+    lonely = tmp_path / "python.exe"
+    lonely.write_bytes(b"")
+    monkeypatch.setattr(sys, "executable", str(lonely))
+    assert autostart.interpreter() == str(lonely)
+
+
+def _pe_subsystem(path: Path) -> int:
+    """2 = GUI (never allocates a console), 3 = console."""
+    data = path.read_bytes()
+    pe = struct.unpack_from("<I", data, 0x3C)[0]
+    return struct.unpack_from("<H", data, pe + 24 + 68)[0]
 
 
 # --- the backstop that closes the race -------------------------------
