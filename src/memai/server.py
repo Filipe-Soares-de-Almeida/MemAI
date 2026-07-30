@@ -25,7 +25,7 @@ import json
 
 from mcp.server.fastmcp import FastMCP
 
-from memai import db, diagram_svg
+from memai import autostart, db, diagram_svg
 
 mcp = FastMCP("memai")
 
@@ -1041,6 +1041,15 @@ _TOOLS = {
 
 
 def main() -> None:
+    # Before mcp.run(), deliberately. This is the last moment on the main
+    # thread with no event loop and no stdio reader threads running --
+    # the state embed.py requires for anything that loads a C extension,
+    # and the only place a few tens of milliseconds cost nothing. A
+    # lifespan hook would look tidier and be worse: the SDK enters it
+    # before the session exists, putting this on the initialize path.
+    # Does nothing unless MEMAI_ADMIN_AUTOSTART says otherwise, and
+    # cannot raise -- see autostart.ensure_admin_running.
+    autostart.ensure_admin_running()
     mcp.run()
 
 
