@@ -755,8 +755,14 @@ export class DiagramEditor {
        one moved it. */
     if (e.pointerType === 'touch') { this.hooks.tipHide?.(); return; }
     if (n && n.note) {
+      /* The whole note, not a slice of it. A label is cut because it has to
+         fit a box on the canvas; a note has no such constraint, and this tip
+         is the only place a reader gets to read one without opening the
+         inspector -- cutting it at 220 characters made the tip a teaser for
+         itself. The tip wraps and is bounded by the window, so length only
+         costs height. */
       this.hooks.tipShow?.(
-        `<b>${esc(n.key)}</b><br>${esc(n.note.slice(0, 220))}`, e.clientX, e.clientY);
+        `<b>${esc(n.key)}</b><br>${esc(n.note)}`, e.clientX, e.clientY);
     } else if (lab && DiagramEditor.shortLabel(lab.label) !== lab.label.trim()) {
       /* only when something is actually hidden -- a tip repeating a badge
          you can already read is noise following the pointer around */

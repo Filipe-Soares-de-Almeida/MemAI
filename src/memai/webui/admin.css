@@ -1974,6 +1974,14 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
   white-space: normal;
   overflow-wrap: anywhere;
   line-height: 1.5;
+  /* Bound the other axis too, now that the diagram tip carries a whole note
+     rather than 220 characters of one. The tip is pointer-events:none -- it
+     has to be, it follows the pointer -- so it cannot be scrolled, and a box
+     taller than the window would just run off the bottom with nothing to say
+     so. A note long enough to hit this belongs in the inspector anyway; a
+     screenful is what a tip can honestly carry. */
+  max-height: calc(100vh - 20px);
+  overflow: hidden;
 }
 .tip b { color: var(--accent); font-family: var(--font-m); }
 
