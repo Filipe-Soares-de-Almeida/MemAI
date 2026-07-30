@@ -20,8 +20,13 @@ import { t } from '../i18n.js';
 
 /* alpha below which the simulation is considered at rest */
 const SETTLE = 0.02;
-/* pair-distance checks to spend on the pre-paint settle, total */
-const SETTLE_BUDGET = 2e6;
+/* Pair-distance checks to spend on the pre-paint settle, total. Worth more
+   than it looks: the budget is what decides how converged the layout is when
+   the view opens, and the whole run stays under ~90ms even at 1000 nodes
+   because the pass floor caps it. */
+const SETTLE_BUDGET = 8e6;
+/* per-frame alpha decay once the graph is live and a kick has stirred it */
+const COOL = .996;
 /* what a node the spotlight missed fades to. Low enough that the matches read
    as the figure, high enough that the store's overall shape survives -- the
    whole reason this view is a canvas. */
@@ -174,11 +179,23 @@ class ForceGraph {
        least once even where rAF is throttled (headless, hidden tabs).
        The pass count is a BUDGET, not a constant: each pass is O(n²), so
        the old fixed 900 was 40M distance checks at 300 nodes and froze
-       the tab before it had drawn anything. Fewer passes on a big graph
-       means a looser start, which the live loop then keeps improving. */
+       the tab before it had drawn anything.
+
+       The cooling rate has to come FROM that budget rather than being the
+       live loop's constant. Decaying at COOL regardless meant the settle ran
+       out of passes long before alpha ran out of heat -- at 138 nodes it
+       stopped at alpha .43 and handed the live loop 13 seconds of visible
+       drift, with the outliers still 76px from where they belonged and fit()
+       framing a layout that was still moving. Deriving it lands alpha on
+       SETTLE exactly as the last pass ends, at any size: the graph opens at
+       rest instead of finishing its arrangement in front of the reader.
+
+       A big graph still settles LOOSER -- fewer passes is less total work, and
+       no rate fixes that -- but loose and still beats tight and crawling. */
     const pairs = Math.max(1, this.nodes.length * (this.nodes.length - 1) / 2);
     const passes = Math.max(60, Math.min(900, Math.floor(SETTLE_BUDGET / pairs)));
-    for (let k = 0; k < passes && this.alpha > .05; k++) this.physics();
+    const cool = Math.min(COOL, Math.pow(SETTLE, 1 / passes));
+    for (let k = 0; k < passes && this.alpha > SETTLE; k++) this.physics(cool);
     this.fit();
     this.draw();
 
@@ -447,7 +464,10 @@ class ForceGraph {
     wireCopyChips(card);
     card.querySelector('[data-openrec]').addEventListener('click', () => openRecord(n.uid));
   }
-  physics() {
+  /* `cool` is per-pass, so the pre-paint settle can spend its whole budget
+     reaching rest while a live kick keeps the gentler decay that reads as
+     the graph reacting to what the reader just did. */
+  physics(cool = COOL) {
     if (this.alpha < SETTLE) return;
     const N = this.nodes;
     for (let i = 0; i < N.length; i++) {
@@ -480,7 +500,7 @@ class ForceGraph {
       n.vx *= .86; n.vy *= .86;
       n.x += n.vx; n.y += n.vy;
     }
-    this.alpha *= .996;
+    this.alpha *= cool;
   }
   draw() {
     const { cx } = this;
