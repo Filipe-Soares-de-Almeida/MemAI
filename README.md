@@ -225,8 +225,10 @@ that only make sense for a person:
   vector backfill/re-embed, orphan cleanup, VACUUM, timestamped backups
   (`VACUUM INTO`), a dedup-candidate review queue, and the audit trail.
 
-It runs on Starlette + uvicorn, both already present as dependencies of
-the `mcp` SDK — no new requirements. The front end is plain ES modules
+It runs on Starlette + uvicorn, which the `mcp` SDK pulls in anyway, so
+nothing extra is downloaded to get a dashboard — but they are declared
+here too, because this package imports them and the SDK does not bound
+them. The front end is plain ES modules
 with no build step (`webui/core/` for the router and shared machinery,
 `webui/views/` for one module per section). Destructive-action parity with
 the MCP tools is kept: archiving is the default "delete", and purging

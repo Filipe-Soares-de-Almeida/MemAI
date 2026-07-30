@@ -8,15 +8,30 @@ version = "0.1.0"
 description = "Custom long-term memory MCP server (SQLite + FTS5 + sqlite-vec hybrid retrieval, local model2vec embeddings)"
 license = "MIT"
 requires-python = ">=3.11"
+# Floors are the versions this is actually tested against, not the oldest
+# that might work -- there is no test matrix here, so a lower bound would
+# be a claim nobody has checked. Ceilings are the point of the exercise:
+# every one of these had an unbounded range, so a major release landing
+# tomorrow would have arrived on the next clean install and broken it
+# with nothing to say why. For the 0.x packages the ceiling is the next
+# MINOR, because before 1.0 that is where the breaking changes go.
+#
+# starlette and uvicorn are listed because admin.py imports them, which
+# is reason enough on its own. They did arrive anyway, as dependencies of
+# mcp -- but mcp asks for `starlette>=0.27` with no ceiling, and it is
+# BaseHTTPMiddleware and StaticFiles that break for us, not for mcp. A
+# dependency you import is yours to bound.
 dependencies = [
-    "mcp>=1.2.0",
-    "sqlite-vec>=0.1.6",
-    "model2vec>=0.3.0",
-    "numpy>=1.26",
+    "mcp>=1.28,<2",
+    "sqlite-vec>=0.1.9,<0.2",
+    "model2vec>=0.8,<0.9",
+    "numpy>=2.5,<3",
+    "starlette>=1.3,<2",
+    "uvicorn>=0.50,<0.51",
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8.0"]
+dev = ["pytest>=9.1,<10"]
 
 [project.scripts]
 memai-mcp = "memai.server:main"
