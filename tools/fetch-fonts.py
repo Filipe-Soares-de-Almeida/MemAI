@@ -1,21 +1,26 @@
 #!/usr/bin/env python3
-"""Populate src/memai/webui/fonts/ with the Roboto faces the admin UI asks for.
+"""Refresh src/memai/webui/fonts/ with the Roboto faces the admin UI asks for.
 
-Run once, by hand, if the dashboard is not rendering in Roboto and the
-font is not installed on the machine:
+The faces ARE tracked -- a clone has them, and so does the wheel. This
+script is how they got there and how they get updated; it is not a step
+anybody has to run to use MemAI. Run it to pull a newer release, then
+regenerate the width table the SVG renderer reads:
 
     python tools/fetch-fonts.py
+    python tools/gen-roboto-metrics.py
+
+That second step is not optional. src/memai/roboto_metrics.json is
+extracted from these exact files, and diagram_svg.measure() wraps text
+against it -- refreshing one without the other makes the SVG renderer
+break lines where the canvas does not.
 
 This is the ONLY part of MemAI that touches the network on purpose, which
-is why it is a separate script rather than something the server does: the
-admin UI must work offline, and it does -- admin.css falls back to an
-installed Roboto and then to the system stack, so a machine that never
-runs this script still gets a usable dashboard, just not the specified
-typeface.
+is why it is a separate script rather than something the server does.
 
-The files are deliberately untracked (see .gitignore). Roboto and Roboto
-Mono are licensed Apache-2.0 by Google; redistributing them is allowed,
-but a repository is not the place to keep binaries a script can fetch.
+Roboto and Roboto Mono are Font Software under the SIL Open Font License
+1.1 -- see webui/fonts/OFL.txt, which ships beside them because the
+licence requires the notice to travel with every copy. The OFL permits
+bundling outright; what it forbids is selling the fonts by themselves.
 
 Only the latin subset of each face is downloaded -- the admin UI is
 English, and the translated catalogs under webui/i18n/ have so far needed
@@ -112,7 +117,10 @@ def main() -> int:
 
     print(f"\n{written}/{len(WANTED)} faces in {OUT_DIR}")
     if written:
-        print("Roboto & Roboto Mono © Google, Apache-2.0. Untracked by design.")
+        print("Roboto & Roboto Mono, SIL Open Font License 1.1 -- see OFL.txt "
+              "beside them.")
+        print("Now run tools/gen-roboto-metrics.py: the width table the SVG "
+              "renderer wraps against is extracted from these files.")
     return 0 if written == len(WANTED) else 1
 
 
