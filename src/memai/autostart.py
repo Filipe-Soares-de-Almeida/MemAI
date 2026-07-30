@@ -21,10 +21,12 @@ disable the dashboard forever, which is the failure nobody would think to
 look for.
 
 A PORT THAT ANSWERS IS NOT OUR PORT. On the machine this was written for,
-8765 -- the admin's own default -- was held by an unrelated MCP server. A
-bare TCP probe would have concluded "already running" and never started
+the admin's own default at the time was held by an unrelated MCP server.
+A bare TCP probe would have concluded "already running" and never started
 anything, or, with the timing inverted, taken a port another tool was
-using. So the probe asks /api/ping and requires MemAI to answer.
+using. Moving the default did not fix that and could not: any number can
+be somebody else's. So the probe asks /api/ping and requires MemAI to
+answer.
 
 THE PORT WE ARE CONFIGURED FOR IS NOT NECESSARILY THE ONE IN USE.
 run-admin.bat sets MEMAI_ADMIN_PORT inside its own process; that never
@@ -56,7 +58,7 @@ from pathlib import Path
 
 from memai import db
 
-DEFAULT_PORT = 8765
+DEFAULT_PORT = 8888
 LOOPBACK = "127.0.0.1"
 REGISTRY_NAME = "admin.json"
 LOG_NAME = "admin.log"
