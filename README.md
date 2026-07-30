@@ -153,13 +153,61 @@ config) pointing at the installed console script:
 }
 ```
 
+### Starting the dashboard with it
+
+The MCP server can bring the admin dashboard up with it, so a session
+begins with both. It is off unless asked, because the dashboard has no
+authentication and opening a web port uninvited is not a memory server's
+business:
+
+```json
+{
+  "mcpServers": {
+    "memai": {
+      "command": "memai-mcp",
+      "env": {
+        "MEMAI_HOME": "/path/to/your/memai-store",
+        "MEMAI_ADMIN_AUTOSTART": "1",
+        "MEMAI_ADMIN_PORT": "8888"
+      }
+    }
+  }
+}
+```
+
+Any variable MemAI reads belongs in that block, and these are spelled out
+rather than left implicit so the knobs are where you would look for them. `MEMAI_ADMIN_PORT` is shown at its default, for when 8888 turns
+out to be taken. `MEMAI_HOME` is a placeholder — drop the line to keep
+the store at `~/.memai`, and on Windows mind that JSON wants its
+backslashes doubled.
+
+Setting them anywhere else will not do. A server the host launches sees
+the environment in this block and no other — not your shell's, and not a
+launcher's, which is why `run-admin.bat` now sets nothing and leans on
+the same defaults.
+
+A host starts several MCP servers per session, so "start it" has to mean
+"start it once". Each one asks `/api/ping` whether a MemAI dashboard is
+already answering — first at the address a running one recorded in
+`$MEMAI_HOME/admin.json`, then at its own configured port — and only then
+tries. Whichever wins the kernel's race for the port keeps it and the
+rest exit; there is no lock file to be left behind by a session that was
+killed rather than closed. If the port answers but is not MemAI, nothing
+starts and the reason is logged.
+
+The dashboard is detached on purpose: it outlives the session that opened
+it, the same as one started by hand. `memai-admin --status` says where it
+is, `memai-admin --stop` stops it. Autostart is loopback-only and refuses
+anything else — `--host` on the command line still lets a person override
+that, with the warning it prints.
+
 ## Admin dashboard
 
 `memai-admin` (or `python -m memai.admin`) serves a local web dashboard
-over the same store, at `http://127.0.0.1:8765` (loopback
+over the same store, at `http://127.0.0.1:8888` (loopback
 only; `--host`/`--port`/`MEMAI_ADMIN_PORT` to change). It is the human
-curation surface for everything the MCP tools do, plus the operations that
-only make sense for a person:
+curation surface for everything the MCP tools do, plus the operations
+that only make sense for a person:
 
 - **Overview** — live counts, confidence meter, per-type distribution,
   30-day activity, vector coverage.
@@ -177,10 +225,35 @@ only make sense for a person:
   vector backfill/re-embed, orphan cleanup, VACUUM, timestamped backups
   (`VACUUM INTO`), a dedup-candidate review queue, and the audit trail.
 
-It runs on Starlette + uvicorn, both already present as dependencies of
-the `mcp` SDK — no new requirements. Destructive-action parity with the
-MCP tools is kept: archiving is the default "delete", and purging demands
-the literal `DELETE <uid>` phrase typed into the UI.
+It runs on Starlette + uvicorn, which the `mcp` SDK pulls in anyway, so
+nothing extra is downloaded to get a dashboard — but they are declared
+here too, because this package imports them and the SDK does not bound
+them. The front end is plain ES modules
+with no build step (`webui/core/` for the router and shared machinery,
+`webui/views/` for one module per section). Destructive-action parity with
+the MCP tools is kept: archiving is the default "delete", and purging
+demands the literal `DELETE <uid>` phrase typed into the UI.
+
+**It has no authentication**, so it binds to loopback and refuses
+cross-origin requests (any `Sec-Fetch-Site` or `Origin` that is not this
+server, and any write that is not `application/json` — that content type
+is what forces a browser preflight, which is what stops another page you
+have open from POSTing to your own port). Those checks are not a login:
+passing `--host` something other than loopback exposes the whole store to
+anyone who can reach the port, and prints a warning saying so.
+
+The UI asks for Roboto per the Material spec and ships it: the latin
+subset of six faces lives in `webui/fonts/`, under the SIL Open Font
+License 1.1 (`webui/fonts/OFL.txt`, separate from MemAI's own MIT
+licence). Nothing about the dashboard needs the network.
+
+That is not only a convenience. `src/memai/roboto_metrics.json` is a
+width table extracted from those exact files, and it is what
+`diagram_svg` wraps text against when it draws a diagram without a
+browser — so the faces have to be the ones the canvas is using for the
+two renderers to break lines in the same place. `tools/fetch-fonts.py`
+refreshes them and `tools/gen-roboto-metrics.py` re-derives the table;
+run the two together or not at all.
 
 ## Data location
 

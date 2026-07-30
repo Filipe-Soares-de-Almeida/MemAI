@@ -14,3 +14,7 @@ dist/
 
 # local Claude Code config
 /.claude/
+
+# design-review snapshots written by the impeccable skill — a local record of
+# what was found and when, not repo content
+/.impeccable/

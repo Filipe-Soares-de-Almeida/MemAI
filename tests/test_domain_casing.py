@@ -108,9 +108,21 @@ def test_normalize_plan_preserve_is_empty():
 # ---------------------------------------------------------- admin endpoints
 
 def test_config_roundtrip(client):
-    assert client.get("/api/config").json() == {"domain_case": "preserve"}
-    assert client.post("/api/config", json={"domain_case": "upper"}).json() == {"domain_case": "upper"}
-    assert client.get("/api/config").json() == {"domain_case": "upper"}
+    assert client.get("/api/config").json()["domain_case"] == "preserve"
+    assert client.post(
+        "/api/config", json={"domain_case": "upper"}).json()["domain_case"] == "upper"
+    assert client.get("/api/config").json()["domain_case"] == "upper"
+
+
+def test_config_writes_one_setting_without_restating_the_other(client):
+    """A partial POST must not disturb the settings it does not name."""
+    client.post("/api/config", json={"domain_case": "upper"})
+    body = client.post("/api/config", json={"svg_retention": "30d"}).json()
+    assert body == {"domain_case": "upper", "svg_retention": "30d"}
+
+
+def test_config_rejects_an_empty_payload(client):
+    assert client.post("/api/config", json={}).status_code == 400
 
 
 def test_config_rejects_bad_value(client):

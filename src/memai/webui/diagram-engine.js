@@ -1,0 +1,1796 @@
+/* MemAI · diagram editor (vanilla JS ES module, no build step).
+
+   A canvas editor for one type='diagram' memory. Deliberately NOT a
+   force layout: every node arrives with x/y from the store, so this file
+   has no layout algorithm and no fallback seeding. A node without
+   coordinates is a server bug, not something to paper over here — which
+   is also why two people looking at the same diagram, and a diagram
+   nobody has ever opened, all show the same picture.
+
+   Consequences of that split:
+     · no physics loop. The canvas redraws when something changes
+       (requestDraw), so an idle editor costs nothing.
+     · dragging is optimistic: the box follows the mouse and the new
+       coordinates are handed to hooks.onMove, which persists them. If
+       that write fails the caller re-fetches and calls setData().
+     · "auto-arrange" is a server round-trip (hooks.onRelayout), never a
+       layout computed here.
+
+   All DOM outside the canvas (the inspector, toolbar wiring, toasts)
+   belongs to app.js and reaches this class through `hooks`.
+
+   =======================================================================
+   THIS FILE HAS A PYTHON TWIN: memai/diagram_svg.py
+   =======================================================================
+   That module renders the same diagram as SVG for readers with no browser
+   (a chat client, an exporter). It is a transcription of the edge geometry
+   below -- the constants, route(), laneEdges(), detours(), assignFans(),
+   unfanCollisions(), and the wrap/clamp/shortLabel text rules.
+
+   Change any of those here, change them there, then run:
+
+       node tools/route-parity.mjs --write   # re-record from THIS file
+       pytest tests/test_diagram_svg.py      # hold Python to the recording
+
+   A divergence does not raise anywhere. It draws a flow that is subtly not
+   the one the user arranged, which is why the parity harness exists and
+   why re-recording is a deliberate step rather than automatic.
+
+   Why two implementations at all: this file needs the geometry in
+   JavaScript regardless, because it hit-tests, drags and zooms against it.
+   The alternative was a headless browser on the server.
+
+   NOT duplicated: node layout. x/y comes from db.py and both sides read
+   it, which is what keeps this file free of a layout algorithm.
+   ======================================================================= */
+
+const esc = s => String(s ?? '').replace(/[&<>"']/g,
+  c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const cssVar = name =>
+  getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+
+export const NODE_SHAPES = ['start', 'step', 'decision', 'io', 'end'];
+
+/* Box geometry, in the same abstract units the server lays out with
+   (LAYOUT_COL_W 300 / LAYOUT_ROW_H 200), so a stored arrangement has
+   room to breathe without any scaling here. Deliberately smaller than one
+   layout cell: the air between boxes is what keeps a long flow readable. */
+/* These four must match db.NODE_DEFAULT_W / NODE_DEFAULT_H /
+   DECISION_DEFAULT_H / NODE_MIN_* -- the server lays out in the same units
+   and clamps a resize to the same bounds. */
+const NODE_W = 170;
+const NODE_H = 48;
+const DECISION_H = 66;
+const NODE_MIN_W = 110, NODE_MAX_W = 560;
+const NODE_MIN_H = 34, NODE_MAX_H = 340;
+/* Every constant from here to ORTH_SNAP is mirrored in diagram_svg.py
+   under the same name. Changing one alone silently splits the canvas from
+   the SVG export -- see the twin-file note at the top of this file for the
+   two commands that catch it. */
+const IO_SKEW = 14;          /* the lean on an input/output parallelogram */
+const HANDLE = 7;            /* half-side of a corner resize grip, world units */
+const SNAP_PX = 7;           /* how near an axis has to be to pull a card onto it */
+const ARROW_GAP = 5;         /* air between the box edge and the arrow tip */
+const ORTH_STUB = 26;        /* how far a right-angled edge leaves its box */
+/* Two edges leaving the same side of the same card used to be drawn from
+   the exact same point with the exact same stub, so they ran on top of each
+   other until they parted -- on a hand-arranged 34-step flow, 37 of 49
+   edges had some length of line drawn over another line. FAN_GAP spreads
+   their anchors along the side; FAN_STUB staggers how deep each one turns,
+   so the perpendicular legs separate too. See assignFans(). */
+const FAN_GAP = 22;
+const FAN_STUB = 14;
+/* The funnel. MERGE_GAP is where an edge's own parallel track begins, out
+   from the card; MERGE_TAIL is the straight bit right at the card, so a
+   line leaves and arrives square and the arrowhead is never drawn on the
+   diagonal that closes the funnel. */
+const MERGE_GAP = 30;
+const MERGE_TAIL = 9;
+const ORTH_RADIUS = 11;      /* corner rounding on a right-angled edge */
+/* Two boxes almost -- but not exactly -- in line used to get a full Z
+   detour for an offset of a few units, and two rounded corners that close
+   together bow into an S. Below this offset the run is drawn as one
+   segment: a couple of degrees off vertical reads as straight, a wiggle
+   reads as a mistake. */
+const ORTH_SNAP = 18;
+const EDGE_PICK_PX = 11;     /* how near the pointer must be to grab a line */
+
+export const ROUTINGS = ['orthogonal', 'curved'];
+/* Label metrics live in world units alongside the box metrics above, so a
+   label occupies the same fraction of its box at every zoom level. Both
+   are multiplied by the diagram's stored font scale. Mirrored in
+   diagram_svg.py, along with the two badge limits below. */
+const LABEL_PX = 12;
+const LABEL_LH = 14;
+const BADGE_PX = 10;
+/* How much of an edge's label is drawn on the line. A branch condition is
+   often a whole sentence, and a badge that long is a wall across the
+   picture, so a long one is cut to a phrase and hovering it shows the rest.
+
+   BOTH limits have to be passed before anything is cut, not either: four
+   short words are still only fourteen characters, and cutting those to
+   three left an ellipsis promising text that was barely there. See
+   shortLabel() and the tip in onMove(). */
+const BADGE_WORDS = 3;
+const BADGE_CHARS = 20;
+export const FONT_SCALES = [0.8, 1, 1.25, 1.6, 2];
+
+/* canvas `font` takes a literal font stack -- it does not resolve the
+   CSS custom properties the rest of the UI styles with */
+const FONT_UI = "'Roboto', 'Segoe UI', system-ui, sans-serif";
+const FONT_MONO = "'Roboto Mono', ui-monospace, Consolas, monospace";
+
+const clampTo = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
+
+/* A node draws at its own size when it has one, its shape's default when
+   it does not -- same rule as db.node_box, font scale included. Without
+   that scale here, asking for bigger text would only truncate the label:
+   the card it has to fit in would not have changed. */
+const nodeSize = (n, fontScale = 1) => ({
+  w: clampTo(Number(n.w) || NODE_W * fontScale, NODE_MIN_W, NODE_MAX_W),
+  h: clampTo(Number(n.h) || (n.shape === 'decision' ? DECISION_H : NODE_H) * fontScale,
+             NODE_MIN_H, NODE_MAX_H),
+});
+
+export class DiagramEditor {
+  constructor(canvas, data, hooks = {}) {
+    this.cv = canvas;
+    this.cx = canvas.getContext('2d');
+    this.hooks = hooks;
+    this.scale = 1;
+    this.tx = 0;
+    this.ty = 0;
+    this.drag = null;
+    this.sizing = null;
+    this.guides = null;
+    this.fontScale = 1;
+    this.fitScale = null;   /* set by fit(); it is the zoom-out floor, see zoomAt */
+    this.pan = null;
+    /* pointers currently down, by id: one drags, resizes or pans, two pinch */
+    this.pointers = new Map();
+    this.pinch = null;
+    this.moved = false;
+    this.hover = null;
+    /* Selection is a card OR a single connection, never both: they answer
+       different questions ("what is this step" vs "where does this branch
+       go") and highlighting both at once answers neither. */
+    this.selected = null;
+    this.selectedEdge = null;
+    this.connectMode = false;
+    this.connectFrom = null;
+    this.destroyed = false;
+    this._frame = 0;
+    /* set whenever the lane/detour solution below is out of date */
+    this.routesDirty = true;
+    /* Read-only until asked otherwise. Reading a flow is the common case,
+       and a stray drag while reading silently rewrites a stored position
+       everyone else sees -- panning, zooming and selecting stay available. */
+    this.readOnly = hooks.readOnly !== false;
+    this.routing = ROUTINGS.includes(hooks.routing) ? hooks.routing : 'orthogonal';
+    this.hoverLabel = null;
+
+    this.readTheme();
+    /* resize() before the first fit(): fit needs the canvas size, and a
+       fit that runs against an unmeasured canvas silently does nothing */
+    this.resize();
+    this.setData(data, { fit: true });
+
+    this._down = e => this.onDown(e);
+    this._move = e => this.onMove(e);
+    this._up = e => this.onUp(e);
+    this._wheel = e => this.onWheel(e);
+    this._click = e => this.onClick(e);
+    this._context = e => this.onContext(e);
+    /* the pointer can leave the canvas without a last mousemove inside it --
+       straight onto the inspector, or onto a dialog -- and the hover tip has
+       nothing left to dismiss it */
+    this._leave = () => {
+      this.hooks.tipHide?.();
+      if (this.hover || this.hoverLabel) { this.hover = null; this.hoverLabel = null; this.requestDraw(); }
+    };
+    this._resize = () => { this.resize(); this.requestDraw(); };
+
+    /* Pointer events rather than mouse events: one set of handlers then
+       serves a mouse, a pen and a finger. On a touch screen this editor used
+       to be a picture and nothing else -- no pan, no zoom, no dragging a
+       card, no selecting one -- so a flow could be read on a tablet and not
+       arranged there. Two pointers pinch; see onDown. */
+    canvas.addEventListener('pointerdown', this._down);
+    canvas.addEventListener('pointermove', this._move);
+    canvas.addEventListener('wheel', this._wheel, { passive: false });
+    canvas.addEventListener('click', this._click);
+    canvas.addEventListener('contextmenu', this._context);
+    canvas.addEventListener('pointerleave', this._leave);
+    addEventListener('pointerup', this._up);
+    addEventListener('pointercancel', this._up);
+
+    /* Three overlapping triggers, on purpose. The stage changes size
+       without the window ever resizing -- a vertical scrollbar appearing
+       takes ~10px off it -- so a window-only listener misses that; but a
+       ResizeObserver is the only one of the three that cannot be verified
+       in a headless pane, so it is not relied on alone. The check inside
+       requestDraw is the backstop that needs no events at all. */
+    addEventListener('resize', this._resize);
+    if (typeof ResizeObserver === 'function') {
+      this._ro = new ResizeObserver(this._resize);
+      this._ro.observe(canvas.parentElement);
+    }
+
+    this.requestDraw();
+  }
+
+  destroy() {
+    this.destroyed = true;
+    cancelAnimationFrame(this._frame);
+    this.cv.removeEventListener('pointerdown', this._down);
+    this.cv.removeEventListener('pointermove', this._move);
+    this.cv.removeEventListener('wheel', this._wheel);
+    this.cv.removeEventListener('click', this._click);
+    this.cv.removeEventListener('contextmenu', this._context);
+    this.cv.removeEventListener('pointerleave', this._leave);
+    removeEventListener('pointerup', this._up);
+    removeEventListener('pointercancel', this._up);
+    removeEventListener('resize', this._resize);
+    this._ro?.disconnect();
+  }
+
+  readTheme() {
+    this.colNode = cssVar('--t-diagram') || '#009688';
+    this.colSurface = cssVar('--surface') || '#1e1e1e';
+    this.colInk = cssVar('--ink') || 'rgba(255,255,255,.87)';
+    this.colInk2 = cssVar('--ink-2') || 'rgba(255,255,255,.6)';
+    this.colLine = cssVar('--line') || 'rgba(255,255,255,.12)';
+    this.colAccent = cssVar('--accent') || '#bb86fc';
+    this.colWarn = cssVar('--warn') || '#ffd54f';
+  }
+
+  /* ── data ──────────────────────────────────────────────────────── */
+
+  setData(data, { fit = false } = {}) {
+    this.data = data;
+    this.fontScale = clampTo(Number(data.font_scale) || 1, 0.7, 2.5);
+    this.nodes = (data.nodes || []).map(n => {
+      const shape = NODE_SHAPES.includes(n.shape) ? n.shape : 'step';
+      return {
+        key: n.key,
+        label: n.label || '',
+        note: n.note || '',
+        shape,
+        x: n.x,
+        y: n.y,
+        sized: n.w != null || n.h != null,   /* has a size of its own */
+        ...nodeSize({ ...n, shape }, this.fontScale),
+      };
+    });
+    this.byKey = Object.fromEntries(this.nodes.map(n => [n.key, n]));
+    this.edges = (data.edges || []).filter(e => this.byKey[e.from] && this.byKey[e.to]);
+    this.linkCount = {};
+    for (const l of data.links || []) {
+      this.linkCount[l.node_key] = (this.linkCount[l.node_key] || 0) + 1;
+    }
+    /* Jumps are counted per step the same way and drawn with their own mark:
+       a step that continues in another flow is a step you can LEAVE from,
+       which is a different fact about it than having a note attached. Both
+       directions count -- being jumped INTO ties this step to another flow
+       just as much -- and an incoming jump aimed at the diagram as a whole
+       carries no key, so it belongs to no card. */
+    this.jumpCount = {};
+    for (const j of data.jumps || []) {
+      if (j.node_key) this.jumpCount[j.node_key] = (this.jumpCount[j.node_key] || 0) + 1;
+    }
+    if (this.selected && !this.byKey[this.selected]) this.selected = null;
+    /* a reload hands over fresh edge objects, so re-find the selected one
+       by its ends rather than dropping the selection on every save */
+    if (this.selectedEdge) {
+      const { from, to } = this.selectedEdge;
+      this.selectedEdge = this.edges.find(e => e.from === from && e.to === to) || null;
+    }
+    this.connectFrom = null;
+    this.hover = null;
+    this.sizing = null;
+    this.guides = null;
+    /* structural, so compute once here rather than per frame -- dragging
+       redraws on every mousemove and cannot change reachability */
+    this.orphans = new Set(this.orphanKeys());
+    /* before the first fit, not only per draw: fit has to know how far the
+       lanes reach or it frames the boxes and cuts the corridors off */
+    this.laneEdges();
+    this.routesDirty = false;
+    if (fit) this.fit();
+    this.requestDraw();
+  }
+
+  /* Lanes: corridors down the side of the diagram, for edges that cannot be
+     drawn between their ends without running over what sits in between.
+
+     Every loop closer needs one by definition -- it travels back up the
+     page. So does any long forward edge: a branch that dead-ends into the
+     terminal step eight rows below was drawn straight down the middle
+     column, through eight boxes and along every other line in that column,
+     which is most of what "the arrows are tangled" looks like.
+
+     Alternating sides and stacking lanes matters: one shared bow direction
+     and magnitude piles a routine's loops on top of each other.
+
+     `detours` is the expensive half: for every forward edge that would
+     cross a box it re-routes the edge against up to ~22 candidate
+     detours, and each of those tests the whole route against every other
+     box. That is fine once, and far too much per mousemove, so a drag
+     asks for it to be skipped -- see draw(). */
+  laneEdges({ detours = true } = {}) {
+    const maxX = Math.max(...this.nodes.map(n => n.x + n.w / 2), 0);
+    const minX = Math.min(...this.nodes.map(n => n.x - n.w / 2), 0);
+    let taken = 0;
+    let laneRight = maxX, laneLeft = minX;
+    const assign = e => {
+      const a = this.byKey[e.from], b = this.byKey[e.to];
+      const side = taken % 2 === 0 ? 1 : -1;
+      const lane = Math.floor(taken / 2);
+      /* How far out the corridor has to sit: past the cards this edge
+         actually travels alongside, NOT past the whole diagram.
+
+         Clearing the diagram's own maxX is what made a hop between two
+         cards near the left edge of a wide flow cross the entire canvas
+         and come back -- it was reserving room against 34 steps it never
+         went near. Only the rows the edge spans can be in its way. */
+      const loY = Math.min(a.y, b.y) - ORTH_STUB;
+      const hiY = Math.max(a.y, b.y) + ORTH_STUB;
+      let spanMaxX = Math.max(a.x + a.w / 2, b.x + b.w / 2);
+      let spanMinX = Math.min(a.x - a.w / 2, b.x - b.w / 2);
+      for (const n of this.nodes) {
+        if (n.y + n.h / 2 < loY || n.y - n.h / 2 > hiY) continue;
+        spanMaxX = Math.max(spanMaxX, n.x + n.w / 2);
+        spanMinX = Math.min(spanMinX, n.x - n.w / 2);
+      }
+      const clearance = side > 0
+        ? spanMaxX - Math.max(a.x, b.x)
+        : Math.min(a.x, b.x) - spanMinX;
+      const reach = 70 + lane * 45;
+      e.lane = side;
+      e.bow = side * (Math.max(clearance, 0) + reach);
+      /* the actual corridor, so fit() reserves what the lanes reach and no
+         more -- see corridorFor(), which recomputes the same x */
+      const corridorX = side > 0
+        ? Math.max(a.x, b.x) + Math.abs(e.bow)
+        : Math.min(a.x, b.x) - Math.abs(e.bow);
+      if (side > 0) laneRight = Math.max(laneRight, corridorX + 20);
+      else laneLeft = Math.min(laneLeft, corridorX - 20);
+      taken++;
+    };
+
+    for (const e of this.edges) {
+      const a = this.byKey[e.from], b = this.byKey[e.to];
+      /* `back` is geometry: does this edge currently run UP the canvas, so
+         it enters from below. `loops` is the graph saying the edge closes a
+         cycle, and that is what gets drawn dashed -- the two used to be one
+         flag, which is why dragging a card above its source turned an
+         ordinary edge dashed. */
+      e.back = b.y <= a.y;
+      /* A cheap pass keeps the whole solution from last time rather than
+         snapping every routed line straight the moment a drag starts:
+         slightly stale beats a diagram that redraws itself under the
+         pointer. The next full pass corrects it. */
+      if (detours) { e.lane = 0; e.bow = 0; e.via = null; }
+    }
+
+    /* Can this edge be drawn between its own two ends? Straight if that is
+       clear, otherwise nudged -- move the crossbar of a Z into a free gap,
+       or run up a corridor just past the obstacle. False means it has to go
+       out to the margin.
+
+       Sending every colliding edge to the margin is what a hand-arranged
+       flow punishes: on a 34-step one, 16 forward edges collide, and 16
+       detours around the whole diagram read worse than the collisions.
+
+       An A->B / B->A pair needs nothing special here any more. It used to be
+       forced onto a corridor, because both halves were drawn from the same
+       anchors along the same line -- a detour was the only thing keeping
+       them apart, and it read as a mistake rather than as two connections.
+       assignFans() gives each of them its own place on the side and its own
+       turning depth instead, so this function is only about cards in the
+       way. */
+    const fitsBetweenItsEnds = e => {
+      if (!this.routeHitsABox(e)) return true;
+      for (const via of this.detours(e)) {
+        e.via = via;
+        if (!this.routeHitsABox(e)) return true;
+      }
+      e.via = null;
+      return false;
+    };
+
+    if (detours) {
+      /* Fanned FIRST, so the collision search below sees the routes as they
+         will actually be drawn. Deciding collisions against centred anchors
+         and then moving the anchors is how a fan pushed a route into a card
+         the centred one missed. */
+      this.assignFans();
+
+      /* A back edge is NOT automatically a margin lane, which is what this
+         used to assume. Two stacked cards with the lower one pointing at
+         the upper need a short hop up its own column; sending that to the
+         margin is what "the line goes around the world to reach the card
+         above it" looked like. It earns a lane the same way a forward edge
+         does -- by not fitting between its ends.
+
+         Back edges are decided first so that the ones that DO take a lane
+         stay nearest the diagram: a reader looking for the retry path finds
+         it in the same place every time. */
+      const needLane = [];
+      for (const e of this.edges) if (e.back && !fitsBetweenItsEnds(e)) needLane.push(e);
+      for (const e of this.edges) if (!e.back && !fitsBetweenItsEnds(e)) needLane.push(e);
+      for (const e of needLane) assign(e);
+    }
+
+    if (detours) {
+      /* Again, because an edge that took a corridor leaves by a different
+         side than it did above, which puts it in a different fan group. */
+      this.assignFans();
+      this.unfanCollisions();
+    }
+
+    /* What fit() has to leave room for, so a lane is not drawn off-screen.
+       Only from a full pass: the cheap one assigns no lanes, and letting it
+       report zero reach would shrink the frame mid-drag. */
+    if (detours) this.laneSpan = { left: laneLeft, right: laneRight };
+  }
+
+  /* Detours to try, nearest first. Crossbars come before corridors: moving
+     the sideways leg of a Z keeps the edge between its own two cards, while
+     a corridor takes it around them. */
+  detours(e) {
+    const a = this.byKey[e.from], b = this.byKey[e.to];
+    const midY = (a.y + b.y) / 2;
+    const loY = Math.min(a.y, b.y), hiY = Math.max(a.y, b.y);
+    const bars = [];
+    const corridors = [];
+    for (const n of this.nodes) {
+      for (const y of [n.y - n.h / 2 - ORTH_STUB, n.y + n.h / 2 + ORTH_STUB]) {
+        if (y > loY && y < hiY) bars.push({ crossY: y });
+      }
+      for (const x of [n.x - n.w / 2 - ORTH_STUB * 1.5, n.x + n.w / 2 + ORTH_STUB * 1.5]) {
+        corridors.push({ corridor: x });
+      }
+    }
+    bars.sort((u, v) => Math.abs(u.crossY - midY) - Math.abs(v.crossY - midY));
+    /* Cheapest first, and cheap is not the same as near. A corridor OUTSIDE
+       the two columns makes the edge overshoot one of its own ends and come
+       back: that is what "it goes past the card and hooks in from the far
+       side" was -- a corridor 23 units beyond the target's right edge,
+       picked over an equally near one on the side the edge was already
+       arriving from. `over` is the extra sideways travel that costs, and it
+       is zero for every candidate BETWEEN the two columns, so those are all
+       preferred and proximity only decides between them. */
+    const over = x => Math.abs(x - a.x) + Math.abs(x - b.x) - Math.abs(a.x - b.x);
+    const near = x => Math.min(Math.abs(x - a.x), Math.abs(x - b.x));
+    corridors.sort((u, v) => over(u.corridor) - over(v.corridor)
+                          || near(u.corridor) - near(v.corridor));
+    return [...bars.slice(0, 10), ...corridors.slice(0, 12)];
+  }
+
+  /* Would this edge, routed between its ends, be drawn over a box that is
+     not one of those ends? Sampled rather than solved: a bounding-box
+     reject throws out almost every pair, and a handful of points along
+     what survives is enough to catch a run down an occupied column. */
+  routeHitsABox(e) {
+    const { pts, curve } = this.route(e);
+    const flat = DiagramEditor.flatten(pts, curve);
+    for (const n of this.nodes) {
+      if (n.key === e.from || n.key === e.to) continue;
+      for (let i = 1; i < flat.length; i++) {
+        if (DiagramEditor.segHitsBox(flat[i - 1], flat[i], n)) return true;
+      }
+    }
+    return false;
+  }
+
+  static segHitsBox(p, q, n, pad = 6) {
+    const x0 = n.x - n.w / 2 - pad, x1 = n.x + n.w / 2 + pad;
+    const y0 = n.y - n.h / 2 - pad, y1 = n.y + n.h / 2 + pad;
+    if (Math.max(p.x, q.x) < x0 || Math.min(p.x, q.x) > x1) return false;
+    if (Math.max(p.y, q.y) < y0 || Math.min(p.y, q.y) > y1) return false;
+    /* an axis-aligned leg -- which is every leg of a right-angled route --
+       is fully decided by the two range checks above, so the sampling
+       below only ever runs for a straight diagonal or a flattened curve */
+    if (Math.abs(p.x - q.x) < 0.01 || Math.abs(p.y - q.y) < 0.01) return true;
+    const steps = 24;
+    for (let i = 0; i <= steps; i++) {
+      const t = i / steps;
+      const x = p.x + (q.x - p.x) * t, y = p.y + (q.y - p.y) * t;
+      if (x >= x0 && x <= x1 && y >= y0 && y <= y1) return true;
+    }
+    return false;
+  }
+
+  /* Steps the flow cannot reach from its start. Almost always a missing
+     edge, so the canvas marks them instead of leaving them looking normal. */
+  orphanKeys() {
+    const start = this.nodes.find(n => n.shape === 'start');
+    if (!start) return this.nodes.map(n => n.key);
+    const out = {};
+    for (const e of this.edges) (out[e.from] = out[e.from] || []).push(e.to);
+    const reached = new Set([start.key]);
+    const queue = [start.key];
+    while (queue.length) {
+      for (const to of out[queue.shift()] || []) {
+        if (!reached.has(to)) { reached.add(to); queue.push(to); }
+      }
+    }
+    return this.nodes.filter(n => !reached.has(n.key)).map(n => n.key);
+  }
+
+  /* ── viewport ──────────────────────────────────────────────────── */
+
+  resize() {
+    /* clientWidth/Height, not getBoundingClientRect: the canvas is
+       inset:0 inside the stage, so it fills the PADDING box -- measuring
+       the border box would size it a border wider than the space it has. */
+    const stage = this.cv.parentElement;
+    const dpr = devicePixelRatio || 1;
+    this.w = stage.clientWidth;
+    this.h = stage.clientHeight;
+    this.cv.width = this.w * dpr;
+    this.cv.height = this.h * dpr;
+    this.cx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  }
+
+  /* Fit into the part of the stage that is actually free. The toolbar and
+     the hint strip float ON the canvas, so a plain centre-and-scale parks
+     the first row of a re-arranged flow behind the buttons -- the caller
+     reports how much room they take (hooks.insets) and the fit centres in
+     what is left, not in the whole stage. */
+  fit() {
+    if (!this.nodes.length || !this.w) return;
+    const xs = this.nodes.flatMap(n => [n.x - n.w / 2, n.x + n.w / 2]);
+    const ys = this.nodes.flatMap(n => [n.y - n.h / 2, n.y + n.h / 2]);
+    if (this.laneSpan) xs.push(this.laneSpan.left, this.laneSpan.right);
+    const minX = Math.min(...xs), maxX = Math.max(...xs);
+    const minY = Math.min(...ys), maxY = Math.max(...ys);
+    const pad = 22;
+    const ins = this.hooks.insets?.() || {};
+    const top = pad + (ins.top || 0), bottom = pad + (ins.bottom || 0);
+    const left = pad + (ins.left || 0), right = pad + (ins.right || 0);
+    const roomW = Math.max(40, this.w - left - right);
+    const roomH = Math.max(40, this.h - top - bottom);
+    /* Remembered, because it is the floor the wheel and the pinch have to
+       respect. fit() writes this.scale directly and a 34-step flow fits well
+       under the 0.15 that zoomAt used to clamp to, so Centre-view would show
+       the whole diagram and then zooming out could never get back to it --
+       the floor was above the level that fitted. See zoomAt. */
+    this.fitScale = Math.min(1.4, Math.min(roomW / (maxX - minX), roomH / (maxY - minY)));
+    this.scale = this.fitScale;
+    this.tx = left + roomW / 2 - (minX + maxX) / 2 * this.scale;
+    this.ty = top + roomH / 2 - (minY + maxY) / 2 * this.scale;
+    this.requestDraw();
+  }
+
+  toWorld(e) {
+    const r = this.cv.getBoundingClientRect();
+    return {
+      x: (e.clientX - r.left - this.tx) / this.scale,
+      y: (e.clientY - r.top - this.ty) / this.scale,
+    };
+  }
+
+  static inside(n, p) {
+    const dx = Math.abs(p.x - n.x), dy = Math.abs(p.y - n.y);
+    /* a decision is drawn as a diamond, so hit-test the diamond */
+    if (n.shape === 'decision') return dx / (n.w / 2) + dy / (n.h / 2) <= 1;
+    return dx <= n.w / 2 && dy <= n.h / 2;
+  }
+
+  nodeAt(p) {
+    for (let i = this.nodes.length - 1; i >= 0; i--) {
+      if (DiagramEditor.inside(this.nodes[i], p)) return this.nodes[i];
+    }
+    return null;
+  }
+
+  /* ── interaction ───────────────────────────────────────────────── */
+
+  setRouting(mode) {
+    this.routing = ROUTINGS.includes(mode) ? mode : 'orthogonal';
+    /* which edges cross a box depends on how they are drawn */
+    this.routesDirty = true;
+    this.requestDraw();
+  }
+
+  setReadOnly(on) {
+    this.readOnly = on;
+    if (on) {
+      this.connectMode = false;
+      this.connectFrom = null;
+      this.drag = null;
+      this.sizing = null;
+      this.guides = null;
+      this.cv.classList.remove('linkmode');
+    }
+    this.requestDraw();
+  }
+
+  /* The two-finger gesture as it stood when it began. Every move is measured
+     against this rather than against the previous frame, so the zoom cannot
+     accumulate drift and the point between the fingers stays under them. */
+  pinchFrom() {
+    const [a, b] = [...this.pointers.values()];
+    const r = this.cv.getBoundingClientRect();
+    return {
+      dist: Math.max(1, Math.hypot(a.x - b.x, a.y - b.y)),
+      mx: (a.x + b.x) / 2 - r.left,
+      my: (a.y + b.y) / 2 - r.top,
+      scale: this.scale, tx: this.tx, ty: this.ty,
+    };
+  }
+
+  /* Zoom about a point in canvas space. Shared by the wheel and the pinch --
+     it was the wheel's arithmetic, written once and needed twice. */
+  zoomAt(mx, my, next) {
+    /* The floor is whatever showed the whole diagram, or 0.15 -- whichever is
+       SMALLER. A fixed floor is only right while every diagram happens to fit
+       above it; below it, zooming out stops at a level that cannot show the
+       flow and Centre-view becomes the only way back to one that can. */
+    const ns = clampTo(next, Math.min(0.15, this.fitScale ?? 0.15), 3);
+    this.tx = mx - (mx - this.tx) * (ns / this.scale);
+    this.ty = my - (my - this.ty) * (ns / this.scale);
+    this.scale = ns;
+  }
+
+  onDown(e) {
+    /* Capture so a drag that leaves the canvas keeps arriving here. In a
+       try because it throws for a pointer the browser does not consider
+       active, and losing capture is a worse drag -- not no drag at all. */
+    try { this.cv.setPointerCapture(e.pointerId); } catch { /* not capturable */ }
+    this.pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (this.pointers.size === 2) {
+      /* A second finger turns the gesture into a pinch. Whatever the first
+         one had already moved is committed rather than abandoned: the card is
+         at its new coordinates on screen either way, so dropping the write
+         would leave the canvas disagreeing with the store. */
+      this.commitGeometry();
+      this.pan = null;
+      this.guides = null;
+      this.cv.classList.remove('dragging');
+      this.pinch = this.pinchFrom();
+      this.requestDraw();
+      return;
+    }
+    if (this.pointers.size > 2) return;
+    if (this.connectMode) return;
+    const p = this.toWorld(e);
+    /* a grip wins over the card under it: the grips sit ON the outline, so
+       the card is always under them too */
+    const grip = this.readOnly ? null : this.handleAt(p);
+    if (grip) {
+      const node = this.byKey[this.selected];
+      /* the opposite corner stays put, so a resize does not walk the card */
+      this.sizing = {
+        node, grip,
+        fx: node.x - grip.sx * node.w / 2,
+        fy: node.y - grip.sy * node.h / 2,
+      };
+      return;
+    }
+    const n = this.readOnly ? null : this.nodeAt(p);
+    if (n) {
+      this.drag = { node: n, dx: n.x - p.x, dy: n.y - p.y };
+    } else {
+      /* still pannable while read-only: moving the view is not editing */
+      this.pan = { x: e.clientX - this.tx, y: e.clientY - this.ty };
+      this.cv.classList.add('dragging');
+    }
+  }
+
+  onMove(e) {
+    if (this.pointers.has(e.pointerId)) {
+      this.pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    }
+    if (this.pinch && this.pointers.size >= 2) {
+      const [a, b] = [...this.pointers.values()];
+      const dist = Math.max(1, Math.hypot(a.x - b.x, a.y - b.y));
+      const p = this.pinch;
+      this.scale = p.scale; this.tx = p.tx; this.ty = p.ty;
+      this.zoomAt(p.mx, p.my, p.scale * (dist / p.dist));
+      this.moved = true;
+      this.hooks.tipHide?.();
+      this.requestDraw();
+      return;
+    }
+    if (this.sizing) {
+      const p = this.toWorld(e);
+      const { node, fx, fy } = this.sizing;
+      const w = clampTo(Math.abs(p.x - fx), NODE_MIN_W, NODE_MAX_W);
+      const h = clampTo(Math.abs(p.y - fy), NODE_MIN_H, NODE_MAX_H);
+      node.w = w;
+      node.h = h;
+      node.x = fx + Math.sign(p.x - fx || 1) * w / 2;
+      node.y = fy + Math.sign(p.y - fy || 1) * h / 2;
+      node.sized = true;
+      this.moved = true;
+      this.hooks.tipHide?.();
+      this.requestDraw();
+      return;
+    }
+    if (this.drag) {
+      const p = this.toWorld(e);
+      const snapped = this.snapToNeighbours(
+        this.drag.node, p.x + this.drag.dx, p.y + this.drag.dy);
+      this.drag.node.x = snapped.x;
+      this.drag.node.y = snapped.y;
+      this.guides = snapped.guides;
+      this.moved = true;
+      this.hooks.tipHide?.();
+      this.requestDraw();
+      return;
+    }
+    if (this.pan) {
+      this.tx = e.clientX - this.pan.x;
+      this.ty = e.clientY - this.pan.y;
+      this.moved = true;
+      this.hooks.tipHide?.();
+      this.requestDraw();
+      return;
+    }
+    const world = this.toWorld(e);
+    const grip = this.readOnly ? null : this.handleAt(world);
+    const n = this.nodeAt(world);
+    /* Asked for in read-only mode too -- the tip below is the only way to
+       read a cut label there. Only the OUTLINE that says "click to edit
+       this" is editor-only, hence the second variable. */
+    const lab = n ? null : this.labelAt(world);
+    const editLab = this.readOnly ? null : lab;
+    if (n !== this.hover || editLab !== this.hoverLabel) {
+      this.hover = n; this.hoverLabel = editLab; this.requestDraw();
+    }
+    /* Only asked when nothing nearer is under the pointer, because it
+       routes every edge to answer. A line is clickable -- it selects that
+       one connection -- and nothing else would say so. */
+    const overLine = !n && !editLab && !this.connectMode && !!this.edgeAt(world);
+    this.cv.style.cursor = this.connectMode ? 'crosshair'
+      : grip ? (grip.id === 'nw' || grip.id === 'se' ? 'nwse-resize' : 'nesw-resize')
+      : editLab ? 'text'
+      : n ? (this.readOnly ? 'pointer' : 'grab')
+      : overLine ? 'pointer' : 'grab';
+    /* A finger has no hover state, so a tip summoned by a tap has nothing
+       that would ever dismiss it -- it would sit on the canvas until the next
+       one moved it. */
+    if (e.pointerType === 'touch') { this.hooks.tipHide?.(); return; }
+    if (n && n.note) {
+      /* The whole note, not a slice of it. A label is cut because it has to
+         fit a box on the canvas; a note has no such constraint, and this tip
+         is the only place a reader gets to read one without opening the
+         inspector -- cutting it at 220 characters made the tip a teaser for
+         itself. The tip wraps and is bounded by the window, so length only
+         costs height. */
+      this.hooks.tipShow?.(
+        `<b>${esc(n.key)}</b><br>${esc(n.note)}`, e.clientX, e.clientY);
+    } else if (lab && DiagramEditor.shortLabel(lab.label) !== lab.label.trim()) {
+      /* only when something is actually hidden -- a tip repeating a badge
+         you can already read is noise following the pointer around */
+      this.hooks.tipShow?.(esc(lab.label.trim()), e.clientX, e.clientY);
+    } else {
+      this.hooks.tipHide?.();
+    }
+  }
+
+  /* Hand whatever was moved or resized to the caller to persist, and mark the
+     routes for a full solve now that the geometry has stopped. Split out of
+     onUp because a pinch beginning mid-drag ends that drag too. */
+  commitGeometry() {
+    if (this.drag || this.sizing) this.routesDirty = true;
+    if (this.drag) {
+      const { node } = this.drag;
+      this.drag = null;
+      this.guides = null;
+      /* optimistic: the box already moved, persistence catches up */
+      this.hooks.onMove?.({ [node.key]: { x: Math.round(node.x), y: Math.round(node.y) } });
+    }
+    if (this.sizing) {
+      const { node } = this.sizing;
+      this.sizing = null;
+      /* size rides the same call as the position: both are geometry, and
+         resizing from a corner moves the centre too */
+      this.hooks.onMove?.({ [node.key]: {
+        x: Math.round(node.x), y: Math.round(node.y),
+        w: Math.round(node.w), h: Math.round(node.h) } });
+    }
+  }
+
+  onUp(e) {
+    if (e) this.pointers.delete(e.pointerId);
+    if (this.pointers.size < 2) this.pinch = null;
+    /* one finger of a pinch lifting is not the end of the gesture */
+    if (this.pointers.size) return;
+    /* Clearing state is not enough: the last frame painted was the one WITH
+       the alignment guides on it, and nothing else here asks for a repaint,
+       so a guide stayed drawn across the whole canvas after the drag ended. */
+    const painted = !!this.guides?.length || !!(this.drag || this.sizing);
+    this.commitGeometry();
+    this.guides = null;
+    this.pan = null;
+    this.cv.classList.remove('dragging');
+    if (painted) this.requestDraw();
+  }
+
+  /* Alignment snap. A dragged card pulls onto another card's centre line
+     once it comes within a few SCREEN pixels, so two steps can be put in
+     the same column or the same row without eyeballing it -- and the guide
+     line says which card it lined up with. */
+  snapToNeighbours(node, x, y) {
+    const tol = SNAP_PX / this.scale;
+    const guides = [];
+    let onX = null, onY = null;
+    for (const m of this.nodes) {
+      if (m === node) continue;
+      if (Math.abs(m.x - x) <= tol && (onX === null || Math.abs(m.x - x) < Math.abs(onX - x))) onX = m.x;
+      if (Math.abs(m.y - y) <= tol && (onY === null || Math.abs(m.y - y) < Math.abs(onY - y))) onY = m.y;
+    }
+    if (onX !== null) { x = onX; guides.push({ axis: 'x', at: onX }); }
+    if (onY !== null) { y = onY; guides.push({ axis: 'y', at: onY }); }
+    return { x, y, guides };
+  }
+
+  drawGuides() {
+    const { cx } = this;
+    if (!this.guides?.length) return;
+    const left = -this.tx / this.scale, right = (this.w - this.tx) / this.scale;
+    const top = -this.ty / this.scale, bottom = (this.h - this.ty) / this.scale;
+    cx.save();
+    cx.strokeStyle = this.colAccent;
+    cx.lineWidth = 1 / this.scale;
+    cx.setLineDash([6 / this.scale, 5 / this.scale]);
+    for (const g of this.guides) {
+      cx.beginPath();
+      if (g.axis === 'x') { cx.moveTo(g.at, top); cx.lineTo(g.at, bottom); }
+      else { cx.moveTo(left, g.at); cx.lineTo(right, g.at); }
+      cx.stroke();
+    }
+    cx.restore();
+  }
+
+  onWheel(e) {
+    e.preventDefault();
+    const r = this.cv.getBoundingClientRect();
+    this.zoomAt(e.clientX - r.left, e.clientY - r.top,
+                this.scale * (e.deltaY < 0 ? 1.13 : 1 / 1.13));
+    this.requestDraw();
+  }
+
+  onClick(e) {
+    if (this.moved) { this.moved = false; return; }
+    const world = this.toWorld(e);
+    const n = this.nodeAt(world);
+    /* the condition written on a line is edited by clicking that text --
+       checked before the nodes, since a label never sits inside a box */
+    if (!n && !this.readOnly && !this.connectMode) {
+      const lab = this.labelAt(world);
+      if (lab) { this.hooks.onEditEdgeLabel?.(lab); return; }
+    }
+    if (this.connectMode) {
+      if (!n) return;
+      if (!this.connectFrom) {
+        this.connectFrom = n;
+        this.hooks.onConnectProgress?.(n);
+      } else if (n !== this.connectFrom) {
+        const from = this.connectFrom;
+        this.connectFrom = null;
+        this.hooks.onConnect?.(from.key, n.key);
+      }
+      this.requestDraw();
+      return;
+    }
+    if (n) {
+      this.selectedEdge = null;
+      this.selected = n.key;
+      this.requestDraw();
+      this.hooks.onSelect?.(n);
+      this.hooks.onSelectEdge?.(null);
+      return;
+    }
+    /* Not a card: a LINE, if the pointer is near one. Selecting a single
+       connection is the only way to read where ONE branch of a fork goes --
+       selecting the card highlights every arrow leaving it, which on a step
+       with six outcomes is the question, not the answer. */
+    const edge = this.edgeAt(world);
+    this.selected = null;
+    this.selectedEdge = edge || null;
+    this.requestDraw();
+    this.hooks.onSelect?.(null);
+    this.hooks.onSelectEdge?.(this.selectedEdge);
+  }
+
+  /* Select a connection from outside the canvas (the inspector's rows). */
+  selectEdge(from, to) {
+    this.selectedEdge = this.edges.find(e => e.from === from && e.to === to) || null;
+    if (this.selectedEdge) this.selected = null;
+    this.requestDraw();
+    return this.selectedEdge;
+  }
+
+  /* Right-click. Whatever is under the pointer decides what the menu can
+     offer, so app.js gets the hit and not the coordinates alone. A line
+     is picked by the LINE, not by its label -- which is the only way to
+     reach an edge that has no label yet. */
+  onContext(e) {
+    if (!this.hooks.onContextMenu) return;
+    e.preventDefault();
+    const world = this.toWorld(e);
+    const node = this.nodeAt(world);
+    const edge = node ? null : (this.labelAt(world) || this.edgeAt(world));
+    if (node && node.key !== this.selected) {
+      this.selected = node.key;
+      this.requestDraw();
+      this.hooks.onSelect?.(node);
+    }
+    this.hooks.onContextMenu({ world, x: e.clientX, y: e.clientY, node, edge });
+  }
+
+  /* Begin a connection with one end already chosen (the context menu route
+     in; the toolbar button leaves both ends to be clicked). */
+  startConnectFrom(key) {
+    const n = this.byKey[key];
+    if (this.readOnly || !n) return;
+    this.toggleConnectMode(true);
+    this.connectFrom = n;
+    this.hooks.onConnectProgress?.(n);
+    this.requestDraw();
+  }
+
+  toggleConnectMode(on = !this.connectMode) {
+    if (this.readOnly) on = false;
+    this.connectMode = on;
+    this.connectFrom = null;
+    this.cv.classList.toggle('linkmode', on);
+    this.requestDraw();
+    this.hooks.onConnectProgress?.(null);
+  }
+
+  select(key) {
+    this.selected = this.byKey[key] ? key : null;
+    this.requestDraw();
+  }
+
+  /* Arrive ON a step: select it and put it in the middle of the free area.
+     What a jump between diagrams lands on -- the whole point of naming a
+     step at the far end is arriving at it, and fit() would frame the flow
+     and leave the reader to find the one card that was meant.
+
+     Zoom deliberately not left at the fit: a 34-step routine fits at ~0.35,
+     where the label on the card you just navigated to is unreadable. It
+     opens near 1:1 unless the whole diagram already fits closer than that,
+     and panning out from there is one wheel turn. */
+  focusNode(key) {
+    const n = this.byKey[key];
+    if (!n || !this.w) return false;
+    this.selected = key;
+    this.selectedEdge = null;
+    this.scale = clampTo(Math.max(this.fitScale ?? 1, 0.9), 0.15, 1.2);
+    const ins = this.hooks.insets?.() || {};
+    const top = ins.top || 0, bottom = ins.bottom || 0;
+    const left = ins.left || 0, right = ins.right || 0;
+    this.tx = left + (this.w - left - right) / 2 - n.x * this.scale;
+    this.ty = top + (this.h - top - bottom) / 2 - n.y * this.scale;
+    this.requestDraw();
+    return true;
+  }
+
+  /* ── drawing ───────────────────────────────────────────────────── */
+
+  requestDraw() {
+    if (this.destroyed || this._frame) return;
+    this._frame = requestAnimationFrame(() => {
+      this._frame = 0;
+      if (this.destroyed) return;
+      /* self-heal: re-measure if the stage moved under us since the last
+         draw, so a missed observer tick costs one blurry frame at worst
+         instead of leaving the backing store permanently wrong */
+      const stage = this.cv.parentElement;
+      if (stage.clientWidth !== this.w || stage.clientHeight !== this.h) this.resize();
+      this.draw();
+    });
+  }
+
+  /* The four points an edge may attach to: the centre of each side.
+     Per shape, because the old approach -- clip a ray from the centre to
+     the bounding rectangle -- lands in empty space beside a diamond,
+     whose sides do not follow that rectangle at all. */
+  static anchors(n) {
+    const hw = n.w / 2, hh = n.h / 2;
+    if (n.shape === 'io') {
+      /* Top and bottom attach on the card's CENTRE LINE, not at the middle
+         of those two edges. The parallelogram leans, so the middle of its
+         top edge sits half a skew right of centre and the middle of its
+         bottom edge half a skew left -- 14 units apart. A line arriving
+         from above and the line leaving underneath then came in and out at
+         different x, and a step you just pass through looked kinked.
+         Centre is still ON both edges (the lean is smaller than the card),
+         and it is where the flow reads as passing straight through.
+
+         The slanted sides are different: their middle IS half a lean in,
+         and nothing lines up against them. */
+      const s = IO_SKEW / 2;
+      return {
+        top: { x: n.x, y: n.y - hh }, bottom: { x: n.x, y: n.y + hh },
+        left: { x: n.x - hw + s, y: n.y }, right: { x: n.x + hw - s, y: n.y },
+      };
+    }
+    /* rectangle, stadium and diamond all attach at the middle of a side --
+       and for a diamond that middle IS its vertex */
+    return {
+      top: { x: n.x, y: n.y - hh }, bottom: { x: n.x, y: n.y + hh },
+      left: { x: n.x - hw, y: n.y }, right: { x: n.x + hw, y: n.y },
+    };
+  }
+
+  /* Which side each end leaves from, taken from where the boxes sit
+     relative to each other: mostly-vertical runs use top/bottom, mostly
+     horizontal ones left/right. An edge routed through a corridor always
+     leaves and enters vertically -- it turns sideways in the gap BETWEEN
+     two rows, where there is nothing to run over, rather than out of the
+     side of a box across whatever else shares that row. */
+  static sides(a, b, viaCorridor) {
+    const dx = b.x - a.x, dy = b.y - a.y;
+    if (viaCorridor) return dy >= 0 ? ['bottom', 'top'] : ['top', 'bottom'];
+    if (Math.abs(dy) >= Math.abs(dx)) return dy >= 0 ? ['bottom', 'top'] : ['top', 'bottom'];
+    return dx >= 0 ? ['right', 'left'] : ['left', 'right'];
+  }
+
+  /* How far along its own side an anchor may be nudged, as [lo, hi] in the
+     axis that side runs along -- or null for a side that cannot take one.
+
+     This exists because "the middle of the side" and "in line with the card
+     below" are not the same point. A parallelogram leans, so the middle of
+     its bottom edge sits half a skew off its centre line, and a run into the
+     card underneath came out a couple of degrees off vertical: a visibly
+     crooked line in a drawing where everything else is square. A diamond's
+     vertex is one point and cannot move; a stadium's left and right are the
+     apex of a curve, so those cannot either. */
+  static slideSpan(n, side) {
+    const hw = n.w / 2, hh = n.h / 2, inset = 12;
+    const vertical = side === 'top' || side === 'bottom';
+    if (n.shape === 'decision') return null;
+    if (n.shape === 'io') {
+      if (!vertical) return null;                 /* the slanted sides */
+      const lo = side === 'top' ? n.x - hw + IO_SKEW : n.x - hw;
+      const hi = side === 'top' ? n.x + hw : n.x + hw - IO_SKEW;
+      return [lo + inset, hi - inset];
+    }
+    const round = n.shape === 'start' || n.shape === 'end' ? hh : 10;
+    if (vertical) return [n.x - hw + round + inset, n.x + hw - round - inset];
+    if (round === hh) return null;                /* a stadium's round cap */
+    return [n.y - hh + round + inset, n.y + hh - round - inset];
+  }
+
+  /* An anchor moved along its own side by `by`, clamped to what the shape
+     allows. Unchanged for a side that cannot take one: a diamond's vertex
+     is a single point, a stadium's left and right are the apex of a curve.
+     Those keep the centre and rely on the staggered stub instead. */
+  /* A point moved sideways relative to a side: along x for top and bottom,
+     along y for left and right. This is how an edge gets its own parallel
+     track -- the offset is on the PATH, never on where it attaches, so it
+     works the same for a rectangle, a parallelogram and a diamond's tip.
+     Attaching the offset to the anchor instead is what put arrows on the
+     face of a diamond and five separate landings on one card. */
+  static alongSide(pt, side, by) {
+    return side === 'top' || side === 'bottom'
+      ? { x: pt.x + by, y: pt.y }
+      : { x: pt.x, y: pt.y + by };
+  }
+
+  /* Give every edge sharing a card's side its own place on it.
+
+     Two things move. The anchor slides along the side (FAN_GAP apart), and
+     the stub -- how far out the edge travels before it turns -- is
+     staggered (FAN_STUB per edge). The anchor alone is not enough: two
+     edges entering one card's top from opposite directions would still turn
+     at the same depth and share that horizontal leg.
+
+     Members are ordered by where their far end sits along the side's own
+     axis, so the fanned lines keep their relative order and do not cross
+     each other right at the card.
+
+     Called only from a full pass -- the sides depend on which edges took a
+     corridor, and a drag keeps the previous solution. */
+  assignFans() {
+    const groups = new Map();
+    for (const e of this.edges) {
+      const a = this.byKey[e.from], b = this.byKey[e.to];
+      const [sideFrom, sideTo] = DiagramEditor.sides(a, b, this.corridorFor(e) !== null);
+      e.fanFrom = 0; e.fanTo = 0; e.stubFrom = 0; e.stubTo = 0;
+      for (const [key, side, self, peer, end] of
+           [[e.from, sideFrom, a, b, 'From'], [e.to, sideTo, b, a, 'To']]) {
+        const id = `${key}|${side}`;
+        if (!groups.has(id)) groups.set(id, []);
+        groups.get(id).push({ e, side, self, peer, end });
+      }
+    }
+    for (const members of groups.values()) {
+      if (members.length < 2) continue;
+      const vertical = members[0].side === 'top' || members[0].side === 'bottom';
+      const along = m => (vertical ? m.peer.x : m.peer.y);
+      members.sort((m, n) => along(m) - along(n));
+      const mid = (members.length - 1) / 2;
+      members.forEach((m, i) => {
+        m.e[`fan${m.end}`] = (i - mid) * FAN_GAP;
+        /* Strictly increasing, NOT symmetric about the middle: a symmetric
+           depth gives the two members of a pair the same stub, which is
+           exactly the case that needs them different. */
+        m.e[`stub${m.end}`] = i * FAN_STUB;
+      });
+    }
+  }
+
+  /* Separation is worth a lot, but never worth a line drawn through a card.
+     Moving an anchor can push a route into a box the centred route missed,
+     so any fanned edge that now collides gives its fan up -- unless it was
+     colliding anyway, in which case the separation costs nothing. */
+  unfanCollisions() {
+    for (const e of this.edges) {
+      if (!(e.fanFrom || e.fanTo || e.stubFrom || e.stubTo)) continue;
+      if (!this.routeHitsABox(e)) continue;
+      const saved = [e.fanFrom, e.fanTo, e.stubFrom, e.stubTo];
+      e.fanFrom = 0; e.fanTo = 0; e.stubFrom = 0; e.stubTo = 0;
+      if (this.routeHitsABox(e)) [e.fanFrom, e.fanTo, e.stubFrom, e.stubTo] = saved;
+    }
+  }
+
+  /* The anchor's coordinate moved towards `to` along its side, if the side
+     allows it and the move stays small. null when it cannot line up. */
+  static slide(n, side, from, to) {
+    const span = DiagramEditor.slideSpan(n, side);
+    if (!span || span[0] >= span[1]) return null;
+    if (Math.abs(to - from) > ORTH_SNAP) return null;
+    const landed = Math.min(span[1], Math.max(span[0], to));
+    return Math.abs(landed - to) < 0.01 ? landed : null;
+  }
+
+  /* Push an anchor outwards so the arrow tip stops short of the box. */
+  static offset(p, side, by) {
+    if (side === 'top') return { x: p.x, y: p.y - by };
+    if (side === 'bottom') return { x: p.x, y: p.y + by };
+    if (side === 'left') return { x: p.x - by, y: p.y };
+    return { x: p.x + by, y: p.y };
+  }
+
+  /* The vertical line an edge runs along instead of going straight between
+     its ends: a side lane for a loop closer, or a local corridor for one
+     that would otherwise cross a box. null for the ordinary case. */
+  corridorFor(e) {
+    if (e.lane) {
+      const a = this.byKey[e.from], b = this.byKey[e.to];
+      const reach = Math.abs(e.bow || ORTH_STUB);
+      return e.lane > 0 ? Math.max(a.x, b.x) + reach : Math.min(a.x, b.x) - reach;
+    }
+    return e.via?.corridor ?? null;
+  }
+
+  /* The polyline an edge follows, ends included. */
+  route(e) {
+    const a = this.byKey[e.from], b = this.byKey[e.to];
+    const corridorX = this.corridorFor(e);
+    const [sideFrom, sideTo] = DiagramEditor.sides(a, b, corridorX !== null);
+    /* The contact point is the anchor itself: the centre of a side, the tip
+       of a diamond. Every edge sharing it lands on it, because several
+       arrows converging on one point is what a flowchart looks like --
+       several arrows landing on different parts of one card is not, which
+       is what attaching the fan to the anchor got wrong.
+
+       What separates is the APPROACH. Each edge runs parallel at its own
+       offset and funnels into the shared point over the last few units, so
+       the paths are readable apart and the contact stays single. */
+    const tail = DiagramEditor.offset(DiagramEditor.anchors(a)[sideFrom], sideFrom, 0);
+    const head = DiagramEditor.offset(DiagramEditor.anchors(b)[sideTo], sideTo, ARROW_GAP);
+
+    if (this.routing === 'curved') {
+      return { pts: [tail, head], curve: this.curveCtrl(tail, head, e) };
+    }
+
+    /* Where the parallel run begins and ends -- offset sideways from the
+       centre line, MERGE_GAP out from the card. */
+    const p = e.fanFrom
+      ? DiagramEditor.alongSide(DiagramEditor.offset(tail, sideFrom, MERGE_GAP), sideFrom, e.fanFrom)
+      : tail;
+    const q = e.fanTo
+      ? DiagramEditor.alongSide(DiagramEditor.offset(head, sideTo, MERGE_GAP), sideTo, e.fanTo)
+      : head;
+    /* MERGE_TAIL of straight line at each end, so an edge leaves and arrives
+       square and the arrowhead is not drawn on a diagonal. */
+    const lead = [tail];
+    if (p !== tail) lead.push(DiagramEditor.offset(tail, sideFrom, MERGE_TAIL), p);
+    const trail = [];
+    if (q !== head) trail.push(q, DiagramEditor.offset(head, sideTo, MERGE_TAIL));
+    trail.push(head);
+    /* lead ends at p and trail starts at q in both cases, so the section
+       built below is only what goes strictly between them */
+    const done = body => ({ pts: [...lead, ...body, ...trail], curve: null });
+
+    /* its own turning depth too, so the legs perpendicular to a side do not
+       share a line either */
+    const stubFrom = ORTH_STUB + (e.stubFrom || 0);
+    const stubTo = ORTH_STUB + (e.stubTo || 0);
+    const fanned = !!(e.fanFrom || e.fanTo || e.stubFrom || e.stubTo);
+
+    if (corridorX !== null) {
+      /* clear of the box, sideways in the row gap, along the corridor, and
+         back into the far end the same way -- all axis-aligned */
+      const leave = DiagramEditor.offset(p, sideFrom, stubFrom);
+      const enter = DiagramEditor.offset(q, sideTo, stubTo);
+      return done([leave, { x: corridorX, y: leave.y },
+                   { x: corridorX, y: enter.y }, enter]);
+    }
+    const vertical = sideFrom === 'top' || sideFrom === 'bottom';
+    /* Nearly in line? Slide one anchor along its own side so the run is
+       EXACTLY straight, instead of drawing the near-miss as a slant. Either
+       end will do, so try the tail first and fall back to the head. */
+    const axis = vertical ? 'x' : 'y';
+    /* Not for a fanned edge: lining it up would put it back on the line the
+       fan just moved it off. */
+    if (!fanned && Math.abs(p[axis] - q[axis]) > 0.01) {
+      const movedTail = DiagramEditor.slide(a, sideFrom, p[axis], q[axis]);
+      if (movedTail !== null) p[axis] = movedTail;
+      else {
+        const movedHead = DiagramEditor.slide(b, sideTo, q[axis], p[axis]);
+        if (movedHead !== null) q[axis] = movedHead;
+      }
+    }
+    const across = vertical ? Math.abs(p.x - q.x) : Math.abs(p.y - q.y);
+    const along = vertical ? Math.abs(p.y - q.y) : Math.abs(p.x - q.x);
+    /* Straight through when the offset is too small to read as a detour, or
+       when the run is too short to fit corners in -- both otherwise produce
+       the same wiggle.
+
+       NOT for a fanned edge, though. Its ends are offset on purpose, and
+       drawing that as one "straight" line makes it a slant: three degrees
+       off vertical in a picture where everything else is square, which
+       reads as a kink and not as a deliberate separation. It takes the Z.
+       A run too short for corners still slants -- a Z crammed into it is
+       the worse of the two. */
+    const bar = e.via?.crossY;
+    const nearlyInLine = across <= ORTH_SNAP && !fanned;
+    if (bar == null && (nearlyInLine || along <= ORTH_RADIUS * 2)) {
+      return done([]);
+    }
+    if (vertical) {
+      if (sideTo === 'top' || sideTo === 'bottom') {
+        /* Z: down, across, down. The crossbar is normally half way, but a
+           detour may have moved it into a gap where nothing is in the way,
+           and a fanned edge shifts it so two Zs between the same cards do
+           not share their crossbar. */
+        const midY = (bar ?? (p.y + q.y) / 2) + (e.stubFrom || 0);
+        return done([{ x: p.x, y: midY }, { x: q.x, y: midY }]);
+      }
+      return done([{ x: p.x, y: q.y }]);            /* L: down, then across */
+    }
+    if (sideTo === 'left' || sideTo === 'right') {
+      const midX = (p.x + q.x) / 2;                /* Z: across, down, across */
+      return done([{ x: midX, y: p.y }, { x: midX, y: q.y }]);
+    }
+    return done([{ x: q.x, y: p.y }]);              /* L: across, then down */
+  }
+
+  curveCtrl(p, q, e) {
+    const mx = (p.x + q.x) / 2, my = (p.y + q.y) / 2;
+    /* the same edges that take a corridor in right-angled mode bow here: a
+       straight chord through six boxes is no better drawn as a curve. The
+       control point is twice the offset, so the curve itself reaches the
+       corridor at its halfway point. */
+    const corridor = this.corridorFor(e);
+    return corridor === null ? null : { x: mx + (corridor - mx) * 2, y: my };
+  }
+
+  /* A quadratic sampled into a polyline, so hit-testing and measuring work
+     the same whether an edge was drawn curved or right-angled. */
+  static flatten(pts, curve) {
+    if (!curve) return pts;
+    const [p, q] = pts;
+    const out = [];
+    for (let i = 0; i <= 12; i++) {
+      const t = i / 12, u = 1 - t;
+      out.push({
+        x: u * u * p.x + 2 * u * t * curve.x + t * t * q.x,
+        y: u * u * p.y + 2 * u * t * curve.y + t * t * q.y,
+      });
+    }
+    return out;
+  }
+
+  static distToSeg(p, a, b) {
+    const vx = b.x - a.x, vy = b.y - a.y;
+    const len2 = vx * vx + vy * vy;
+    const t = len2 ? Math.max(0, Math.min(1, ((p.x - a.x) * vx + (p.y - a.y) * vy) / len2)) : 0;
+    return Math.hypot(p.x - (a.x + vx * t), p.y - (a.y + vy * t));
+  }
+
+  /* The edge whose LINE passes under a world point. Routed fresh rather
+     than read off the last frame, so a line can be picked at the position
+     it is actually drawn at even mid-drag. */
+  edgeAt(p) {
+    const tol = EDGE_PICK_PX / this.scale;
+    let best = null, bestD = Infinity;
+    for (const e of this.edges) {
+      if (!this.byKey[e.from] || !this.byKey[e.to]) continue;
+      const { pts, curve } = this.route(e);
+      const flat = DiagramEditor.flatten(pts, curve);
+      for (let i = 1; i < flat.length; i++) {
+        const d = DiagramEditor.distToSeg(p, flat[i - 1], flat[i]);
+        if (d < bestD) { bestD = d; best = e; }
+      }
+    }
+    return bestD <= tol ? best : null;
+  }
+
+  /* Point half way along a polyline, for placing the label. */
+  static midpoint(pts) {
+    let total = 0;
+    const segs = [];
+    for (let i = 1; i < pts.length; i++) {
+      const len = Math.hypot(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y);
+      segs.push(len); total += len;
+    }
+    let walked = 0;
+    for (let i = 0; i < segs.length; i++) {
+      if (walked + segs[i] >= total / 2) {
+        const f = segs[i] ? (total / 2 - walked) / segs[i] : 0;
+        return { x: pts[i].x + (pts[i + 1].x - pts[i].x) * f,
+                 y: pts[i].y + (pts[i + 1].y - pts[i].y) * f };
+      }
+      walked += segs[i];
+    }
+    return pts[0];
+  }
+
+  /* `grow` traces the outline `grow` units OUTSIDE the shape, which is how
+     the selection ring is drawn without transforming the canvas mid-path.
+
+     A parallel offset, not a bigger bounding box. Scaling half-width and
+     half-height by the same amount is not the same curve: on a diamond,
+     whose left and right vertices are acute, it leaves the ring touching
+     the shape at the tips while standing clear along the sides -- which is
+     exactly what "the border isn't going around the card" looked like. */
+  shapePath(n, grow = 0) {
+    const { cx } = this;
+    cx.beginPath();
+    if (n.shape === 'decision') {
+      /* the edge is x/a + y/b = 1, so offsetting it by `grow` scales the
+         whole diamond by 1 + grow*|(1/a, 1/b)| -- at the sharp tips that
+         reaches much further out along the axis than `grow` itself */
+      const a = n.w / 2, b = n.h / 2;
+      const k = 1 + grow * Math.hypot(1 / a, 1 / b);
+      const hw = a * k, hh = b * k;
+      cx.moveTo(n.x, n.y - hh);
+      cx.lineTo(n.x + hw, n.y);
+      cx.lineTo(n.x, n.y + hh);
+      cx.lineTo(n.x - hw, n.y);
+      cx.closePath();
+      return;
+    }
+    if (n.shape === 'io') {
+      /* A slanted side stays PARALLEL only if the lean grows with the
+         height: keeping the skew fixed tilts the ring slightly against the
+         card, so the gap ends up wider at one end than the other. The lines
+         are x + m*y = c, so an offset of `grow` moves c by grow*√(1+m²) --
+         and the extra m*grow puts the widened height back on the width. */
+      const m = IO_SKEW / (n.h || 1);
+      const hh = n.h / 2 + grow;
+      const hw = n.w / 2 + grow * (Math.sqrt(1 + m * m) + m);
+      const skew = IO_SKEW * (hh / (n.h / 2));
+      cx.moveTo(n.x - hw + skew, n.y - hh);
+      cx.lineTo(n.x + hw, n.y - hh);
+      cx.lineTo(n.x + hw - skew, n.y + hh);
+      cx.lineTo(n.x - hw, n.y + hh);
+      cx.closePath();
+      return;
+    }
+    const hw = n.w / 2 + grow, hh = n.h / 2 + grow;
+    const box = [n.x - hw, n.y - hh, hw * 2, hh * 2];
+    /* a rounded corner offsets into a rounded corner of radius r + grow;
+       leaving the radius alone is what made the ring's corners read as a
+       different shape from the card's */
+    const terminal = n.shape === 'start' || n.shape === 'end';
+    if (cx.roundRect) cx.roundRect(...box, terminal ? hh : 10 + grow);
+    else cx.rect(...box);
+  }
+
+  /* Half the shape's width at a given offset from its centre line. What
+     keeps a corner marker inside a shape whose corners are not where its
+     bounding box says they are. */
+  static halfWidthAt(n, dy) {
+    const hw = n.w / 2, hh = n.h / 2;
+    const t = Math.min(1, Math.abs(dy) / (hh || 1));
+    if (n.shape === 'decision') return hw * (1 - t);
+    if (n.shape === 'io') return hw - IO_SKEW * (dy + hh) / (n.h || 1);
+    if (n.shape === 'start' || n.shape === 'end') {
+      /* a stadium: the caps are semicircles of radius hh */
+      return hw - hh + Math.sqrt(Math.max(0, hh * hh - dy * dy));
+    }
+    return hw;   /* a rounded rectangle, near enough for a 10-unit radius */
+  }
+
+  wrap(text, maxWidth, maxLines) {
+    const { cx } = this;
+    const words = String(text).split(/\s+/).filter(Boolean);
+    const lines = [];
+    let line = '';
+    for (const word of words) {
+      const next = line ? `${line} ${word}` : word;
+      if (cx.measureText(next).width <= maxWidth || !line) {
+        line = next;
+      } else {
+        lines.push(line);
+        line = word;
+        if (lines.length === maxLines) break;
+      }
+    }
+    if (lines.length < maxLines && line) lines.push(line);
+    if (lines.length === maxLines) {
+      const consumed = lines.join(' ').length;
+      if (consumed < String(text).trim().length) {
+        lines[maxLines - 1] = this.clamp(`${lines[maxLines - 1]}…`, maxWidth);
+      }
+    }
+    /* A single word with no break opportunity is forced onto its line
+       above, so it can still be wider than the box -- and a routine or
+       function name is exactly that: one long CamelCase token. Clamp
+       every line by character, not just the last one. */
+    return lines.map(l => this.clamp(l, maxWidth));
+  }
+
+  /* Shorten one line by characters until it fits, ellipsis included. */
+  clamp(line, maxWidth) {
+    const { cx } = this;
+    if (cx.measureText(line).width <= maxWidth) return line;
+    let cut = line.replace(/…$/, '');
+    while (cut && cx.measureText(`${cut}…`).width > maxWidth) cut = cut.slice(0, -1);
+    return `${cut}…`;
+  }
+
+  /* `hot` is an edge of the selected step -- drawn over the others, in the
+     selection colour, with its condition readable at any zoom. A step with
+     six lines through it is unreadable otherwise: this is what says which
+     of them are its own. `dim` is everything else while that lasts. */
+  drawEdge(e, { hot = false, dim = false } = {}) {
+    const { cx } = this;
+    const a = this.byKey[e.from], b = this.byKey[e.to];
+    if (!a || !b) { e.hit = null; return; }
+    /* dashed + amber says ONE thing: this edge closes a cycle. It comes
+       from the graph (see db.loop_edges), not from which way the line
+       happens to point after someone dragged a card. */
+    const back = !!e.loops;
+    const { pts, curve } = this.route(e);
+    const from = pts[0], to = pts[pts.length - 1];
+    const strong = back ? this.colWarn : (hot ? this.colAccent : this.colInk2);
+
+    cx.save();
+    if (dim) cx.globalAlpha = 0.3;
+    cx.strokeStyle = hot ? strong : (back ? this.colWarn : this.colLine);
+    cx.lineWidth = (hot ? 2.6 : back ? 1.4 : 1.7) / this.scale;
+    if (back) cx.setLineDash([5 / this.scale, 4 / this.scale]);
+    cx.beginPath();
+    cx.moveTo(from.x, from.y);
+    if (curve) {
+      cx.quadraticCurveTo(curve.x, curve.y, to.x, to.y);
+    } else if (pts.length === 2) {
+      cx.lineTo(to.x, to.y);
+    } else {
+      /* arcTo rounds each corner for us, so a right-angled run reads as a
+         drawn line rather than a staircase of hard pixels. The radius is
+         capped at half of each neighbouring leg: a fixed radius on a short
+         leg eats past the next corner and bows the whole run. */
+      for (let i = 1; i < pts.length - 1; i++) {
+        const prev = pts[i - 1], here = pts[i], next = pts[i + 1];
+        const r = Math.min(ORTH_RADIUS,
+          Math.hypot(here.x - prev.x, here.y - prev.y) / 2,
+          Math.hypot(next.x - here.x, next.y - here.y) / 2);
+        cx.arcTo(here.x, here.y, next.x, next.y, Math.max(0, r));
+      }
+      cx.lineTo(to.x, to.y);
+    }
+    cx.stroke();
+    cx.setLineDash([]);
+
+    /* arrowhead along whatever the last stretch was heading */
+    const prev = curve || pts[pts.length - 2];
+    const tanX = to.x - prev.x, tanY = to.y - prev.y;
+    const d = Math.hypot(tanX, tanY) || 1;
+    const ux = tanX / d, uy = tanY / d;
+    const s = hot ? 11 : 9;
+    cx.beginPath();
+    cx.moveTo(to.x, to.y);
+    cx.lineTo(to.x - ux * s - uy * s * 0.45, to.y - uy * s + ux * s * 0.45);
+    cx.lineTo(to.x - ux * s + uy * s * 0.45, to.y - uy * s - ux * s * 0.45);
+    cx.closePath();
+    cx.fillStyle = strong;
+    cx.fill();
+
+    e.hit = null;
+    /* a selected step's own conditions stay legible even zoomed out, which
+       is the whole point of the highlight */
+    if (!e.label || (this.scale <= 0.4 && !hot)) { cx.restore(); return; }
+    const at = curve
+      ? { x: (from.x + 2 * curve.x + to.x) / 4, y: (from.y + 2 * curve.y + to.y) / 4 }
+      : DiagramEditor.midpoint(pts);
+    /* world units, same reason as node labels -- except on a highlighted
+       edge, which is sized to stay readable at whatever zoom you are at */
+    const base = BADGE_PX * this.fontScale;
+    const px = hot ? Math.max(base, (base + 1) / this.scale) : base;
+    cx.font = `${px}px ${FONT_MONO}`;
+    const text = DiagramEditor.shortLabel(e.label);
+    const wide = cx.measureText(text).width;
+    const pad = px * 0.4;
+    const box = { x: at.x - wide / 2 - pad, y: at.y - px * 0.8,
+                  w: wide + pad * 2, h: px * 1.6 };
+    cx.fillStyle = this.colSurface;
+    cx.fillRect(box.x, box.y, box.w, box.h);
+    if (!this.readOnly || hot) {
+      /* an outline says the text itself is the thing you click to change */
+      cx.strokeStyle = (e === this.hoverLabel || hot) ? this.colAccent : this.colLine;
+      cx.lineWidth = 1 / this.scale;
+      cx.strokeRect(box.x, box.y, box.w, box.h);
+    }
+    cx.fillStyle = hot ? this.colInk : (back ? this.colWarn : this.colInk2);
+    cx.textAlign = 'center';
+    cx.textBaseline = 'middle';
+    cx.fillText(text, at.x, at.y);
+    cx.restore();
+    e.hit = box;                         /* for labelAt(), see onClick */
+  }
+
+  /* An edge label cut down to the phrase that is drawn on the line. Returns
+     the label unchanged when the whole thing fits, so a caller can compare
+     the two to find out whether anything is being hidden. */
+  static shortLabel(text) {
+    const full = String(text ?? '').trim();
+    const words = full.split(/\s+/);
+    if (words.length <= BADGE_WORDS || full.length <= BADGE_CHARS) return full;
+    let cut = words.slice(0, BADGE_WORDS).join(' ');
+    if (cut.length > BADGE_CHARS) cut = cut.slice(0, BADGE_CHARS);
+    /* Either cut can land on punctuation -- a space, a comma, the colon that
+       introduced the half being dropped -- and that reads as a typo once the
+       ellipsis is stuck to it. */
+    return `${cut.replace(/[\s,;:.\-/]+$/, '')}…`;
+  }
+
+  /* The edge whose label sits under a world point, if any. */
+  labelAt(p) {
+    for (const e of this.edges) {
+      const h = e.hit;
+      if (h && p.x >= h.x && p.x <= h.x + h.w && p.y >= h.y && p.y <= h.y + h.h) return e;
+    }
+    return null;
+  }
+
+  drawNode(n, orphan, ringed = false) {
+    const { cx } = this;
+    const terminal = n.shape === 'start' || n.shape === 'end';
+    this.shapePath(n);
+    cx.fillStyle = terminal ? this.colNode : this.colSurface;
+    cx.fill();
+    this.shapePath(n);
+    cx.strokeStyle = orphan ? this.colWarn : this.colNode;
+    cx.lineWidth = (orphan ? 2 : 1.6) / this.scale;
+    if (orphan) cx.setLineDash([4 / this.scale, 3 / this.scale]);
+    cx.stroke();
+    cx.setLineDash([]);
+
+    if (n.key === this.selected || n === this.connectFrom || ringed) {
+      this.shapePath(n, 6);
+      cx.strokeStyle = this.colAccent;
+      cx.lineWidth = 1.6 / this.scale;
+      if (n === this.connectFrom) cx.setLineDash([4 / this.scale, 3 / this.scale]);
+      cx.stroke();
+      cx.setLineDash([]);
+    }
+
+    if (this.scale < 0.3) return;
+    /* World units, NOT 11.5/scale. The boxes are in world units, so a font
+       sized to stay constant on screen grows relative to its box as you
+       zoom out and the label spills over the edges -- which is exactly
+       what happened. Scaling with the box keeps text inside it at every
+       zoom, at the cost of small text when zoomed far out (hence the
+       early return above). The diagram's font scale multiplies both. */
+    const px = LABEL_PX * this.fontScale;
+    const lh = LABEL_LH * this.fontScale;
+    cx.font = `${px}px ${FONT_UI}`;
+    cx.fillStyle = terminal ? '#000' : this.colInk;
+    cx.textAlign = 'center';
+    cx.textBaseline = 'middle';
+    /* as many lines as the card is tall enough for: a resized card is only
+       worth resizing if the text it was resized for actually appears */
+    const maxLines = Math.max(1, Math.floor((n.h - 8) / lh));
+    const room = DiagramEditor.halfWidthAt(n, 0) * 2
+      - (n.shape === 'decision' ? n.w * 0.32 : 20);
+    const lines = this.wrap(n.label, room, maxLines);
+    const top = n.y - (lines.length - 1) * lh / 2;
+    lines.forEach((line, i) => cx.fillText(line, n.x, top + i * lh));
+
+    /* Attached memories carry a marker, because nothing else on the canvas
+       hints at them. A note does NOT: hovering the card shows it, and a
+       glyph on most of the cards of a documented flow is just noise. */
+    const count = this.linkCount[n.key];
+    if (count && this.scale > 0.45) {
+      /* save/restore because this is the last thing drawn on a card: the
+         font and textAlign set below otherwise leak into the next frame,
+         where every consumer happens to set its own -- happens to, which
+         is not something to leave a later edit standing on */
+      cx.save();
+      const bpx = BADGE_PX * this.fontScale;
+      const color = terminal ? 'rgba(0,0,0,.6)' : this.colInk2;
+      /* inside the SHAPE, not inside its bounding box -- the top-right
+         corner of the box is empty space on a diamond and outside the
+         curve on a stadium, which is where this used to land */
+      const dy = -n.h / 2 + bpx * 0.9;
+      const right = n.x + DiagramEditor.halfWidthAt(n, dy) - 5;
+      const midY = n.y + dy + bpx / 2;
+      cx.font = `${bpx}px ${FONT_MONO}`;
+      cx.fillStyle = color;
+      cx.textAlign = 'right';
+      cx.fillText(String(count), right, midY);
+      this.drawLinkMark(right - cx.measureText(String(count)).width - bpx * 0.3, midY, bpx, color);
+      cx.restore();
+    }
+
+    /* Steps that continue in another flow get their own mark, in the
+       OPPOSITE corner: two counts sharing one corner read as a single
+       two-digit number, and these two say different things. */
+    const jumps = this.jumpCount[n.key];
+    if (jumps && this.scale > 0.45) {
+      cx.save();
+      const bpx = BADGE_PX * this.fontScale;
+      const color = terminal ? 'rgba(0,0,0,.6)' : this.colInk2;
+      const dy = n.h / 2 - bpx * 0.9;
+      const right = n.x + DiagramEditor.halfWidthAt(n, dy) - 5;
+      const midY = n.y + dy - bpx / 2;
+      cx.font = `${bpx}px ${FONT_MONO}`;
+      cx.fillStyle = color;
+      cx.textAlign = 'right';
+      cx.fillText(String(jumps), right, midY);
+      this.drawJumpMark(right - cx.measureText(String(jumps)).width - bpx * 0.3, midY, bpx, color);
+      cx.restore();
+    }
+
+    if (this.resizable(n)) this.drawHandles(n);
+  }
+
+  /* The "continues in another flow" mark: a wall with an arrow going
+     through it, which is what leaving this diagram is. Drawn rather than
+     typed for the same reason drawLinkMark is -- canvas cannot use the SVG
+     set in core/icons.js, and a glyph picked out of a font is a glyph some
+     system does not ship. Right-to-left from `right`, beside a count of
+     unknown width. */
+  drawJumpMark(right, midY, size, color) {
+    const { cx } = this;
+    const w = size * 0.62, h = size * 0.52;
+    const x0 = right - w, y0 = midY - h / 2;
+    cx.save();
+    cx.strokeStyle = color;
+    cx.fillStyle = color;
+    cx.lineWidth = Math.max(0.5, size * 0.1);
+    cx.lineCap = 'round';
+    cx.beginPath();                       /* the wall being left behind */
+    cx.moveTo(x0, y0);
+    cx.lineTo(x0, y0 + h);
+    cx.stroke();
+    cx.beginPath();                       /* and the way out through it */
+    cx.moveTo(x0 + size * 0.16, midY);
+    cx.lineTo(right, midY);
+    cx.stroke();
+    cx.beginPath();
+    cx.moveTo(right, midY);
+    cx.lineTo(right - size * 0.2, midY - size * 0.16);
+    cx.lineTo(right - size * 0.2, midY + size * 0.16);
+    cx.closePath();
+    cx.fill();
+    cx.restore();
+  }
+
+  /* The "has memories attached" mark, DRAWN rather than typed.
+
+     It used to be U+21F1, which Roboto does not have and most monospace
+     faces do not either: it fell through to whatever the system happened
+     to ship, and to a tofu box where nothing did. Canvas cannot use the
+     SVG set in core/icons.js, so this is the same idea by hand -- two
+     nodes and a tie, matching that set's `graph` icon, which is what a
+     linked memory is. Drawn right-to-left from `right`, so it sits beside
+     a count of unknown width. */
+  drawLinkMark(right, midY, size, color) {
+    const { cx } = this;
+    const r = size * 0.15;
+    const ax = right - size * 0.62, ay = midY + size * 0.22;
+    const bx = right - size * 0.1, by = midY - size * 0.24;
+    cx.save();
+    cx.strokeStyle = color;
+    cx.fillStyle = color;
+    cx.lineWidth = Math.max(0.5, size * 0.1);
+    cx.beginPath();
+    cx.moveTo(ax, ay);
+    cx.lineTo(bx, by);
+    cx.stroke();
+    for (const [px, py] of [[ax, ay], [bx, by]]) {
+      cx.beginPath();
+      cx.arc(px, py, r, 0, 7);
+      cx.fill();
+    }
+    cx.restore();
+  }
+
+  /* Corner grips, on the selected card only and only while editing: four
+     more things to hit on every card would make dragging the flow harder,
+     not easier. */
+  resizable(n) {
+    return !this.readOnly && !this.connectMode && n.key === this.selected;
+  }
+
+  static handles(n) {
+    const hw = n.w / 2, hh = n.h / 2;
+    return [
+      { id: 'nw', x: n.x - hw, y: n.y - hh, sx: -1, sy: -1 },
+      { id: 'ne', x: n.x + hw, y: n.y - hh, sx: 1, sy: -1 },
+      { id: 'sw', x: n.x - hw, y: n.y + hh, sx: -1, sy: 1 },
+      { id: 'se', x: n.x + hw, y: n.y + hh, sx: 1, sy: 1 },
+    ];
+  }
+
+  drawHandles(n) {
+    const { cx } = this;
+    const s = HANDLE / Math.max(this.scale, 0.35);   /* stays grabbable zoomed out */
+    cx.fillStyle = this.colAccent;
+    cx.strokeStyle = this.colSurface;
+    cx.lineWidth = 1.4 / this.scale;
+    for (const h of DiagramEditor.handles(n)) {
+      cx.beginPath();
+      cx.rect(h.x - s / 2, h.y - s / 2, s, s);
+      cx.fill();
+      cx.stroke();
+    }
+  }
+
+  handleAt(p) {
+    const n = this.byKey[this.selected];
+    if (!n || !this.resizable(n)) return null;
+    const s = HANDLE / Math.max(this.scale, 0.35);
+    return DiagramEditor.handles(n).find(h =>
+      Math.abs(p.x - h.x) <= s && Math.abs(p.y - h.y) <= s) || null;
+  }
+
+  draw() {
+    const { cx } = this;
+    cx.clearRect(0, 0, this.w, this.h);
+    cx.save();
+    cx.translate(this.tx, this.ty);
+    cx.scale(this.scale, this.scale);
+
+    /* Lanes are geometry, so they have to follow a drag: moving a step can
+       turn a forward edge into a loop closer, or park it over a box it now
+       runs through. They cannot be cached per node either -- dragging one
+       card can make an unrelated edge cross it.
+
+       But the full solve is the most expensive thing in this file and a
+       drag redraws on every mousemove, so while something is being moved
+       only the cheap half runs (loop closers still get their lanes;
+       forward edges are drawn straight, crossings and all). onUp marks the
+       routes dirty and the next frame solves them properly. */
+    const interacting = !!(this.drag || this.sizing);
+    if (this.routesDirty || interacting) {
+      this.laneEdges({ detours: !interacting });
+      this.routesDirty = interacting;
+    }
+    /* the selected step's lines go last, so they sit over the ones they
+       cross instead of disappearing under them */
+    const sel = this.selected, selEdge = this.selectedEdge;
+    const isHot = e => selEdge
+      ? e === selEdge
+      : (!!sel && (e.from === sel || e.to === sel));
+    const anySel = !!(sel || selEdge);
+    const cool = anySel ? this.edges.filter(e => !isHot(e)) : this.edges;
+    for (const e of cool) this.drawEdge(e, { dim: anySel });
+    if (anySel) for (const e of this.edges.filter(isHot)) this.drawEdge(e, { hot: true });
+    /* Both ends of a selected connection get the ring, so "where does this
+       branch go" is answered by the picture and not by reading a label. */
+    const ends = selEdge ? [selEdge.from, selEdge.to] : null;
+    for (const n of this.nodes) {
+      this.drawNode(n, this.orphans.has(n.key), !!ends && ends.includes(n.key));
+    }
+    this.drawGuides();   /* over the cards: it is about where they line up */
+
+    cx.restore();
+  }
+}
