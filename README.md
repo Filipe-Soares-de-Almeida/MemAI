@@ -166,12 +166,20 @@ business:
     "memai": {
       "command": "memai-mcp",
       "env": {
-        "MEMAI_ADMIN_AUTOSTART": "1"
+        "MEMAI_ADMIN_AUTOSTART": "1",
+        "MEMAI_ADMIN_PORT": "8888"
       }
     }
   }
 }
 ```
+
+`MEMAI_ADMIN_PORT` is spelled out at its default, so the knob is where
+you would look for it when 8888 turns out to be taken. `MEMAI_HOME`
+belongs in the same block if the store is not at `~/.memai`. A variable
+exported anywhere else will not do: a server the host launches from this
+config sees this environment and no other, which is why `run-admin.bat`
+sets nothing and leans on the same default.
 
 A host starts several MCP servers per session, so "start it" has to mean
 "start it once". Each one asks `/api/ping` whether a MemAI dashboard is
