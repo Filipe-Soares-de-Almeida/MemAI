@@ -166,8 +166,7 @@ business:
     "memai": {
       "command": "memai-mcp",
       "env": {
-        "MEMAI_ADMIN_AUTOSTART": "1",
-        "MEMAI_ADMIN_PORT": "8888"
+        "MEMAI_ADMIN_AUTOSTART": "1"
       }
     }
   }
@@ -192,10 +191,10 @@ that, with the warning it prints.
 ## Admin dashboard
 
 `memai-admin` (or `python -m memai.admin`) serves a local web dashboard
-over the same store, at `http://127.0.0.1:8765` (loopback
-only; `--host`/`--port`/`MEMAI_ADMIN_PORT` to change; `run-admin.bat`
-sets 8888). It is the human curation surface for everything the MCP tools
-do, plus the operations that only make sense for a person:
+over the same store, at `http://127.0.0.1:8888` (loopback
+only; `--host`/`--port`/`MEMAI_ADMIN_PORT` to change). It is the human
+curation surface for everything the MCP tools do, plus the operations
+that only make sense for a person:
 
 - **Overview** — live counts, confidence meter, per-type distribution,
   30-day activity, vector coverage.

@@ -18,7 +18,7 @@ Destructive parity with the MCP tools is kept: archive (forget) is the
 default "delete", and purge demands the literal confirmation phrase
 "DELETE <uid>" typed by the operator, same guardrail as server.py.
 
-Run with `memai-admin` (default http://127.0.0.1:8765); binds to
+Run with `memai-admin` (default http://127.0.0.1:8888); binds to
 loopback unless --host says otherwise. Honors MEMAI_HOME.
 """
 
@@ -1595,18 +1595,29 @@ def _cmd_stop() -> int:
     return 0
 
 
-def main() -> None:
+def build_parser() -> argparse.ArgumentParser:
+    """Separate from main() so a test can ask what the defaults resolved to.
+
+    The port default comes from autostart rather than being read here, so
+    that the guard looking for a dashboard and the dashboard itself
+    cannot end up with different ideas of where it is -- which is exactly
+    what happened while run-admin.bat set the variable and the code
+    defaulted elsewhere.
+    """
     parser = argparse.ArgumentParser(description="memai admin dashboard")
     parser.add_argument("--host", default="127.0.0.1")
-    parser.add_argument("--port", type=int,
-                        default=int(os.environ.get("MEMAI_ADMIN_PORT", "8765")))
+    parser.add_argument("--port", type=int, default=autostart.configured_port())
     parser.add_argument("--autostarted", action="store_true",
                         help="started by the MCP server: lose a port race quietly")
     parser.add_argument("--status", action="store_true",
                         help="report where a running dashboard is, and exit")
     parser.add_argument("--stop", action="store_true",
                         help="stop a running dashboard, and exit")
-    args = parser.parse_args()
+    return parser
+
+
+def main() -> None:
+    args = build_parser().parse_args()
 
     if args.status:
         raise SystemExit(_cmd_status())

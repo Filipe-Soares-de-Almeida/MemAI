@@ -240,7 +240,9 @@ def test_probe_tells_the_three_cases_apart(dead_port, busy_port, memai_port):
 # --- configuration ---------------------------------------------------
 
 @pytest.mark.parametrize("raw, expected", [
-    ("8888", 8888),
+    # deliberately not the default: a value equal to it would pass whether
+    # the variable was read or ignored
+    ("9001", 9001),
     ("garbage", autostart.DEFAULT_PORT),
     ("", autostart.DEFAULT_PORT),
     ("0", autostart.DEFAULT_PORT),
@@ -250,6 +252,24 @@ def test_probe_tells_the_three_cases_apart(dead_port, busy_port, memai_port):
 def test_port_config(monkeypatch, raw, expected):
     monkeypatch.setenv("MEMAI_ADMIN_PORT", raw)
     assert autostart.configured_port() == expected
+
+
+def test_the_default_port_is_the_one_the_launcher_uses():
+    """run-admin.bat used to override this, which is how the dashboard and
+    the documented default came to disagree. One number now, in one place."""
+    assert autostart.DEFAULT_PORT == 8888
+
+
+def test_admin_and_autostart_agree_on_the_port(monkeypatch):
+    """Two defaults would mean the guard looking for the dashboard on a
+    port the dashboard never binds."""
+    monkeypatch.delenv("MEMAI_ADMIN_PORT", raising=False)
+    args = admin.build_parser().parse_args([])
+    assert args.port == autostart.configured_port() == autostart.DEFAULT_PORT
+
+    monkeypatch.setenv("MEMAI_ADMIN_PORT", "9002")
+    assert admin.build_parser().parse_args([]).port == 9002
+    assert admin.build_parser().parse_args(["--port", "9003"]).port == 9003
 
 
 # --- it may never cost the caller its memory tools -------------------
