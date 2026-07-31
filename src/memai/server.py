@@ -13,6 +13,13 @@ Writer tool names match the `type` value they store (note stores
 type='note', reasoning stores type='reasoning', ...), so what an agent
 calls is exactly what search/list_* filter on.
 
+A memory's `domain` is the subject it belongs to, and subjects contain
+subjects: write it as a path, outermost first -- 'acme/x100/p200' is a
+routine inside a module inside a product. Every read that takes a domain
+covers its subdomains too, so one call asks about a whole product or
+about exactly one routine, depending on how much of the path it gives.
+list_domains() returns the tree that exists.
+
 diagram is the one type whose body is not prose: it stores a graph, one
 row per step, and generates the prose the retrieval side indexes. Its
 graph is edited through diagram_* and read back through get_diagram().
@@ -35,8 +42,21 @@ def _row_to_dict(row) -> dict:
 
 
 SNIPPET_LIMIT = 400
+# What one warm-up is allowed to cost, per list. Named rather than inline
+# because pulse() reports which of these it hit: a brief that silently
+# stopped at five reads as "there were five".
 PULSE_NOTES = 5  # recent note()'d facts surfaced as warm-up breadcrumbs
 PULSE_DIAGRAMS = 5  # documented flows named, never inlined -- see pulse()
+PULSE_HANDOFFS = 5
+PULSE_ANTI_PATTERNS = 10
+# the type each pulse list is drawn from, for "how many did it leave out"
+PULSE_LIST_TYPES = {
+    "recent_notes": "note",
+    "handoffs": "handoff",
+    "anti_patterns": "anti_pattern",
+    "diagrams": "diagram",
+    "latest_checkpoint": "checkpoint",
+}
 
 # Memory type tag per writer -- the retrieval tools filter on these exact
 # strings (search/recall/list_*(type=...)). Each writer tool is named
@@ -62,18 +82,20 @@ def _snippet_dict(d: dict) -> dict:
 
 
 def _list_scoped(conn, domain: str, type: str, limit: int) -> list:
-    """Recency-ordered rows of one type: scoped to a domain if given, else global."""
+    """Recency-ordered rows of one type: scoped to a domain subtree if given, else global."""
     if domain:
         return db.list_by_domain(conn, domain, type=type, limit=limit)
     return db.list_recent(conn, type=type, limit=limit)
 
 
 def _coerce_domain(conn, domain: str) -> tuple[str, dict | None]:
-    """Apply the store's casing policy to a domain before a write.
+    """Apply the store's domain policy before a write: casing, and path shape.
 
     Returns (coerced_domain, warning). warning is None when the domain
     already conforms; otherwise it describes the adjustment so the tool
-    can echo it back to the agent (coerce-and-warn, never reject).
+    can echo it back to the agent (coerce-and-warn, never reject) -- which
+    is also how an agent learns that 'acme / x100' was filed as
+    'acme/x100'.
     """
     coerced, mode = db.coerce_domain(conn, domain)
     if coerced == domain:
@@ -88,6 +110,11 @@ def note(content: str, domain: str = "", tags: str = "", session: str = "") -> d
     Timeless knowledge -- retrieved by relevance, not recency. Bring it
     back with recall() (or search(type='note')); pulse() also shows the
     few most recent ones as warm-up breadcrumbs.
+
+    domain: the subject this belongs to, as a path from the outermost
+    scope in ('acme/x100/p200'). File it as deep as the fact is specific
+    -- a note about one routine goes on the routine, and still comes back
+    when someone asks about the module or the product above it.
 
     tags: comma-separated keywords/synonyms -- write generously; tags
     feed both the keyword index and the embedding, so they make the
@@ -532,19 +559,23 @@ def search(query: str, domain: str = "", type: str = "", limit: int = 30) -> lis
     model is unavailable. Content is snippet-truncated per result --
     call get_memory(uid) for the full record.
 
-    Matching diagrams come back FIRST, carrying
-    rank_reason='diagram_first'. A diagram documents a whole routine end
-    to end, so it is the thing to read before the partial notes around
-    it -- read it first, then use the notes as annotations on the steps.
-    That tag means "a type preference put this at the top", NOT "this
-    matched best": a promoted diagram may be a weaker match than the
-    untagged rows below it, so still judge relevance yourself. Diagrams
-    marked contradicted are never promoted.
+    A diagram ranks like any other memory: it comes back when it matches
+    the query, in the position its scores earn. Nothing lifts a type to the
+    top, so a flow in the results is a flow this query actually hit -- and
+    when one does show up it is worth opening first, because it states a
+    whole routine the surrounding notes only annotate.
 
     type filters (one writer each): 'note', 'reasoning', 'checkpoint',
-    'anti_pattern', 'handoff', 'diagram'. To recall note()'d knowledge
+    'anti_pattern', 'handoff', 'diagram'. Ask for type='diagram' to sweep
+    the documented flows on purpose. To recall note()'d knowledge
     specifically, recall() is the sugar for search(type='note') -- which
     also means recall() never surfaces a diagram; use search() for that.
+
+    domain scopes to a path AND everything under it: domain='acme/x100'
+    searches the module and each of its routines. Give more of the path to
+    narrow it. A domain naming only the deep end of a path ('p200') is
+    resolved to the branches it sits in -- every result carries its real
+    `domain`, which is where to read what the filter actually covered.
     """
     with db.connect() as conn:
         results = db.search_hybrid(conn, query, domain=domain, type=type, limit=limit)
@@ -561,6 +592,9 @@ def recall(query: str, domain: str = "", limit: int = 20) -> list[dict]:
     recency warm-up hook the way checkpoints have pulse(); this (or
     search(type='note')) is how notes come back. Content is
     snippet-truncated -- call get_memory(uid) for the full record.
+
+    domain scopes to a path and everything nested under it, and resolves a
+    bare deep segment the same way search() does.
     """
     with db.connect() as conn:
         results = db.search_hybrid(conn, query, domain=domain, type=TYPE_NOTE, limit=limit)
@@ -568,45 +602,68 @@ def recall(query: str, domain: str = "", limit: int = 20) -> list[dict]:
 
 
 @mcp.tool()
-def list_by_domain(domain: str, type: str = "", limit: int = 50) -> list[dict]:
-    """List active memories for a domain, most recent first. Fallback when search misses.
+def list_by_domain(
+    domain: str, type: str = "", limit: int = 50, subtree: bool = True
+) -> list[dict]:
+    """List active memories for a domain and its subdomains, most recent first.
 
-    Matches domain exactly -- see list_domains() for the real strings in
-    use. Content is snippet-truncated per result -- call get_memory(uid)
-    for the full record.
+    Fallback when search misses. domain is a path, matched from the
+    outermost segment in: 'acme/x100' lists the module's own memories plus
+    every routine under it. Pass subtree=False for what is filed at
+    exactly that path and nowhere deeper.
+
+    A domain that matches no path is retried as a run of segments INSIDE
+    one, so list_by_domain('p200') still finds the routine once it lives
+    at 'acme/x100/p200'. The literal reading wins whenever it has rows,
+    and an ambiguous name (the same code under two modules) covers both
+    branches rather than picking one -- each row's `domain` says which
+    branch it came from. list_domains() is the way to see the paths first.
+
+    Content is snippet-truncated per result -- call get_memory(uid) for the
+    full record.
     """
     with db.connect() as conn:
-        rows = db.list_by_domain(conn, domain, type=type, limit=limit)
+        rows = db.list_by_domain(conn, domain, type=type, limit=limit, subtree=subtree)
     return [_snippet_dict(_row_to_dict(r)) for r in rows]
 
 
 @mcp.tool()
-def list_recent(type: str = "", domain: str = "", limit: int = 20) -> list[dict]:
+def list_recent(
+    type: str = "", domain: str = "", limit: int = 20, subtree: bool = True
+) -> list[dict]:
     """List the most recent active memories, optionally filtered by type/domain.
 
-    Content is snippet-truncated per result -- call get_memory(uid) for
-    the full record.
+    A domain covers its subdomains, and a bare deep segment resolves to the
+    branches holding it (see list_by_domain); subtree=False narrows to that
+    exact path. Content is snippet-truncated per result -- call
+    get_memory(uid) for the full record.
     """
     with db.connect() as conn:
-        rows = db.list_recent(conn, type=type, domain=domain, limit=limit)
+        rows = db.list_recent(conn, type=type, domain=domain, limit=limit, subtree=subtree)
     return [_snippet_dict(_row_to_dict(r)) for r in rows]
 
 
 @mcp.tool()
 def list_domains() -> list[dict]:
-    """List distinct domains with their memory count and latest activity.
+    """List the domain tree: every path with its counts and latest activity.
 
     Warm-up discovery. domain is free text and drifts over time (e.g.
-    'PROJ-1042' vs 'proj-1042'), and pulse/list_by_domain match it
-    exactly -- this surfaces the real strings so you target the right
-    one instead of guessing. Ordered by most recent activity.
+    'proj-1042' vs 'proj-1042-cache-warmup'), so this surfaces the
+    paths actually in use instead of leaving you to guess one. Ordered by
+    most recent activity.
+
+    Per entry: `domain` (the full path), `parent`, `depth`, `count` (filed
+    at exactly this path), `subtree` (that plus everything nested under
+    it), `children`, and `implicit` -- true for a level that exists only
+    because something deeper is filed under it. Read `subtree` to pick the
+    scope worth warming up: a parent holding nothing of its own can still
+    be where the work is.
 
     Casing may be enforced store-wide -- call get_domain_case() to see
     the active policy before coining a new domain.
     """
     with db.connect() as conn:
-        rows = db.list_domains(conn)
-    return [_row_to_dict(r) for r in rows]
+        return db.list_domains(conn)
 
 
 @mcp.tool()
@@ -656,11 +713,28 @@ def pulse(domain: str = "") -> dict:
     diagrams lists the documented flows by title only, never inlined:
     a whole graph would swamp a warm-up. Read one with get_diagram(uid)
     when the work actually touches that routine.
+
+    domain warms up a path and everything under it, so pulse('acme/x100')
+    is the module-wide brief and pulse('acme/x100/p200') the routine's.
+    A domain that names only the deep end of a path ('p200') is resolved
+    to the branches it sits in -- `scope.paths` reports which, and an
+    ambiguous name resolves to ALL of them.
+
+    `scope` is the rest of the brief: what the scope HOLDS, next to what
+    came back. This is a warm-up, so each list stops at a handful and the
+    newest few of a busy child can fill it on their own -- `scope.not_shown`
+    counts what that left behind, per type, and `scope.subdomains` says
+    which level it is sitting in (`own` = filed there, `subtree` = with its
+    descendants). Read them as the drill-down plan: search(query,
+    domain=...) or list_by_domain(domain, type=..., limit=...) on the child
+    that holds what this pass only counted. A pulse is the state of a
+    scope, never its contents.
     """
     with db.connect() as conn:
+        census = db.domain_census(conn, domain)
         latest_checkpoint = db.latest_by_type(conn, TYPE_CHECKPOINT, domain=domain)
-        handoffs = _list_scoped(conn, domain, TYPE_HANDOFF, 5)
-        anti_patterns = _list_scoped(conn, domain, TYPE_ANTI_PATTERN, 10)
+        handoffs = _list_scoped(conn, domain, TYPE_HANDOFF, PULSE_HANDOFFS)
+        anti_patterns = _list_scoped(conn, domain, TYPE_ANTI_PATTERN, PULSE_ANTI_PATTERNS)
         recent_notes = _list_scoped(conn, domain, TYPE_NOTE, PULSE_NOTES)
         diagram_rows = _list_scoped(conn, domain, TYPE_DIAGRAM, PULSE_DIAGRAMS)
         diagrams = []
@@ -674,12 +748,35 @@ def pulse(domain: str = "") -> dict:
         checkpoint_dict = _row_to_dict(latest_checkpoint)
         if checkpoint_dict:
             checkpoint_dict["relations"] = [_row_to_dict(r) for r in db.get_relations(conn, checkpoint_dict["uid"])]
+    shown = {
+        "latest_checkpoint": [checkpoint_dict] if checkpoint_dict else [],
+        "handoffs": handoffs,
+        "anti_patterns": anti_patterns,
+        "recent_notes": recent_notes,
+        "diagrams": diagrams,
+    }
+    # what each list left behind, from the census -- reported per LIST, since
+    # that is what the reader is looking at, and only where something was
+    # actually left (a zero everywhere teaches the block to be skipped)
+    not_shown = {}
+    for key, type_ in PULSE_LIST_TYPES.items():
+        left = census["by_type"].get(type_, 0) - len(shown[key])
+        if left > 0:
+            not_shown[key] = left
     return {
         "latest_checkpoint": checkpoint_dict,
         "handoffs": [_snippet_dict(_row_to_dict(r)) for r in handoffs],
         "anti_patterns": [_snippet_dict(_row_to_dict(r)) for r in anti_patterns],
         "recent_notes": [_snippet_dict(_row_to_dict(r)) for r in recent_notes],
         "diagrams": diagrams,
+        "scope": {
+            "domain": domain,
+            "paths": census["paths"],
+            "total": census["total"],
+            "by_type": census["by_type"],
+            "not_shown": not_shown,
+            "subdomains": census["children"],
+        },
     }
 
 
@@ -810,6 +907,10 @@ def dedup_scan(domain: str = "", type: str = "", threshold: float = 0.6, limit: 
     merge -- returns candidate pairs + similarity score for the agent to
     review and decide (link_memories / edit_memory / forget as
     appropriate).
+
+    domain scans a path and everything nested under it, which is usually
+    what you want: near-duplicates collect between a module and its own
+    routines.
     """
     with db.connect() as conn:
         pairs = db.dedup_candidates(conn, domain=domain, type=type, threshold=threshold, limit=limit)
@@ -861,6 +962,14 @@ def optimize_scan(
       - domain_hints: clusters of domain-string variants that likely mean
         the same thing (case/separator drift, ticket-id spellings), with
         a suggested canonical -- ready-made redomain candidates,
+      - domain_nesting: flat domains that already spell a hierarchy out
+        ('acme-x100-p200-cache-warmup'), each with the path it could
+        become ('acme/x100/p200/cache-warmup'). Domains nest, and a
+        scope only groups what is filed under it, so these are the
+        redomain candidates that turn one string per subject into a tree.
+        Read them as a proposal, not a verdict: the split cannot tell a
+        real level from a hyphen inside a name, so check each one and
+        stage only the splits that hold,
       - anchors: per memory, the verifiable references found in its FULL
         content (URLs, file paths, table/field identifiers, constants),
         space-joined -- the things to go check against live facts.

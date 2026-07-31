@@ -25,7 +25,7 @@ import { icon } from '../core/icons.js';
 import { toast, failed, openModal, closeModal, confirmModal, promptModal } from '../core/ui.js';
 import { typeTag, typeClass, confPill, uidChip, statusTag, wireCopyChips,
          failedHTML, TYPE_ORDER, CONF, REL_SUGGEST,
-         cachedDomains, invalidateDomains } from '../core/shared.js';
+         cachedDomains, invalidateDomains, domainDatalist } from '../core/shared.js';
 import { pickMemories } from '../core/link-picker.js';
 import { go, refreshBehind } from '../core/router.js';
 import { t } from '../i18n.js';
@@ -480,7 +480,7 @@ export async function openRecord(uid) {
 }
 
 function openMetaModal(m) {
-  const dl = cachedDomains().map(d => `<option value="${esc(d.domain)}">`).join('');
+  const dl = domainDatalist(cachedDomains());
   const modal = openModal({
     title: t('mm.title'),
     bodyHTML: `

@@ -10,7 +10,7 @@ import { $, esc, fmtInt, fmtDate, debounce } from '../core/dom.js';
 import { api, query } from '../core/api.js';
 import { icon } from '../core/icons.js';
 import { toast, failed, promptModal } from '../core/ui.js';
-import { typeTag, statusTag, confPill, getDomains,
+import { typeTag, statusTag, confPill, getDomains, domainOptions,
          TYPE_ORDER, TYPE_LABEL, CONF } from '../core/shared.js';
 import { go, refreshBehind } from '../core/router.js';
 import { onTeardown } from '../core/lifecycle.js';
@@ -62,6 +62,9 @@ export async function renderMemories(view, params, ctx) {
     status: params.has('status') ? params.get('status') : 'active',
     confidence: params.get('confidence') || '',
     session: params.get('session') || '',
+    /* a domain filter covers its subdomains; 'exact' is the opt-out, and it
+       lives in the URL so the narrowed list is a linkable state */
+    exact: params.get('exact') || '',
     sort: params.get('sort') || 'created_at',
     dir: params.get('dir') || 'desc',
     page: parseInt(params.get('page') || '0', 10) || 0,
@@ -73,15 +76,17 @@ export async function renderMemories(view, params, ctx) {
   const qs = query({
     q: state.q, domain: state.domain, type: state.type, status: state.status,
     confidence: state.confidence, session: state.session, sort: state.sort, dir: state.dir,
+    subtree: state.exact ? '0' : '',
     limit: PAGE, offset: state.page * PAGE,
   });
   const data = await api(`/api/memories?${qs}`);
   if (ctx.stale()) return;
 
   const domainOpts = [`<option value="">${t('common.allDomains')}</option>`,
-    ...domains.map(d => `<option value="${esc(d.domain)}" ${d.domain === state.domain ? 'selected' : ''}>${esc(d.domain)}</option>`)];
+    domainOptions(domains, state.domain)];
   if (state.domain && !domains.some(d => d.domain === state.domain))
     domainOpts.push(`<option value="${esc(state.domain)}" selected>${esc(state.domain)}</option>`);
+  const kids = domains.find(d => d.domain === state.domain)?.children;
   const typeOpts = [`<option value="">${t('common.allTypes')}</option>`,
     ...TYPE_ORDER.map(tp => `<option value="${tp}" ${tp === state.type ? 'selected' : ''}>${TYPE_LABEL[tp]}</option>`)];
 
@@ -95,6 +100,15 @@ export async function renderMemories(view, params, ctx) {
       <kbd class="toolbar-kbd" aria-hidden="true">/</kbd>
       <select id="fType">${typeOpts.join('')}</select>
       <select id="fDomain">${domainOpts.join('')}</select>
+      <!-- only where the choice exists: a domain with no subdomains reads
+           the same either way, and an inert toggle is noise -->
+      ${kids ? `<button type="button" class="chip clickable" id="fExact" aria-pressed="${Boolean(state.exact)}"
+           title="${esc(t('mem.subtree.title'))}">${t(state.exact ? 'mem.subtree.exact' : 'mem.subtree.incl')}</button>` : ''}
+      <!-- the filter resolved a name that was only the deep end of a path;
+           showing the rows without saying so would claim a filter that was
+           never run -->
+      ${data.domain_scope ? `<span class="chip" title="${esc(t('mem.scope.title'))}">${
+        esc(t('mem.scope.resolved', { list: data.domain_scope.join(', ') }))}</span>` : ''}
       <div class="seg" id="fStatus" role="group" aria-label="${t('mem.status.aria')}">
         <button type="button" data-v="active" aria-pressed="${state.status === 'active'}">${t('common.active')}</button>
         <button type="button" data-v="archived" aria-pressed="${state.status === 'archived'}">${t('common.archived')}</button>
@@ -147,7 +161,12 @@ export async function renderMemories(view, params, ctx) {
   }, 500));
   const fType = $('#fType');
   if (fType) fType.addEventListener('change', e => navigate({ type: e.target.value, page: 0 }));
-  $('#fDomain').addEventListener('change', e => navigate({ domain: e.target.value, page: 0 }));
+  /* a new scope starts inclusive: 'exact' was about the domain just left */
+  $('#fDomain').addEventListener('change', e =>
+    navigate({ domain: e.target.value, exact: '', page: 0 }));
+  const fExact = $('#fExact');
+  if (fExact) fExact.addEventListener('click', () =>
+    navigate({ exact: state.exact ? '' : '1', page: 0 }));
   $('#fConf').addEventListener('change', e => navigate({ confidence: e.target.value, page: 0 }));
   const fSort = $('#fSort');
   if (fSort) fSort.addEventListener('change', e => {
