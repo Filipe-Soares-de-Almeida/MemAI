@@ -79,6 +79,43 @@ several paraphrases in one call still help. `list_by_domain` /
 `list_recent` exist as a brute-force fallback for when a search comes back
 thin.
 
+**Domains nest.** A memory's `domain` is the subject it belongs to, written
+as a path: `acme/x100/p200` is a routine inside a module inside a product.
+One flat bucket per subject stops working as soon as subjects contain
+subjects — the routine's notes and the module's notes are the same
+material at two levels of detail. Every read that takes a domain covers its
+subdomains, so `pulse('acme/x100')` is the module-wide brief and
+`pulse('acme/x100/p200')` the routine's, and `list_domains()` returns the
+tree (per level: what is filed on it, what its subtree holds, whether the
+level exists only because something deeper is filed under it). Pass
+`subtree=False` to `list_by_domain` / `list_recent` for one level alone.
+
+A domain filter also reaches for a name that is only the *deep end* of a
+path: what a caller has in hand is usually the routine's code, not the
+product above it, so `list_by_domain('p200')` still finds the routine once
+it lives at `acme/x100/p200`. The literal reading always wins (a `p200`
+that exists as its own domain means that domain), an ambiguous name covers
+every branch holding it rather than picking one, and where a response has
+room to say so it reports `domain_scope` — the filter never claims a scope
+it did not run. Re-homing is deliberately *not* resolved: a rename moves
+exactly the path it was given.
+
+The nesting lives in the string — no domains table, no id to resolve. A
+store with no separator anywhere is a tree of depth 1 and behaves exactly as
+it did, FTS tokenizes the levels into searchable words for free (a module
+code finds the routines under it), and re-homing a domain in the dashboard
+rewrites the subtree's paths in one audited pass.
+
+**A warm-up says what it left out.** `pulse` is the state of a scope, not its
+contents: each list stops at a handful, and on a parent domain the newest few
+of one busy child can fill it alone — which used to hide both the parent's own
+memories and the fact that anything was hidden. So the response carries a
+`scope` block: where it read (`paths`), what the scope holds (`total`,
+`by_type`), what each list left behind (`not_shown`), and the level below it
+(`subdomains`, each with `own` and `subtree` counts). That is the drill-down
+plan — `search(query, domain=…)` or `list_by_domain(domain, type=…)` on the
+child that holds what the warm-up only counted.
+
 **Recency vs. similarity.** `pulse` and the `list_*` tools always sort by
 `created_at DESC` — never by similarity. Similarity ranking exists only
 inside `search`, where it orders *candidates* for the agent to judge, not
@@ -109,10 +146,10 @@ tool's full signature and docstring, read live from the code.
 | `handoff(content, domain, session)` | Leave a note for another agent/session |
 | `search(query, domain, type, limit)` | Hybrid BM25 + vector search, source-annotated |
 | `recall(query, domain, limit)` | Relevance-ranked recall of `note()`'d knowledge (search scoped to `type='note'`) |
-| `list_by_domain(domain, type, limit)` | Recency-ordered list, scoped to a domain |
-| `list_recent(type, domain, limit)` | Recency-ordered list, global |
-| `list_domains()` | Distinct domains with counts + latest activity (warm-up discovery) |
-| `pulse(domain)` | Session warm-up: latest checkpoint + open handoffs/anti-patterns + recent notes |
+| `list_by_domain(domain, type, limit, subtree)` | Recency-ordered list, scoped to a domain path and its subdomains |
+| `list_recent(type, domain, limit, subtree)` | Recency-ordered list, global |
+| `list_domains()` | The domain tree: every path with own/subtree counts + latest activity (warm-up discovery) |
+| `pulse(domain)` | Session warm-up: latest checkpoint + open handoffs/anti-patterns + recent notes, plus a `scope` census of what it did not show |
 | `get_memory(uid)` | Full record, including edit history and relations |
 | `edit_memory(uid, new_content, note)` | Correct a memory, keeping the prior version |
 | `link_memories(from_uid, to_uid, relation_type, note)` | Create a typed relation between two memories |
@@ -218,9 +255,11 @@ that only make sense for a person:
   multi-select bulk actions.
 - **Graph** — force-layout of the relations graph; drag, zoom, click to
   inspect, and a link mode to create relations between two nodes.
-- **Domains** — counts per domain, rename/merge (every affected row is
-  re-embedded and audited), and spelling-drift detection
-  (`PROJ-1042` vs `proj-1042`).
+- **Domains** — the domain tree: one row per level, expandable, showing what
+  is filed on it and what its subtree holds. Move/rename/merge (typing a
+  path re-homes the domain and its subdomains; every affected row is
+  re-embedded and audited), casing policy, and spelling-drift detection
+  between siblings (`acme/Cache` vs `acme/cache`).
 - **Maintenance** — integrity/FTS/vector health checks, FTS rebuild,
   vector backfill/re-embed, orphan cleanup, VACUUM, timestamped backups
   (`VACUUM INTO`), a dedup-candidate review queue, and the audit trail.

@@ -1677,6 +1677,30 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
 }
 .rename-form { display: flex; gap: var(--sp-2); align-items: center; flex-wrap: wrap; }
 
+/* A domain is a path, so the table is a tree: one row per level, indented
+   by --d (its depth), and only the leaf name written out -- the ancestors
+   are the rows above it. The full path stays in the row's title and in
+   every link it emits, because that is what the API matches on. */
+.dom-cell { display: flex; align-items: center; gap: var(--sp-2); }
+.dom-cell::before { content: ""; flex: none; width: calc(var(--d, 0) * 18px); }
+.dom-twist {
+  flex: none; width: 18px; height: 18px; padding: 0;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: none; border: none; cursor: pointer; color: var(--ink-3);
+  border-radius: var(--r-sm); --ico: 12px;
+}
+.dom-twist:hover { color: var(--accent); background: var(--hover-1); }
+.dom-twist[hidden] { display: none; }
+.dom-twist.leafpad { visibility: hidden; }
+.dom-twist svg { transition: transform .12s; }
+.dom-twist[aria-expanded="true"] svg { transform: rotate(90deg); }
+.dom-leaf { color: var(--ink); font-family: var(--font-m); font-size: var(--fs-sm); }
+/* a level that exists only because something deeper is filed under it:
+   real enough to group by, but nobody wrote a memory to it */
+.dom-leaf.implicit { color: var(--ink-3); font-style: italic; }
+.dom-kids { font-size: var(--fs-label); color: var(--ink-3); }
+.dom-roll { font-size: var(--fs-label); color: var(--ink-3); margin-left: var(--sp-1); }
+
 /* ── maintenance ─────────────────────────────────────────────────────── */
 
 .check-row {
@@ -2315,6 +2339,16 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
    diagram, and then the same three pixels were recoloured to --warn to mean
    "this one is broken" -- so the identity mark and the alarm were the same
    pixel, and neither could be read without the other. Both are gone. */
+/* One band per outermost domain segment, so a store of forty flows reads as
+   a handful of branches. The heading is the filter into that branch. */
+.dgl-group + .dgl-group { margin-top: var(--sp-4); }
+.dgl-group-head {
+  display: flex; align-items: center; gap: var(--sp-2);
+  padding-bottom: var(--sp-2); margin-bottom: var(--sp-3);
+  border-bottom: 1px solid var(--line-soft);
+}
+.dgl-group-n { font-size: var(--fs-label); color: var(--ink-3); }
+
 .dgl-card {
   display: grid; gap: var(--sp-2);
   background: var(--surface);
