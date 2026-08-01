@@ -248,38 +248,44 @@ def golden() -> dict:
     return _load("route-golden.json")
 
 
-def _record(data: dict, routing: str) -> dict:
+def _badge(n: dict, row: int, font_scale: float) -> dict:
+    left, mid_y = ds.badge_anchor(n, row, ds.BADGE_PX * font_scale)
+    return {"left": left, "mid_y": mid_y}
+
+
+def _record(data: dict) -> dict:
     """Mirror of record() in tools/route-parity.mjs, same field for field."""
-    layout = ds.DiagramLayout(data, routing)
+    layout = ds.DiagramLayout(data)
     edges = []
     for e in layout.edges:
-        pts, curve = layout.route(e)
+        pts = layout.route(e)
         via = None
         if e["via"] is not None:
-            via = ({"corridor": e["via"]["corridor"]} if "corridor" in e["via"]
-                   else {"crossY": e["via"]["crossY"]})
+            key = next(k for k in ("corridor", "crossY", "crossX")
+                       if k in e["via"])
+            via = {key: e["via"][key]}
         has_corridor = bool(e["lane"]) or (e["via"] is not None
                                           and "corridor" in e["via"])
         edges.append({
             "from": e["from"], "to": e["to"],
             "back": e["back"], "loops": e["loops"],
-            "lane": e["lane"], "bow": e["bow"],
+            "lane": e["lane"], "bow": e["bow"], "flank": e["flank"],
             "via": via,
             "fan_from": e["fan_from"], "fan_to": e["fan_to"],
             "stub_from": e["stub_from"], "stub_to": e["stub_to"],
             "corridor": layout.corridor_for(e) if has_corridor else None,
-            "curve": dict(curve) if curve else None,
             "pts": [dict(p) for p in pts],
             "label_at": ds.midpoint(pts) if pts else None,
             "short_label": ds.short_label(e["label"]),
         })
     return {
-        "routing": routing,
         "font_scale": layout.font_scale,
         "lane_span": (dict(layout.lane_span) if layout.lane_span else None),
         "orphans": sorted(layout.orphans),
         "nodes": [{"key": n["key"], "shape": n["shape"], "sized": n["sized"],
-                   "x": n["x"], "y": n["y"], "w": n["w"], "h": n["h"]}
+                   "x": n["x"], "y": n["y"], "w": n["w"], "h": n["h"],
+                   "badge": [_badge(n, row, layout.font_scale)
+                             for row in (-1, 1)]}
                   for n in layout.nodes],
         "edges": edges,
     }
@@ -310,9 +316,9 @@ def _same(got, want, path: str = "") -> None:
         assert got == want, path
 
 
-@pytest.mark.parametrize("routing", ["orthogonal", "curved"])
-def test_routing_matches_the_canvas(fixture_data, golden, routing):
-    _same(_record(fixture_data, routing), golden[routing], routing)
+def test_routing_matches_the_canvas(fixture_data, golden):
+    want = {k: v for k, v in golden.items() if k != "_"}
+    _same(_record(fixture_data), want, "routes")
 
 
 def test_golden_was_recorded_from_this_fixture(fixture_data, golden):
@@ -324,9 +330,8 @@ def test_golden_was_recorded_from_this_fixture(fixture_data, golden):
     kept = [e for e in fixture_data["edges"]
             if e["from"] in {n["key"] for n in fixture_data["nodes"]}
             and e["to"] in {n["key"] for n in fixture_data["nodes"]}]
-    for routing in ("orthogonal", "curved"):
-        assert len(golden[routing]["edges"]) == len(kept)
-        assert len(golden[routing]["nodes"]) == len(fixture_data["nodes"])
+    assert len(golden["edges"]) == len(kept)
+    assert len(golden["nodes"]) == len(fixture_data["nodes"])
 
 
 def test_the_fixture_exercises_every_routing_branch(golden):
@@ -337,22 +342,27 @@ def test_the_fixture_exercises_every_routing_branch(golden):
     module -- alternating sides, stacked reach, and the span fit() has to
     reserve.
     """
-    edges = golden["orthogonal"]["edges"]
+    edges = golden["edges"]
     lanes = [e for e in edges if e["lane"]]
     assert {e["lane"] for e in lanes} == {1, -1}, "both sides must be taken"
     assert len({abs(e["bow"]) for e in lanes}) > 1, "lanes must stack outward"
     assert any(e["via"] and "corridor" in e["via"] for e in edges)
+    # both crossbar axes: a vertical run moves its bar along y, a
+    # horizontal one along x, and only the matching kind is read
     assert any(e["via"] and "crossY" in e["via"] for e in edges)
+    assert any(e["via"] and "crossX" in e["via"] for e in edges)
     assert any(e["fan_from"] or e["fan_to"] for e in edges)
     assert any(e["stub_from"] or e["stub_to"] for e in edges)
     assert any(len(e["pts"]) == 2 for e in edges), "a straight run"
     assert any(len(e["pts"]) > 6 for e in edges), "a funnelled corridor run"
-    assert golden["orthogonal"]["orphans"], "an unreachable step"
-    assert any(n["sized"] for n in golden["orthogonal"]["nodes"])
-    assert any(not n["sized"] for n in golden["orthogonal"]["nodes"])
-    shapes = {n["shape"] for n in golden["orthogonal"]["nodes"]}
-    assert shapes == set(ds.NODE_SHAPES)
-    assert any(e["curve"] for e in golden["curved"]["edges"])
+    # both ways out of a corridor: the side facing it, and the vertical
+    # fallback for a flank leg that would cross the card's own row
+    assert any(e["flank"] for e in edges), "a corridor left by the near side"
+    assert any(e["corridor"] is not None and not e["flank"] for e in edges)
+    assert golden["orphans"], "an unreachable step"
+    assert any(n["sized"] for n in golden["nodes"])
+    assert any(not n["sized"] for n in golden["nodes"])
+    assert {n["shape"] for n in golden["nodes"]} == set(ds.NODE_SHAPES)
 
 
 # Nudged by one unit each: enough to move a route, small enough that a
@@ -441,11 +451,11 @@ def test_a_diagonal_corner_insets_by_the_tangent_not_the_radius():
     round -- a visible loop on the line.
     """
     square = ds.edge_d([{"x": 0, "y": 0}, {"x": 100, "y": 0},
-                        {"x": 100, "y": 100}], None)
+                        {"x": 100, "y": 100}])
     assert "L89 0" in square          # 90 degrees: inset == r == 11
 
     diagonal = ds.edge_d([{"x": 0, "y": 0}, {"x": 100, "y": 0},
-                          {"x": 200, "y": 100}], None)
+                          {"x": 200, "y": 100}])
     assert "L95 0" in diagonal        # 45 degrees: inset == 11*0.4142
     assert "L89 0" not in diagonal, "insetting by r again"
 
@@ -453,7 +463,7 @@ def test_a_diagonal_corner_insets_by_the_tangent_not_the_radius():
 def test_collinear_points_do_not_get_an_arc():
     """Three points in a line have no corner to round, and an arc between
     two coincident tangents is what a renderer draws as a full circle."""
-    d = ds.edge_d([{"x": 0, "y": 0}, {"x": 50, "y": 0}, {"x": 100, "y": 0}], None)
+    d = ds.edge_d([{"x": 0, "y": 0}, {"x": 50, "y": 0}, {"x": 100, "y": 0}])
     assert "A" not in d
 
 
@@ -463,10 +473,124 @@ def test_the_frame_contains_every_routed_point(fixture_data):
     layout = ds.DiagramLayout(fixture_data)
     routes = {(e["from"], e["to"]): layout.route(e) for e in layout.edges}
     x0, y0, vw, vh = ds.frame(layout, routes)
-    for (src, dst), (pts, curve) in routes.items():
-        for p in ds.flatten(pts, curve):
+    for (src, dst), pts in routes.items():
+        for p in pts:
             assert x0 <= p["x"] <= x0 + vw, f"{src}->{dst} x"
             assert y0 <= p["y"] <= y0 + vh, f"{src}->{dst} y"
+
+
+def test_a_badge_clears_the_selection_ring_of_every_shape():
+    """Inside the card is where the label is; ON the ring is where the ring is.
+
+    A card is sized to its own text, so a count in the corner landed on the
+    last line and the two read as one smudge. Outside, the thing to clear is
+    not the card but the SELECTION RING traced RING_GROW beyond it -- and on
+    the two shapes whose outline is not their bounding box that is not
+    "RING_GROW further out". At a diamond's acute tip the offset outline
+    reaches roughly three times RING_GROW past the slope, which is how a
+    badge that had cleared the shape ended up drawn on the ring as soon as
+    the card was selected.
+
+    So the gap is measured from the ring, and the shape only sets a floor.
+    """
+    bpx = ds.BADGE_PX
+    for shape in ds.NODE_SHAPES:
+        n = {"key": shape, "shape": shape, "x": 0.0, "y": 0.0, "w": 170.0,
+             "h": 66.0 if shape == "decision" else 48.0}
+        for row in (-1, 1):
+            left, mid_y = ds.badge_anchor(n, row, bpx)
+            dy = mid_y - n["y"]
+            # over the badge's WHOLE height, not just its centre line: the
+            # ring is a curve across it, and on a diamond the row centre
+            # clears by BADGE_OUT while the corner nearest the card's middle
+            # is well inside. Sampled densely so a one-extreme check cannot
+            # pass by picking the end that happens to be narrower.
+            half = bpx * 0.8
+            for i in range(9):
+                at = dy - half + i * (half / 4)
+                ring = n["x"] + ds.half_width_at(n, at, ds.RING_GROW)
+                assert left - ring >= ds.BADGE_OUT - 1e-9, f"{shape} at {at}"
+                assert left - (n["x"] + ds.half_width_at(n, at)) >= ds.BADGE_OUT
+            # and it is not parked further out than it has to be
+            widest = max(ds.half_width_at(n, dy + s * half, ds.RING_GROW)
+                         for s in (-1, 1))
+            assert left - (n["x"] + widest) == pytest.approx(ds.BADGE_OUT), shape
+            # clear of the middle of the side, which is one anchor: an edge
+            # leaving sideways passes BETWEEN the two rows
+            assert abs(dy) > bpx * 0.8, shape
+        rows = [ds.badge_anchor(n, row, bpx)[1] for row in (-1, 1)]
+        assert rows[1] - rows[0] >= bpx * 1.6, f"{shape} rows overlap"
+
+
+def test_growing_an_outline_is_not_adding_to_its_half_width():
+    """The one case where hw + grow is wrong, pinned on its own.
+
+    A rectangle grows by grow. A diamond does not: offsetting x/a + y/b = 1
+    outwards scales the whole diamond, so near a tip the outline moves much
+    further than grow. Getting this wrong is invisible on four of the five
+    shapes.
+    """
+    diamond = {"shape": "decision", "x": 0.0, "y": 0.0, "w": 170.0, "h": 66.0}
+    rect = {**diamond, "shape": "step", "h": 48.0}
+    grow = ds.RING_GROW
+    # at the row a badge sits on, the diamond's ring is far more than `grow`
+    # past the slope, and the rectangle's is exactly `grow` past its side
+    dy = ds.BADGE_PX * 1.1
+    assert (ds.half_width_at(rect, dy, grow)
+            - ds.half_width_at(rect, dy)) == pytest.approx(grow)
+    assert ds.half_width_at(diamond, dy, grow) - ds.half_width_at(diamond, dy) > grow * 2
+    # and grow=0 has to be exactly what it always was
+    for n in (diamond, rect):
+        assert ds.half_width_at(n, dy, 0.0) == ds.half_width_at(n, dy)
+
+
+def test_the_frame_reserves_room_for_a_badge():
+    """An SVG cannot be panned, so a badge outside the frame is simply gone.
+
+    The badges are the only thing this renderer draws outside a card's own
+    box, and at the largest font scale they reach further than the frame's
+    fixed padding -- which is the case that clipped.
+    """
+    data = {
+        "font_scale": 2.0,
+        "nodes": [{"key": "a", "label": "One", "shape": "step",
+                   "x": 0, "y": 0, "w": None, "h": None}],
+        "edges": [],
+        "links": [{"node_key": "a", "target_uid": "aaaaaaaaaaaaaaa1"},
+                  {"node_key": "a", "target_uid": "aaaaaaaaaaaaaaa2"},
+                  {"node_key": "a", "target_uid": "aaaaaaaaaaaaaaa3"}],
+    }
+    layout = ds.DiagramLayout(data)
+    node = layout.nodes[0]
+    reach = ds.badge_reach(node, 3, ds.BADGE_PX * layout.font_scale)
+    x0, _, vw, _ = ds.frame(layout, {})
+    assert reach > node["x"] + node["w"] / 2, "the badge is meant to stick out"
+    assert reach <= x0 + vw, "and the frame has to cover it"
+
+
+def test_the_frame_reserves_room_for_a_jump_badge():
+    """The same reservation, for a card carrying no links at all.
+
+    frame() measured the link counts alone, so a step whose only badge is
+    the jump one had it drawn past the edge of the viewBox.
+    """
+    data = {
+        "font_scale": 2.0,
+        "nodes": [{"key": "a", "label": "One", "shape": "step",
+                   "x": 0, "y": 0, "w": None, "h": None}],
+        "edges": [],
+        "jumps": [{"node_key": "a", "peer_uid": "bbbbbbbbbbbbbbb1"},
+                  {"node_key": "a", "peer_uid": "bbbbbbbbbbbbbbb2"},
+                  # aimed at the diagram as a whole, so it counts on no card
+                  {"node_key": "", "peer_uid": "bbbbbbbbbbbbbbb3"}],
+    }
+    layout = ds.DiagramLayout(data)
+    assert layout.jump_count == {"a": 2}
+    node = layout.nodes[0]
+    reach = ds.badge_reach(node, 2, ds.BADGE_PX * layout.font_scale)
+    x0, _, vw, _ = ds.frame(layout, {})
+    assert reach > node["x"] + node["w"] / 2, "the badge is meant to stick out"
+    assert reach <= x0 + vw, "and the frame has to cover it"
 
 
 def test_notes_become_tooltips_and_can_be_left_out(fixture_data):
@@ -483,6 +607,29 @@ def test_link_counts_are_drawn_inside_the_shape(fixture_data):
     svg_text = ds.render_svg(fixture_data)[0]
     assert 'class="dg-c"' in svg_text
     assert 'class="dg-lm"' in svg_text
+
+
+def test_jump_counts_are_drawn_on_the_row_below(fixture_data):
+    """The "continues in another flow" badge, which the SVG used to lose.
+
+    It was the only hint that a jump exists at all, so an exported diagram
+    dropped the signal silently. 'audit' carries jumps and no links, so the
+    lower row has to stand on its own; the fixture's keyless incoming jump
+    is aimed at the diagram as a whole and belongs to no card.
+    """
+    layout = ds.DiagramLayout(fixture_data)
+    assert layout.jump_count == {"audit": 2, "check": 1}
+    svg_text = ds.render_svg(fixture_data)[0]
+    assert 'class="dg-jm"' in svg_text
+    # each count on its own row: the two say different things, and on one
+    # row they would read as a single two-digit number
+    bpx = ds.BADGE_PX * layout.font_scale
+    for key, row, count in (("audit", 1, 2), ("check", -1, 1),
+                            ("check", 1, 1)):
+        left, mid_y = ds.badge_anchor(layout.by_key[key], row, bpx)
+        right = left + bpx * 0.92 + ds.measure(str(count), bpx, ds.FACE_MONO)
+        assert (f'<text class="dg-c" x="{ds._n(right)}" '
+                f'y="{mid_y:.1f}">{count}</text>') in svg_text, (key, row)
 
 
 def test_interactive_wraps_the_same_drawing(fixture_data):
@@ -516,6 +663,6 @@ def test_the_fixture_notices_a_changed_constant(
     one, and require the comparison to fail.
     """
     monkeypatch.setattr(ds, name, perturbed)
+    want = {k: v for k, v in golden.items() if k != "_"}
     with pytest.raises(AssertionError):
-        for routing in ("orthogonal", "curved"):
-            _same(_record(fixture_data, routing), golden[routing], routing)
+        _same(_record(fixture_data), want, name)

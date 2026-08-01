@@ -67,11 +67,10 @@ globalThis.getComputedStyle = () => ({ getPropertyValue: () => '' });
 const round = n => Math.round(n * 1e6) / 1e6;   /* kill float noise, keep sub-pixel */
 const pt = p => ({ x: round(p.x), y: round(p.y) });
 
-const record = async (data, routing) => {
-  const { DiagramEditor } = await import(`file://${ENGINE}`);
-  const ed = new DiagramEditor(stubCanvas(), data, { readOnly: true, routing });
+const record = async data => {
+  const { DiagramEditor, BADGE_PX } = await import(`file://${ENGINE}`);
+  const ed = new DiagramEditor(stubCanvas(), data, { readOnly: true });
   return {
-    routing,
     font_scale: round(ed.fontScale),
     lane_span: ed.laneSpan
       ? { left: round(ed.laneSpan.left), right: round(ed.laneSpan.right) }
@@ -80,23 +79,30 @@ const record = async (data, routing) => {
     nodes: ed.nodes.map(n => ({
       key: n.key, shape: n.shape, sized: n.sized,
       x: round(n.x), y: round(n.y), w: round(n.w), h: round(n.h),
+      /* both rows, because halfWidthAt is NOT symmetric in dy on a
+         parallelogram -- recording one would leave the other unpinned */
+      badge: [-1, 1].map(row => {
+        const at = DiagramEditor.badgeAnchor(n, row, BADGE_PX * ed.fontScale);
+        return { left: round(at.left), mid_y: round(at.midY) };
+      }),
     })),
     edges: ed.edges.map(e => {
-      const { pts, curve } = ed.route(e);
+      const pts = ed.route(e);
       return {
         from: e.from, to: e.to,
         back: !!e.back, loops: !!e.loops,
-        lane: e.lane || 0, bow: round(e.bow || 0),
+        lane: e.lane || 0, bow: round(e.bow || 0), flank: !!e.flank,
         via: e.via
           ? (e.via.corridor !== undefined
               ? { corridor: round(e.via.corridor) }
-              : { crossY: round(e.via.crossY) })
+              : e.via.crossY !== undefined
+                ? { crossY: round(e.via.crossY) }
+                : { crossX: round(e.via.crossX) })
           : null,
         fan_from: round(e.fanFrom || 0), fan_to: round(e.fanTo || 0),
         stub_from: round(e.stubFrom || 0), stub_to: round(e.stubTo || 0),
         corridor: e.lane || e.via?.corridor !== undefined
           ? round(ed.corridorFor(e)) : null,
-        curve: curve ? pt(curve) : null,
         /* the whole polyline: the one output that proves the rest agreed */
         pts: pts.map(pt),
         label_at: pts.length ? pt(DiagramEditor.midpoint(pts)) : null,
@@ -108,18 +114,14 @@ const record = async (data, routing) => {
 
 const main = async () => {
   const data = JSON.parse(readFileSync(FIXTURE, 'utf8'));
-  /* both routings, because the SVG exporter can be asked for either and a
-     bug that only shows in the curved path would otherwise ship unseen */
   const fresh = {
     _: 'Recorded from webui/diagram-engine.js by tools/route-parity.mjs. Do not hand-edit.',
-    orthogonal: await record(data, 'orthogonal'),
-    curved: await record(data, 'curved'),
+    ...await record(data),
   };
 
   if (process.argv.includes('--write')) {
     writeFileSync(GOLDEN, `${JSON.stringify(fresh, null, 1)}\n`);
-    const n = fresh.orthogonal.edges.length;
-    console.log(`wrote ${GOLDEN}\n  ${n} edges x 2 routings`);
+    console.log(`wrote ${GOLDEN}\n  ${fresh.edges.length} edges`);
     return 0;
   }
 
@@ -134,20 +136,18 @@ const main = async () => {
      one side is a divergence too, and this way it cannot be forgotten. */
   const a = JSON.stringify(golden), b = JSON.stringify(fresh);
   if (a === b) {
-    console.log(`parity ok -- ${fresh.orthogonal.edges.length} edges x 2 routings`);
+    console.log(`parity ok -- ${fresh.edges.length} edges`);
     return 0;
   }
   console.error('the canvas no longer routes the fixture the way the golden says.');
   console.error('  if the change was intended, re-record with --write and run pytest;');
   console.error('  the Python side has to be updated to match.');
-  for (const routing of ['orthogonal', 'curved']) {
-    for (const [i, edge] of fresh[routing].edges.entries()) {
-      const was = golden[routing]?.edges?.[i];
-      if (JSON.stringify(was) !== JSON.stringify(edge)) {
-        console.error(`  ${routing} ${edge.from}->${edge.to}`);
-        console.error(`    golden ${JSON.stringify(was?.pts)}`);
-        console.error(`    now    ${JSON.stringify(edge.pts)}`);
-      }
+  for (const [i, edge] of fresh.edges.entries()) {
+    const was = golden.edges?.[i];
+    if (JSON.stringify(was) !== JSON.stringify(edge)) {
+      console.error(`  ${edge.from}->${edge.to}`);
+      console.error(`    golden ${JSON.stringify(was?.pts)}`);
+      console.error(`    now    ${JSON.stringify(edge.pts)}`);
     }
   }
   return 1;

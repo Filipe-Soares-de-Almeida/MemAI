@@ -15,10 +15,8 @@ import { typeClass, DG_REL_SUGGEST } from '../core/shared.js';
 import { pickMemories } from '../core/link-picker.js';
 import { onTeardown } from '../core/lifecycle.js';
 import { openRecord } from './record.js';
-import { DiagramEditor, NODE_SHAPES, ROUTINGS, FONT_SCALES } from '../diagram-engine.js';
+import { DiagramEditor, NODE_SHAPES, FONT_SCALES } from '../diagram-engine.js';
 import { t } from '../i18n.js';
-
-const ROUTING_KEY = 'memai.diagram.routing';
 
 const shapeOptions = sel => NODE_SHAPES.map(s =>
   `<option value="${s}"${s === sel ? ' selected' : ''}>${t(`dg.shape.${s}`)}</option>`).join('');
@@ -76,6 +74,39 @@ const jumpHref = (j, from) =>
 const backHref = (uid, node) =>
   `#/diagram?uid=${enc(uid)}` + (node ? `&node=${enc(node)}` : '');
 
+/* How many chips the corner offers before folding the rest behind a +N, and
+   how much of a flow's name one chip carries.
+
+   Both are here because the corner is the one thing on the canvas that grows
+   with the DATA rather than with the diagram. A chip used to carry a whole
+   flow title: measured on a 614-wide stage, that came out 590 wide -- 96% of
+   the canvas -- and was ellipsised anyway, so the width bought no text. And
+   they stacked, one row each: at 27px a row, ten ties took 55% of the stage
+   height, and insets() then handed fit() what was left, so a well-connected
+   flow drew itself smaller the more it was connected.
+
+   A short name fits several to a row, and the cap is what keeps it to one
+   row no matter how many ties a step grows.
+
+   Three and not four: a chip is capped at 10rem, so three of them plus the
+   +N button fit one row down to a stage about 550 wide -- which is what the
+   stage IS once the inspector has its share. Four measured 603 against 590
+   of room and wrapped, which is the thing this exists to stop. */
+const JUMP_CHIPS_SHOWN = 3;
+const CHIP_LABEL_CHARS = 20;
+
+/* A flow's name cut to what a chip can carry. The part before the first
+   dash-like separator, which is where a title carries its identifier when it
+   has one, and clamped so a title with no separator is short anyway. The
+   whole title stays in the chip's tooltip -- that is where a reader asks
+   which flow this is, rather than where it goes. */
+const chipLabel = title => {
+  const full = String(title ?? '').trim();
+  const head = full.split(/\s+[\u2014\u2013-]\s+/)[0].trim() || full;
+  if (head.length <= CHIP_LABEL_CHARS) return head;
+  return `${head.slice(0, CHIP_LABEL_CHARS).replace(/[\s,;:.\-/]+$/, '')}\u2026`;
+};
+
 /* Which step of the target flow to arrive on, and why the flow continues
    there. Second half of adding a jump: the first half picked the diagram,
    and only that diagram knows what its steps are called. */
@@ -132,10 +163,6 @@ export async function renderDiagram(view, params, ctx) {
   /* Read-only until asked otherwise: reading a flow is the common case, and
      a stray drag while reading rewrites a position every other reader sees. */
   let editing = false;
-  /* how edges are drawn is a reading preference, not diagram data, so it
-     lives in the browser rather than in the store */
-  let routing = localStorage.getItem(ROUTING_KEY);
-  if (!ROUTINGS.includes(routing)) routing = 'orthogonal';
 
   view.innerHTML = `<div class="anim">
     <div class="view-head">
@@ -151,7 +178,6 @@ export async function renderDiagram(view, params, ctx) {
           <button class="btn btn-sm" id="dgAdd" data-editonly>${t('dg.add')}</button>
           <button class="btn btn-sm" id="dgConnect" data-editonly>${t('dg.connect')}</button>
           <button class="btn btn-sm" id="dgArrange" data-editonly>${t('dg.arrange')}</button>
-          <button class="btn btn-sm" id="dgRouting"></button>
           <button class="btn btn-sm" id="dgFont" data-editonly></button>
           <button class="btn btn-sm" id="dgFit">${t('dg.center')}</button>
           <button class="btn btn-sm" id="dgMermaid">${t('dg.mermaid')}</button>
@@ -433,12 +459,6 @@ export async function renderDiagram(view, params, ctx) {
     };
   }
 
-  function paintRouting() {
-    const b = $('#dgRouting');
-    b.textContent = t(`dg.routing.${routing}`);
-    b.title = t('dg.routing.switch');
-  }
-
   /* Text size is stored on the diagram, not in the browser: a card resized
      to fit its label at one size is the wrong size at another, and the card
      sizes ARE stored. So this is an edit, and it needs editing on. */
@@ -552,6 +572,13 @@ export async function renderDiagram(view, params, ctx) {
        the same flow on the same corner */
     const mine = (node ? data.jumps.filter(j => j.node_key === node.key) : [])
       .filter(j => j !== back);
+    /* A tie aimed at the diagram as a WHOLE belongs to no step, so no
+       selection could ever surface it and the canvas said nothing about it
+       at all -- it was reachable only from the inspector. It is about the
+       flow you are looking at, so it stays for as long as you are on it,
+       and it comes after the selected step's own: those are what the click
+       that got you here was asking about. */
+    const whole = data.jumps.filter(j => !j.node_key && j !== back);
 
     /* The arrow says what the CLICK does, not which way the tie points:
        right is "open that flow", left is "back to the one that sent you
@@ -562,23 +589,49 @@ export async function renderDiagram(view, params, ctx) {
        recorded the jump. Which end recorded it is a fact about the data,
        not about where this button takes you; the inspector's panel is
        where it belongs and still shows it. */
-    const chip = (href, kind, title, step, hint) => `
-      <a class="dg-navchip${kind === 'back' ? ' back' : ''}" href="${href}" title="${esc(hint)}">
+    const chip = (over, href, kind, title, step, hint) => `
+      <a class="dg-navchip${kind === 'back' ? ' back' : ''}${over ? ' over' : ''}"
+         href="${href}" title="${esc(hint)}">
         <span class="dg-navchip-mark">${icon(kind === 'back' ? 'arrow-left' : 'arrow-right')}</span>
-        <span class="dg-navchip-text">${esc(title)}</span>
+        <span class="dg-navchip-text">${esc(chipLabel(title))}</span>
         ${step ? `<span class="dg-key">${esc(step)}</span>` : ''}
       </a>`;
 
-    bar.innerHTML = [
-      back ? chip(backHref(back.peer_uid, back.peer_node), 'back', back.peer_title,
-                  back.peer_node, t('dg.jump.backTitle', { title: back.peer_title })) : '',
+    /* Built as a list first, so the cap counts what is actually offered
+       rather than each group guessing how much room the others left. */
+    const offers = [
+      ...(back ? [[backHref(back.peer_uid, back.peer_node), 'back', back.peer_title,
+                   back.peer_node, t('dg.jump.backTitle', { title: back.peer_title })]] : []),
       /* the direction survives in the tooltip, which is where a reader asks
          "why is this flow on my screen" rather than "where does this go" */
-      ...mine.map(j => chip(jumpHref(j, uid), 'go', j.peer_title, j.peer_node,
+      ...mine.map(j => [jumpHref(j, uid), 'go', j.peer_title, j.peer_node,
         t(j.direction === 'out' ? 'dg.jump.open' : 'dg.jump.openFrom',
-          { title: j.peer_title }))),
-    ].filter(Boolean).join('');
-    bar.hidden = !bar.innerHTML;
+          { title: j.peer_title })]),
+      ...whole.map(j => [jumpHref(j, uid), 'go', j.peer_title, '',
+        t('dg.jump.openHere', { title: j.peer_title })]),
+    ];
+    const folded = Math.max(0, offers.length - JUMP_CHIPS_SHOWN);
+
+    bar.classList.remove('open');
+    bar.innerHTML = offers
+      .map((args, i) => chip(i >= JUMP_CHIPS_SHOWN, ...args))
+      .concat(folded ? [`
+        <button type="button" class="dg-navchip dg-navmore"
+                title="${esc(t('dg.jump.more', { n: folded }))}">+${folded}</button>`] : [])
+      .join('');
+    bar.hidden = !offers.length;
+
+    /* Toggled here rather than by a stylesheet-only :focus-within trick: the
+       label has to flip too, and a corner that expanded on hover would open
+       itself every time the pointer crossed it on the way to a card. */
+    const more = bar.querySelector('.dg-navmore');
+    if (more) {
+      more.onclick = () => {
+        const open = bar.classList.toggle('open');
+        more.textContent = open ? '\u2212' : `+${folded}`;
+        more.title = open ? t('dg.jump.less') : t('dg.jump.more', { n: folded });
+      };
+    }
   }
 
   function paintSide() {
@@ -750,7 +803,6 @@ export async function renderDiagram(view, params, ctx) {
   engine = new DiagramEditor($('#dgCanvas'), data, {
     tipShow, tipHide,
     readOnly: true,
-    routing,
     onEditEdgeLabel: editEdgeLabel,
     onContextMenu: canvasMenu,
     /* the toolbar has its own row now; the hint strip, the legend and the
@@ -797,12 +849,6 @@ export async function renderDiagram(view, params, ctx) {
   $('#dgArrange').onclick = arrange;
   $('#dgFit').onclick = () => engine.fit();
   $('#dgRecord').onclick = () => openRecord(uid);
-  $('#dgRouting').onclick = () => {
-    routing = routing === 'orthogonal' ? 'curved' : 'orthogonal';
-    localStorage.setItem(ROUTING_KEY, routing);
-    engine.setRouting(routing);
-    paintRouting();
-  };
   $('#dgFont').onclick = openFontMenu;
   $('#dgMode').onclick = () => { editing = !editing; applyMode(); };
   /* the heading and the summary panel are where you reach for these, so both
@@ -822,7 +868,6 @@ export async function renderDiagram(view, params, ctx) {
     engine.focusNode(landOn);
   }
 
-  paintRouting();
   paintFont();
   applyMode();
   $('#dgMermaid').onclick = async () => {
