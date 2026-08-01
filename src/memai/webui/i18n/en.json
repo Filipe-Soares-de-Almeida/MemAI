@@ -242,7 +242,7 @@
     "do.th.types": "types",
     "do.collide.title": "variants of the same name: {list} — click to merge",
     "do.empty": "no named domains yet",
-    "do.tree.intro": "A domain is a path, so these are levels: 'acme/x100/p200' files a memory under a routine inside a module inside a product. Asking about a level covers everything below it — so a name in italics is a level nothing was filed on directly, and +n counts what sits underneath.",
+    "do.tree.intro": "Domains nest like folders: 'acme/x100/p200' puts a memory in p200, which sits inside x100, which sits inside acme. Ask about any level and you get everything below it too. A name in italics holds no memory of its own — only the levels under it do. The +n next to a count is what sits further down.",
     "do.tree.expandAll": "Expand all",
     "do.tree.collapseAll": "Collapse all",
     "do.tree.expand": "Show what is under {domain}",
