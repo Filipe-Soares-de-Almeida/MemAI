@@ -9,8 +9,10 @@
   "a short back edge between stacked cards (hop in its own column)",
   "two nodes sized by hand, so node_size takes both branches",
   "a step unreachable from start, so orphan_keys is exercised",
-  "TWO edges that fit nowhere between their ends, so they take margin lanes -- the wide 'guard'/'gate' cards exist to block every nearer corridor, and two of them so the side alternates and the second lane stacks outward"
+  "jumps both ways: 'audit' carries them without any link, so the lower badge row stands on its own, 'check' carries one of each, and a keyless incoming jump aimed at the diagram as a whole belongs to no card and is counted on none",
+  "TWO edges that fit nowhere between their ends, so they take margin lanes -- the wide 'guard'/'gate' cards and the 'wall_left'/'wall_right' pair exist to block every nearer corridor, and two such edges so the side alternates and the second lane stacks outward"
  ],
+ "_walls": "wall_left/wall_right have no edges: they are there to close the last corridors on the full-height column, which is what makes an edge run out of candidates and take a margin lane. They leave a gap around x=0 so the spine itself is untouched. Widen the gap and the lane coverage silently disappears -- see test_the_fixture_exercises_every_routing_branch.",
  "uid": "fixture0000000001",
  "kind": "flowchart",
  "title": "Route fixture",
@@ -36,7 +38,10 @@
   {"key": "tiny_a", "label": "Short hop out", "shape": "step", "note": "", "x": 2000, "y": 200, "w": null, "h": null},
   {"key": "tiny_b", "label": "Short hop in", "shape": "step", "note": "dx 30 and dy 76 put `along` at exactly 23, one unit inside the ORTH_RADIUS*2 threshold that decides straight-run vs Z", "x": 2030, "y": 276, "w": null, "h": null},
   {"key": "snap_a", "label": "Almost in line above", "shape": "step", "note": "", "x": 2400, "y": 200, "w": null, "h": null},
-  {"key": "snap_b", "label": "Almost in line below", "shape": "step", "note": "offset by 18.5, half a unit past ORTH_SNAP -- so the anchor may NOT slide into line and the run may NOT be drawn as one segment", "x": 2418.5, "y": 600, "w": null, "h": null}
+  {"key": "snap_b", "label": "Almost in line below", "shape": "step", "note": "offset by 18.5, half a unit past ORTH_SNAP -- so the anchor may NOT slide into line and the run may NOT be drawn as one segment", "x": 2418.5, "y": 600, "w": null, "h": null},
+  {"key": "between", "label": "Sits on the crossbar", "shape": "step", "note": "no edges: parked exactly where audit->side_a would put the DOWN leg of its Z, so that run has to move its crossbar sideways -- the crossX case, which the vertical crossY one cannot cover", "x": 742, "y": 400, "w": 170, "h": null},
+  {"key": "wall_left", "label": "Left wall", "shape": "step", "note": "no edges: closes the corridors left of the column, so an edge down the full height runs out of candidates", "x": -448, "y": 1400, "w": 664, "h": null},
+  {"key": "wall_right", "label": "Right wall", "shape": "step", "note": "no edges: the same on the right, and the gap between the two is what keeps the spine itself routable", "x": 448, "y": 1400, "w": 664, "h": null}
  ],
  "edges": [
   {"from": "start", "to": "load", "label": "", "loops": false},
@@ -74,5 +79,10 @@
   {"node_key": "write", "target_uid": "aaaaaaaaaaaaaaa2"},
   {"node_key": "check", "target_uid": "aaaaaaaaaaaaaaa3"}
  ],
- "jumps": []
+ "jumps": [
+  {"direction": "out", "node_key": "audit", "peer_uid": "bbbbbbbbbbbbbbb1", "peer_node": "start", "label": ""},
+  {"direction": "out", "node_key": "audit", "peer_uid": "bbbbbbbbbbbbbbb2", "peer_node": "", "label": ""},
+  {"direction": "in", "node_key": "check", "peer_uid": "bbbbbbbbbbbbbbb1", "peer_node": "done", "label": ""},
+  {"direction": "in", "node_key": "", "peer_uid": "bbbbbbbbbbbbbbb2", "peer_node": "done", "label": ""}
+ ]
 }
