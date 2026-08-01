@@ -68,12 +68,17 @@ export async function renderOverview(view, params, ctx) {
   /* The row stays clickable for the mouse; the cell holds a real button so
      the same jump exists for the keyboard. Its click bubbles to the row, so
      there is still one handler and not two. */
+  /* Domains are paths, and this table is the ten liveliest of them rather
+     than the tree -- so the whole path is written out here, and a parent
+     shows what its subtree holds next to what is filed on it directly.
+     The Domains view is where the tree itself is walked. */
   const domRows = o.domains.map(d => `
     <tr class="clickable" data-domain="${esc(d.domain)}">
       <td><button type="button" class="row-open"
                   aria-label="${esc(t('a11y.filterDomain', { domain: d.domain }))}">${esc(d.domain)}</button></td>
-      <td class="num">${fmtInt(d.count)}</td>
-      <td class="num" style="color:var(--ink-3)">${fmtAgo(d.latest_at)}</td>
+      <td class="num">${fmtInt(d.count)}${d.subtree > d.count
+        ? `<span class="dom-roll" title="${esc(t('do.rollupWhy'))}">+${fmtInt(d.subtree - d.count)}</span>` : ''}</td>
+      <td class="num" style="color:var(--ink-3)">${fmtAgo(d.latest_at || d.subtree_latest_at)}</td>
     </tr>`).join('');
 
   const recentRows = o.recent.map(m => `

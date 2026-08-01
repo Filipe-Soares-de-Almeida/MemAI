@@ -7,7 +7,7 @@ import { api } from '../core/api.js';
 import { icon } from '../core/icons.js';
 import { toast, failed, promptModal } from '../core/ui.js';
 import { statusTag, confPill, uidChip, wireCopyChips, getDomains,
-         invalidateDomains } from '../core/shared.js';
+         invalidateDomains, domainOptions, domainSegments } from '../core/shared.js';
 import { go } from '../core/router.js';
 import { openRecord } from './record.js';
 import { t } from '../i18n.js';
@@ -81,7 +81,7 @@ export async function renderDiagrams(view, params, ctx) {
       <div class="act-row">
         <select id="dglDomain" aria-label="${t('common.allDomains')}">
           <option value="">${t('common.allDomains')}</option>
-          ${domains.map(d => `<option value="${esc(d.domain)}" ${d.domain === state.domain ? 'selected' : ''}>${esc(d.domain)}</option>`).join('')}
+          ${domainOptions(domains, state.domain)}
         </select>
         <div class="seg" id="dglStatus" role="group" aria-label="${t('mem.status.aria')}">
           <button type="button" data-v="active" aria-pressed="${state.status === 'active'}">${t('common.active')}</button>
@@ -142,15 +142,42 @@ export async function renderDiagrams(view, params, ctx) {
     </div>`;
   };
 
+  /* Flows are grouped by the OUTERMOST segment of their domain: a store
+     grows one diagram per routine, and thirty cards in one flat grid is a
+     list to read rather than a set to navigate. The heading filters to that
+     branch, which is where the finer grouping comes from -- the server
+     scopes a domain filter to its whole subtree, so picking 'acme' narrows
+     to it and the headings below become its modules. */
+  const rootOf = d => domainSegments(d.domain)[0] || '';
+
   const grid = $('#dglGrid');
   const draw = () => {
     const q = $('#dglFilter').value.trim().toLowerCase();
     const shown = q
       ? data.items.filter(d => `${d.title} ${d.summary} ${d.domain} ${d.tags}`.toLowerCase().includes(q))
       : data.items;
-    grid.innerHTML = shown.length
-      ? `<div class="dgl-grid">${shown.map(card).join('')}</div>`
-      : `<div class="empty">${data.total ? t('dgl.noMatch') : `${t('dgl.empty')}<div class="dg-empty" style="margin-top:8px">${t('dgl.emptyHint')}</div>`}</div>`;
+    const groups = new Map();
+    for (const d of shown) {
+      const k = rootOf(d);
+      if (!groups.has(k)) groups.set(k, []);
+      groups.get(k).push(d);
+    }
+    /* undomained last: it is the leftover pile, not a branch */
+    const order = [...groups.keys()].sort((a, b) =>
+      (a === '') - (b === '') || a.localeCompare(b));
+    grid.innerHTML = !shown.length
+      ? `<div class="empty">${data.total ? t('dgl.noMatch') : `${t('dgl.empty')}<div class="dg-empty" style="margin-top:8px">${t('dgl.emptyHint')}</div>`}</div>`
+      : order.length < 2
+        ? `<div class="dgl-grid">${shown.map(card).join('')}</div>`
+        : order.map(k => `<section class="dgl-group">
+            <div class="dgl-group-head">
+              ${k ? `<button type="button" class="chip clickable" data-fdomain="${esc(k)}"
+                       aria-label="${esc(t('a11y.filterDomain', { domain: k }))}">${esc(k)}</button>`
+                  : `<span class="chip">${t('dgl.noDomain')}</span>`}
+              <span class="dgl-group-n">${t('dgl.groupCount', { n: groups.get(k).length })}</span>
+            </div>
+            <div class="dgl-grid">${groups.get(k).map(card).join('')}</div>
+          </section>`).join('');
     wireCopyChips(grid);
     grid.querySelectorAll('[data-edit]').forEach(el =>
       el.addEventListener('click', () => go('diagram', { uid: el.dataset.edit })));

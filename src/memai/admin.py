@@ -107,6 +107,30 @@ def _int_param(request, name: str, default: int, lo: int, hi: int) -> int:
     return max(lo, min(hi, val))
 
 
+def _subtree_param(request) -> bool:
+    """Whether a domain filter covers its subdomains. On unless told otherwise.
+
+    A domain is a scope, and the useful default for a filter is the whole
+    scope -- picking 'acme/x100' and seeing none of its routines reads as
+    an empty module. `subtree=0` narrows to the exact path.
+    """
+    return request.query_params.get("subtree", "1").lower() not in ("0", "false", "no")
+
+
+def _scope_echo(conn: sqlite3.Connection, domain: str) -> dict:
+    """`domain_scope` for a response, but only when it is news.
+
+    A domain filter is allowed to resolve a name that is the deep end of a
+    path ('p200' -> 'acme/x100/p200'); a view that showed those rows
+    without saying so would be claiming a filter it did not run. Omitted
+    when the filter matched literally, which is the ordinary case.
+    """
+    if not domain:
+        return {}
+    scopes = db.resolve_domain_scopes(conn, domain)
+    return {} if scopes == [db.normalize_domain(domain)] else {"domain_scope": scopes}
+
+
 def _file_size(path: Path) -> int:
     try:
         return path.stat().st_size
@@ -170,7 +194,7 @@ def overview(request, payload) -> dict:
                 """SELECT substr(created_at, 1, 10) AS day, COUNT(*)
                    FROM memories GROUP BY day ORDER BY day DESC LIMIT 45""").fetchall())
         ]
-        domains = [dict(r) for r in db.list_domains(conn)]
+        domains = db.list_domains(conn)
         recent = [_summary(r, 150) for r in db.list_recent(conn, limit=8)]
         vec_ok = db._vec_ready(conn)
         vec_rows = conn.execute("SELECT COUNT(*) FROM memories_vec").fetchone()[0] if vec_ok else 0
@@ -183,7 +207,10 @@ def overview(request, payload) -> dict:
             "relations": relations,
             "edits": edits,
             "sessions": sessions,
-            "domains": len(domains),
+            # written-to paths only: an ancestor that exists because
+            # something deeper is filed under it is a level of the tree,
+            # not a domain anybody named
+            "domains": sum(1 for d in domains if not d["implicit"]),
         },
         "by_type": by_type,
         "by_confidence": by_confidence,
@@ -219,22 +246,28 @@ def list_memories(request, payload) -> dict:
     direction = "ASC" if qp.get("dir", "desc").lower() == "asc" else "DESC"
     limit = _int_param(request, "limit", 50, 1, 200)
     offset = _int_param(request, "offset", 0, 0, 1_000_000)
+    subtree = _subtree_param(request)
 
     with db.connect() as conn:
+        scope = _scope_echo(conn, domain)
         if q:
-            hits = db.search_hybrid(conn, q, domain=domain, type=type_, status=status, limit=200)
+            hits = db.search_hybrid(conn, q, domain=domain, type=type_, status=status,
+                                    limit=200, subtree=subtree)
             if confidence:
                 hits = [h for h in hits if h["confidence"] == confidence]
             if session:
                 hits = [h for h in hits if h["session"] == session]
             total = len(hits)
             items = [_summary(h) for h in hits[offset:offset + limit]]
-            return {"total": total, "items": items, "searched": True}
+            return {"total": total, "items": items, "searched": True, **scope}
 
         where, params = ["1=1"], []
-        for field, value in (("domain", domain), ("type", type_),
-                             ("status", status), ("confidence", confidence),
-                             ("session", session)):
+        if domain:
+            clause, values, _ = db.domain_scope_clause(conn, domain, alias="", subtree=subtree)
+            where.append(clause)
+            params.extend(values)
+        for field, value in (("type", type_), ("status", status),
+                             ("confidence", confidence), ("session", session)):
             if value:
                 where.append(f"AND {field} = ?")
                 params.append(value)
@@ -243,7 +276,7 @@ def list_memories(request, payload) -> dict:
         rows = conn.execute(
             f"SELECT * FROM memories WHERE {clause} ORDER BY {sort} {direction} LIMIT ? OFFSET ?",
             [*params, limit, offset]).fetchall()
-    return {"total": total, "items": [_summary(r) for r in rows], "searched": False}
+    return {"total": total, "items": [_summary(r) for r in rows], "searched": False, **scope}
 
 
 def memory_detail(request, payload) -> dict:
@@ -343,7 +376,7 @@ def edit_meta(request, payload) -> dict:
             # it claims a generated content field with nothing generating it
             raise ValueError("a diagram's type cannot be changed")
         if "domain" in updates:
-            updates["domain"] = db.apply_domain_case(conn, updates["domain"])
+            updates["domain"] = db.apply_domain_policy(conn, updates["domain"])
         changed = {k: v for k, v in updates.items() if v != row[k]}
         if not changed:
             return {"ok": True, "changed": []}
@@ -471,13 +504,19 @@ def graph(request, payload) -> dict:
     status = qp.get("status", "active")
     domain = qp.get("domain", "")
     type_ = qp.get("type", "")
-    where, params = ["1=1"], []
-    for field, value in (("status", status), ("domain", domain), ("type", type_)):
-        if value:
-            where.append(f"AND {field} = ?")
-            params.append(value)
     limit = _int_param(request, "limit", GRAPH_NODE_CAP, 1, 2000)
     with db.connect() as conn:
+        scope = _scope_echo(conn, domain)
+        where, params = ["1=1"], []
+        if domain:
+            clause, values, _ = db.domain_scope_clause(
+                conn, domain, alias="", subtree=_subtree_param(request))
+            where.append(clause)
+            params.extend(values)
+        for field, value in (("status", status), ("type", type_)):
+            if value:
+                where.append(f"AND {field} = ?")
+                params.append(value)
         total = conn.execute(
             f"SELECT COUNT(*) FROM memories WHERE {' '.join(where)}", params).fetchone()[0]
         # `deg` orders the cut, not the payload: the degree reported per
@@ -512,7 +551,7 @@ def graph(request, payload) -> dict:
     } for r in rows]
     # A cap that says nothing reads as "this is everything".
     return {"nodes": nodes, "edges": edges,
-            "total": total, "truncated": total > len(nodes)}
+            "total": total, "truncated": total > len(nodes), **scope}
 
 
 # ---------------------------------------------------------------- diagrams
@@ -558,11 +597,14 @@ def diagram_list(request, payload) -> dict:
     status = request.query_params.get("status", "active")
     domain = request.query_params.get("domain", "")
     with db.connect() as conn:
-        items = db.diagram_overview(conn, domain=domain, status=status)
+        items = db.diagram_overview(conn, domain=domain, status=status,
+                                    subtree=_subtree_param(request))
+        scope = _scope_echo(conn, domain)
     return {
         "total": len(items),
         "with_issues": sum(1 for d in items if d["issues"]),
         "items": items,
+        **scope,
     }
 
 
@@ -731,76 +773,99 @@ def diagram_mermaid(request, payload) -> dict:
 # ---------------------------------------------------------------- domains
 
 def domains(request, payload) -> dict:
+    """The domain tree, one entry per path, for the Domains view.
+
+    Every field the table draws: both status counts, the type mix, the
+    spelling-variant warning, and the tree position (parent/depth/
+    children) with the subtree rollups the parent rows are drawn from.
+
+    A level nobody wrote to directly still gets an entry, flagged
+    `implicit`: 'acme/x100/p200' means the tree HAS an 'acme/x100', and a
+    view that skipped it could not draw the branch its children hang from.
+    """
     with db.connect() as conn:
         rows = conn.execute(
             """SELECT domain, status, type, COUNT(*) AS n, MAX(created_at) AS latest
                FROM memories WHERE domain <> ''
                GROUP BY domain, status, type""").fetchall()
     agg: dict[str, dict] = {}
+
+    def node(path: str) -> dict:
+        return agg.setdefault(path, {
+            "domain": path, "active": 0, "archived": 0, "types": {},
+            "latest_at": "", "parent": db.domain_parent(path),
+            "depth": db.domain_depth(path), "children": 0,
+            "subtree_active": 0, "subtree_archived": 0,
+            "subtree_latest_at": "", "implicit": True,
+        })
+
     for r in rows:
-        d = agg.setdefault(r["domain"], {
-            "domain": r["domain"], "active": 0, "archived": 0,
-            "types": {}, "latest_at": ""})
+        d = node(db.normalize_domain(r["domain"]))
+        d["implicit"] = False
         if r["status"] == "active":
             d["active"] += r["n"]
         else:
             d["archived"] += r["n"]
         d["types"][r["type"]] = d["types"].get(r["type"], 0) + r["n"]
         d["latest_at"] = max(d["latest_at"], r["latest"])
-    by_lower: dict[str, list[str]] = {}
-    for name in agg:
-        by_lower.setdefault(name.strip().lower(), []).append(name)
-    for names in by_lower.values():
+        for ancestor in db.domain_ancestors(d["domain"]):
+            node(ancestor)
+
+    for d in list(agg.values()):
+        for scope in db.domain_ancestors(d["domain"], include_self=True):
+            holder = agg[scope]
+            holder["subtree_active"] += d["active"]
+            holder["subtree_archived"] += d["archived"]
+            holder["subtree_latest_at"] = max(holder["subtree_latest_at"], d["latest_at"])
+        if d["parent"]:
+            agg[d["parent"]]["children"] += 1
+
+    # Spelling variants are compared per level, not per whole path: two
+    # siblings called 'Cache' and 'cache' are the drift worth merging,
+    # while the same word at two different depths is two different scopes.
+    by_sibling: dict[tuple[str, str], list[str]] = {}
+    for path, d in agg.items():
+        if d["implicit"]:
+            continue
+        by_sibling.setdefault(
+            (d["parent"], db.split_domain(path)[-1].lower()), []).append(path)
+    for names in by_sibling.values():
         if len(names) > 1:
             for n in names:
                 agg[n]["collides_with"] = [x for x in names if x != n]
-    result = sorted(agg.values(), key=lambda d: d["latest_at"], reverse=True)
+
+    result = sorted(agg.values(), key=lambda d: d["domain"])
+    result.sort(key=lambda d: d["subtree_latest_at"], reverse=True)
     return {"domains": result}
 
 
-def _rename_domain_rows(conn: sqlite3.Connection, src: str, dst: str) -> int:
-    """Move every memory from domain `src` to `dst`: UPDATE + audit + re-embed.
-
-    Domain is part of the embedding source, so each row is re-embedded.
-    If `dst` already has rows this is a merge. Returns the count moved.
-    """
-    rows = conn.execute(
-        "SELECT rowid_pk, uid, content, tags FROM memories WHERE domain = ?", (src,)).fetchall()
-    now = db.now_iso()
-    conn.execute(
-        "UPDATE memories SET domain = ?, updated_at = ? WHERE domain = ?", (dst, now, src))
-    for r in rows:
-        conn.execute(
-            "INSERT INTO edits (memory_uid, edited_at, prev_content, new_content, note) VALUES (?, ?, ?, ?, ?)",
-            (r["uid"], now, r["content"], r["content"], f"meta: domain '{src}' → '{dst}'"))
-        db._upsert_vector(conn, r["rowid_pk"], r["content"], r["tags"], dst)
-    return len(rows)
-
-
 def rename_domain(request, payload) -> dict:
-    """Rename or merge a domain. Every affected row is re-embedded (domain
-    is part of the embedding source) and audited in edits."""
+    """Rename, re-home or merge a domain, subdomains included.
+
+    'to' is a full path, so this is also how a domain is nested: renaming
+    'x100' to 'acme/x100' moves the bucket (and its subtree) under 'acme'.
+    Every affected row is re-embedded (domain is part of the embedding
+    source) and audited in edits -- see db.move_domain.
+    """
     src = (payload.get("from") or "").strip()
     dst = (payload.get("to") or "").strip()
     if not src:
         raise ValueError("'from' is required")
     if not dst:
         raise ValueError("'to' is required")
-    if src == dst:
-        raise ValueError("source and target are the same")
     with db.connect() as conn:
-        exists = conn.execute(
-            "SELECT COUNT(*) FROM memories WHERE domain = ?", (src,)).fetchone()[0] > 0
-        if not exists:
-            raise ValueError(f"no memories in domain '{src}'")
-        merged = conn.execute(
-            "SELECT COUNT(*) FROM memories WHERE domain = ?", (dst,)).fetchone()[0] > 0
-        affected = _rename_domain_rows(conn, src, dst)
-    return {"ok": True, "affected": affected, "merged": merged}
+        moved = db.move_domain(conn, src, dst)
+    return {"ok": True, "affected": moved["moved"],
+            "domains": moved["domains"], "merged": moved["merged"]}
 
 
 def _normalize_plan(mode: str, counts: dict[str, int]) -> list[dict]:
-    """Compute the per-domain moves that bring `counts` in line with `mode`.
+    """Compute the per-domain moves that bring `counts` in line with policy.
+
+    Policy is the casing `mode` plus the canonical path shape, the same
+    pair every write path applies -- so this also repairs a domain that
+    reached the table with a blank or padded segment ('acme//x100',
+    'acme / x100'), which no prefix query could match as written.
 
     Each entry: {from, to, count, action}. action is 'merge' when the
     target already exists or more than one source collapses into it,
@@ -809,7 +874,7 @@ def _normalize_plan(mode: str, counts: dict[str, int]) -> list[dict]:
     existing = set(counts)
     targets: dict[str, list[str]] = {}
     for d in counts:
-        targets.setdefault(db.case_domain(mode, d), []).append(d)
+        targets.setdefault(db.normalize_domain(db.case_domain(mode, d)), []).append(d)
     plan: list[dict] = []
     for target, srcs in targets.items():
         changing = [s for s in srcs if s != target]
@@ -825,12 +890,14 @@ def _normalize_plan(mode: str, counts: dict[str, int]) -> list[dict]:
 
 
 def normalize_domains(request, payload) -> dict:
-    """Bring already-stored domains in line with the casing policy.
+    """Bring already-stored domains in line with the casing + path policy.
 
     dry_run (default true) returns the plan for preview -- what renames
     and what merges -- without touching data. dry_run=false applies it,
-    reusing the rename/merge path (UPDATE + audit + re-embed). No-op when
-    the policy is 'preserve' or everything already conforms.
+    reusing the rename/merge path (UPDATE + audit + re-embed). Each entry
+    names one exact stored domain, so the moves are exact-path (a
+    descendant appears as its own entry, or does not need moving at all).
+    No-op when everything already conforms.
     """
     dry_run = bool(payload.get("dry_run", True))
     with db.connect() as conn:
@@ -844,7 +911,8 @@ def normalize_domains(request, payload) -> dict:
             return {"mode": mode, "dry_run": True, "plan": plan,
                     "renames": sum(1 for e in plan if e["action"] == "rename"),
                     "merges": sum(1 for e in plan if e["action"] == "merge")}
-        affected = sum(_rename_domain_rows(conn, e["from"], e["to"]) for e in plan)
+        affected = sum(
+            db.move_domain(conn, e["from"], e["to"], subtree=False)["moved"] for e in plan)
     return {"ok": True, "mode": mode, "moved": len(plan), "affected": affected}
 
 
@@ -1069,16 +1137,19 @@ def backup(request, payload) -> dict:
 
 def dedup(request, payload) -> dict:
     threshold = min(max(float(request.query_params.get("threshold", 0.6)), 0.3), 0.99)
+    domain = request.query_params.get("domain", "")
     with db.connect() as conn:
+        scope = _scope_echo(conn, domain)
         pairs = db.dedup_candidates(
             conn,
-            domain=request.query_params.get("domain", ""),
+            domain=domain,
             type=request.query_params.get("type", ""),
             threshold=threshold,
+            subtree=_subtree_param(request),
             limit=_int_param(request, "limit", 20, 1, 60))
         result = [{"a": _summary(a, DEDUP_SNIPPET), "b": _summary(b, DEDUP_SNIPPET),
                    "ratio": round(score, 3), "method": method} for a, b, score, method in pairs]
-    return {"pairs": result, "threshold": threshold}
+    return {"pairs": result, "threshold": threshold, **scope}
 
 
 def audit(request, payload) -> dict:
@@ -1126,11 +1197,9 @@ def lookup(request, payload) -> dict:
             # answers past every filter including status -- the operator
             # named the row, there is nothing left to narrow.
             exact = db.get_memory(conn, q)
-            # pure relevance here: the operator is choosing *any* memory to
-            # attach, so lifting diagrams to the top would only be noise
             rows = [dict(exact)] if exact is not None else \
                 db.search_hybrid(conn, q, type=type_, domain=domain, tag=tag,
-                                 status=status, limit=fetch, diagrams_first=False)
+                                 status=status, limit=fetch)
     rows = [r for r in rows if r["uid"] != exclude]
     items = [{
         "uid": r["uid"], "type": r["type"], "domain": r["domain"],

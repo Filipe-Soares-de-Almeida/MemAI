@@ -44,6 +44,19 @@ DOMAIN_CASE_KEY = "domain_case"
 DOMAIN_CASE_MODES = ("preserve", "lower", "upper")
 DOMAIN_CASE_DEFAULT = "preserve"
 
+# A domain is one string that reads as a PATH: the segments between
+# DOMAIN_SEP nest, outermost first, so 'acme/x100/p200' files a memory
+# under a routine that belongs to a module that belongs to a product.
+# One flat bucket per subject stops being enough as soon as subjects
+# contain subjects -- and the whole point of a scope is that asking about
+# the module includes its routines.
+#
+# The nesting lives in the string on purpose. No domains table, no id to
+# resolve: a store with no separator anywhere is a tree of depth 1, every
+# scoped read keeps working unchanged, and FTS keeps tokenizing the
+# ancestors into searchable words for free.
+DOMAIN_SEP = "/"
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS memories (
     rowid_pk        INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -394,14 +407,60 @@ def case_domain(mode: str, domain: str) -> str:
     return domain
 
 
+def split_domain(domain: str) -> list[str]:
+    """A domain path's segments, outermost first. Blank segments drop out."""
+    return [s for s in (p.strip() for p in (domain or "").split(DOMAIN_SEP)) if s]
+
+
+def normalize_domain(domain: str) -> str:
+    """Canonical form of a domain path: trimmed segments, single separators.
+
+    Every write path runs this, so 'acme / x100//' and 'acme/x100' are one
+    domain and no caller can coin an empty segment -- a path with one
+    would sit in the tree at a level nothing can name.
+    """
+    return DOMAIN_SEP.join(split_domain(domain))
+
+
+def domain_parent(domain: str) -> str:
+    """The path one level up. '' for a root, and for no domain at all."""
+    return DOMAIN_SEP.join(split_domain(domain)[:-1])
+
+
+def domain_ancestors(domain: str, *, include_self: bool = False) -> list[str]:
+    """Every enclosing path, outermost first: acme, acme/x100, acme/x100/p200."""
+    segs = split_domain(domain)
+    end = len(segs) if include_self else len(segs) - 1
+    return [DOMAIN_SEP.join(segs[: i + 1]) for i in range(max(end, 0))]
+
+
+def domain_depth(domain: str) -> int:
+    """How deep a path sits. 0 for no domain, 1 for a root."""
+    return len(split_domain(domain))
+
+
+def in_domain(domain: str, scope: str) -> bool:
+    """True when `domain` IS `scope` or sits under it. An empty scope holds all.
+
+    Segment-wise, not string-wise: 'acme/x1000' is not inside 'acme/x100'
+    however similar the two read.
+    """
+    segs, want = split_domain(domain), split_domain(scope)
+    return segs[: len(want)] == want
+
+
 def coerce_domain(conn: sqlite3.Connection, domain: str) -> tuple[str, str]:
-    """Coerce a domain to the store's policy. Returns (coerced_domain, active_mode)."""
+    """Coerce a domain to the store's policy. Returns (coerced_domain, active_mode).
+
+    Two rules, one call: the casing policy, and the path shape every
+    reader assumes (see normalize_domain).
+    """
     mode = get_domain_case(conn)
-    return case_domain(mode, domain), mode
+    return normalize_domain(case_domain(mode, domain)), mode
 
 
-def apply_domain_case(conn: sqlite3.Connection, domain: str) -> str:
-    """Coerce a domain to the store's configured casing policy."""
+def apply_domain_policy(conn: sqlite3.Connection, domain: str) -> str:
+    """Coerce a domain to the store's casing policy and canonical path shape."""
     return coerce_domain(conn, domain)[0]
 
 
@@ -514,7 +573,7 @@ def insert_memory(
 ) -> str:
     uid = new_uid()
     ts = created_at or now_iso()
-    domain = apply_domain_case(conn, domain)
+    domain = apply_domain_policy(conn, domain)
     cur = conn.execute(
         """INSERT INTO memories
            (uid, type, domain, session, tags, content, status, confidence, created_at, updated_at)
@@ -1714,7 +1773,8 @@ def _graph_issues(nodes: list[dict], edges: list[dict]) -> list[dict]:
 
 
 def diagram_overview(
-    conn: sqlite3.Connection, *, domain: str = "", status: str = "active"
+    conn: sqlite3.Connection, *, domain: str = "", status: str = "active",
+    subtree: bool = True,
 ) -> list[dict]:
     """One card per diagram: its size, its links and what is structurally wrong.
 
@@ -1731,8 +1791,9 @@ def diagram_overview(
     params: list = []
     where = []
     if domain:
-        where.append("m.domain = ?")
-        params.append(domain)
+        clause, values, _ = domain_scope_clause(conn, domain, subtree=subtree)
+        where.append(clause.removeprefix("AND "))
+        params.extend(values)
     if status:
         where.append("m.status = ?")
         params.append(status)
@@ -1815,6 +1876,115 @@ def _fts_query(raw: str) -> str:
     return " OR ".join(escaped)
 
 
+def _like_needle(value: str) -> str:
+    """Escape a literal so it matches itself inside a LIKE ... ESCAPE '\\'.
+
+    `_` is a single-character wildcard, and real identifiers carry one
+    ('anti_pattern', 'F100_TOTAL'), so an unescaped needle silently
+    matches rows nobody asked for.
+    """
+    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
+def domain_clause(domain: str, *, alias: str = "m", subtree: bool = True) -> tuple[str, list]:
+    """SQL fragment + bound values that scope a query to one domain.
+
+    Subtree by default, because a domain names a scope and the reason the
+    scope nests is that asking about 'acme/x100' must not hide what is
+    filed under 'acme/x100/p200'. In a store with no nesting the prefix
+    arm matches nothing extra, so this returns exactly the rows plain
+    equality used to.
+
+    subtree=False is for the questions about the bucket itself rather than
+    the scope: what is filed at THIS path, and which rows a rename of this
+    exact string has to rewrite.
+    """
+    col = f"{alias}.domain" if alias else "domain"
+    path = normalize_domain(domain)
+    if not subtree:
+        return f"AND {col} = ?", [path]
+    return (
+        f"AND ({col} = ? OR {col} LIKE ? ESCAPE '\\')",
+        [path, _like_needle(path) + DOMAIN_SEP + "%"],
+    )
+
+
+def _inner_scope(stored: list[str], want: list[str]) -> str | None:
+    """Where `want` sits inside a stored path, as a path down to its end.
+
+    'p200' inside 'acme/x100/p200/warmup' is the scope 'acme/x100/p200'
+    -- the level asked for, with whatever it contains. The OUTERMOST
+    occurrence wins: a repeated segment name inside one path is a level and
+    a sublevel of itself, and the level is the one that was asked for.
+    """
+    for i in range(len(stored) - len(want) + 1):
+        if stored[i:i + len(want)] == want:
+            return DOMAIN_SEP.join(stored[: i + len(want)])
+    return None
+
+
+def resolve_domain_scopes(conn: sqlite3.Connection, domain: str) -> list[str]:
+    """The paths a domain filter should cover, given what the caller wrote.
+
+    A path taken from the tree matches as a prefix, which is the normal
+    case and settles here immediately. But the name a caller has in hand is
+    usually the DEEP end of the path -- a routine code, not the product it
+    belongs to -- and 'p200' matches no prefix once that routine lives at
+    'acme/x100/p200'. So when nothing in the store starts with the string,
+    it is tried as a run of segments anywhere inside a path, and every
+    branch it names becomes a scope.
+
+    Two deliberate properties. The literal reading always wins: if 'p200'
+    also exists as a top-level domain, that is what a filter on 'p200'
+    means, and the routine buried elsewhere is not silently mixed in. And
+    an ambiguous name broadens instead of guessing -- a code filed under
+    two modules resolves to both scopes, and callers are told which
+    (`scope.paths` in pulse(), `domain_scope` in the admin responses),
+    because picking one silently is the failure this exists to avoid.
+
+    Returns the requested path unchanged when nothing matches, so an
+    unknown domain still means "no rows" rather than "everything".
+    """
+    path = normalize_domain(domain)
+    if not path:
+        return []
+    clause, params = domain_clause(path, alias="", subtree=True)
+    if conn.execute(f"SELECT 1 FROM memories WHERE 1=1 {clause} LIMIT 1", params).fetchone():
+        return [path]
+
+    want = split_domain(path)
+    scopes: set[str] = set()
+    for r in conn.execute("SELECT DISTINCT domain FROM memories WHERE domain <> ''"):
+        found = _inner_scope(split_domain(r["domain"]), want)
+        if found:
+            scopes.add(found)
+    # No scope in here can contain another, so there is nothing to collapse:
+    # a scope that ended deeper than an ancestor scope would mean the query
+    # also occurred at the ancestor's depth in that same path, and
+    # _inner_scope would have stopped there. Which is why it takes the
+    # outermost occurrence -- the alternative needs this set pruned.
+    return sorted(scopes) or [path]
+
+
+def domain_scope_clause(
+    conn: sqlite3.Connection, domain: str, *, alias: str = "m", subtree: bool = True
+) -> tuple[str, list, list[str]]:
+    """domain_clause over every scope the filter resolves to.
+
+    Returns (sql, params, scopes) -- `scopes` is what the query actually
+    covers, which is the string the caller passed unless resolution had to
+    reach for it (see resolve_domain_scopes).
+    """
+    scopes = resolve_domain_scopes(conn, domain)
+    parts: list[str] = []
+    params: list = []
+    for scope in scopes:
+        clause, values = domain_clause(scope, alias=alias, subtree=subtree)
+        parts.append(clause.removeprefix("AND "))
+        params.extend(values)
+    return f"AND ({' OR '.join(parts)})", params, scopes
+
+
 def _tag_clause(tag: str, alias: str = "m") -> tuple[str, str]:
     """SQL fragment + bound value for "this row carries this tag".
 
@@ -1830,8 +2000,7 @@ def _tag_clause(tag: str, alias: str = "m") -> tuple[str, str]:
     otherwise be a LIKE pattern matching 'anti-pattern' too.
     """
     col = f"{alias}.tags" if alias else "tags"
-    needle = (tag.replace(" ", "")
-                 .replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_"))
+    needle = _like_needle(tag.replace(" ", ""))
     return (
         f"AND (',' || REPLACE({col}, ' ', '') || ',') LIKE ('%,' || ? || ',%') ESCAPE '\\'",
         needle,
@@ -1847,6 +2016,7 @@ def search_memories(
     tag: str = "",
     status: str = "active",
     limit: int = 30,
+    subtree: bool = True,
 ) -> list[sqlite3.Row]:
     sql = [
         """SELECT m.*, bm25(memories_fts) AS rank
@@ -1856,8 +2026,9 @@ def search_memories(
     ]
     params: list = [_fts_query(query)]
     if domain:
-        sql.append("AND m.domain = ?")
-        params.append(domain)
+        clause, values, _ = domain_scope_clause(conn, domain, subtree=subtree)
+        sql.append(clause)
+        params.extend(values)
     if type:
         sql.append("AND m.type = ?")
         params.append(type)
@@ -1885,6 +2056,7 @@ def search_semantic(
     tag: str = "",
     status: str = "active",
     limit: int = 30,
+    subtree: bool = True,
 ) -> list[sqlite3.Row]:
     """Brute-force KNN over the vector table, filtered post-KNN.
 
@@ -1918,8 +2090,9 @@ def search_semantic(
     ]
     params: list = [blobs[0], k]
     if domain:
-        sql.append("AND m.domain = ?")
-        params.append(domain)
+        clause, values, _ = domain_scope_clause(conn, domain, subtree=subtree)
+        sql.append(clause)
+        params.extend(values)
     if type:
         sql.append("AND m.type = ?")
         params.append(type)
@@ -1935,25 +2108,6 @@ def search_semantic(
     return conn.execute(" ".join(sql), params).fetchall()
 
 
-def _diagram_first_tier(row: dict) -> int:
-    """0 sorts ahead of everything else, 1 is the normal band.
-
-    A diagram states a whole routine end to end, so inside one candidate
-    set it is worth reading before the partial notes scattered around it:
-    the flow is the source of truth those notes annotate.
-
-    A contradicted or archived diagram gets no promotion -- it has stopped
-    being that source of truth, and pushing it to the top would invert the
-    only reason for promoting diagrams in the first place.
-    """
-    promote = (
-        row.get("type") == DIAGRAM_TYPE
-        and row.get("confidence") != "contradicted"
-        and row.get("status") == "active"
-    )
-    return 0 if promote else 1
-
-
 def search_hybrid(
     conn: sqlite3.Connection,
     query: str,
@@ -1963,7 +2117,7 @@ def search_hybrid(
     tag: str = "",
     status: str = "active",
     limit: int = 30,
-    diagrams_first: bool = True,
+    subtree: bool = True,
 ) -> list[dict]:
     """FTS BM25 + vector KNN, merged by reciprocal rank fusion.
 
@@ -1973,30 +2127,19 @@ def search_hybrid(
     Ordering is RRF, but it's a candidate ordering, not a verdict --
     the agent decides relevance, same as FTS-only did.
 
-    `diagrams_first` (default on) lifts matching diagrams above the rest
-    of the candidate set -- see _diagram_first_tier for which ones and
-    why. Three deliberate properties:
-
-    * promoting requires LOOKING for them. Both retrievers apply `limit`
-      themselves, so a diagram that lost the global top-N never reaches
-      the merge and no amount of re-ordering can rescue it. A second
-      retrieval scoped to type='diagram' backfills the pool with the best
-      diagrams for this query, whatever else crowded them out.
-    * the backfill only adds uids the global passes missed, so nothing
-      gets a second RRF contribution for appearing in two passes.
-    * RRF scores are never altered, only the ordering, and every promoted
-      row is tagged `rank_reason='diagram_first'`. Position 1 can mean "a
-      type preference put it there" rather than "it matched best", and a
-      reader that cannot tell the difference has been misled -- so the
-      row says which it was.
-
-    Pass diagrams_first=False where type preference is noise rather than
-    help, e.g. a picker that is choosing any memory to link.
+    Type is not part of the ordering. A diagram used to be lifted above the
+    rest of the candidate set, on the reasoning that a whole documented
+    routine is worth reading before the notes annotating it -- and in a
+    grown store that reliably spent the top slots on flows the query was
+    not about, because promotion had to go LOOK for diagrams (a second
+    retrieval scoped to type='diagram') to have any to promote. A diagram
+    now earns its place the way every other memory does: it comes back when
+    it matches, where its scores put it.
     """
     K = 60  # standard RRF damping constant
     merged: dict[str, dict] = {}
 
-    def fold(rows, source: str, backfill: bool = False) -> None:
+    def fold(rows, source: str) -> None:
         for i, row in enumerate(rows):
             uid = row["uid"]
             contribution = 1.0 / (K + i + 1)
@@ -2008,7 +2151,7 @@ def search_hybrid(
                 d["match_source"] = source
                 d["_rrf"] = contribution
                 merged[uid] = d
-            elif not backfill:
+            else:
                 if source == "fts":
                     seen["fts_rank"] = row["rank"]
                 else:
@@ -2017,32 +2160,26 @@ def search_hybrid(
                 seen["_rrf"] += contribution
 
     fold(search_memories(conn, query, domain=domain, type=type, tag=tag,
-                         status=status, limit=limit), "fts")
+                         status=status, limit=limit, subtree=subtree), "fts")
     fold(search_semantic(conn, query, domain=domain, type=type, tag=tag,
-                         status=status, limit=limit), "vec")
+                         status=status, limit=limit, subtree=subtree), "vec")
 
-    # only with no type filter: an explicit type='note' means the caller
-    # asked for notes, and backfilling diagrams would break that contract
-    # (recall() is exactly that call, and must never surface one)
-    if diagrams_first and not type:
-        scoped = dict(domain=domain, type=DIAGRAM_TYPE, tag=tag, status=status, limit=limit)
-        fold(search_memories(conn, query, **scoped), "fts", backfill=True)
-        fold(search_semantic(conn, query, **scoped), "vec", backfill=True)
-
-    tier = _diagram_first_tier if diagrams_first else (lambda d: 1)
-    results = sorted(merged.values(), key=lambda d: (tier(d), -d["_rrf"]))[:limit]
+    results = sorted(merged.values(), key=lambda d: -d["_rrf"])[:limit]
     for d in results:
         del d["_rrf"]
-        if tier(d) == 0:
-            d["rank_reason"] = "diagram_first"
     return results
 
 
 def list_by_domain(
-    conn: sqlite3.Connection, domain: str, *, type: str = "", status: str = "active", limit: int = 50
+    conn: sqlite3.Connection, domain: str, *, type: str = "", status: str = "active",
+    limit: int = 50, subtree: bool = True,
 ) -> list[sqlite3.Row]:
-    sql = ["SELECT * FROM memories WHERE domain = ?"]
-    params: list = [domain]
+    """Recency-ordered rows of one domain, its subdomains included.
+
+    subtree=False narrows to what is filed at exactly this path.
+    """
+    clause, params, _ = domain_scope_clause(conn, domain, alias="", subtree=subtree)
+    sql = [f"SELECT * FROM memories WHERE 1=1 {clause}"]
     if type:
         sql.append("AND type = ?")
         params.append(type)
@@ -2056,7 +2193,7 @@ def list_by_domain(
 
 def list_recent(
     conn: sqlite3.Connection, *, type: str = "", domain: str = "", tag: str = "",
-    status: str = "active", limit: int = 20
+    status: str = "active", limit: int = 20, subtree: bool = True,
 ) -> list[sqlite3.Row]:
     sql = ["SELECT * FROM memories WHERE 1=1"]
     params: list = []
@@ -2064,8 +2201,9 @@ def list_recent(
         sql.append("AND type = ?")
         params.append(type)
     if domain:
-        sql.append("AND domain = ?")
-        params.append(domain)
+        clause, values, _ = domain_scope_clause(conn, domain, alias="", subtree=subtree)
+        sql.append(clause)
+        params.extend(values)
     if tag:
         clause, needle = _tag_clause(tag, alias="")
         sql.append(clause)
@@ -2080,13 +2218,23 @@ def list_recent(
 
 def list_domains(
     conn: sqlite3.Connection, *, status: str = "active"
-) -> list[sqlite3.Row]:
-    """Distinct non-empty domains with their memory count + latest activity.
+) -> list[dict]:
+    """Every domain in the store, as the nodes of the domain tree.
 
     Warm-up discovery. domain is free text and drifts over time (e.g.
-    'PROJ-1042' vs 'PROJ-1042 invoice rounding'), and pulse/
-    list_by_domain match it exactly -- listing the real strings lets the
-    caller target the right one instead of guessing.
+    'proj-1042' vs 'proj-1042-cache-warmup'), so listing the real
+    strings lets the caller target the right one instead of guessing.
+
+    Both counts are reported, because they answer different questions:
+    `count` is what is filed at exactly this path, `subtree` is that plus
+    everything nested under it. A domain holding nothing of its own can
+    still be the right thing to warm up -- that is what a parent IS.
+
+    Ancestors nobody wrote to directly still get a node, flagged
+    `implicit`: one 'acme/x100/p200' means the tree has an 'acme' and an
+    'acme/x100', whether or not a memory was ever filed at either.
+    Ordering stays recency-first (by subtree activity, so a parent sorts
+    with its liveliest child), alphabetical within a tie.
     """
     sql = [
         "SELECT domain, COUNT(*) AS count, MAX(created_at) AS latest_at",
@@ -2096,8 +2244,162 @@ def list_domains(
     if status:
         sql.append("AND status = ?")
         params.append(status)
-    sql.append("GROUP BY domain ORDER BY latest_at DESC")
-    return conn.execute(" ".join(sql), params).fetchall()
+    sql.append("GROUP BY domain")
+    rows = conn.execute(" ".join(sql), params).fetchall()
+
+    nodes: dict[str, dict] = {}
+
+    def node(path: str) -> dict:
+        return nodes.setdefault(path, {
+            "domain": path, "count": 0, "latest_at": "",
+            "parent": domain_parent(path), "depth": domain_depth(path),
+            "subtree": 0, "subtree_latest_at": "", "children": 0,
+            "implicit": True,
+        })
+
+    for r in rows:
+        # normalized on every write path; normalizing again keeps a store
+        # written to directly from splitting one path across two nodes
+        n = node(normalize_domain(r["domain"]))
+        n["count"] += r["count"]
+        n["latest_at"] = max(n["latest_at"], r["latest_at"] or "")
+        n["implicit"] = False
+        for ancestor in domain_ancestors(n["domain"]):
+            node(ancestor)
+
+    for n in list(nodes.values()):
+        for scope in domain_ancestors(n["domain"], include_self=True):
+            holder = nodes[scope]
+            holder["subtree"] += n["count"]
+            holder["subtree_latest_at"] = max(holder["subtree_latest_at"], n["latest_at"])
+        if n["parent"]:
+            nodes[n["parent"]]["children"] += 1
+
+    out = sorted(nodes.values(), key=lambda n: n["domain"])
+    out.sort(key=lambda n: n["subtree_latest_at"], reverse=True)
+    return out
+
+
+def domain_census(
+    conn: sqlite3.Connection, domain: str = "", *, status: str = "active"
+) -> dict:
+    """What a domain scope holds, and how it splits one level down.
+
+    pulse() returns the newest few of each type; this is how it can say what
+    it did NOT return. `by_type` counts the whole scope, so a caller can see
+    that 5 of 13 notes came back and reach for search()/list_by_domain()
+    with the domain it already has.
+
+    `children` stops at the NEXT level rather than walking the subtree: "what
+    else is in here" is answered a level at a time, and the child's own
+    census is one call away when the work goes there. Each child reports
+    `own` (filed at that path) and `subtree` (that plus everything under it),
+    because a child that holds nothing itself can still be where the branch
+    lives.
+
+    An empty `domain` censuses the whole store, and then `children` are its
+    roots.
+    """
+    scopes = resolve_domain_scopes(conn, domain)
+    where, params = ["1=1"], []
+    if scopes:
+        clause, values, _ = domain_scope_clause(conn, domain, alias="", subtree=True)
+        where.append(clause)
+        params.extend(values)
+    if status:
+        where.append("AND status = ?")
+        params.append(status)
+    rows = conn.execute(
+        f"SELECT domain, type, COUNT(*) AS n FROM memories WHERE {' '.join(where)} "
+        "GROUP BY domain, type", params).fetchall()
+
+    by_type: dict[str, int] = {}
+    kids: dict[str, dict] = {}
+    for r in rows:
+        by_type[r["type"]] = by_type.get(r["type"], 0) + r["n"]
+        for scope in (scopes or [""]):
+            if r["domain"] == scope or not in_domain(r["domain"], scope):
+                continue
+            child = DOMAIN_SEP.join(split_domain(r["domain"])[: domain_depth(scope) + 1])
+            k = kids.setdefault(child, {"domain": child, "own": 0, "subtree": 0})
+            k["subtree"] += r["n"]
+            if r["domain"] == child:
+                k["own"] += r["n"]
+    return {
+        "paths": scopes,
+        "total": sum(by_type.values()),
+        "by_type": by_type,
+        "children": sorted(kids.values(), key=lambda k: (-k["subtree"], k["domain"])),
+    }
+
+
+def move_domain(
+    conn: sqlite3.Connection, src: str, dst: str, *, subtree: bool = True
+) -> dict:
+    """Re-home a domain and, by default, everything nested under it.
+
+    Moving 'acme/x100' to 'acme/legacy' takes 'acme/x100/p200' along as
+    'acme/legacy/p200': the descendants are part of what the operator
+    pointed at, and leaving them behind would silently split a subject in
+    two. A merge is not a separate operation -- renaming onto a path that
+    already holds memories means those two sets are one domain now.
+
+    Every moved row is re-embedded (domain is part of the embedding
+    source) and audited in `edits`, so a re-home is reconstructible.
+
+    Refuses to move a domain into its own subtree: 'acme' -> 'acme/x100'
+    would make the path its own ancestor.
+
+    `src` is matched as given AND in canonical form. Every writer normalizes,
+    so the two are the same string in practice -- but a row written straight
+    into the table can hold a shape no writer would produce ('acme//x100 '),
+    and repairing exactly that is what the normalize pass names it for.
+    """
+    src_given, src, dst = src or "", normalize_domain(src), normalize_domain(dst)
+    if not src:
+        raise ValueError("source domain is required")
+    if not dst:
+        raise ValueError("target domain is required")
+    if src == dst and src_given == src:
+        raise ValueError("source and target are the same")
+    if subtree and in_domain(dst, src):
+        raise ValueError(f"cannot move '{src}' into its own subtree ('{dst}')")
+
+    clause, params = domain_clause(src, alias="", subtree=subtree)
+    if src_given != src:
+        clause = f"AND ({clause.removeprefix('AND ')} OR domain = ?)"
+        params = [*params, src_given]
+    rows = conn.execute(
+        f"SELECT rowid_pk, uid, content, tags, domain FROM memories WHERE 1=1 {clause}",
+        params).fetchall()
+    if not rows:
+        raise ValueError(f"no memories in domain '{src}'")
+
+    # "merge" means rows that were NOT part of this move already live at
+    # the target scope -- asked before the UPDATE, or every move would
+    # look like one
+    moving = {r["rowid_pk"] for r in rows}
+    dst_clause, dst_params = domain_clause(dst, alias="", subtree=True)
+    merged = any(
+        r["rowid_pk"] not in moving for r in conn.execute(
+            f"SELECT rowid_pk FROM memories WHERE 1=1 {dst_clause}", dst_params))
+
+    now = now_iso()
+    touched: set[str] = set()
+    for r in rows:
+        old = r["domain"]
+        target = dst if old in (src, src_given) else dst + DOMAIN_SEP + old[len(src) + 1:]
+        conn.execute(
+            "UPDATE memories SET domain = ?, updated_at = ? WHERE rowid_pk = ?",
+            (target, now, r["rowid_pk"]))
+        conn.execute(
+            "INSERT INTO edits (memory_uid, edited_at, prev_content, new_content, note) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (r["uid"], now, r["content"], r["content"],
+             f"meta: domain '{old}' → '{target}'"))
+        _upsert_vector(conn, r["rowid_pk"], r["content"], r["tags"], target)
+        touched.add(old)
+    return {"moved": len(rows), "domains": len(touched), "merged": merged}
 
 
 def latest_by_type(
@@ -2125,6 +2427,7 @@ def _timeline_pair(a: sqlite3.Row, b: sqlite3.Row) -> bool:
 def dedup_candidates(
     conn: sqlite3.Connection, *, domain: str = "", type: str = "",
     threshold: float = 0.6, limit: int = 20, since: str = "",
+    subtree: bool = True,
 ) -> list[tuple[sqlite3.Row, sqlite3.Row, float, str]]:
     """Surface likely-duplicate/contradictory pairs for the agent to review.
 
@@ -2157,8 +2460,9 @@ def dedup_candidates(
     sql = ["SELECT * FROM memories WHERE status = 'active' AND type != ?"]
     params: list = [DIAGRAM_TYPE]
     if domain:
-        sql.append("AND domain = ?")
-        params.append(domain)
+        clause, values, _ = domain_scope_clause(conn, domain, alias="", subtree=subtree)
+        sql.append(clause)
+        params.extend(values)
     if type:
         sql.append("AND type = ?")
         params.append(type)
@@ -2302,10 +2606,69 @@ def _domain_hints(domain_counts: dict[str, int]) -> list[dict]:
     return hints
 
 
+# A token that reads as a code rather than as prose: 'x100', 'p200',
+# 'x1042'. Two digits minimum, so a word like 'v2' does not pass for one.
+_CODE_TOKEN = re.compile(r"^[a-z]{1,4}\d{2,}[a-z0-9]*$")
+# How many domains a leading token must head before it counts as a root of
+# the tree on its own (a code needs no such evidence).
+_ROOT_MIN = 3
+NESTING_HINT_CAP = 40
+
+
+def _nesting_hints(domain_counts: dict[str, int]) -> list[dict]:
+    """Propose a nested path for each flat domain that already reads like one.
+
+    'acme-x100-p200-cache-warmup' states a hierarchy in a string
+    nothing can group by. This lifts its leading part into path segments
+    and keeps the descriptive tail as the leaf --
+    'acme/x100/p200/cache-warmup' -- so the diagrams and notes of one
+    module can be asked for as one scope.
+
+    Only leading tokens that LOOK structural are lifted: a code
+    (_CODE_TOKEN), or a token heading _ROOT_MIN or more domains in the
+    store, which is what a root looks like from here whatever it means.
+    The first token that is neither ends the path, tail included.
+
+    Advisory, and deliberately so: nothing here can tell a real level from
+    a hyphen inside a name, so each proposal is meant for a human -- or for
+    an agent staging a `redomain` suggestion the human then approves --
+    never for the rows directly.
+    """
+    heads: dict[str, int] = {}
+    for raw in domain_counts:
+        segs = split_domain(raw)
+        if segs:
+            head = segs[0].split("-")[0].lower()
+            heads[head] = heads.get(head, 0) + 1
+
+    def structural(token: str) -> bool:
+        token = token.lower()
+        return bool(_CODE_TOKEN.match(token)) or heads.get(token, 0) >= _ROOT_MIN
+
+    hints: list[dict] = []
+    for raw, count in sorted(domain_counts.items(), key=lambda kv: (-kv[1], kv[0])):
+        if not raw or DOMAIN_SEP in raw:
+            continue                      # blank, or already a path
+        tokens = raw.split("-")
+        cut = 0
+        while cut < len(tokens) - 1 and structural(tokens[cut]):
+            cut += 1
+        if not cut:
+            continue
+        hints.append({
+            "domain": raw,
+            "count": count,
+            "proposed": DOMAIN_SEP.join([*tokens[:cut], "-".join(tokens[cut:])]),
+        })
+        if len(hints) >= NESTING_HINT_CAP:
+            break
+    return hints
+
+
 def optimization_corpus(
     conn: sqlite3.Connection, *, domain: str = "", type: str = "",
     since: str = "", include_archived: bool = False, limit: int = 500,
-    offset: int = 0, full: bool = False,
+    offset: int = 0, full: bool = False, subtree: bool = True,
 ) -> dict:
     """Compact whole-corpus dump for an agent to reason over in one call.
 
@@ -2330,9 +2693,12 @@ def optimization_corpus(
     reaches CORPUS_CHAR_BUDGET -- the guarantee is that ONE response
     always fits an MCP host's output cap, whatever the store looks like.
     A `stats` block aggregates the filtered corpus regardless of limit,
-    `domain_hints` clusters likely-variant domain strings, and
-    `truncated` flags when the listing stopped before the corpus ended --
-    page onward with offset (offset + count is the next page's offset).
+    `domain_hints` clusters likely-variant domain strings,
+    `domain_nesting` proposes a path for each flat domain that already
+    spells a hierarchy out (see _nesting_hints -- the raw material for
+    `redomain` suggestions), and `truncated` flags when the listing
+    stopped before the corpus ended -- page onward with offset (offset +
+    count is the next page's offset).
 
     `since` makes curation incremental: only memories created OR updated
     at/after the given ISO timestamp (a date like '2026-07-01' works --
@@ -2346,8 +2712,9 @@ def optimization_corpus(
     where = ["1=1"]
     params: list = []
     if domain:
-        where.append("AND domain = ?")
-        params.append(domain)
+        clause, values, _ = domain_scope_clause(conn, domain, alias="", subtree=subtree)
+        where.append(clause)
+        params.extend(values)
     if type:
         where.append("AND type = ?")
         params.append(type)
@@ -2422,15 +2789,20 @@ def optimization_corpus(
     }
 
     # domain hints cluster over the WHOLE store; with `since`, keep only
-    # clusters that touch the delta (counts stay store-wide)
+    # clusters that touch the delta (counts stay store-wide). Nesting
+    # proposals follow the same rule: a flat domain is worth re-homing
+    # whether or not the memory that revealed it is new, but a proposal
+    # about a corner of the store this run never looked at is noise.
     if since:
         by_domain_global = dict(conn.execute(
             f"SELECT domain, COUNT(*) FROM memories WHERE {base_where_sql} "
             "GROUP BY domain ORDER BY COUNT(*) DESC", base_params).fetchall())
         hints = [h for h in _domain_hints(by_domain_global)
                  if any(v["domain"] in by_domain for v in h["variants"])]
+        nesting = [n for n in _nesting_hints(by_domain_global) if n["domain"] in by_domain]
     else:
         hints = _domain_hints(by_domain)
+        nesting = _nesting_hints(by_domain)
 
     return {
         "memories": mems,
@@ -2440,6 +2812,7 @@ def optimization_corpus(
         "truncated": offset + len(mems) < total,
         "stats": stats,
         "domain_hints": hints,
+        "domain_nesting": nesting,
     }
 
 
@@ -2482,6 +2855,10 @@ def _validate_suggestion(conn: sqlite3.Connection, s: object) -> tuple[dict | No
             return None, err
         if "domain" not in payload:
             return None, "payload.domain required"
+        # normalize at staging time, not only on apply: the panel shows
+        # this payload as the proposed target, and it has to be the path
+        # the memory will actually end up in
+        payload = {**payload, "domain": normalize_domain(str(payload["domain"]))}
     elif kind == "set_confidence":
         err = target_err()
         if err:
@@ -2644,7 +3021,7 @@ def _update_meta_field(conn: sqlite3.Connection, uid: str, field: str, value: st
     f-string interpolation is not an injection surface.
     """
     if field == "domain":
-        value = apply_domain_case(conn, value)
+        value = apply_domain_policy(conn, value)
     row = get_memory(conn, uid)
     conn.execute(
         f"UPDATE memories SET {field} = ?, updated_at = ? WHERE uid = ?",

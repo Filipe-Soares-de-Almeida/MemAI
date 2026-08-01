@@ -25,7 +25,8 @@ import { api, seg } from './api.js';
 import { icon } from './icons.js';
 import { openModal, closeModal } from './ui.js';
 import { typeColor, typeClass, confPill, statusTag, uidChip, relTypeField,
-         wireRelTypeField, TYPE_ORDER, TYPE_LABEL, getDomains } from './shared.js';
+         wireRelTypeField, TYPE_ORDER, TYPE_LABEL, getDomains,
+         domainOptions } from './shared.js';
 import { t } from '../i18n.js';
 
 /* Records already fetched for the preview pane. Arrowing down a list of
@@ -174,8 +175,7 @@ export function pickMemories({
     const input = mq('#lpQ');
 
     getDomains().then(ds => {
-      mq('[data-f="domain"]')?.insertAdjacentHTML('beforeend',
-        ds.map(d => `<option value="${esc(d.domain)}">${esc(d.domain)}</option>`).join(''));
+      mq('[data-f="domain"]')?.insertAdjacentHTML('beforeend', domainOptions(ds));
     }).catch(() => { /* the filter is an accelerator, not a requirement */ });
 
     const anyFilter = () => Boolean((type ? '' : filters.type) || filters.domain || filters.tag)

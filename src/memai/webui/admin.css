@@ -1677,6 +1677,30 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
 }
 .rename-form { display: flex; gap: var(--sp-2); align-items: center; flex-wrap: wrap; }
 
+/* A domain is a path, so the table is a tree: one row per level, indented
+   by --d (its depth), and only the leaf name written out -- the ancestors
+   are the rows above it. The full path stays in the row's title and in
+   every link it emits, because that is what the API matches on. */
+.dom-cell { display: flex; align-items: center; gap: var(--sp-2); }
+.dom-cell::before { content: ""; flex: none; width: calc(var(--d, 0) * 18px); }
+.dom-twist {
+  flex: none; width: 18px; height: 18px; padding: 0;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: none; border: none; cursor: pointer; color: var(--ink-3);
+  border-radius: var(--r-sm); --ico: 12px;
+}
+.dom-twist:hover { color: var(--accent); background: var(--hover-1); }
+.dom-twist[hidden] { display: none; }
+.dom-twist.leafpad { visibility: hidden; }
+.dom-twist svg { transition: transform .12s; }
+.dom-twist[aria-expanded="true"] svg { transform: rotate(90deg); }
+.dom-leaf { color: var(--ink); font-family: var(--font-m); font-size: var(--fs-sm); }
+/* a level that exists only because something deeper is filed under it:
+   real enough to group by, but nobody wrote a memory to it */
+.dom-leaf.implicit { color: var(--ink-3); font-style: italic; }
+.dom-kids { font-size: var(--fs-label); color: var(--ink-3); }
+.dom-roll { font-size: var(--fs-label); color: var(--ink-3); margin-left: var(--sp-1); }
+
 /* ── maintenance ─────────────────────────────────────────────────────── */
 
 .check-row {
@@ -2152,17 +2176,36 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
    into whichever flow sent you here. Empty and hidden for a step that
    continues nowhere -- which is most of them, and the reason this can sit
    on the drawing at all. */
+/* A ROW that wraps, not a column: the chips carry a flow's short name now
+   (see chipLabel), so five or six fit across instead of one per row. Past
+   JUMP_CHIPS_SHOWN they fold behind the +N button -- the corner is the only
+   thing over the canvas that grows with how connected a flow is, and it
+   feeds insets(), so left alone it shrinks the diagram it sits on. */
 .dg-jumpnav {
   position: absolute; left: 12px; top: 12px; z-index: 3;
   max-width: calc(100% - 24px);
-  display: flex; flex-direction: column; gap: var(--sp-2); align-items: flex-start;
+  display: flex; flex-wrap: wrap; gap: var(--sp-2); align-items: center;
   pointer-events: none;
 }
 .dg-jumpnav > * { pointer-events: auto; }
+.dg-jumpnav .dg-navchip.over { display: none; }
+.dg-jumpnav.open .dg-navchip.over { display: inline-flex; }
+/* family and size only -- the `font` shorthand would carry a line-height in
+   with it and win over .dg-navchip's, leaving the button two pixels shorter
+   than the chips it shares a row with */
+.dg-navmore {
+  font-family: inherit; cursor: pointer;
+  font-variant-numeric: tabular-nums;
+}
 
 .dg-navchip {
-  max-width: 100%;
+  /* 10rem, not 100%: the chips share a row now, so one long name may not
+     take the room the next two need. The full title is in the tooltip. */
+  max-width: min(100%, 10rem);
   display: inline-flex; align-items: center; gap: var(--sp-2);
+  /* a fixed line box, so a chip carrying a step badge is not 4px taller
+     than one without and the row stays level */
+  line-height: 1.4;
   background: var(--glass);
   border: 1px solid var(--accent);
   border-radius: var(--r-pill); padding: var(--sp-1) var(--sp-3);
@@ -2178,7 +2221,7 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
 .dg-navchip-text {
   min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-.dg-navchip > .dg-key { flex: none; }
+.dg-navchip > .dg-key { flex: none; line-height: inherit; padding-block: 0; }
 /* a line sample is wide and flat, not a square icon */
 .ico-line { width: 22px; height: 7px; }
 
@@ -2315,6 +2358,16 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
    diagram, and then the same three pixels were recoloured to --warn to mean
    "this one is broken" -- so the identity mark and the alarm were the same
    pixel, and neither could be read without the other. Both are gone. */
+/* One band per outermost domain segment, so a store of forty flows reads as
+   a handful of branches. The heading is the filter into that branch. */
+.dgl-group + .dgl-group { margin-top: var(--sp-4); }
+.dgl-group-head {
+  display: flex; align-items: center; gap: var(--sp-2);
+  padding-bottom: var(--sp-2); margin-bottom: var(--sp-3);
+  border-bottom: 1px solid var(--line-soft);
+}
+.dgl-group-n { font-size: var(--fs-label); color: var(--ink-3); }
+
 .dgl-card {
   display: grid; gap: var(--sp-2);
   background: var(--surface);
