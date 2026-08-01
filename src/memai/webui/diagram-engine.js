@@ -24,8 +24,9 @@
    =======================================================================
    That module renders the same diagram as SVG for readers with no browser
    (a chat client, an exporter). It is a transcription of the edge geometry
-   below -- the constants, route(), laneEdges(), detours(), assignFans(),
-   unfanCollisions(), and the wrap/clamp/shortLabel text rules.
+   below -- the constants, route(), sides(), laneEdges(), detours(),
+   corridorClear(), assignFans(), unfanCollisions(), badgeAnchor(), and the
+   wrap/clamp/shortLabel text rules.
 
    Change any of those here, change them there, then run:
 
@@ -95,14 +96,13 @@ const ORTH_RADIUS = 11;      /* corner rounding on a right-angled edge */
 const ORTH_SNAP = 18;
 const EDGE_PICK_PX = 11;     /* how near the pointer must be to grab a line */
 
-export const ROUTINGS = ['orthogonal', 'curved'];
 /* Label metrics live in world units alongside the box metrics above, so a
    label occupies the same fraction of its box at every zoom level. Both
    are multiplied by the diagram's stored font scale. Mirrored in
    diagram_svg.py, along with the two badge limits below. */
 const LABEL_PX = 12;
 const LABEL_LH = 14;
-const BADGE_PX = 10;
+export const BADGE_PX = 10;
 /* How much of an edge's label is drawn on the line. A branch condition is
    often a whole sentence, and a badge that long is a wall across the
    picture, so a long one is cut to a phrase and hovering it shows the rest.
@@ -113,6 +113,16 @@ const BADGE_PX = 10;
    shortLabel() and the tip in onMove(). */
 const BADGE_WORDS = 3;
 const BADGE_CHARS = 20;
+/* How far outside a card the selection ring is traced. The badge beside a
+   card is measured from THAT and not from the card, so selecting one does
+   not move the badge onto the ring -- and does not move the badge at all,
+   which a ring-only offset would. Mirrored in diagram_svg.py, which draws
+   no ring but has to place the badge in the same spot. */
+const RING_GROW = 6;
+/* Air between the ring's outline and a count floating beside it. Small, and
+   measured from an OUTLINE -- see drawBadge(). Mirrored in diagram_svg.py,
+   where frame() also has to reserve room for what it puts outside the box. */
+const BADGE_OUT = 7;
 export const FONT_SCALES = [0.8, 1, 1.25, 1.6, 2];
 
 /* canvas `font` takes a literal font stack -- it does not resolve the
@@ -166,7 +176,6 @@ export class DiagramEditor {
        and a stray drag while reading silently rewrites a stored position
        everyone else sees -- panning, zooming and selecting stay available. */
     this.readOnly = hooks.readOnly !== false;
-    this.routing = ROUTINGS.includes(hooks.routing) ? hooks.routing : 'orthogonal';
     this.hoverLabel = null;
 
     this.readTheme();
@@ -355,6 +364,14 @@ export class DiagramEditor {
         : Math.min(a.x, b.x) - Math.abs(e.bow);
       if (side > 0) laneRight = Math.max(laneRight, corridorX + 20);
       else laneLeft = Math.min(laneLeft, corridorX - 20);
+      /* out of the side that faces the lane if the row it crosses is free.
+         A margin lane is the last resort, so nothing checked this route for
+         collisions on the way here -- the flank leg runs along the card's
+         own row and is the one part of it that can hit something. */
+      if (this.corridorClear(e, corridorX)) {
+        e.flank = true;
+        if (this.routeHitsABox(e)) e.flank = false;
+      }
       taken++;
     };
 
@@ -370,7 +387,7 @@ export class DiagramEditor {
          snapping every routed line straight the moment a drag starts:
          slightly stale beats a diagram that redraws itself under the
          pointer. The next full pass corrects it. */
-      if (detours) { e.lane = 0; e.bow = 0; e.via = null; }
+      if (detours) { e.lane = 0; e.bow = 0; e.via = null; e.flank = false; }
     }
 
     /* Can this edge be drawn between its own two ends? Straight if that is
@@ -389,13 +406,50 @@ export class DiagramEditor {
        assignFans() gives each of them its own place on the side and its own
        turning depth instead, so this function is only about cards in the
        way. */
+    /* Corridors already committed to, as { x, loY, hiY }. A corridor is a
+       line down the page, and nothing in routeHitsABox can see another
+       LINE -- only boxes. So an A->B / B->A pair, which asks the same
+       question of detours() and gets the same answer, used to run its two
+       halves down the same x for their whole length: one line drawn over
+       another for a thousand units, which is the thing fanning exists to
+       prevent. The second one is sent to the next candidate instead.
+       Anything within FAN_GAP counts as the same corridor -- two vertical
+       lines closer than that read as one thick one. */
+    const usedCorridors = [];
+    const corridorFree = (e, x) => {
+      const a = this.byKey[e.from], b = this.byKey[e.to];
+      const loY = Math.min(a.y, b.y), hiY = Math.max(a.y, b.y);
+      return !usedCorridors.some(t =>
+        Math.abs(t.x - x) < FAN_GAP && hiY > t.loY && loY < t.hiY);
+    };
+    const reserve = (e, x) => {
+      const a = this.byKey[e.from], b = this.byKey[e.to];
+      usedCorridors.push(
+        { x, loY: Math.min(a.y, b.y), hiY: Math.max(a.y, b.y) });
+    };
+
     const fitsBetweenItsEnds = e => {
       if (!this.routeHitsABox(e)) return true;
       for (const via of this.detours(e)) {
+        if (via.corridor !== undefined && !corridorFree(e, via.corridor)) continue;
         e.via = via;
-        if (!this.routeHitsABox(e)) return true;
+        /* On a corridor, the side facing it is tried BEFORE the vertical
+           way out: it is the same corridor reached with two corners instead
+           of four, and routeHitsABox is what says whether the row it steps
+           across is clear enough to take it. Every candidate from detours()
+           already cleared corridorClear, so there is nothing to re-check. */
+        if (via.corridor !== undefined) {
+          e.flank = true;
+          if (!this.routeHitsABox(e)) { reserve(e, via.corridor); return true; }
+          e.flank = false;
+        }
+        if (!this.routeHitsABox(e)) {
+          if (via.corridor !== undefined) reserve(e, via.corridor);
+          return true;
+        }
       }
       e.via = null;
+      e.flank = false;
       return false;
     };
 
@@ -437,22 +491,45 @@ export class DiagramEditor {
 
   /* Detours to try, nearest first. Crossbars come before corridors: moving
      the sideways leg of a Z keeps the edge between its own two cards, while
-     a corridor takes it around them. */
+     a corridor takes it around them.
+
+     DEDUPLICATED, which is not tidying. A flow laid out in columns has one
+     candidate per node, so twenty stacked cards offer the SAME x twenty
+     times -- and the slice at the end then spends its whole budget on one
+     value. That is how a hop between two cards a couple of rows apart ended
+     up on a margin lane clear across the diagram: every candidate it was
+     allowed to try was the same blocked column, and the two that would have
+     worked never got looked at. */
   detours(e) {
     const a = this.byKey[e.from], b = this.byKey[e.to];
-    const midY = (a.y + b.y) / 2;
-    const loY = Math.min(a.y, b.y), hiY = Math.max(a.y, b.y);
-    const bars = [];
-    const corridors = [];
+    /* Which way the Z runs when nothing has forced a corridor yet, because
+       that decides which crossbar can move. A vertical run's crossbar goes
+       ACROSS, so moving it means picking a y; a horizontal run's goes DOWN,
+       so it means picking an x. Only the matching kind is read by route().
+       Offering the other one spends the candidate budget on values that
+       cannot change the route at all -- which is how a run 450 wide and 200
+       tall exhausted its crossbars without ever moving, fell through to a
+       corridor, and left its card by the bottom to reach something beside
+       it. */
+    const vertical = ['top', 'bottom'].includes(DiagramEditor.sides(a, b)[0]);
+    const mid = vertical ? (a.y + b.y) / 2 : (a.x + b.x) / 2;
+    const lo = vertical ? Math.min(a.y, b.y) : Math.min(a.x, b.x);
+    const hi = vertical ? Math.max(a.y, b.y) : Math.max(a.x, b.x);
+    const barAt = new Set();
+    const corridorX = new Set();
     for (const n of this.nodes) {
-      for (const y of [n.y - n.h / 2 - ORTH_STUB, n.y + n.h / 2 + ORTH_STUB]) {
-        if (y > loY && y < hiY) bars.push({ crossY: y });
+      const half = (vertical ? n.h : n.w) / 2 + ORTH_STUB;
+      const centre = vertical ? n.y : n.x;
+      for (const v of [centre - half, centre + half]) {
+        if (v > lo && v < hi) barAt.add(v);
       }
       for (const x of [n.x - n.w / 2 - ORTH_STUB * 1.5, n.x + n.w / 2 + ORTH_STUB * 1.5]) {
-        corridors.push({ corridor: x });
+        if (this.corridorClear(e, x)) corridorX.add(x);
       }
     }
-    bars.sort((u, v) => Math.abs(u.crossY - midY) - Math.abs(v.crossY - midY));
+    const bars = [...barAt]
+      .sort((u, v) => Math.abs(u - mid) - Math.abs(v - mid))
+      .map(v => (vertical ? { crossY: v } : { crossX: v }));
     /* Cheapest first, and cheap is not the same as near. A corridor OUTSIDE
        the two columns makes the edge overshoot one of its own ends and come
        back: that is what "it goes past the card and hooks in from the far
@@ -463,8 +540,9 @@ export class DiagramEditor {
        preferred and proximity only decides between them. */
     const over = x => Math.abs(x - a.x) + Math.abs(x - b.x) - Math.abs(a.x - b.x);
     const near = x => Math.min(Math.abs(x - a.x), Math.abs(x - b.x));
-    corridors.sort((u, v) => over(u.corridor) - over(v.corridor)
-                          || near(u.corridor) - near(v.corridor));
+    const corridors = [...corridorX]
+      .sort((u, v) => over(u) - over(v) || near(u) - near(v))
+      .map(corridor => ({ corridor }));
     return [...bars.slice(0, 10), ...corridors.slice(0, 12)];
   }
 
@@ -473,12 +551,11 @@ export class DiagramEditor {
      reject throws out almost every pair, and a handful of points along
      what survives is enough to catch a run down an occupied column. */
   routeHitsABox(e) {
-    const { pts, curve } = this.route(e);
-    const flat = DiagramEditor.flatten(pts, curve);
+    const pts = this.route(e);
     for (const n of this.nodes) {
       if (n.key === e.from || n.key === e.to) continue;
-      for (let i = 1; i < flat.length; i++) {
-        if (DiagramEditor.segHitsBox(flat[i - 1], flat[i], n)) return true;
+      for (let i = 1; i < pts.length; i++) {
+        if (DiagramEditor.segHitsBox(pts[i - 1], pts[i], n)) return true;
       }
     }
     return false;
@@ -489,9 +566,9 @@ export class DiagramEditor {
     const y0 = n.y - n.h / 2 - pad, y1 = n.y + n.h / 2 + pad;
     if (Math.max(p.x, q.x) < x0 || Math.min(p.x, q.x) > x1) return false;
     if (Math.max(p.y, q.y) < y0 || Math.min(p.y, q.y) > y1) return false;
-    /* an axis-aligned leg -- which is every leg of a right-angled route --
-       is fully decided by the two range checks above, so the sampling
-       below only ever runs for a straight diagonal or a flattened curve */
+    /* an axis-aligned leg -- which is almost every leg of a right-angled
+       route -- is fully decided by the two range checks above, so the
+       sampling below only ever runs for a funnel's diagonal lead-in */
     if (Math.abs(p.x - q.x) < 0.01 || Math.abs(p.y - q.y) < 0.01) return true;
     const steps = 24;
     for (let i = 0; i <= steps; i++) {
@@ -587,13 +664,6 @@ export class DiagramEditor {
   }
 
   /* ── interaction ───────────────────────────────────────────────── */
-
-  setRouting(mode) {
-    this.routing = ROUTINGS.includes(mode) ? mode : 'orthogonal';
-    /* which edges cross a box depends on how they are drawn */
-    this.routesDirty = true;
-    this.requestDraw();
-  }
 
   setReadOnly(on) {
     this.readOnly = on;
@@ -1023,15 +1093,58 @@ export class DiagramEditor {
 
   /* Which side each end leaves from, taken from where the boxes sit
      relative to each other: mostly-vertical runs use top/bottom, mostly
-     horizontal ones left/right. An edge routed through a corridor always
-     leaves and enters vertically -- it turns sideways in the gap BETWEEN
-     two rows, where there is nothing to run over, rather than out of the
-     side of a box across whatever else shares that row. */
-  static sides(a, b, viaCorridor) {
+     horizontal ones left/right.
+
+     An edge routed through a corridor has two ways out, and `flank` picks
+     between them.
+
+     Without it the edge leaves vertically and turns sideways in the gap
+     BETWEEN two rows, where there is nothing to run over. That is the safe
+     answer and the fallback, but on a card whose corridor is off to one
+     side it means leaving downwards and immediately turning back -- a
+     corner that exists only because the wrong side was used, and then a
+     second one to get in at the far end.
+
+     With it, both ends use the side FACING the corridor, so the edge steps
+     straight out into it and the whole route is two corners. It is only
+     offered when the corridor stands clear (corridorClear) and the sideways
+     leg hits nothing, because that leg runs along the card's own row. */
+  static sides(a, b, corridorX = null, flank = false) {
     const dx = b.x - a.x, dy = b.y - a.y;
-    if (viaCorridor) return dy >= 0 ? ['bottom', 'top'] : ['top', 'bottom'];
+    if (corridorX !== null) {
+      if (flank) {
+        return [corridorX < a.x ? 'left' : 'right',
+                corridorX < b.x ? 'left' : 'right'];
+      }
+      return dy >= 0 ? ['bottom', 'top'] : ['top', 'bottom'];
+    }
     if (Math.abs(dy) >= Math.abs(dx)) return dy >= 0 ? ['bottom', 'top'] : ['top', 'bottom'];
     return dx >= 0 ? ['right', 'left'] : ['left', 'right'];
+  }
+
+  /* Is a corridor at this x worth going out to? Only if it stands clear of
+     BOTH end cards by MERGE_GAP, which is how deep the funnel reaches.
+
+     A corridor nearer than that is not a way around anything -- it can even
+     fall inside one of the cards' own width, where "going around" is a
+     couple of units of sideways travel under the card itself. And once the
+     fan has moved a line further out than the corridor, the route reaches
+     past its own corridor and comes back: a seven-unit step backwards in
+     the middle of a run, which is what a fork out of one card looked like
+     on four of its arrows.
+
+     Used for two decisions -- whether a corridor is a candidate at all, and
+     whether it can be left by the near side (see sides()) -- because both
+     ask the same question. */
+  corridorClear(e, corridorX) {
+    const a = this.byKey[e.from], b = this.byKey[e.to];
+    for (const n of [a, b]) {
+      const clear = corridorX < n.x
+        ? n.x - n.w / 2 - corridorX
+        : corridorX - (n.x + n.w / 2);
+      if (clear < MERGE_GAP) return false;
+    }
+    return true;
   }
 
   /* How far along its own side an anchor may be nudged, as [lo, hi] in the
@@ -1088,33 +1201,63 @@ export class DiagramEditor {
      axis, so the fanned lines keep their relative order and do not cross
      each other right at the card.
 
+     One member keeps the centre track, and WHICH one matters more than the
+     spread does. An edge between two cards in the same column is drawn as
+     one straight segment when it is left alone; move it aside and it has to
+     come back, which is a Z half way down a run that had no reason to bend
+     -- the offset is a few units, so the bend reads as a mistake rather
+     than as a route. So the member that would run straight (see inLine
+     below) is the one left on the centre line, and everyone else is spread
+     around it. Those others turn a corner regardless, and a corner in a
+     line that was already turning costs nothing to read.
+
+     Only when NO member runs straight is the spread symmetric about the
+     middle, as it was everywhere before: with nothing to protect, an even
+     splay is what the funnel should look like.
+
      Called only from a full pass -- the sides depend on which edges took a
      corridor, and a drag keeps the previous solution. */
   assignFans() {
     const groups = new Map();
     for (const e of this.edges) {
       const a = this.byKey[e.from], b = this.byKey[e.to];
-      const [sideFrom, sideTo] = DiagramEditor.sides(a, b, this.corridorFor(e) !== null);
+      const corridorX = this.corridorFor(e);
+      const [sideFrom, sideTo] =
+        DiagramEditor.sides(a, b, corridorX, !!e.flank);
       e.fanFrom = 0; e.fanTo = 0; e.stubFrom = 0; e.stubTo = 0;
       for (const [key, side, self, peer, end] of
            [[e.from, sideFrom, a, b, 'From'], [e.to, sideTo, b, a, 'To']]) {
         const id = `${key}|${side}`;
         if (!groups.has(id)) groups.set(id, []);
-        groups.get(id).push({ e, side, self, peer, end });
+        groups.get(id).push({ e, side, self, peer, end, corridorX });
       }
     }
     for (const members of groups.values()) {
       if (members.length < 2) continue;
       const vertical = members[0].side === 'top' || members[0].side === 'bottom';
       const along = m => (vertical ? m.peer.x : m.peer.y);
+      /* every member of a group shares the card, so any one of them has it */
+      const own = members[0].self;
+      /* the same near-miss route() calls straight, and never an edge on a
+         corridor: that one turns twice whatever happens, so handing it the
+         centre line would only cost it to a neighbour that wanted it */
+      const offBy = m => Math.abs(along(m) - (vertical ? own.x : own.y));
+      const inLine = m => m.corridorX === null && offBy(m) <= ORTH_SNAP;
       members.sort((m, n) => along(m) - along(n));
-      const mid = (members.length - 1) / 2;
+      let keep = -1;
+      for (const [i, m] of members.entries()) {
+        if (inLine(m) && (keep < 0 || offBy(m) < offBy(members[keep]))) keep = i;
+      }
+      const mid = keep < 0 ? (members.length - 1) / 2 : keep;
+      let rank = 0;
       members.forEach((m, i) => {
         m.e[`fan${m.end}`] = (i - mid) * FAN_GAP;
         /* Strictly increasing, NOT symmetric about the middle: a symmetric
            depth gives the two members of a pair the same stub, which is
-           exactly the case that needs them different. */
-        m.e[`stub${m.end}`] = i * FAN_STUB;
+           exactly the case that needs them different. The kept member takes
+           zero, so its route stays the unfanned one end to end. */
+        m.e[`stub${m.end}`] =
+          keep < 0 ? i * FAN_STUB : (i === keep ? 0 : ++rank * FAN_STUB);
       });
     }
   }
@@ -1167,7 +1310,8 @@ export class DiagramEditor {
   route(e) {
     const a = this.byKey[e.from], b = this.byKey[e.to];
     const corridorX = this.corridorFor(e);
-    const [sideFrom, sideTo] = DiagramEditor.sides(a, b, corridorX !== null);
+    const [sideFrom, sideTo] =
+      DiagramEditor.sides(a, b, corridorX, !!e.flank);
     /* The contact point is the anchor itself: the centre of a side, the tip
        of a diamond. Every edge sharing it lands on it, because several
        arrows converging on one point is what a flowchart looks like --
@@ -1180,10 +1324,6 @@ export class DiagramEditor {
     const tail = DiagramEditor.offset(DiagramEditor.anchors(a)[sideFrom], sideFrom, 0);
     const head = DiagramEditor.offset(DiagramEditor.anchors(b)[sideTo], sideTo, ARROW_GAP);
 
-    if (this.routing === 'curved') {
-      return { pts: [tail, head], curve: this.curveCtrl(tail, head, e) };
-    }
-
     /* Where the parallel run begins and ends -- offset sideways from the
        centre line, MERGE_GAP out from the card. */
     const p = e.fanFrom
@@ -1193,15 +1333,18 @@ export class DiagramEditor {
       ? DiagramEditor.alongSide(DiagramEditor.offset(head, sideTo, MERGE_GAP), sideTo, e.fanTo)
       : head;
     /* MERGE_TAIL of straight line at each end, so an edge leaves and arrives
-       square and the arrowhead is not drawn on a diagonal. */
-    const lead = [tail];
-    if (p !== tail) lead.push(DiagramEditor.offset(tail, sideFrom, MERGE_TAIL), p);
-    const trail = [];
-    if (q !== head) trail.push(q, DiagramEditor.offset(head, sideTo, MERGE_TAIL));
-    trail.push(head);
-    /* lead ends at p and trail starts at q in both cases, so the section
-       built below is only what goes strictly between them */
-    const done = body => ({ pts: [...lead, ...body, ...trail], curve: null });
+       square and the arrowhead is not drawn on a diagonal.
+       `from` ends at p and `to` starts at q in both cases, so the body
+       handed over is only what goes strictly between them. */
+    const funnel = (from, to) => {
+      const lead = [tail];
+      if (from !== tail) lead.push(DiagramEditor.offset(tail, sideFrom, MERGE_TAIL), from);
+      const trail = [];
+      if (to !== head) trail.push(to, DiagramEditor.offset(head, sideTo, MERGE_TAIL));
+      trail.push(head);
+      return body => [...lead, ...body, ...trail];
+    };
+    const done = funnel(p, q);
 
     /* its own turning depth too, so the legs perpendicular to a side do not
        share a line either */
@@ -1210,6 +1353,26 @@ export class DiagramEditor {
     const fanned = !!(e.fanFrom || e.fanTo || e.stubFrom || e.stubTo);
 
     if (corridorX !== null) {
+      /* Out of the side facing the corridor: the stub and the corridor run
+         along the same line, so there is nothing between them to turn for
+         and the whole route is two corners.
+
+         The funnel turns MERGE_GAP short of the card, and the corridor may
+         be barely further out than that -- four units, on a card whose
+         corridor is the nearest one there was room for. Two turns closer
+         together than the corner rounding do not read as two turns; they
+         read as the line fraying where it meets the card. So a track that
+         near the corridor is snapped ONTO it: the corridor is this edge's
+         own parallel run either way. */
+      if (sideFrom === 'left' || sideFrom === 'right') {
+        const snap = pt => Math.abs(corridorX - pt.x) < ORTH_RADIUS
+          ? { x: corridorX, y: pt.y } : pt;
+        const from = snap(p), to = snap(q);
+        const body = [];
+        if (from.x !== corridorX) body.push({ x: corridorX, y: from.y });
+        if (to.x !== corridorX) body.push({ x: corridorX, y: to.y });
+        return funnel(from, to)(body);
+      }
       /* clear of the box, sideways in the row gap, along the corridor, and
          back into the far end the same way -- all axis-aligned */
       const leave = DiagramEditor.offset(p, sideFrom, stubFrom);
@@ -1238,14 +1401,19 @@ export class DiagramEditor {
        when the run is too short to fit corners in -- both otherwise produce
        the same wiggle.
 
-       NOT for a fanned edge, though. Its ends are offset on purpose, and
-       drawing that as one "straight" line makes it a slant: three degrees
-       off vertical in a picture where everything else is square, which
-       reads as a kink and not as a deliberate separation. It takes the Z.
-       A run too short for corners still slants -- a Z crammed into it is
-       the worse of the two. */
-    const bar = e.via?.crossY;
-    const nearlyInLine = across <= ORTH_SNAP && !fanned;
+       A fanned edge only qualifies when its two ends land on the SAME
+       track. Near-but-not-equal is what it must not take: its ends are
+       offset on purpose, and drawing a few units of offset as one
+       "straight" line makes it a slant -- three degrees off vertical in a
+       picture where everything else is square, which reads as a kink and
+       not as a deliberate separation. Exactly equal is a different case:
+       the run between the two funnels IS straight, and putting a Z there
+       spends a crossbar of zero length on it. A run too short for corners
+       still slants -- a Z crammed into it is the worse of the two. */
+    /* the moved crossbar, in whichever axis this run's crossbar lies along
+       -- see detours(), which only ever offers the matching one */
+    const bar = vertical ? e.via?.crossY : e.via?.crossX;
+    const nearlyInLine = across <= (fanned ? 0.01 : ORTH_SNAP);
     if (bar == null && (nearlyInLine || along <= ORTH_RADIUS * 2)) {
       return done([]);
     }
@@ -1261,36 +1429,12 @@ export class DiagramEditor {
       return done([{ x: p.x, y: q.y }]);            /* L: down, then across */
     }
     if (sideTo === 'left' || sideTo === 'right') {
-      const midX = (p.x + q.x) / 2;                /* Z: across, down, across */
+      /* Z: across, down, across -- the down leg normally half way, or moved
+         into a free gap by a detour, the same way the vertical Z's is */
+      const midX = bar ?? (p.x + q.x) / 2;
       return done([{ x: midX, y: p.y }, { x: midX, y: q.y }]);
     }
     return done([{ x: q.x, y: p.y }]);              /* L: across, then down */
-  }
-
-  curveCtrl(p, q, e) {
-    const mx = (p.x + q.x) / 2, my = (p.y + q.y) / 2;
-    /* the same edges that take a corridor in right-angled mode bow here: a
-       straight chord through six boxes is no better drawn as a curve. The
-       control point is twice the offset, so the curve itself reaches the
-       corridor at its halfway point. */
-    const corridor = this.corridorFor(e);
-    return corridor === null ? null : { x: mx + (corridor - mx) * 2, y: my };
-  }
-
-  /* A quadratic sampled into a polyline, so hit-testing and measuring work
-     the same whether an edge was drawn curved or right-angled. */
-  static flatten(pts, curve) {
-    if (!curve) return pts;
-    const [p, q] = pts;
-    const out = [];
-    for (let i = 0; i <= 12; i++) {
-      const t = i / 12, u = 1 - t;
-      out.push({
-        x: u * u * p.x + 2 * u * t * curve.x + t * t * q.x,
-        y: u * u * p.y + 2 * u * t * curve.y + t * t * q.y,
-      });
-    }
-    return out;
   }
 
   static distToSeg(p, a, b) {
@@ -1308,10 +1452,9 @@ export class DiagramEditor {
     let best = null, bestD = Infinity;
     for (const e of this.edges) {
       if (!this.byKey[e.from] || !this.byKey[e.to]) continue;
-      const { pts, curve } = this.route(e);
-      const flat = DiagramEditor.flatten(pts, curve);
-      for (let i = 1; i < flat.length; i++) {
-        const d = DiagramEditor.distToSeg(p, flat[i - 1], flat[i]);
+      const pts = this.route(e);
+      for (let i = 1; i < pts.length; i++) {
+        const d = DiagramEditor.distToSeg(p, pts[i - 1], pts[i]);
         if (d < bestD) { bestD = d; best = e; }
       }
     }
@@ -1391,13 +1534,32 @@ export class DiagramEditor {
   }
 
   /* Half the shape's width at a given offset from its centre line. What
-     keeps a corner marker inside a shape whose corners are not where its
-     bounding box says they are. */
-  static halfWidthAt(n, dy) {
-    const hw = n.w / 2, hh = n.h / 2;
-    const t = Math.min(1, Math.abs(dy) / (hh || 1));
-    if (n.shape === 'decision') return hw * (1 - t);
-    if (n.shape === 'io') return hw - IO_SKEW * (dy + hh) / (n.h || 1);
+     keeps a marker beside a shape whose sides are not where its bounding
+     box says they are.
+
+     `grow` measures the outline `grow` units OUTSIDE the shape -- the same
+     curve shapePath(n, grow) traces, and NOT hw + grow, which is only right
+     for a rectangle. At a diamond's acute tip the offset outline reaches
+     far further out than grow does: 6 units of selection ring put its edge
+     16 units past the slope, so a badge that had cleared the shape itself
+     was still drawn on the ring the moment the card was selected. */
+  static halfWidthAt(n, dy, grow = 0) {
+    const hw0 = n.w / 2, hh0 = n.h / 2;
+    if (n.shape === 'decision') {
+      const k = grow ? 1 + grow * Math.hypot(1 / hw0, 1 / hh0) : 1;
+      const hw = hw0 * k, hh = hh0 * k;
+      return hw * (1 - Math.min(1, Math.abs(dy) / (hh || 1)));
+    }
+    if (n.shape === 'io') {
+      /* the lean has to grow with the height or the offset outline is not
+         parallel to the card -- see shapePath */
+      const m = IO_SKEW / (n.h || 1);
+      const hh = hh0 + grow;
+      const hw = hw0 + grow * (Math.sqrt(1 + m * m) + m);
+      const skew = IO_SKEW * (hh / (hh0 || 1));
+      return hw - skew * (dy + hh) / (hh * 2 || 1);
+    }
+    const hw = hw0 + grow, hh = hh0 + grow;
     if (n.shape === 'start' || n.shape === 'end') {
       /* a stadium: the caps are semicircles of radius hh */
       return hw - hh + Math.sqrt(Math.max(0, hh * hh - dy * dy));
@@ -1455,7 +1617,7 @@ export class DiagramEditor {
        from the graph (see db.loop_edges), not from which way the line
        happens to point after someone dragged a card. */
     const back = !!e.loops;
-    const { pts, curve } = this.route(e);
+    const pts = this.route(e);
     const from = pts[0], to = pts[pts.length - 1];
     const strong = back ? this.colWarn : (hot ? this.colAccent : this.colInk2);
 
@@ -1466,9 +1628,7 @@ export class DiagramEditor {
     if (back) cx.setLineDash([5 / this.scale, 4 / this.scale]);
     cx.beginPath();
     cx.moveTo(from.x, from.y);
-    if (curve) {
-      cx.quadraticCurveTo(curve.x, curve.y, to.x, to.y);
-    } else if (pts.length === 2) {
+    if (pts.length === 2) {
       cx.lineTo(to.x, to.y);
     } else {
       /* arcTo rounds each corner for us, so a right-angled run reads as a
@@ -1488,7 +1648,7 @@ export class DiagramEditor {
     cx.setLineDash([]);
 
     /* arrowhead along whatever the last stretch was heading */
-    const prev = curve || pts[pts.length - 2];
+    const prev = pts[pts.length - 2];
     const tanX = to.x - prev.x, tanY = to.y - prev.y;
     const d = Math.hypot(tanX, tanY) || 1;
     const ux = tanX / d, uy = tanY / d;
@@ -1505,9 +1665,7 @@ export class DiagramEditor {
     /* a selected step's own conditions stay legible even zoomed out, which
        is the whole point of the highlight */
     if (!e.label || (this.scale <= 0.4 && !hot)) { cx.restore(); return; }
-    const at = curve
-      ? { x: (from.x + 2 * curve.x + to.x) / 4, y: (from.y + 2 * curve.y + to.y) / 4 }
-      : DiagramEditor.midpoint(pts);
+    const at = DiagramEditor.midpoint(pts);
     /* world units, same reason as node labels -- except on a highlighted
        edge, which is sized to stay readable at whatever zoom you are at */
     const base = BADGE_PX * this.fontScale;
@@ -1572,7 +1730,7 @@ export class DiagramEditor {
     cx.setLineDash([]);
 
     if (n.key === this.selected || n === this.connectFrom || ringed) {
-      this.shapePath(n, 6);
+      this.shapePath(n, RING_GROW);
       cx.strokeStyle = this.colAccent;
       cx.lineWidth = 1.6 / this.scale;
       if (n === this.connectFrom) cx.setLineDash([4 / this.scale, 3 / this.scale]);
@@ -1604,50 +1762,77 @@ export class DiagramEditor {
 
     /* Attached memories carry a marker, because nothing else on the canvas
        hints at them. A note does NOT: hovering the card shows it, and a
-       glyph on most of the cards of a documented flow is just noise. */
-    const count = this.linkCount[n.key];
-    if (count && this.scale > 0.45) {
-      /* save/restore because this is the last thing drawn on a card: the
-         font and textAlign set below otherwise leak into the next frame,
-         where every consumer happens to set its own -- happens to, which
-         is not something to leave a later edit standing on */
-      cx.save();
-      const bpx = BADGE_PX * this.fontScale;
-      const color = terminal ? 'rgba(0,0,0,.6)' : this.colInk2;
-      /* inside the SHAPE, not inside its bounding box -- the top-right
-         corner of the box is empty space on a diamond and outside the
-         curve on a stadium, which is where this used to land */
-      const dy = -n.h / 2 + bpx * 0.9;
-      const right = n.x + DiagramEditor.halfWidthAt(n, dy) - 5;
-      const midY = n.y + dy + bpx / 2;
-      cx.font = `${bpx}px ${FONT_MONO}`;
-      cx.fillStyle = color;
-      cx.textAlign = 'right';
-      cx.fillText(String(count), right, midY);
-      this.drawLinkMark(right - cx.measureText(String(count)).width - bpx * 0.3, midY, bpx, color);
-      cx.restore();
-    }
+       glyph on most of the cards of a documented flow is just noise.
 
-    /* Steps that continue in another flow get their own mark, in the
-       OPPOSITE corner: two counts sharing one corner read as a single
-       two-digit number, and these two say different things. */
-    const jumps = this.jumpCount[n.key];
-    if (jumps && this.scale > 0.45) {
-      cx.save();
-      const bpx = BADGE_PX * this.fontScale;
-      const color = terminal ? 'rgba(0,0,0,.6)' : this.colInk2;
-      const dy = n.h / 2 - bpx * 0.9;
-      const right = n.x + DiagramEditor.halfWidthAt(n, dy) - 5;
-      const midY = n.y + dy - bpx / 2;
-      cx.font = `${bpx}px ${FONT_MONO}`;
-      cx.fillStyle = color;
-      cx.textAlign = 'right';
-      cx.fillText(String(jumps), right, midY);
-      this.drawJumpMark(right - cx.measureText(String(jumps)).width - bpx * 0.3, midY, bpx, color);
-      cx.restore();
+       Steps that continue in another flow get their own mark, on the row
+       below: two counts on one row read as a single two-digit number, and
+       these two say different things. */
+    if (this.scale > 0.45) {
+      const count = this.linkCount[n.key];
+      const jumps = this.jumpCount[n.key];
+      if (count) this.drawBadge(n, -1, String(count), this.drawLinkMark);
+      if (jumps) this.drawBadge(n, 1, String(jumps), this.drawJumpMark);
     }
 
     if (this.resizable(n)) this.drawHandles(n);
+  }
+
+  /* A count and its glyph, floating OUTSIDE the card on the right.
+     `row` is -1 for the upper badge and 1 for the lower one.
+
+     Outside, because inside is where the label is: on a card whose text
+     fills it -- which is most of them, since a card is sized to its label
+     -- a badge in the corner landed ON the last line and the two read as
+     one smudge.
+
+     It hugs the OUTLINE rather than the bounding box, which is the whole
+     reason halfWidthAt exists: beside a diamond the box corner is empty
+     air, and a badge parked out there looks like it belongs to nothing.
+     Beside a parallelogram the box is wrong the other way -- the slant
+     pulls the edge in, so a badge on the box would sit ON the card at one
+     end and float away at the other.
+
+     The two rows straddle the card's middle rather than sitting at its
+     top and bottom, because top and bottom are where the vertical edges
+     attach; the middle of a side is one anchor, and the badges leave it a
+     gap. */
+  drawBadge(n, row, text, drawMark) {
+    const { cx } = this;
+    cx.save();
+    const bpx = BADGE_PX * this.fontScale;
+    /* NOT the dark ink a terminal card used to get: that only read because
+       the badge was drawn on the card's own teal fill. Out here it would be
+       dark on the diagram's background. */
+    const color = this.colInk2;
+    const { left, midY } = DiagramEditor.badgeAnchor(n, row, bpx);
+    cx.font = `${bpx}px ${FONT_MONO}`;
+    const right = left + bpx * 0.92 + cx.measureText(text).width;
+    cx.fillStyle = color;
+    cx.textAlign = 'right';
+    cx.fillText(text, right, midY);
+    drawMark.call(this, left + bpx * 0.62, midY, bpx, color);
+    cx.restore();
+  }
+
+  /* Where a badge starts and where its middle is. Split out of drawBadge so
+     the parity harness can record it: it is pure geometry -- only the count's
+     own width needs the canvas -- and nothing else would notice BADGE_OUT or
+     the row offset drifting apart from diagram_svg.py. */
+  static badgeAnchor(n, row, bpx) {
+    const dy = row * bpx * 1.1;
+    /* The widest the ring gets over the badge's OWN height, not at the row's
+       centre line: a badge is bpx*1.6 tall, and the ring is a curve across
+       that. Measured at the centre only, a diamond's badge cleared by 7 at
+       its middle and was 14 units INSIDE the ring at its top corner -- the
+       ring bulges towards the card's middle, which is the end of the row
+       nearest it. Both extremes, because the shapes disagree about which one
+       is worst: a diamond and a stadium are widest at the inner end, a
+       parallelogram leans the other way and is widest at the outer one. */
+    const half = bpx * 0.8;
+    const reach = Math.max(
+      DiagramEditor.halfWidthAt(n, dy - half, RING_GROW),
+      DiagramEditor.halfWidthAt(n, dy + half, RING_GROW));
+    return { left: n.x + reach + BADGE_OUT, midY: n.y + dy };
   }
 
   /* The "continues in another flow" mark: a wall with an arrow going

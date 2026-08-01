@@ -5,7 +5,8 @@
 import { esc } from '../core/dom.js';
 import { api } from '../core/api.js';
 import { toast, failed, openModal, closeModal } from '../core/ui.js';
-import { TYPE_ORDER, CONF, getDomains, invalidateDomains } from '../core/shared.js';
+import { TYPE_ORDER, CONF, getDomains, invalidateDomains,
+         domainDatalist } from '../core/shared.js';
 import { go, refreshBehind } from '../core/router.js';
 import { openRecord } from './record.js';
 import { newDiagramSkeleton } from './diagrams.js';
@@ -24,7 +25,7 @@ export async function openNewMemory() {
       </div>
       <div class="field"><label for="nmDomain">${t('nm.domain')}</label>
         <input type="text" id="nmDomain" list="nmDomainsDL" placeholder="${t('nm.domainPh')}">
-        <datalist id="nmDomainsDL">${domains.map(d => `<option value="${esc(d.domain)}">`).join('')}</datalist></div>
+        <datalist id="nmDomainsDL">${domainDatalist(domains)}</datalist></div>
       <div class="field"><label for="nmTags">${t('nm.tags')}</label>
         <input type="text" id="nmTags" placeholder="${t('nm.tagsPh')}"></div>
       <div class="field" id="nmContentField"><label for="nmContent">${t('nm.content')}</label>

@@ -706,67 +706,59 @@ def test_search_finds_a_diagram_by_its_tags_and_summary(conn):
         assert uid in [r["uid"] for r in db.search_memories(conn, query)], query
 
 
-def test_hybrid_puts_a_matching_diagram_first(conn):
-    """The flow is the source of truth the surrounding notes annotate."""
+def test_a_matching_diagram_comes_back_ranked_like_anything_else(conn):
+    """No type tier and no `rank_reason`: a flow sits where its scores put it."""
     note = db.insert_memory(conn, type="note",
                             content="The export window is inclusive on both ends.")
-    db.insert_memory(conn, type="checkpoint", content="INTENT: fix the export window")
     uid = _mk(conn, summary="Reads the export window and ships one file per store.")
 
     hits = db.search_hybrid(conn, "export window")
-    assert hits[0]["uid"] == uid
-    assert hits[0]["rank_reason"] == "diagram_first"
-    # the promotion is ordering only: the note is still there, still untagged
-    assert note in [h["uid"] for h in hits]
-    assert "rank_reason" not in [h for h in hits if h["uid"] == note][0]
+    uids = [h["uid"] for h in hits]
+    assert uid in uids and note in uids
+    assert all("rank_reason" not in h for h in hits)
 
 
-def test_promotion_survives_the_limit_cut(conn):
-    """Ranking after the slice would drop the diagrams worth promoting."""
+def test_a_diagram_that_lost_the_ranking_is_not_backfilled_in(conn):
+    """What the promotion cost: a second retrieval scoped to diagrams used to
+    inject flows the query never actually hit, spending the top slots on
+    them. Nothing goes looking for a type any more."""
     for i in range(12):
-        db.insert_memory(conn, type="note", content=f"export window note number {i}")
-    uid = _mk(conn, summary="Reads the export window.")
+        db.insert_memory(conn, type="note",
+                         content=f"export window note number {i}: inclusive on both ends")
+    # deliberately shares no word with the query: the promotion used to put a
+    # flow like this one at the top anyway
+    _mk(conn, title="Cache warmup flow", summary="How the cache warms up.", nodes=[
+        {"key": "start", "shape": "start", "label": "warmup starts"},
+        {"key": "done", "shape": "end", "label": "done"}],
+        edges=[{"from": "start", "to": "done"}])
+
     hits = db.search_hybrid(conn, "export window", limit=3)
     assert len(hits) == 3
-    assert hits[0]["uid"] == uid
+    assert {h["type"] for h in hits} == {"note"}
 
 
-def test_contradicted_or_archived_diagrams_are_not_promoted(conn):
-    """A diagram that stopped being the truth must not be pushed to the top."""
-    db.insert_memory(conn, type="note", content="The export window is inclusive.")
-    bad = _mk(conn, summary="Reads the export window.")
-    db.set_confidence(conn, bad, "contradicted")
-    hits = db.search_hybrid(conn, "export window")
-    assert hits[0]["uid"] != bad
-    assert all("rank_reason" not in h for h in hits)
-
-    db.set_confidence(conn, bad, "unverified")
-    db.set_status(conn, bad, "archived")
-    hits = db.search_hybrid(conn, "export window", status="")
-    assert hits[0]["uid"] != bad
-
-
-def test_diagrams_first_can_be_switched_off(conn):
-    db.insert_memory(conn, type="note", content="The export window is inclusive on both ends.")
+def test_confidence_no_longer_changes_a_diagrams_position(conn):
+    """It only ever mattered because promotion had to exclude a flow that had
+    stopped being the truth. Ranking is scores now, for every type."""
     uid = _mk(conn, summary="Reads the export window.")
-    hits = db.search_hybrid(conn, "export window", diagrams_first=False)
-    assert uid in [h["uid"] for h in hits]
-    assert hits[0]["uid"] != uid
-    assert all("rank_reason" not in h for h in hits)
+    before = [h["uid"] for h in db.search_hybrid(conn, "export window")]
+    db.set_confidence(conn, uid, "contradicted")
+    assert [h["uid"] for h in db.search_hybrid(conn, "export window")] == before
 
 
-def test_recall_never_promotes_a_diagram(conn):
-    """recall() is scoped to notes, so the type preference cannot apply."""
+def test_a_type_filter_still_excludes_diagrams(conn):
+    """recall() is search(type='note') -- the scope, not a ranking preference,
+    is what keeps a flow out of it."""
     _mk(conn, summary="Reads the export window.")
     note = db.insert_memory(conn, type="note", content="The export window is inclusive.")
     hits = db.search_hybrid(conn, "export window", type="note")
     assert [h["uid"] for h in hits] == [note]
 
 
-def test_promotion_works_on_the_vector_side_too(tmp_path, fake_embedder):
-    """The backfill runs both retrievers, so a semantic-only hit promotes."""
+def test_a_diagram_is_reachable_by_vector_alone(tmp_path, fake_embedder):
+    """The prose projection is embedded like any other content, so a flow
+    still surfaces on a semantic-only match -- it just is not lifted."""
     with db.connect(tmp_path / "vec.db") as conn:
-        db.insert_memory(conn, type="note", content="car maintenance schedule")
         uid = _mk(conn, title="Car maintenance schedule", nodes=[
             {"key": "start", "shape": "start", "label": "car maintenance"},
             {"key": "done", "shape": "end", "label": "schedule the next service"},
@@ -774,13 +766,15 @@ def test_promotion_works_on_the_vector_side_too(tmp_path, fake_embedder):
         # 'automobile' is a synonym of 'car' for the fake embedder and does
         # not appear literally anywhere, so this can only match by vector
         hits = db.search_hybrid(conn, "automobile maintenance")
-        assert hits[0]["uid"] == uid
-        assert hits[0]["rank_reason"] == "diagram_first"
-        assert hits[0]["match_source"] in ("vec", "both")
+        assert [h["uid"] for h in hits] == [uid]
+        # the vector side is what carries 'automobile'; the keyword side only
+        # has 'maintenance' to go on, hence 'both' rather than 'vec'
+        assert hits[0]["vec_distance"] is not None
 
 
-def test_api_lookup_does_not_promote_diagrams(client):
-    """The picker is choosing any memory to attach; a type lift is noise there."""
+def test_api_lookup_ranks_by_relevance(client):
+    """The picker is choosing any memory to attach, and now so is everything
+    else: the better match leads."""
     client.post("/api/memories", json={
         "type": "note", "content": "The export window is inclusive on both ends."})
     _create(client, summary="Reads the export window.")

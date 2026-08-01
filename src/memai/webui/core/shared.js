@@ -135,6 +135,51 @@ export function wireCopyChips(root) {
     el.addEventListener('click', e => { e.stopPropagation(); copyUid(el.dataset.copy); }));
 }
 
+/* ─── domain paths ───────────────────────────────────────────────────────
+   A domain is one string that reads as a path: 'acme/x100/p200' is a
+   routine inside a module inside a product. The server stores and matches
+   it; these are the four things a view needs to DRAW one. */
+
+export const DOMAIN_SEP = '/';
+
+export const domainSegments = d => (d || '').split(DOMAIN_SEP).filter(Boolean);
+export const domainLeaf = d => domainSegments(d).slice(-1)[0] || '';
+export const domainDepth = d => domainSegments(d).length;
+
+/* Tree order: a parent, then its whole subtree, then its next sibling.
+   Comparing the strings would not do it -- '-' sorts before '/', so a root
+   named 'acme-legacy' would land between 'acme' and 'acme/x100' and cut a
+   subtree in half. Segments, then depth. */
+export function byDomainPath(a, b) {
+  const x = domainSegments(a.domain), y = domainSegments(b.domain);
+  for (let i = 0; i < Math.min(x.length, y.length); i++) {
+    const c = x[i].localeCompare(y[i]);
+    if (c) return c;
+  }
+  return x.length - y.length;
+}
+
+/* Options for a domain <select>: tree-ordered, indented by depth, showing
+   the leaf with the full path on hover. Repeating the whole path in every
+   row makes the reader diff strings to see the shape; indentation shows it.
+   The full path is still the value, and still the title -- two sibling
+   trees can hold the same leaf name. */
+export function domainOptions(domains, selected = '') {
+  return domains.slice().sort(byDomainPath).map(d => {
+    /* non-breaking: a run of plain spaces inside an <option> collapses */
+    const pad = '   '.repeat(Math.max(domainDepth(d.domain) - 1, 0));
+    return `<option value="${esc(d.domain)}"${d.domain === selected ? ' selected' : ''}
+             title="${esc(d.domain)}">${pad}${esc(domainLeaf(d.domain))}</option>`;
+  }).join('');
+}
+
+/* For a free-text domain field: the whole path is the value, because that
+   is what gets typed and stored. Tree-ordered so the suggestions read as
+   the tree they are. */
+export const domainDatalist = domains =>
+  domains.slice().sort(byDomainPath)
+    .map(d => `<option value="${esc(d.domain)}">`).join('');
+
 /* ─── domains cache (datalists, selects) ─────────────────────────────── */
 
 let cache = null, cachedAt = 0;

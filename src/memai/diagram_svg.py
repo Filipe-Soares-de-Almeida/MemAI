@@ -54,6 +54,8 @@ LABEL_LH = 14.0          # and its line height
 BADGE_PX = 10.0          # edge label and corner counts
 BADGE_WORDS = 3          # an edge label is cut past BOTH of these...
 BADGE_CHARS = 20         # ...never just one, see short_label()
+RING_GROW = 6.0          # how far outside a card the canvas rings a selection
+BADGE_OUT = 7.0          # air between that ring and a count beside the card
 
 IO_SKEW = 14.0           # the lean on an input/output parallelogram
 ARROW_GAP = 5.0          # air between the box edge and the arrow tip
@@ -65,7 +67,6 @@ MERGE_TAIL = 9.0         # the straight bit right at the card
 ORTH_RADIUS = 11.0       # corner rounding on a right-angled edge
 ORTH_SNAP = 18.0         # below this offset a run is drawn as one segment
 
-ROUTINGS = ("orthogonal", "curved")
 NODE_SHAPES = ("start", "step", "decision", "io", "end")
 
 # ── text measurement ────────────────────────────────────────────────────
@@ -220,9 +221,16 @@ def anchors(n: dict) -> dict[str, dict]:
     }
 
 
-def sides(a: dict, b: dict, via_corridor: bool) -> tuple[str, str]:
+def sides(a: dict, b: dict, corridor_x: float | None = None,
+          flank: bool = False) -> tuple[str, str]:
+    # `flank` sends a corridor edge out of the side that FACES the corridor
+    # instead of vertically into the row gap -- two corners instead of four.
+    # Only offered when that leg is clear; see the twin for the whole reason.
     dx, dy = b["x"] - a["x"], b["y"] - a["y"]
-    if via_corridor:
+    if corridor_x is not None:
+        if flank:
+            return ("left" if corridor_x < a["x"] else "right",
+                    "left" if corridor_x < b["x"] else "right")
         return ("bottom", "top") if dy >= 0 else ("top", "bottom")
     if abs(dy) >= abs(dx):
         return ("bottom", "top") if dy >= 0 else ("top", "bottom")
@@ -274,16 +282,53 @@ def offset(p: dict, side: str, by: float) -> dict:
     return {"x": p["x"] + by, "y": p["y"]}
 
 
-def half_width_at(n: dict, dy: float) -> float:
-    hw, hh = n["w"] / 2, n["h"] / 2
-    t = min(1.0, abs(dy) / (hh or 1))
+def half_width_at(n: dict, dy: float, grow: float = 0.0) -> float:
+    # `grow` measures the outline that many units OUTSIDE the shape, which is
+    # NOT hw + grow except on a rectangle -- see the twin. Nothing here draws
+    # the selection ring, but the badge is placed against it, so the growth
+    # rules have to exist on this side too.
+    hw0, hh0 = n["w"] / 2, n["h"] / 2
     if n["shape"] == "decision":
-        return hw * (1 - t)
+        k = 1 + grow * math.hypot(1 / hw0, 1 / hh0) if grow else 1.0
+        hw, hh = hw0 * k, hh0 * k
+        return hw * (1 - min(1.0, abs(dy) / (hh or 1)))
     if n["shape"] == "io":
-        return hw - IO_SKEW * (dy + hh) / (n["h"] or 1)
+        m = IO_SKEW / (n["h"] or 1)
+        hh = hh0 + grow
+        hw = hw0 + grow * (math.sqrt(1 + m * m) + m)
+        skew = IO_SKEW * (hh / (hh0 or 1))
+        return hw - skew * (dy + hh) / (hh * 2 or 1)
+    hw, hh = hw0 + grow, hh0 + grow
     if n["shape"] in ("start", "end"):
         return hw - hh + math.sqrt(max(0.0, hh * hh - dy * dy))
     return hw
+
+
+def badge_anchor(n: dict, row: int, bpx: float) -> tuple[float, float]:
+    """Where a count floating beside a card starts, and its middle.
+
+    Twin of DiagramEditor.drawBadge's own arithmetic. `row` is -1 for the
+    upper badge and 1 for the lower one; both straddle the card's middle,
+    clear of the anchor that sits exactly on it.
+    """
+    dy = row * bpx * 1.1
+    # the widest the ring gets over the badge's own height, at BOTH extremes
+    # -- the shapes disagree about which one is worst; see the twin
+    half = bpx * 0.8
+    reach = max(half_width_at(n, dy - half, RING_GROW),
+                half_width_at(n, dy + half, RING_GROW))
+    return n["x"] + reach + BADGE_OUT, n["y"] + dy
+
+
+def badge_reach(n: dict, count: int, bpx: float) -> float:
+    """How far right of the card a count reaches, for frame().
+
+    An SVG cannot be panned, so a badge outside the frame is simply gone --
+    and the badges are the only thing this renderer draws outside a card's
+    own box. Measured for the widest of the two rows.
+    """
+    left = max(badge_anchor(n, row, bpx)[0] for row in (-1, 1))
+    return left + bpx * 0.92 + measure(str(count), bpx, FACE_MONO)
 
 
 def seg_hits_box(p: dict, q: dict, n: dict, pad: float = 6.0) -> bool:
@@ -303,21 +348,6 @@ def seg_hits_box(p: dict, q: dict, n: dict, pad: float = 6.0) -> bool:
         if x0 <= x <= x1 and y0 <= y <= y1:
             return True
     return False
-
-
-def flatten(pts: list[dict], curve: dict | None) -> list[dict]:
-    if not curve:
-        return pts
-    p, q = pts
-    out = []
-    for i in range(13):
-        t = i / 12
-        u = 1 - t
-        out.append({
-            "x": u * u * p["x"] + 2 * u * t * curve["x"] + t * t * q["x"],
-            "y": u * u * p["y"] + 2 * u * t * curve["y"] + t * t * q["y"],
-        })
-    return out
 
 
 def midpoint(pts: list[dict]) -> dict:
@@ -353,10 +383,9 @@ class DiagramLayout:
     the algorithm.
     """
 
-    def __init__(self, data: dict, routing: str = "orthogonal") -> None:
+    def __init__(self, data: dict) -> None:
         self.font_scale = _clamp(float(data.get("font_scale") or 1),
                                  db.FONT_SCALE_MIN, db.FONT_SCALE_MAX)
-        self.routing = routing if routing in ROUTINGS else "orthogonal"
         self.nodes: list[dict] = []
         for n in data.get("nodes") or []:
             shape = n.get("shape") if n.get("shape") in NODE_SHAPES else "step"
@@ -380,7 +409,7 @@ class DiagramLayout:
         self.edges: list[dict] = [
             {"from": e["from"], "to": e["to"], "label": e.get("label") or "",
              "loops": bool(e.get("loops")),
-             "lane": 0, "bow": 0.0, "via": None, "back": False,
+             "lane": 0, "bow": 0.0, "via": None, "back": False, "flank": False,
              "fan_from": 0.0, "fan_to": 0.0, "stub_from": 0.0, "stub_to": 0.0}
             for e in data.get("edges") or []
             if e.get("from") in self.by_key and e.get("to") in self.by_key
@@ -389,6 +418,14 @@ class DiagramLayout:
         for link in data.get("links") or []:
             key = link.get("node_key")
             self.link_count[key] = self.link_count.get(key, 0) + 1
+        # Jumps counted per step the same way, both directions, exactly as
+        # setData does -- but an incoming jump aimed at the diagram as a
+        # whole carries no key, so it belongs to no card and is skipped.
+        self.jump_count: dict[str, int] = {}
+        for jump in data.get("jumps") or []:
+            key = jump.get("node_key")
+            if key:
+                self.jump_count[key] = self.jump_count.get(key, 0) + 1
         self.lane_span: dict[str, float] | None = None
         self.orphans = set(self.orphan_keys())
         self.lane_edges()
@@ -444,6 +481,11 @@ class DiagramLayout:
                 lane_right = max(lane_right, corridor_x + 20)
             else:
                 lane_left = min(lane_left, corridor_x - 20)
+            # out of the side facing the lane when the row it crosses is free
+            if self.corridor_clear(e, corridor_x):
+                e["flank"] = True
+                if self.route_hits_a_box(e):
+                    e["flank"] = False
             taken += 1
 
         for e in self.edges:
@@ -456,15 +498,47 @@ class DiagramLayout:
                 e["lane"] = 0
                 e["bow"] = 0.0
                 e["via"] = None
+                e["flank"] = False
+
+        # corridors already committed to, as (x, lo_y, hi_y). route_hits_a_box
+        # sees boxes, never another LINE, so without this an A->B / B->A pair
+        # runs both halves down the same x -- see the twin.
+        used_corridors: list[tuple[float, float, float]] = []
+
+        def corridor_free(e: dict, x: float) -> bool:
+            a, b = self.by_key[e["from"]], self.by_key[e["to"]]
+            lo_y, hi_y = min(a["y"], b["y"]), max(a["y"], b["y"])
+            return not any(abs(tx - x) < FAN_GAP
+                           and hi_y > t_lo and lo_y < t_hi
+                           for tx, t_lo, t_hi in used_corridors)
+
+        def reserve(e: dict, x: float) -> None:
+            a, b = self.by_key[e["from"]], self.by_key[e["to"]]
+            used_corridors.append(
+                (x, min(a["y"], b["y"]), max(a["y"], b["y"])))
 
         def fits_between_its_ends(e: dict) -> bool:
             if not self.route_hits_a_box(e):
                 return True
             for via in self.detours(e):
+                if "corridor" in via and not corridor_free(e, via["corridor"]):
+                    continue
                 e["via"] = via
+                # the side facing the corridor first: same corridor, two
+                # corners instead of four. detours() already filtered on
+                # corridor_clear, so there is nothing to re-check.
+                if "corridor" in via:
+                    e["flank"] = True
+                    if not self.route_hits_a_box(e):
+                        reserve(e, via["corridor"])
+                        return True
+                    e["flank"] = False
                 if not self.route_hits_a_box(e):
+                    if "corridor" in via:
+                        reserve(e, via["corridor"])
                     return True
             e["via"] = None
+            e["flank"] = False
             return False
 
         if detours:
@@ -484,20 +558,31 @@ class DiagramLayout:
             self.lane_span = {"left": lane_left, "right": lane_right}
 
     def detours(self, e: dict) -> list[dict]:
+        # DEDUPLICATED -- see the twin. A column of stacked cards offers the
+        # same x once per card, and the slice below would spend its whole
+        # budget on that one value.
         a, b = self.by_key[e["from"]], self.by_key[e["to"]]
-        mid_y = (a["y"] + b["y"]) / 2
-        lo_y, hi_y = min(a["y"], b["y"]), max(a["y"], b["y"])
-        bars: list[dict] = []
-        corridors: list[dict] = []
+        # which crossbar can move depends on which way the Z runs -- along y
+        # for a vertical run, along x for a horizontal one. Only the matching
+        # kind is read by route(); see the twin.
+        vertical = sides(a, b)[0] in ("top", "bottom")
+        axis = "y" if vertical else "x"
+        span = "h" if vertical else "w"
+        mid = (a[axis] + b[axis]) / 2
+        lo, hi = min(a[axis], b[axis]), max(a[axis], b[axis])
+        bar_at: dict[float, None] = {}
+        corridor_x: dict[float, None] = {}
         for n in self.nodes:
-            for y in (n["y"] - n["h"] / 2 - ORTH_STUB,
-                      n["y"] + n["h"] / 2 + ORTH_STUB):
-                if lo_y < y < hi_y:
-                    bars.append({"crossY": y})
+            half = n[span] / 2 + ORTH_STUB
+            for v in (n[axis] - half, n[axis] + half):
+                if lo < v < hi:
+                    bar_at[v] = None
             for x in (n["x"] - n["w"] / 2 - ORTH_STUB * 1.5,
                       n["x"] + n["w"] / 2 + ORTH_STUB * 1.5):
-                corridors.append({"corridor": x})
-        bars.sort(key=lambda u: abs(u["crossY"] - mid_y))
+                if self.corridor_clear(e, x):
+                    corridor_x[x] = None
+        key = "crossY" if vertical else "crossX"
+        bars = [{key: v} for v in sorted(bar_at, key=lambda v: abs(v - mid))]
 
         def over(x: float) -> float:
             return abs(x - a["x"]) + abs(x - b["x"]) - abs(a["x"] - b["x"])
@@ -507,17 +592,29 @@ class DiagramLayout:
 
         # a tuple key is the same ordering as the JS comparator's
         # `over(u) - over(v) || near(u) - near(v)`, and both sorts are stable
-        corridors.sort(key=lambda u: (over(u["corridor"]), near(u["corridor"])))
+        # over an insertion order that is the node order on both sides
+        corridors = [{"corridor": x} for x in
+                     sorted(corridor_x, key=lambda x: (over(x), near(x)))]
         return bars[:10] + corridors[:12]
 
+    def corridor_clear(self, e: dict, corridor_x: float) -> bool:
+        # is a corridor here worth going out to, and can it be left by the
+        # near side -- one question, see the twin
+        a, b = self.by_key[e["from"]], self.by_key[e["to"]]
+        for n in (a, b):
+            clear = (n["x"] - n["w"] / 2 - corridor_x if corridor_x < n["x"]
+                     else corridor_x - (n["x"] + n["w"] / 2))
+            if clear < MERGE_GAP:
+                return False
+        return True
+
     def route_hits_a_box(self, e: dict) -> bool:
-        pts, curve = self.route(e)
-        flat = flatten(pts, curve)
+        pts = self.route(e)
         for n in self.nodes:
             if n["key"] in (e["from"], e["to"]):
                 continue
-            for i in range(1, len(flat)):
-                if seg_hits_box(flat[i - 1], flat[i], n):
+            for i in range(1, len(pts)):
+                if seg_hits_box(pts[i - 1], pts[i], n):
                     return True
         return False
 
@@ -525,24 +622,46 @@ class DiagramLayout:
         groups: dict[str, list[dict]] = {}
         for e in self.edges:
             a, b = self.by_key[e["from"]], self.by_key[e["to"]]
-            side_from, side_to = sides(a, b, self.corridor_for(e) is not None)
+            corridor_x = self.corridor_for(e)
+            side_from, side_to = sides(a, b, corridor_x, e["flank"])
             e["fan_from"] = e["fan_to"] = e["stub_from"] = e["stub_to"] = 0.0
-            for key, side, peer, end in ((e["from"], side_from, b, "from"),
-                                         (e["to"], side_to, a, "to")):
+            for key, side, self_n, peer, end in (
+                    (e["from"], side_from, a, b, "from"),
+                    (e["to"], side_to, b, a, "to")):
                 groups.setdefault(f"{key}|{side}", []).append(
-                    {"e": e, "side": side, "peer": peer, "end": end})
+                    {"e": e, "side": side, "self": self_n, "peer": peer,
+                     "end": end, "corridor_x": corridor_x})
         for members in groups.values():
             if len(members) < 2:
                 continue
-            vertical = members[0]["side"] in ("top", "bottom")
-            members.sort(key=lambda m: m["peer"]["x" if vertical else "y"])
-            mid = (len(members) - 1) / 2
+            axis = "x" if members[0]["side"] in ("top", "bottom") else "y"
+            # every member shares the card, so any one of them has it
+            centre = members[0]["self"][axis]
+            members.sort(key=lambda m: m["peer"][axis])
+            # the member that would run straight keeps the centre line; see
+            # the twin for why that outranks an even splay
+            off = [abs(m["peer"][axis] - centre) for m in members]
+            keep = -1
+            for i, m in enumerate(members):
+                if m["corridor_x"] is not None or off[i] > ORTH_SNAP:
+                    continue
+                if keep < 0 or off[i] < off[keep]:
+                    keep = i
+            mid = (len(members) - 1) / 2 if keep < 0 else float(keep)
+            rank = 0
             for i, m in enumerate(members):
                 m["e"][f"fan_{m['end']}"] = (i - mid) * FAN_GAP
                 # strictly increasing, NOT symmetric: a symmetric depth
                 # gives the two members of a pair the same stub, which is
-                # the one case that needs them different
-                m["e"][f"stub_{m['end']}"] = i * FAN_STUB
+                # the one case that needs them different. The kept member
+                # takes zero, so its route stays the unfanned one.
+                if keep < 0:
+                    m["e"][f"stub_{m['end']}"] = i * FAN_STUB
+                elif i == keep:
+                    m["e"][f"stub_{m['end']}"] = 0.0
+                else:
+                    rank += 1
+                    m["e"][f"stub_{m['end']}"] = rank * FAN_STUB
 
     def unfan_collisions(self) -> None:
         for e in self.edges:
@@ -567,14 +686,7 @@ class DiagramLayout:
                     else min(a["x"], b["x"]) - reach)
         return e["via"].get("corridor") if e["via"] else None
 
-    def curve_ctrl(self, p: dict, q: dict, e: dict) -> dict | None:
-        mx, my = (p["x"] + q["x"]) / 2, (p["y"] + q["y"]) / 2
-        corridor = self.corridor_for(e)
-        if corridor is None:
-            return None
-        return {"x": mx + (corridor - mx) * 2, "y": my}
-
-    def route(self, e: dict) -> tuple[list[dict], dict | None]:
+    def route(self, e: dict) -> list[dict]:
         """The polyline an edge follows, ends included. Twin of route().
 
         Note the identity games, which are load-bearing rather than
@@ -585,27 +697,26 @@ class DiagramLayout:
         """
         a, b = self.by_key[e["from"]], self.by_key[e["to"]]
         corridor_x = self.corridor_for(e)
-        side_from, side_to = sides(a, b, corridor_x is not None)
+        side_from, side_to = sides(a, b, corridor_x, e["flank"])
         tail = offset(anchors(a)[side_from], side_from, 0)
         head = offset(anchors(b)[side_to], side_to, ARROW_GAP)
-
-        if self.routing == "curved":
-            return [tail, head], self.curve_ctrl(tail, head, e)
 
         p = (along_side(offset(tail, side_from, MERGE_GAP), side_from,
                         e["fan_from"]) if e["fan_from"] else tail)
         q = (along_side(offset(head, side_to, MERGE_GAP), side_to,
                         e["fan_to"]) if e["fan_to"] else head)
-        lead = [tail]
-        if p is not tail:
-            lead += [offset(tail, side_from, MERGE_TAIL), p]
-        trail: list[dict] = []
-        if q is not head:
-            trail += [q, offset(head, side_to, MERGE_TAIL)]
-        trail.append(head)
 
-        def done(body: list[dict]) -> tuple[list[dict], None]:
-            return [*lead, *body, *trail], None
+        def funnel(frm: dict, to: dict):
+            lead = [tail]
+            if frm is not tail:
+                lead += [offset(tail, side_from, MERGE_TAIL), frm]
+            trail: list[dict] = []
+            if to is not head:
+                trail += [to, offset(head, side_to, MERGE_TAIL)]
+            trail.append(head)
+            return lambda body: [*lead, *body, *trail]
+
+        done = funnel(p, q)
 
         stub_from = ORTH_STUB + e["stub_from"]
         stub_to = ORTH_STUB + e["stub_to"]
@@ -613,6 +724,20 @@ class DiagramLayout:
                       or e["stub_from"] or e["stub_to"])
 
         if corridor_x is not None:
+            if side_from in ("left", "right"):
+                # a track nearer the corridor than the corner rounding is
+                # snapped onto it -- see the twin
+                def snap(pt: dict) -> dict:
+                    return ({"x": corridor_x, "y": pt["y"]}
+                            if abs(corridor_x - pt["x"]) < ORTH_RADIUS else pt)
+
+                frm, to = snap(p), snap(q)
+                body = []
+                if frm["x"] != corridor_x:
+                    body.append({"x": corridor_x, "y": frm["y"]})
+                if to["x"] != corridor_x:
+                    body.append({"x": corridor_x, "y": to["y"]})
+                return funnel(frm, to)(body)
             leave = offset(p, side_from, stub_from)
             enter = offset(q, side_to, stub_to)
             return done([leave, {"x": corridor_x, "y": leave["y"]},
@@ -631,8 +756,11 @@ class DiagramLayout:
 
         across = abs(p["x"] - q["x"]) if vertical else abs(p["y"] - q["y"])
         along = abs(p["y"] - q["y"]) if vertical else abs(p["x"] - q["x"])
-        bar = e["via"].get("crossY") if e["via"] else None
-        nearly_in_line = across <= ORTH_SNAP and not fanned
+        # the moved crossbar, in whichever axis this run's crossbar lies
+        # along -- detours() only ever offers the matching one
+        bar = (e["via"].get("crossY" if vertical else "crossX")
+               if e["via"] else None)
+        nearly_in_line = across <= (0.01 if fanned else ORTH_SNAP)
         if bar is None and (nearly_in_line or along <= ORTH_RADIUS * 2):
             return done([])
         if vertical:
@@ -643,7 +771,8 @@ class DiagramLayout:
                              {"x": q["x"], "y": mid_y}])
             return done([{"x": p["x"], "y": q["y"]}])       # L: down, across
         if side_to in ("left", "right"):
-            mid_x = (p["x"] + q["x"]) / 2
+            # the down leg half way, or moved into a free gap by a detour
+            mid_x = bar if bar is not None else (p["x"] + q["x"]) / 2
             return done([{"x": mid_x, "y": p["y"]},
                          {"x": mid_x, "y": q["y"]}])
         return done([{"x": q["x"], "y": p["y"]}])           # L: across, down
@@ -707,12 +836,14 @@ _CSS = (
     ".dg-b,.dg-bl,.dg-c{{font:{bpx}px 'Roboto Mono',ui-monospace,Consolas,"
     "monospace;dominant-baseline:central}}"
     ".dg-b,.dg-bl{{text-anchor:middle}}"
-    ".dg-c{{text-anchor:end;fill:{ink2}}}.dg-ct{{fill:rgba(0,0,0,.6)}}"
+    # one fill, no terminal variant: the dark ink only read while the badge
+    # was drawn on a terminal card's own teal, and it floats outside now
+    ".dg-c{{text-anchor:end;fill:{ink2}}}"
     ".dg-b{{fill:{ink2}}}.dg-bl{{fill:{warn}}}.dg-bg{{fill:{surface}}}"
-    ".dg-lm{{stroke:{ink2};fill:{ink2}}}"
+    ".dg-lm,.dg-jm{{stroke:{ink2};fill:{ink2}}}"
     "#dg-vp.zs .dg-t,#dg-vp.zs .dg-tt{{display:none}}"
-    "#dg-vp.zb .dg-b,#dg-vp.zb .dg-bl,#dg-vp.zb .dg-bg,"
-    "#dg-vp.zb .dg-c,#dg-vp.zb .dg-lm{{display:none}}"
+    "#dg-vp.zb .dg-b,#dg-vp.zb .dg-bl,#dg-vp.zb .dg-bg,#dg-vp.zb .dg-c,"
+    "#dg-vp.zb .dg-lm,#dg-vp.zb .dg-jm{{display:none}}"
 )
 
 
@@ -747,7 +878,7 @@ def node_path(n: dict) -> str:
             f'height="{_n(h)}" rx="{_n(rx)}"')
 
 
-def edge_d(pts: list[dict], curve: dict | None) -> str:
+def edge_d(pts: list[dict]) -> str:
     """The routed polyline as path data, corners rounded like arcTo does.
 
     The inset is r/tan(alpha/2), NOT r. Those agree only at 90 degrees, so
@@ -759,9 +890,6 @@ def edge_d(pts: list[dict], curve: dict | None) -> str:
     the real guard.
     """
     first = pts[0]
-    if curve:
-        return (f"M{_n(first['x'])} {_n(first['y'])}Q{_n(curve['x'])} "
-                f"{_n(curve['y'])} {_n(pts[-1]['x'])} {_n(pts[-1]['y'])}")
     if len(pts) == 2:
         return (f"M{_n(first['x'])} {_n(first['y'])}"
                 f"L{_n(pts[1]['x'])} {_n(pts[1]['y'])}")
@@ -825,6 +953,26 @@ def _link_mark(right: float, mid_y: float, size: float) -> str:
             f'<circle cx="{bx:.1f}" cy="{by:.1f}" r="{r:.2f}"/></g>')
 
 
+def _jump_mark(right: float, mid_y: float, size: float) -> str:
+    """The "continues in another flow" glyph: a wall with a way out of it.
+
+    Same construction as drawJumpMark, drawn right-to-left from `right` for
+    the same reason _link_mark is. The arrowhead is filled and NOT stroked,
+    which the canvas gets from calling fill() alone and this has to say.
+    """
+    w, h = size * 0.62, size * 0.52
+    x0, y0 = right - w, mid_y - h / 2
+    return (f'<g class="dg-jm" stroke-width="{max(0.5, size * 0.1):.2f}" '
+            f'stroke-linecap="round">'
+            f'<path d="M{x0:.1f} {y0:.1f}L{x0:.1f} {y0 + h:.1f}" fill="none"/>'
+            f'<path d="M{x0 + size * 0.16:.1f} {mid_y:.1f}'
+            f'L{right:.1f} {mid_y:.1f}" fill="none"/>'
+            f'<path d="M{right:.1f} {mid_y:.1f}'
+            f'L{right - size * 0.2:.1f} {mid_y - size * 0.16:.1f}'
+            f'L{right - size * 0.2:.1f} {mid_y + size * 0.16:.1f}Z" '
+            f'stroke="none"/></g>')
+
+
 def frame(layout: DiagramLayout,
           routes: dict) -> tuple[float, float, float, float]:
     """The viewBox: every card, the lane corridors, and every routed point.
@@ -833,15 +981,21 @@ def frame(layout: DiagramLayout,
     anything it crops is still reachable; an SVG cannot, so a corridor
     falling outside the frame would simply be gone.
     """
+    bpx = BADGE_PX * layout.font_scale
     xs: list[float] = []
     ys: list[float] = []
     for n in layout.nodes:
         xs += [n["x"] - n["w"] / 2, n["x"] + n["w"] / 2]
         ys += [n["y"] - n["h"] / 2, n["y"] + n["h"] / 2]
+        # both counts, because a card can carry the jump one alone
+        for count in (layout.link_count.get(n["key"]),
+                      layout.jump_count.get(n["key"])):
+            if count:
+                xs.append(badge_reach(n, count, bpx))
     if layout.lane_span:
         xs += [layout.lane_span["left"], layout.lane_span["right"]]
-    for pts, curve in routes.values():
-        for p in flatten(pts, curve):
+    for pts in routes.values():
+        for p in pts:
             xs.append(p["x"])
             ys.append(p["y"])
     if not xs:
@@ -851,10 +1005,9 @@ def frame(layout: DiagramLayout,
     return (x0, y0, max(xs) + pad - x0, max(ys) + pad - y0)
 
 
-def render_svg(data: dict, *, notes: bool = True,
-               routing: str = "orthogonal") -> tuple[str, tuple]:
+def render_svg(data: dict, *, notes: bool = True) -> tuple[str, tuple]:
     """One diagram as a self-contained SVG. Returns (markup, viewBox)."""
-    layout = DiagramLayout(data, routing)
+    layout = DiagramLayout(data)
     fs = layout.font_scale
     routes = {(e["from"], e["to"]): layout.route(e) for e in layout.edges}
     x0, y0, vw, vh = frame(layout, routes)
@@ -876,20 +1029,14 @@ def render_svg(data: dict, *, notes: bool = True,
 
     # edges under the cards, same order as draw()
     for e in layout.edges:
-        pts, curve = routes[(e["from"], e["to"])]
         out.append(f'<path class="dg-{"el" if e["loops"] else "e"}" '
-                   f'd="{edge_d(pts, curve)}"/>')
+                   f'd="{edge_d(routes[(e["from"], e["to"])])}"/>')
 
     bpx = BADGE_PX * fs
     for e in layout.edges:
         if not e["label"]:
             continue
-        pts, curve = routes[(e["from"], e["to"])]
-        if curve:
-            at = {"x": (pts[0]["x"] + 2 * curve["x"] + pts[-1]["x"]) / 4,
-                  "y": (pts[0]["y"] + 2 * curve["y"] + pts[-1]["y"]) / 4}
-        else:
-            at = midpoint(pts)
+        at = midpoint(routes[(e["from"], e["to"])])
         text = short_label(e["label"])
         wide = measure(text, bpx, FACE_MONO)
         pad = bpx * 0.4
@@ -928,20 +1075,21 @@ def render_svg(data: dict, *, notes: bool = True,
                        f'textLength="{_n(measure(line, px))}" '
                        f'lengthAdjust="spacingAndGlyphs">{esc(line)}</text>')
 
-        count = layout.link_count.get(n["key"])
-        if count:
-            # inside the SHAPE, not its bounding box: the top-right corner
-            # of the box is empty air on a diamond
-            dy = -n["h"] / 2 + bpx * 0.9
-            right = n["x"] + half_width_at(n, dy) - 5
-            mid_y = n["y"] + dy + bpx / 2
+        # OUTSIDE the card, hugging the OUTLINE rather than the bounding box
+        # -- see drawBadge() in the twin for both halves of why. The jump
+        # count takes the row BELOW the link one: two counts on one row read
+        # as a single two-digit number, and they say different things.
+        badges = ((-1, layout.link_count.get(n["key"]), _link_mark),
+                  (1, layout.jump_count.get(n["key"]), _jump_mark))
+        for row, count, mark in badges:
+            if not count:
+                continue
             num = str(count)
-            cls_c = "dg-c dg-ct" if terminal else "dg-c"
-            out.append(f'<text class="{cls_c}" x="{_n(right)}" '
+            left, mid_y = badge_anchor(n, row, bpx)
+            right = left + bpx * 0.92 + measure(num, bpx, FACE_MONO)
+            out.append(f'<text class="dg-c" x="{_n(right)}" '
                        f'y="{mid_y:.1f}">{num}</text>')
-            out.append(_link_mark(
-                right - measure(num, bpx, FACE_MONO) - bpx * 0.3,
-                mid_y, bpx))
+            out.append(mark(left + bpx * 0.62, mid_y, bpx))
         if group:
             out.append("</g>")
     out.append("</g></svg>")
@@ -1071,8 +1219,7 @@ _STANDALONE_HEAD = (
 
 
 def render_interactive(data: dict, *, notes: bool = True,
-                       routing: str = "orthogonal", height: int = 560,
-                       open_scale: float = 0.85,
+                       height: int = 560, open_scale: float = 0.85,
                        standalone: bool = False) -> str:
     """The same drawing, wrapped in pan/zoom.
 
@@ -1092,7 +1239,7 @@ def render_interactive(data: dict, *, notes: bool = True,
     LABEL_MIN_SCALE so the flow opens with its text readable, near the
     start step rather than fitted.
     """
-    svg, (x0, y0, vw, vh) = render_svg(data, notes=notes, routing=routing)
+    svg, (x0, y0, vw, vh) = render_svg(data, notes=notes)
     nodes = data.get("nodes") or []
     start = next((n for n in nodes if n.get("shape") == "start"),
                  nodes[0] if nodes else {"x": 0, "y": 0})

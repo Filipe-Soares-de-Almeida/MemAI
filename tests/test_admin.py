@@ -145,7 +145,7 @@ def test_domains_rename_and_collision(client):
     assert all("collides_with" in d for d in doms)
 
     res = client.post("/api/domains/rename", json={"from": "PROJ-1", "to": "proj-1"})
-    assert res.json() == {"ok": True, "affected": 1, "merged": True}
+    assert res.json() == {"ok": True, "affected": 1, "domains": 1, "merged": True}
     doms = client.get("/api/domains").json()["domains"]
     assert len(doms) == 1
     assert doms[0]["active"] == 2

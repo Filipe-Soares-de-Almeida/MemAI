@@ -5,7 +5,7 @@ import { $, esc, fmtInt, fmtBytes, fmtDate } from '../core/dom.js';
 import { api, seg } from '../core/api.js';
 import { toast, failed, confirmModal, promptModal } from '../core/ui.js';
 import { typeTag, typeClass, uidChip, statusTag, wireCopyChips, failedHTML, retryable,
-         getDomains, TYPE_ORDER, TYPE_LABEL } from '../core/shared.js';
+         getDomains, TYPE_ORDER, TYPE_LABEL, domainDatalist } from '../core/shared.js';
 import { openRecord } from './record.js';
 import { t } from '../i18n.js';
 
@@ -110,7 +110,7 @@ export async function renderMaintenance(view) {
   getDomains().then(ds => {
     const dl = $('#ddDomainsDL');
     /* the view may have been swapped while this was in flight */
-    if (dl) dl.innerHTML = ds.map(d => `<option value="${esc(d.domain)}">`).join('');
+    if (dl) dl.innerHTML = domainDatalist(ds);
   }).catch(() => {});
 
   const loadHealth = retryable('#healthBody', async () => {
