@@ -18,9 +18,9 @@ const ISSUE_ORDER = ['empty', 'no_start', 'many_starts', 'unreachable',
 /* A flow starts as a start→end skeleton and is grown on the canvas: there
    is no useful "empty diagram", and typing a graph as text is not the
    point of the type. */
-export const newDiagramSkeleton = ({ title, domain = '', tags = '' }) =>
+export const newDiagramSkeleton = ({ title, domain = '', also = '', tags = '' }) =>
   api('/api/diagrams', { body: {
-    title, domain, tags,
+    title, domain, also, tags,
     nodes: [
       { key: 'start', shape: 'start', label: t('dg.skeleton.start') },
       { key: 'finish', shape: 'end', label: t('dg.skeleton.end') },
@@ -108,9 +108,14 @@ export async function renderDiagrams(view, params, ctx) {
     b.addEventListener('click', () => nav({ status: b.dataset.v })));
   $('#dglNew').addEventListener('click', () => promptNewDiagram(state.domain));
 
-  const card = d => {
+  /* `branch` is the group this copy of the card is being drawn under. A flow
+     cross-listed into another subject appears under that subject's branch as
+     well as its own, so the copy that is not at home says so -- two cards
+     with one uid otherwise read as a duplicated record. */
+  const card = (d, branch) => {
     const issues = d.issues.slice().sort(
       (a, b) => ISSUE_ORDER.indexOf(a.kind) - ISSUE_ORDER.indexOf(b.kind));
+    const away = branch !== undefined && branch !== homeOf(d);
     return `<div class="dgl-card${issues.length ? ' has-issues' : ''}">
       <div class="dgl-top">
         <button type="button" class="dgl-title" data-edit="${esc(d.uid)}" title="${esc(d.title)}">${esc(d.title || '—')}</button>
@@ -131,8 +136,11 @@ export async function renderDiagrams(view, params, ctx) {
           : `<span class="dgl-sound">${icon('confirmed')}${t('dgl.sound')}</span>`}
       </div>
       <div class="dgl-foot">
+        ${away ? `<span class="chip" title="${esc(t('dgl.alsoWhy'))}">${t('dgl.also')}</span>` : ''}
         ${d.domain ? `<button type="button" class="chip clickable" data-fdomain="${esc(d.domain)}"
                 aria-label="${esc(t('a11y.filterDomain', { domain: d.domain }))}">${esc(d.domain)}</button>` : ''}
+        ${(d.also || []).map(p => `<button type="button" class="chip clickable" data-fdomain="${esc(p)}"
+                aria-label="${esc(t('a11y.filterDomain', { domain: p }))}">${esc(p)}</button>`).join('')}
         ${uidChip(d.uid)}
         <span class="spacer"></span>
         <span class="dgl-when" title="${esc(d.updated_at)}">${fmtAgo(d.updated_at)}</span>
@@ -147,20 +155,39 @@ export async function renderDiagrams(view, params, ctx) {
      list to read rather than a set to navigate. The heading filters to that
      branch, which is where the finer grouping comes from -- the server
      scopes a domain filter to its whole subtree, so picking 'acme' narrows
-     to it and the headings below become its modules. */
-  const rootOf = d => domainSegments(d.domain)[0] || '';
+     to it and the headings below become its modules.
+
+     A flow cross-listed into another subject is grouped under that subject's
+     branch TOO: several routines can each be a step of one end-to-end
+     process without any of them being the parent of the others, and putting
+     each card only where it is filed is exactly the granularity that was
+     missing. A flow with no domain of its own but a cross-listing groups
+     under the cross-listing alone -- the leftover pile is for the ones with
+     no subject at all. */
+  const homeOf = d => domainSegments(d.domain)[0] || '';
+  const branchesOf = d => {
+    const roots = new Set();
+    for (const p of d.also || []) {
+      const r = domainSegments(p)[0];
+      if (r) roots.add(r);
+    }
+    if (d.domain || !roots.size) roots.add(homeOf(d));
+    return roots;
+  };
 
   const grid = $('#dglGrid');
   const draw = () => {
     const q = $('#dglFilter').value.trim().toLowerCase();
     const shown = q
-      ? data.items.filter(d => `${d.title} ${d.summary} ${d.domain} ${d.tags}`.toLowerCase().includes(q))
+      ? data.items.filter(d => `${d.title} ${d.summary} ${d.domain} ${(d.also || []).join(' ')} ${d.tags}`
+          .toLowerCase().includes(q))
       : data.items;
     const groups = new Map();
     for (const d of shown) {
-      const k = rootOf(d);
-      if (!groups.has(k)) groups.set(k, []);
-      groups.get(k).push(d);
+      for (const k of branchesOf(d)) {
+        if (!groups.has(k)) groups.set(k, []);
+        groups.get(k).push(d);
+      }
     }
     /* undomained last: it is the leftover pile, not a branch */
     const order = [...groups.keys()].sort((a, b) =>
@@ -168,7 +195,7 @@ export async function renderDiagrams(view, params, ctx) {
     grid.innerHTML = !shown.length
       ? `<div class="empty">${data.total ? t('dgl.noMatch') : `${t('dgl.empty')}<div class="dg-empty" style="margin-top:8px">${t('dgl.emptyHint')}</div>`}</div>`
       : order.length < 2
-        ? `<div class="dgl-grid">${shown.map(card).join('')}</div>`
+        ? `<div class="dgl-grid">${shown.map(d => card(d)).join('')}</div>`
         : order.map(k => `<section class="dgl-group">
             <div class="dgl-group-head">
               ${k ? `<button type="button" class="chip clickable" data-fdomain="${esc(k)}"
@@ -176,7 +203,7 @@ export async function renderDiagrams(view, params, ctx) {
                   : `<span class="chip">${t('dgl.noDomain')}</span>`}
               <span class="dgl-group-n">${t('dgl.groupCount', { n: groups.get(k).length })}</span>
             </div>
-            <div class="dgl-grid">${groups.get(k).map(card).join('')}</div>
+            <div class="dgl-grid">${groups.get(k).map(d => card(d, k)).join('')}</div>
           </section>`).join('');
     wireCopyChips(grid);
     grid.querySelectorAll('[data-edit]').forEach(el =>

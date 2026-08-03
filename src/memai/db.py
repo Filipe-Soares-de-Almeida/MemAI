@@ -57,12 +57,55 @@ DOMAIN_CASE_DEFAULT = "preserve"
 # ancestors into searchable words for free.
 DOMAIN_SEP = "/"
 
+# A memory is FILED at one path and can additionally BELONG to others. The
+# path says where it lives -- one direct parent, the thing a re-home
+# renames. A cross-listing says it is also part of a subject that cuts
+# ACROSS the tree: the same routine belongs to the module it runs in and to
+# the end-to-end flow it is a step of, and neither of those is the other's
+# ancestor. `memory_domains` holds those extra memberships, one row per
+# path, and every domain filter reads it (see domain_clause).
+#
+# `memories.also_domains` carries the same paths as one text field, for
+# exactly the two readers that cannot join: the FTS index and the embedder.
+# Nothing filters on it -- see _write_domain_links, its only writer.
+ALSO_SEP = "\n"
+
+# The FTS index and its triggers, kept separate because they are also what a
+# store built before a new indexed column has to be rebuilt from (_ensure_fts).
+_FTS_COLUMNS = ("content", "tags", "domain", "also_domains")
+
+_FTS_SCHEMA = """
+CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(
+    content, tags, domain, also_domains,
+    content='memories', content_rowid='rowid_pk',
+    tokenize='porter unicode61'
+);
+
+CREATE TRIGGER IF NOT EXISTS memories_ai AFTER INSERT ON memories BEGIN
+    INSERT INTO memories_fts(rowid, content, tags, domain, also_domains)
+    VALUES (new.rowid_pk, new.content, new.tags, new.domain, new.also_domains);
+END;
+
+CREATE TRIGGER IF NOT EXISTS memories_ad AFTER DELETE ON memories BEGIN
+    INSERT INTO memories_fts(memories_fts, rowid, content, tags, domain, also_domains)
+    VALUES ('delete', old.rowid_pk, old.content, old.tags, old.domain, old.also_domains);
+END;
+
+CREATE TRIGGER IF NOT EXISTS memories_au AFTER UPDATE ON memories BEGIN
+    INSERT INTO memories_fts(memories_fts, rowid, content, tags, domain, also_domains)
+    VALUES ('delete', old.rowid_pk, old.content, old.tags, old.domain, old.also_domains);
+    INSERT INTO memories_fts(rowid, content, tags, domain, also_domains)
+    VALUES (new.rowid_pk, new.content, new.tags, new.domain, new.also_domains);
+END;
+"""
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS memories (
     rowid_pk        INTEGER PRIMARY KEY AUTOINCREMENT,
     uid             TEXT UNIQUE NOT NULL,
     type            TEXT NOT NULL,
     domain          TEXT NOT NULL DEFAULT '',
+    also_domains    TEXT NOT NULL DEFAULT '',   -- indexing mirror of memory_domains
     session         TEXT NOT NULL DEFAULT '',
     tags            TEXT NOT NULL DEFAULT '',
     content         TEXT NOT NULL,
@@ -78,29 +121,19 @@ CREATE INDEX IF NOT EXISTS idx_memories_type ON memories(type);
 CREATE INDEX IF NOT EXISTS idx_memories_status ON memories(status);
 CREATE INDEX IF NOT EXISTS idx_memories_created ON memories(created_at);
 
-CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(
-    content, tags, domain,
-    content='memories', content_rowid='rowid_pk',
-    tokenize='porter unicode61'
+-- One row per extra domain a memory belongs to, beside the one it is filed
+-- at. No row here is ever a memory's own path or an ancestor of it: the
+-- prefix arm of a domain filter already covers those, and recording one
+-- would count the memory twice in its own branch (see apply_link_policy).
+CREATE TABLE IF NOT EXISTS memory_domains (
+    memory_uid  TEXT NOT NULL REFERENCES memories(uid),
+    domain      TEXT NOT NULL,
+    created_at  TEXT NOT NULL,
+    PRIMARY KEY (memory_uid, domain)
 );
 
-CREATE TRIGGER IF NOT EXISTS memories_ai AFTER INSERT ON memories BEGIN
-    INSERT INTO memories_fts(rowid, content, tags, domain)
-    VALUES (new.rowid_pk, new.content, new.tags, new.domain);
-END;
-
-CREATE TRIGGER IF NOT EXISTS memories_ad AFTER DELETE ON memories BEGIN
-    INSERT INTO memories_fts(memories_fts, rowid, content, tags, domain)
-    VALUES ('delete', old.rowid_pk, old.content, old.tags, old.domain);
-END;
-
-CREATE TRIGGER IF NOT EXISTS memories_au AFTER UPDATE ON memories BEGIN
-    INSERT INTO memories_fts(memories_fts, rowid, content, tags, domain)
-    VALUES ('delete', old.rowid_pk, old.content, old.tags, old.domain);
-    INSERT INTO memories_fts(rowid, content, tags, domain)
-    VALUES (new.rowid_pk, new.content, new.tags, new.domain);
-END;
-
+CREATE INDEX IF NOT EXISTS idx_memory_domains_domain ON memory_domains(domain);
+""" + _FTS_SCHEMA + """
 CREATE TABLE IF NOT EXISTS edits (
     id            INTEGER PRIMARY KEY AUTOINCREMENT,
     memory_uid    TEXT NOT NULL REFERENCES memories(uid),
@@ -449,6 +482,25 @@ def in_domain(domain: str, scope: str) -> bool:
     return segs[: len(want)] == want
 
 
+def parse_domains(value) -> list[str]:
+    """Several domain paths out of one field, normalized and deduped.
+
+    Splits on commas, semicolons and newlines. A path's own separator is
+    '/', so those three are free to mean "next path" -- which is what a
+    form field and a string-typed MCP argument both hand over. A list or
+    tuple is taken as already split.
+    """
+    if value is None:
+        return []
+    items = value if isinstance(value, (list, tuple, set)) else re.split(r"[,;\n]", str(value))
+    out: list[str] = []
+    for raw in items:
+        path = normalize_domain(str(raw))
+        if path and path not in out:
+            out.append(path)
+    return out
+
+
 def coerce_domain(conn: sqlite3.Connection, domain: str) -> tuple[str, str]:
     """Coerce a domain to the store's policy. Returns (coerced_domain, active_mode).
 
@@ -464,9 +516,44 @@ def apply_domain_policy(conn: sqlite3.Connection, domain: str) -> str:
     return coerce_domain(conn, domain)[0]
 
 
-def _embed_source(content: str, tags: str, domain: str) -> str:
+def apply_link_policy(
+    conn: sqlite3.Connection, also, primary: str, *, coerce: bool = True
+) -> list[str]:
+    """The cross-listings worth storing for a memory filed at `primary`.
+
+    Casing and path shape come from the store's policy, same as the primary
+    domain. A path the primary already satisfies is dropped: with the memory
+    filed at 'acme/x100/p200', a cross-listing at 'acme' -- or at the
+    primary itself -- matches nothing the prefix arm of a domain filter did
+    not already match, and storing it would count the memory twice in its
+    own branch. A path BELOW the primary is kept: it is a narrower scope,
+    which is a real thing to say.
+
+    coerce=False keeps the casing as given, for a caller rewriting exact
+    stored strings rather than accepting new ones -- move_domain leaves the
+    primary domain's casing alone for the same reason, and the pass that
+    repairs casing (admin.normalize_domains) decides which strings it
+    touches and reports them.
+
+    Sorted, because this is a set and the order it arrives in means nothing.
+    Sorting HERE rather than at each read is what keeps the `memory_domains`
+    rows (read back ORDER BY domain) and the `also_domains` mirror (read back
+    in stored order) telling one story: the same memory's memberships came
+    back in two different orders while the mirror kept write order.
+    """
+    primary = normalize_domain(primary)
+    out: list[str] = []
+    for path in parse_domains(also):
+        if coerce:
+            path = apply_domain_policy(conn, path)
+        if path and not in_domain(primary, path) and path not in out:
+            out.append(path)
+    return sorted(out)
+
+
+def _embed_source(content: str, tags: str, domain: str, also: str = "") -> str:
     """The text a memory's vector is computed from -- same fields FTS indexes."""
-    return "\n".join(p for p in (content, tags, domain) if p)
+    return "\n".join(p for p in (content, tags, domain, also) if p)
 
 
 # Columns added to a table that already exists in someone's store.
@@ -479,6 +566,7 @@ _ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
     ("diagrams", "font_scale", "REAL NOT NULL DEFAULT 1"),
     ("diagram_nodes", "w", "REAL"),
     ("diagram_nodes", "h", "REAL"),
+    ("memories", "also_domains", "TEXT NOT NULL DEFAULT ''"),
 )
 
 
@@ -490,6 +578,30 @@ def _ensure_columns(conn: sqlite3.Connection) -> None:
             continue  # table itself is new; the schema above already has it
         if column not in have:
             conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
+
+
+def _ensure_fts(conn: sqlite3.Connection) -> None:
+    """Rebuild the FTS index when its columns are behind _FTS_SCHEMA.
+
+    fts5 has no ALTER, and `CREATE VIRTUAL TABLE IF NOT EXISTS` does
+    nothing at all for a store whose index predates a column -- so a newly
+    indexed field means dropping the index and rebuilding it from the
+    content table. Runs after _ensure_columns, which is what puts the new
+    column on `memories` for the rebuild to read.
+
+    The triggers go with it, and not as tidying: on an external-content
+    index, a `delete` command has to hand fts5 the OLD value of EVERY
+    column, so a trigger still naming three of four would corrupt the
+    index on the next edit rather than fail visibly.
+    """
+    have = tuple(r["name"] for r in conn.execute("PRAGMA table_info(memories_fts)"))
+    if have == _FTS_COLUMNS:
+        return
+    for trigger in ("memories_ai", "memories_ad", "memories_au"):
+        conn.execute(f"DROP TRIGGER IF EXISTS {trigger}")
+    conn.execute("DROP TABLE IF EXISTS memories_fts")
+    conn.executescript(_FTS_SCHEMA)
+    conn.execute("INSERT INTO memories_fts(memories_fts) VALUES ('rebuild')")
 
 
 def _ensure_vec(conn: sqlite3.Connection) -> None:
@@ -518,11 +630,13 @@ def _ensure_vec(conn: sqlite3.Connection) -> None:
         _set_meta(conn, "embed_model", embed.model_name())
         _set_meta(conn, "embed_dim", str(dim))
     missing = conn.execute(
-        """SELECT rowid_pk, content, tags, domain FROM memories
+        """SELECT rowid_pk, content, tags, domain, also_domains FROM memories
            WHERE rowid_pk NOT IN (SELECT rowid FROM memories_vec)"""
     ).fetchall()
     if missing:
-        blobs = embed.embed_texts([_embed_source(r["content"], r["tags"], r["domain"]) for r in missing])
+        blobs = embed.embed_texts([
+            _embed_source(r["content"], r["tags"], r["domain"], r["also_domains"])
+            for r in missing])
         if blobs:
             conn.executemany(
                 "INSERT INTO memories_vec (rowid, embedding) VALUES (?, ?)",
@@ -530,10 +644,13 @@ def _ensure_vec(conn: sqlite3.Connection) -> None:
             )
 
 
-def _upsert_vector(conn: sqlite3.Connection, rowid_pk: int, content: str, tags: str, domain: str) -> None:
+def _upsert_vector(
+    conn: sqlite3.Connection, rowid_pk: int, content: str, tags: str, domain: str,
+    also: str = "",
+) -> None:
     if not _vec_ready(conn):
         return
-    blobs = embed.embed_texts([_embed_source(content, tags, domain)])
+    blobs = embed.embed_texts([_embed_source(content, tags, domain, also)])
     if not blobs:
         return
     conn.execute("DELETE FROM memories_vec WHERE rowid = ?", (rowid_pk,))
@@ -551,6 +668,7 @@ def connect(db_path: Path | None = None):
     conn.execute("PRAGMA foreign_keys=ON;")
     conn.executescript(SCHEMA)
     _ensure_columns(conn)
+    _ensure_fts(conn)
     if vec_loaded:
         _ensure_vec(conn)
     try:
@@ -566,6 +684,7 @@ def insert_memory(
     type: str,
     content: str,
     domain: str = "",
+    also: str = "",
     session: str = "",
     tags: str = "",
     confidence: str = "unverified",
@@ -574,13 +693,21 @@ def insert_memory(
     uid = new_uid()
     ts = created_at or now_iso()
     domain = apply_domain_policy(conn, domain)
+    links = apply_link_policy(conn, also, domain)
+    blob = ALSO_SEP.join(links)
     cur = conn.execute(
         """INSERT INTO memories
-           (uid, type, domain, session, tags, content, status, confidence, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, 'active', ?, ?, ?)""",
-        (uid, type, domain, session, tags, content, confidence, ts, ts),
+           (uid, type, domain, also_domains, session, tags, content, status,
+            confidence, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?)""",
+        (uid, type, domain, blob, session, tags, content, confidence, ts, ts),
     )
-    _upsert_vector(conn, cur.lastrowid, content, tags, domain)
+    if links:
+        conn.executemany(
+            "INSERT INTO memory_domains (memory_uid, domain, created_at) VALUES (?, ?, ?)",
+            [(uid, path, ts) for path in links],
+        )
+    _upsert_vector(conn, cur.lastrowid, content, tags, domain, blob)
     return uid
 
 
@@ -600,7 +727,8 @@ def update_memory_content(conn: sqlite3.Connection, uid: str, new_content: str, 
         "UPDATE memories SET content = ?, updated_at = ? WHERE uid = ?",
         (new_content, now_iso(), uid),
     )
-    _upsert_vector(conn, row["rowid_pk"], new_content, row["tags"], row["domain"])
+    _upsert_vector(conn, row["rowid_pk"], new_content, row["tags"], row["domain"],
+                   row["also_domains"])
     return True
 
 
@@ -1220,6 +1348,7 @@ def insert_diagram(
     summary: str = "",
     kind: str = "flowchart",
     domain: str = "",
+    also: str = "",
     session: str = "",
     tags: str = "",
 ) -> tuple[str | None, list[str]]:
@@ -1241,7 +1370,7 @@ def insert_diagram(
     summary = str(summary).strip()
     uid = insert_memory(
         conn, type=DIAGRAM_TYPE, content=_render_text(title, summary, kind, n, e),
-        domain=domain, session=session, tags=tags or DIAGRAM_TYPE,
+        domain=domain, also=also, session=session, tags=tags or DIAGRAM_TYPE,
     )
     conn.execute(
         "INSERT INTO diagrams (memory_uid, kind, title, summary) VALUES (?, ?, ?, ?)",
@@ -1828,6 +1957,11 @@ def diagram_overview(
     ):
         jumps_by[r["uid"]] = r["n"]
 
+    # the flows cross-listed into other subjects: the Diagrams view groups by
+    # branch, and a flow that is a step of an end-to-end process belongs
+    # under that process's branch as well as its own
+    also_by = domain_links_for(conn, [r["uid"] for r in rows])
+
     out = []
     for r in rows:
         nodes = nodes_by.get(r["uid"], [])
@@ -1835,6 +1969,7 @@ def diagram_overview(
         issues = _graph_issues(nodes, edges)
         out.append({
             **dict(r),
+            "also": also_by.get(r["uid"], []),
             "nodes": len(nodes),
             "edges": len(edges),
             "links": links_by.get(r["uid"], 0),
@@ -1886,7 +2021,19 @@ def _like_needle(value: str) -> str:
     return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 
-def domain_clause(domain: str, *, alias: str = "m", subtree: bool = True) -> tuple[str, list]:
+def _path_predicate(col: str, path: str, subtree: bool) -> tuple[str, list]:
+    """"this column holds that path" -- the scope arm, or just the bucket."""
+    if not subtree:
+        return f"{col} = ?", [path]
+    return (
+        f"({col} = ? OR {col} LIKE ? ESCAPE '\\')",
+        [path, _like_needle(path) + DOMAIN_SEP + "%"],
+    )
+
+
+def domain_clause(
+    domain: str, *, alias: str = "m", subtree: bool = True, also: bool = True
+) -> tuple[str, list]:
     """SQL fragment + bound values that scope a query to one domain.
 
     Subtree by default, because a domain names a scope and the reason the
@@ -1898,14 +2045,39 @@ def domain_clause(domain: str, *, alias: str = "m", subtree: bool = True) -> tup
     subtree=False is for the questions about the bucket itself rather than
     the scope: what is filed at THIS path, and which rows a rename of this
     exact string has to rewrite.
+
+    A scope also holds what is CROSS-LISTED into it -- the same predicate,
+    over the extra memberships in `memory_domains` -- because a memory that
+    belongs to two subjects belongs to both when either one is asked about.
+    also=False drops that arm, for the operations that mean the filed path
+    and nothing else: a re-home rewrites where a memory LIVES, and matching
+    a cross-listing there would move a memory that only passes through.
     """
     col = f"{alias}.domain" if alias else "domain"
     path = normalize_domain(domain)
-    if not subtree:
-        return f"AND {col} = ?", [path]
+    own, values = _path_predicate(col, path, subtree)
+    if not also:
+        return f"AND {own}", values
+    linked, link_values = _path_predicate("dl.domain", path, subtree)
+    uid = f"{alias}.uid" if alias else "uid"
     return (
-        f"AND ({col} = ? OR {col} LIKE ? ESCAPE '\\')",
-        [path, _like_needle(path) + DOMAIN_SEP + "%"],
+        f"AND ({own} OR EXISTS (SELECT 1 FROM memory_domains dl "
+        f"WHERE dl.memory_uid = {uid} AND {linked}))",
+        [*values, *link_values],
+    )
+
+
+def all_domains_sql() -> str:
+    """Every distinct path in use, filed or cross-listed, in a `domain` column.
+
+    One statement, because "which domains exist" has two sources now and a
+    caller that reads only `memories` would miss a subject that exists
+    purely as a cross-listing -- which is a legitimate way for one to exist.
+    """
+    return (
+        "SELECT DISTINCT domain FROM ("
+        "SELECT domain FROM memories WHERE domain <> '' "
+        "UNION SELECT domain FROM memory_domains WHERE domain <> '')"
     )
 
 
@@ -1944,6 +2116,10 @@ def resolve_domain_scopes(conn: sqlite3.Connection, domain: str) -> list[str]:
 
     Returns the requested path unchanged when nothing matches, so an
     unknown domain still means "no rows" rather than "everything".
+
+    Cross-listings count as paths in use on both readings: a subject that
+    exists only because memories were cross-listed into it is a real scope,
+    and it resolves literally like any other.
     """
     path = normalize_domain(domain)
     if not path:
@@ -1954,7 +2130,7 @@ def resolve_domain_scopes(conn: sqlite3.Connection, domain: str) -> list[str]:
 
     want = split_domain(path)
     scopes: set[str] = set()
-    for r in conn.execute("SELECT DISTINCT domain FROM memories WHERE domain <> ''"):
+    for r in conn.execute(all_domains_sql()):
         found = _inner_scope(split_domain(r["domain"]), want)
         if found:
             scopes.add(found)
@@ -1967,7 +2143,8 @@ def resolve_domain_scopes(conn: sqlite3.Connection, domain: str) -> list[str]:
 
 
 def domain_scope_clause(
-    conn: sqlite3.Connection, domain: str, *, alias: str = "m", subtree: bool = True
+    conn: sqlite3.Connection, domain: str, *, alias: str = "m", subtree: bool = True,
+    also: bool = True,
 ) -> tuple[str, list, list[str]]:
     """domain_clause over every scope the filter resolves to.
 
@@ -1979,7 +2156,7 @@ def domain_scope_clause(
     parts: list[str] = []
     params: list = []
     for scope in scopes:
-        clause, values = domain_clause(scope, alias=alias, subtree=subtree)
+        clause, values = domain_clause(scope, alias=alias, subtree=subtree, also=also)
         parts.append(clause.removeprefix("AND "))
         params.extend(values)
     return f"AND ({' OR '.join(parts)})", params, scopes
@@ -2230,22 +2407,32 @@ def list_domains(
     everything nested under it. A domain holding nothing of its own can
     still be the right thing to warm up -- that is what a parent IS.
 
+    `also` and `subtree_also` are the same two questions for the memories
+    CROSS-LISTED here rather than filed here -- counted apart, because a
+    scope's own size and how much of another subject passes through it are
+    different facts and adding them would make the tree deeper than the
+    store. A node with `count` 0 and `also` above it exists purely as a
+    cross-cutting subject, which is a legitimate way for one to exist.
+
     Ancestors nobody wrote to directly still get a node, flagged
     `implicit`: one 'acme/x100/p200' means the tree has an 'acme' and an
-    'acme/x100', whether or not a memory was ever filed at either.
+    'acme/x100', whether or not a memory was ever filed at either. Being
+    cross-listed at a path names it as surely as being filed there, so that
+    clears `implicit` too.
     Ordering stays recency-first (by subtree activity, so a parent sorts
-    with its liveliest child), alphabetical within a tie.
+    with its liveliest child), alphabetical within a tie. `latest_at` counts
+    both kinds of activity, or a subject that only ever gets cross-listed
+    into would sink to the bottom of the tree it organizes.
     """
-    sql = [
-        "SELECT domain, COUNT(*) AS count, MAX(created_at) AS latest_at",
-        "FROM memories WHERE domain <> ''",
-    ]
-    params: list = []
-    if status:
-        sql.append("AND status = ?")
-        params.append(status)
-    sql.append("GROUP BY domain")
-    rows = conn.execute(" ".join(sql), params).fetchall()
+    where = "AND m.status = ?" if status else ""
+    params: list = [status] if status else []
+    rows = conn.execute(
+        "SELECT m.domain AS domain, COUNT(*) AS count, MAX(m.created_at) AS latest_at "
+        f"FROM memories m WHERE m.domain <> '' {where} GROUP BY m.domain", params).fetchall()
+    link_rows = conn.execute(
+        "SELECT dl.domain AS domain, COUNT(*) AS count, MAX(m.created_at) AS latest_at "
+        "FROM memory_domains dl JOIN memories m ON m.uid = dl.memory_uid "
+        f"WHERE dl.domain <> '' {where} GROUP BY dl.domain", params).fetchall()
 
     nodes: dict[str, dict] = {}
 
@@ -2254,23 +2441,26 @@ def list_domains(
             "domain": path, "count": 0, "latest_at": "",
             "parent": domain_parent(path), "depth": domain_depth(path),
             "subtree": 0, "subtree_latest_at": "", "children": 0,
+            "also": 0, "subtree_also": 0,
             "implicit": True,
         })
 
-    for r in rows:
-        # normalized on every write path; normalizing again keeps a store
-        # written to directly from splitting one path across two nodes
-        n = node(normalize_domain(r["domain"]))
-        n["count"] += r["count"]
-        n["latest_at"] = max(n["latest_at"], r["latest_at"] or "")
-        n["implicit"] = False
-        for ancestor in domain_ancestors(n["domain"]):
-            node(ancestor)
+    for source, key in ((rows, "count"), (link_rows, "also")):
+        for r in source:
+            # normalized on every write path; normalizing again keeps a store
+            # written to directly from splitting one path across two nodes
+            n = node(normalize_domain(r["domain"]))
+            n[key] += r["count"]
+            n["latest_at"] = max(n["latest_at"], r["latest_at"] or "")
+            n["implicit"] = False
+            for ancestor in domain_ancestors(n["domain"]):
+                node(ancestor)
 
     for n in list(nodes.values()):
         for scope in domain_ancestors(n["domain"], include_self=True):
             holder = nodes[scope]
             holder["subtree"] += n["count"]
+            holder["subtree_also"] += n["also"]
             holder["subtree_latest_at"] = max(holder["subtree_latest_at"], n["latest_at"])
         if n["parent"]:
             nodes[n["parent"]]["children"] += 1
@@ -2299,6 +2489,16 @@ def domain_census(
 
     An empty `domain` censuses the whole store, and then `children` are its
     roots.
+
+    A memory CROSS-LISTED into the scope is part of the scope -- it counts
+    in `total` and `by_type` like any other. But its filed path is somewhere
+    else entirely, so it cannot be placed by that path: the level it sits at
+    HERE is the one its cross-listing names. `also` reports how much of the
+    scope arrives that way, and each child carries its own `also`/
+    `subtree_also`, so a drill-down plan built from this never points at a
+    child that turns out to hold nothing. All three are omitted when zero --
+    a store that never cross-lists should not pay for the field on every
+    child of every pulse.
     """
     scopes = resolve_domain_scopes(conn, domain)
     where, params = ["1=1"], []
@@ -2309,28 +2509,61 @@ def domain_census(
     if status:
         where.append("AND status = ?")
         params.append(status)
+    where_sql = " ".join(where)
     rows = conn.execute(
-        f"SELECT domain, type, COUNT(*) AS n FROM memories WHERE {' '.join(where)} "
+        f"SELECT domain, type, COUNT(*) AS n FROM memories WHERE {where_sql} "
         "GROUP BY domain, type", params).fetchall()
+    # the cross-listings of the in-scope memories, by the path they name --
+    # one row per (link path, type), so a child is placed by the membership
+    # that put the memory in this scope rather than by where it lives
+    link_rows = conn.execute(
+        "SELECT dl.domain AS domain, m.type AS type, COUNT(*) AS n "
+        "FROM memory_domains dl JOIN memories m ON m.uid = dl.memory_uid "
+        f"WHERE m.rowid_pk IN (SELECT rowid_pk FROM memories WHERE {where_sql}) "
+        "GROUP BY dl.domain, m.type", params).fetchall()
 
     by_type: dict[str, int] = {}
     kids: dict[str, dict] = {}
+
+    def kid(child: str) -> dict:
+        return kids.setdefault(child, {
+            "domain": child, "own": 0, "subtree": 0, "also": 0, "subtree_also": 0})
+
+    def trim(k: dict) -> dict:
+        return {key: v for key, v in k.items() if v or key not in ("also", "subtree_also")}
+
+    def place(path: str, n: int, own_key: str, subtree_key: str) -> None:
+        for scope in (scopes or [""]):
+            if path == scope or not in_domain(path, scope):
+                continue
+            child = DOMAIN_SEP.join(split_domain(path)[: domain_depth(scope) + 1])
+            k = kid(child)
+            k[subtree_key] += n
+            if path == child:
+                k[own_key] += n
+
+    also_total = 0
     for r in rows:
         by_type[r["type"]] = by_type.get(r["type"], 0) + r["n"]
-        for scope in (scopes or [""]):
-            if r["domain"] == scope or not in_domain(r["domain"], scope):
-                continue
-            child = DOMAIN_SEP.join(split_domain(r["domain"])[: domain_depth(scope) + 1])
-            k = kids.setdefault(child, {"domain": child, "own": 0, "subtree": 0})
-            k["subtree"] += r["n"]
-            if r["domain"] == child:
-                k["own"] += r["n"]
-    return {
+        # in scope only because of a cross-listing: nothing about its filed
+        # path belongs to this census beyond the count
+        if scopes and not any(in_domain(r["domain"], s) for s in scopes):
+            also_total += r["n"]
+            continue
+        place(r["domain"], r["n"], "own", "subtree")
+    for r in link_rows:
+        place(r["domain"], r["n"], "also", "subtree_also")
+    out = {
         "paths": scopes,
         "total": sum(by_type.values()),
         "by_type": by_type,
-        "children": sorted(kids.values(), key=lambda k: (-k["subtree"], k["domain"])),
+        "children": [trim(k) for k in sorted(
+            kids.values(),
+            key=lambda k: (-(k["subtree"] + k["subtree_also"]), k["domain"]))],
     }
+    if also_total:
+        out["also"] = also_total
+    return out
 
 
 def move_domain(
@@ -2346,6 +2579,13 @@ def move_domain(
 
     Every moved row is re-embedded (domain is part of the embedding
     source) and audited in `edits`, so a re-home is reconstructible.
+
+    Cross-listings pointing INTO the moved scope follow it: renaming a
+    subject renames it for the memories that merely belong to it too, or
+    they would be left pointing at a path that no longer exists. What does
+    NOT follow is the memory itself -- the rows to re-home are matched on
+    the filed path alone (also=False), because a cross-listing says a memory
+    belongs to a subject, not that it lives there.
 
     Refuses to move a domain into its own subtree: 'acme' -> 'acme/x100'
     would make the path its own ancestor.
@@ -2365,30 +2605,38 @@ def move_domain(
     if subtree and in_domain(dst, src):
         raise ValueError(f"cannot move '{src}' into its own subtree ('{dst}')")
 
-    clause, params = domain_clause(src, alias="", subtree=subtree)
+    # `memory_domains` names its path `domain` too, so one clause selects
+    # the rows filed in the moved scope and the cross-listings into it.
+    clause, params = domain_clause(src, alias="", subtree=subtree, also=False)
     if src_given != src:
         clause = f"AND ({clause.removeprefix('AND ')} OR domain = ?)"
         params = [*params, src_given]
     rows = conn.execute(
-        f"SELECT rowid_pk, uid, content, tags, domain FROM memories WHERE 1=1 {clause}",
+        f"SELECT rowid_pk, uid, content, tags, domain, also_domains FROM memories "
+        f"WHERE 1=1 {clause}", params).fetchall()
+    link_rows = conn.execute(
+        f"SELECT memory_uid, domain FROM memory_domains WHERE 1=1 {clause}",
         params).fetchall()
-    if not rows:
+    if not rows and not link_rows:
         raise ValueError(f"no memories in domain '{src}'")
 
     # "merge" means rows that were NOT part of this move already live at
     # the target scope -- asked before the UPDATE, or every move would
     # look like one
     moving = {r["rowid_pk"] for r in rows}
-    dst_clause, dst_params = domain_clause(dst, alias="", subtree=True)
+    dst_clause, dst_params = domain_clause(dst, alias="", subtree=True, also=False)
     merged = any(
         r["rowid_pk"] not in moving for r in conn.execute(
             f"SELECT rowid_pk FROM memories WHERE 1=1 {dst_clause}", dst_params))
+
+    def retarget(old: str) -> str:
+        return dst if old in (src, src_given) else dst + DOMAIN_SEP + old[len(src) + 1:]
 
     now = now_iso()
     touched: set[str] = set()
     for r in rows:
         old = r["domain"]
-        target = dst if old in (src, src_given) else dst + DOMAIN_SEP + old[len(src) + 1:]
+        target = retarget(old)
         conn.execute(
             "UPDATE memories SET domain = ?, updated_at = ? WHERE rowid_pk = ?",
             (target, now, r["rowid_pk"]))
@@ -2397,9 +2645,128 @@ def move_domain(
             "VALUES (?, ?, ?, ?, ?)",
             (r["uid"], now, r["content"], r["content"],
              f"meta: domain '{old}' → '{target}'"))
-        _upsert_vector(conn, r["rowid_pk"], r["content"], r["tags"], target)
+        _upsert_vector(conn, r["rowid_pk"], r["content"], r["tags"], target,
+                       r["also_domains"])
         touched.add(old)
-    return {"moved": len(rows), "domains": len(touched), "merged": merged}
+
+    # Retargeting a cross-listing can land it on the memory's own path -- a
+    # re-home that makes the two subjects one -- and apply_link_policy then
+    # drops it. Same on the other side: a memory whose FILED path just moved
+    # under a subject it was cross-listed into no longer needs the
+    # cross-listing. Both go through set_domain_links, which is where that
+    # policy lives, rather than an UPDATE per row.
+    #
+    # Only the paths this move SELECTED are retargeted. A subtree=False move
+    # is one exact string at a time (the normalize pass), and rewriting a
+    # descendant membership here would rename it out from under its own entry
+    # in that plan, which then finds nothing to move.
+    moved_paths = {r["domain"] for r in link_rows}
+    relinked = sorted({r["memory_uid"] for r in link_rows})
+    for uid in relinked:
+        want = [retarget(p) if p in moved_paths else p
+                for p in get_domain_links(conn, uid)]
+        set_domain_links(conn, uid, want, coerce=False,
+                         note=f"meta: also '{src}' → '{dst}'")
+    for r in rows:
+        if r["also_domains"] and r["uid"] not in relinked:
+            set_domain_links(conn, r["uid"], get_domain_links(conn, r["uid"]),
+                             coerce=False)
+    touched.update(r["domain"] for r in link_rows)
+    return {
+        "moved": len(rows), "domains": len(touched), "merged": merged,
+        "also_moved": len(relinked),
+    }
+
+
+def get_domain_links(conn: sqlite3.Connection, uid: str) -> list[str]:
+    """The extra domains one memory belongs to, beside the one it is filed at."""
+    return [r["domain"] for r in conn.execute(
+        "SELECT domain FROM memory_domains WHERE memory_uid = ? ORDER BY domain",
+        (uid,))]
+
+
+def domain_links_for(conn: sqlite3.Connection, uids) -> dict[str, list[str]]:
+    """get_domain_links for a page of rows, in one query.
+
+    A list view showing rows under a domain filter has to be able to say
+    which of them are only cross-listed there, and a per-row lookup would
+    make that N queries for a cosmetic truth.
+    """
+    wanted = set(uids)
+    if not wanted:
+        return {}
+    out: dict[str, list[str]] = {}
+    for r in conn.execute("SELECT memory_uid, domain FROM memory_domains ORDER BY domain"):
+        if r["memory_uid"] in wanted:
+            out.setdefault(r["memory_uid"], []).append(r["domain"])
+    return out
+
+
+def _write_domain_links(conn: sqlite3.Connection, row: sqlite3.Row, paths: list[str]) -> list[str]:
+    """Rewrite one memory's cross-listings: rows, index text, vector.
+
+    `memory_domains` is the truth every domain filter reads.
+    `memories.also_domains` is the same paths as one field, and exists for
+    the two readers that cannot join it: the FTS index and the embedder.
+    Nothing filters on that field -- which is why it is written here, and
+    only here, in the same breath as the rows it mirrors.
+    """
+    uid = row["uid"]
+    conn.execute("DELETE FROM memory_domains WHERE memory_uid = ?", (uid,))
+    now = now_iso()
+    if paths:
+        conn.executemany(
+            "INSERT INTO memory_domains (memory_uid, domain, created_at) VALUES (?, ?, ?)",
+            [(uid, path, now) for path in paths])
+    blob = ALSO_SEP.join(paths)
+    conn.execute(
+        "UPDATE memories SET also_domains = ?, updated_at = ? WHERE uid = ?",
+        (blob, now, uid))
+    _upsert_vector(conn, row["rowid_pk"], row["content"], row["tags"], row["domain"], blob)
+    return paths
+
+
+def set_domain_links(
+    conn: sqlite3.Connection, uid: str, also, *, note: str = "", coerce: bool = True
+) -> list[str]:
+    """Replace the extra domains a memory belongs to. Returns what was stored.
+
+    Audited in `edits` like any other metadata change, so a membership that
+    was added and later dropped is still reconstructible. coerce=False keeps
+    the casing as given -- see apply_link_policy.
+    """
+    row = get_memory(conn, uid)
+    if row is None:
+        raise ValueError(f"no memory {uid}")
+    before = get_domain_links(conn, uid)
+    paths = apply_link_policy(conn, also, row["domain"], coerce=coerce)
+    if paths == before:
+        return paths
+    _write_domain_links(conn, row, paths)
+    conn.execute(
+        "INSERT INTO edits (memory_uid, edited_at, prev_content, new_content, note) "
+        "VALUES (?, ?, ?, ?, ?)",
+        (uid, now_iso(), row["content"], row["content"],
+         note or f"meta: also '{', '.join(before)}' → '{', '.join(paths)}'"))
+    return paths
+
+
+def add_domain_link(conn: sqlite3.Connection, uid: str, domain: str) -> list[str]:
+    """Cross-list a memory into one more domain. Returns the resulting set."""
+    if not normalize_domain(domain):
+        raise ValueError("domain is required")
+    return set_domain_links(conn, uid, [*get_domain_links(conn, uid), domain])
+
+
+def remove_domain_link(conn: sqlite3.Connection, uid: str, domain: str) -> list[str]:
+    """Drop one cross-listing. Returns the resulting set.
+
+    Matched on the exact path: dropping 'acme' does not drop a separate
+    membership in 'acme/x100', which is a scope of its own.
+    """
+    path = normalize_domain(domain)
+    return set_domain_links(
+        conn, uid, [p for p in get_domain_links(conn, uid) if p != path])
 
 
 def latest_by_type(
@@ -2527,7 +2894,7 @@ def dedup_candidates(
 
 CONFIDENCE_VALUES = ("unverified", "confirmed", "contradicted")
 SUGGESTION_KINDS = (
-    "compact", "reword", "retag", "redomain",
+    "compact", "reword", "retag", "redomain", "crosslist",
     "set_confidence", "archive", "link", "merge", "distill",
 )
 # distill targets must be durable knowledge types -- distilling INTO a
@@ -2682,9 +3049,13 @@ def optimization_corpus(
       - content is a snippet with content_len alongside (full=True keeps
         whole bodies; get_memory fetches one on demand)
       - tags longer than CORPUS_TAGS_LEN are cut, with tags_len alongside
-      - empty/default fields are omitted (blank domain/session/tags, null
-        superseded_by, status matching the filter default, confidence
-        'unverified' -- stats.by_confidence keeps the aggregate view)
+      - empty/default fields are omitted (blank domain/session/tags, no
+        cross-listings, null superseded_by, status matching the filter
+        default, confidence 'unverified' -- stats.by_confidence keeps the
+        aggregate view)
+      - `also` lists the domains a memory belongs to besides its own path,
+        because a pass proposing a `crosslist` has to be able to tell a new
+        membership from one that already holds
       - created_at drops sub-second precision; updated_at is not listed
         at all (get_memory has it)
       - anchors come as one space-joined string, capped at
@@ -2728,7 +3099,7 @@ def optimization_corpus(
     where_sql = " ".join(where)
 
     rows = conn.execute(
-        f"""SELECT uid, type, domain, session, tags, content, status,
+        f"""SELECT uid, type, domain, also_domains, session, tags, content, status,
                    confidence, superseded_by, created_at, updated_at
             FROM memories WHERE {where_sql}
             ORDER BY created_at DESC LIMIT ? OFFSET ?""",
@@ -2742,6 +3113,10 @@ def optimization_corpus(
             m["confidence"] = r["confidence"]
         if r["domain"]:
             m["domain"] = r["domain"]
+        # what it already belongs to besides its own path, or a curation pass
+        # proposing a cross-listing cannot tell a new one from one that holds
+        if r["also_domains"]:
+            m["also"] = parse_domains(r["also_domains"])
         if r["session"]:
             m["session"] = r["session"]
         if r["tags"]:
@@ -2859,6 +3234,27 @@ def _validate_suggestion(conn: sqlite3.Connection, s: object) -> tuple[dict | No
         # this payload as the proposed target, and it has to be the path
         # the memory will actually end up in
         payload = {**payload, "domain": normalize_domain(str(payload["domain"]))}
+    elif kind == "crosslist":
+        err = target_err()
+        if err:
+            return None, err
+        if "also" not in payload:
+            return None, "payload.also required"
+        # the whole set is REPLACED, and the panel shows this payload as what
+        # will hold -- so the staging pass runs the same policy the apply
+        # will (casing, path shape, and dropping a path the memory's own
+        # domain already covers) rather than showing paths that then change
+        row = get_memory(conn, target_uid)
+        given = parse_domains(payload["also"])
+        want = apply_link_policy(conn, given, row["domain"])
+        # an empty list is a legitimate suggestion ("drop every cross-listing"),
+        # but a non-empty one that survives as empty is not the suggestion it
+        # looks like: it would apply as a clear, so say what happened instead
+        if given and not want:
+            return None, (
+                f"every path given is already covered by the memory's domain "
+                f"{row['domain']!r}: {', '.join(given)}")
+        payload = {**payload, "also": want}
     elif kind == "set_confidence":
         err = target_err()
         if err:
@@ -3019,6 +3415,11 @@ def _update_meta_field(conn: sqlite3.Connection, uid: str, field: str, value: st
 
     `field` is only ever 'tags' or 'domain' (caller-controlled), so the
     f-string interpolation is not an injection surface.
+
+    A domain change re-runs the cross-listing policy: the memory's new path
+    may already satisfy a membership it used to need (see
+    apply_link_policy), and leaving that row would count it twice in its
+    own branch.
     """
     if field == "domain":
         value = apply_domain_policy(conn, value)
@@ -3036,7 +3437,10 @@ def _update_meta_field(conn: sqlite3.Connection, uid: str, field: str, value: st
         conn, row["rowid_pk"], row["content"],
         value if field == "tags" else row["tags"],
         value if field == "domain" else row["domain"],
+        row["also_domains"],
     )
+    if field == "domain" and row["also_domains"]:
+        set_domain_links(conn, uid, get_domain_links(conn, uid))
 
 
 def _apply_kind(conn: sqlite3.Connection, kind: str, target_uid: str | None, payload: dict) -> dict:
@@ -3055,6 +3459,11 @@ def _apply_kind(conn: sqlite3.Connection, kind: str, target_uid: str | None, pay
         row = get_memory(conn, target_uid)
         prev = {"domain": row["domain"]}
         _update_meta_field(conn, target_uid, "domain", str(payload["domain"]).strip())
+        return prev
+    if kind == "crosslist":
+        # the whole set, not an addition: undo restores exactly this list
+        prev = {"also": get_domain_links(conn, target_uid)}
+        set_domain_links(conn, target_uid, payload["also"], note=f"optimize:{kind}")
         return prev
     if kind == "set_confidence":
         row = get_memory(conn, target_uid)
@@ -3109,6 +3518,9 @@ def _revert_kind(
         _update_meta_field(conn, target_uid, "tags", prev["tags"])
     elif kind == "redomain":
         _update_meta_field(conn, target_uid, "domain", prev["domain"])
+    elif kind == "crosslist":
+        set_domain_links(conn, target_uid, prev["also"], coerce=False,
+                         note="optimize:undo crosslist")
     elif kind == "set_confidence":
         set_confidence(conn, target_uid, prev["confidence"])
     elif kind == "archive":

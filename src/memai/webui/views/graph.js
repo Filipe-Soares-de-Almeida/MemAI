@@ -406,7 +406,10 @@ class ForceGraph {
     let hit = 0;
     for (const n of this.nodes) {
       if (!terms.length) { n.dim = false; hit++; continue; }
-      const hay = `${n.label} ${n.domain || ''} ${n.tags || ''}`.toLowerCase();
+      /* every domain it belongs to, not only the one it is filed at: a node
+         cross-listed into a subject is findable by that subject's name */
+      const hay = `${n.label} ${n.domain || ''} ${(n.also || []).join(' ')} ${n.tags || ''}`
+        .toLowerCase();
       n.dim = !terms.every(w => hay.includes(w));
       if (!n.dim) hit++;
     }
@@ -459,6 +462,7 @@ class ForceGraph {
       <div class="act-row">
         <button class="btn btn-sm btn-solid" data-openrec>${t('common.openRecord')}</button>
         ${n.domain ? `<span class="chip">${esc(n.domain)}</span>` : ''}
+        ${(n.also || []).map(p => `<span class="chip">${esc(p)}</span>`).join('')}
         <span class="chip">${t('g.links', { n: n.degree })}</span>
       </div>`;
     wireCopyChips(card);

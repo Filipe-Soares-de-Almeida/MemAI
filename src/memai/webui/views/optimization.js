@@ -15,7 +15,7 @@ import { t } from '../i18n.js';
 
 /* the kinds the before/after pair below knows how to render. Anything else
    is shown as its payload rather than as two empty boxes -- see optRaw. */
-const DIFF_KINDS = new Set(['compact', 'reword', 'retag', 'redomain',
+const DIFF_KINDS = new Set(['compact', 'reword', 'retag', 'redomain', 'crosslist',
                             'set_confidence', 'archive']);
 
 /* The kinds whose "before" IS the memory's own content. For these, the
@@ -32,6 +32,9 @@ function optBefore(s) {
     case 'compact': case 'reword': return esc(tg.snippet || '');
     case 'retag': return esc(tg.tags || '—');
     case 'redomain': return esc(tg.domain || '—');
+    /* the whole set is replaced, so Before is the whole set -- and an em
+       dash where a memory has none, like every other empty field here */
+    case 'crosslist': return esc((tg.also || []).join(', ') || '—');
     case 'set_confidence': return esc(tg.confidence || '—');
     case 'archive': return esc(tg.status || 'active');
     default: return '';
@@ -44,6 +47,7 @@ function optAfter(s) {
     case 'compact': case 'reword': return esc(p.new_content || '');
     case 'retag': return esc(p.tags || '—');
     case 'redomain': return esc(p.domain || '—');
+    case 'crosslist': return esc((p.also || []).join(', ') || '—');
     case 'set_confidence': return esc(p.confidence || '—');
     case 'archive': return 'archived' + (p.reason ? ` · ${esc(p.reason)}` : '');
     default: return '';

@@ -146,6 +146,14 @@ export const domainSegments = d => (d || '').split(DOMAIN_SEP).filter(Boolean);
 export const domainLeaf = d => domainSegments(d).slice(-1)[0] || '';
 export const domainDepth = d => domainSegments(d).length;
 
+/* Whether a path IS a scope or sits under it. Segment-wise, like the
+   server's own check: 'acme/x1000' is not inside 'acme/x100' however
+   similar the two read. An empty scope holds everything. */
+export function inDomainPath(domain, scope) {
+  const want = domainSegments(scope), segs = domainSegments(domain);
+  return want.every((s, i) => segs[i] === s);
+}
+
 /* Tree order: a parent, then its whole subtree, then its next sibling.
    Comparing the strings would not do it -- '-' sorts before '/', so a root
    named 'acme-legacy' would land between 'acme' and 'acme/x100' and cut a

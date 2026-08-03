@@ -71,15 +71,24 @@ export async function renderOverview(view, params, ctx) {
   /* Domains are paths, and this table is the ten liveliest of them rather
      than the tree -- so the whole path is written out here, and a parent
      shows what its subtree holds next to what is filed on it directly.
-     The Domains view is where the tree itself is walked. */
-  const domRows = o.domains.map(d => `
-    <tr class="clickable" data-domain="${esc(d.domain)}">
+     The Domains view is where the tree itself is walked.
+
+     A cross-cutting subject reaches this table on its cross-listed activity,
+     so its filed count is 0 and printing that alone would read as a domain
+     holding nothing. The count of what belongs to it is named instead. */
+  const domRows = o.domains.map(d => {
+    const filed = d.count || d.subtree;
+    const also = d.subtree_also
+      ? `<span class="dom-roll" title="${esc(t('do.th.alsoWhy'))}">${filed ? '+' : ''}${
+          fmtInt(d.subtree_also)} ${t('ov.domains.also')}</span>` : '';
+    return `<tr class="clickable" data-domain="${esc(d.domain)}">
       <td><button type="button" class="row-open"
                   aria-label="${esc(t('a11y.filterDomain', { domain: d.domain }))}">${esc(d.domain)}</button></td>
-      <td class="num">${fmtInt(d.count)}${d.subtree > d.count
-        ? `<span class="dom-roll" title="${esc(t('do.rollupWhy'))}">+${fmtInt(d.subtree - d.count)}</span>` : ''}</td>
+      <td class="num">${filed ? fmtInt(d.count) : ''}${d.subtree > d.count
+        ? `<span class="dom-roll" title="${esc(t('do.rollupWhy'))}">+${fmtInt(d.subtree - d.count)}</span>` : ''}${also}</td>
       <td class="num" style="color:var(--ink-3)">${fmtAgo(d.latest_at || d.subtree_latest_at)}</td>
-    </tr>`).join('');
+    </tr>`;
+  }).join('');
 
   const recentRows = o.recent.map(m => `
     <div class="rel-row clickable" data-uid="${esc(m.uid)}">
