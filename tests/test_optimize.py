@@ -35,6 +35,20 @@ def _mk(conn, content="a fact", **kw):
     return db.insert_memory(conn, type=kw.pop("type", "note"), content=content, **kw)
 
 
+def _mk_diagram(conn):
+    uid, errors = db.insert_diagram(
+        conn, title="Cache warmup routine",
+        nodes=[
+            {"key": "start", "shape": "start", "label": "Receive the warmup trigger"},
+            {"key": "fill", "label": "Load every hot key"},
+            {"key": "done", "shape": "end", "label": "Report the warmup as finished"},
+        ],
+        edges=[{"from": "start", "to": "fill"}, {"from": "fill", "to": "done"}],
+    )
+    assert errors == []
+    return uid
+
+
 def test_stage_validates_and_reports_errors(conn):
     uid = _mk(conn, content="keep me")
     res = db.stage_optimization(conn, "run", [
@@ -53,6 +67,39 @@ def test_stage_no_valid_suggestions_creates_no_run(conn):
     res = db.stage_optimization(conn, "", [{"kind": "bogus", "payload": {}}])
     assert res["run_id"] is None and res["staged"] == 0
     assert db.list_optimization_runs(conn) == []
+
+
+@pytest.mark.parametrize("kind", ["compact", "reword"])
+def test_stage_refuses_rewriting_a_diagram(conn, kind):
+    """A diagram's content is the projection of its graph, so the panel never
+    gets to offer a rewrite the next structural edit would regenerate over."""
+    uid = _mk_diagram(conn)
+    res = db.stage_optimization(conn, "r", [
+        {"kind": kind, "target_uid": uid, "payload": {"new_content": "hand written"}},
+    ])
+    assert res["staged"] == 0 and res["run_id"] is None
+    assert "generated from the graph" in res["errors"][0]["error"]
+    assert db.get_memory(conn, uid)["content"].startswith("DIAGRAM:")
+
+
+def test_apply_refuses_a_diagram_rewrite_staged_before_the_guard(conn):
+    """Runs staged before staging refused this still hold one, so apply checks too."""
+    diag, note = _mk_diagram(conn), _mk(conn, content="untouched")
+    before = db.get_memory(conn, diag)["content"]
+    run = db.stage_optimization(conn, "r", [
+        {"kind": "reword", "target_uid": note, "payload": {"new_content": "better"}},
+    ])
+    conn.execute(
+        """INSERT INTO optimization_suggestions
+           (run_id, kind, target_uid, payload, rationale, verified, status, created_at)
+           VALUES (?, 'reword', ?, ?, '', '', 'pending', ?)""",
+        (run["run_id"], diag, json.dumps({"new_content": "hand written"}), db.now_iso()),
+    )
+    sug = db.get_optimization_suggestions(conn, run["run_id"])[-1]
+    with pytest.raises(ValueError, match="generated from the graph"):
+        db.apply_suggestion(conn, sug["id"])
+    assert db.get_memory(conn, diag)["content"] == before
+    assert db.get_suggestion(conn, sug["id"])["status"] == "pending"
 
 
 @pytest.mark.parametrize("kind,payload,check", [
