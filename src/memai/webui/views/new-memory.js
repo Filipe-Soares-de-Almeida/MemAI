@@ -26,6 +26,9 @@ export async function openNewMemory() {
       <div class="field"><label for="nmDomain">${t('nm.domain')}</label>
         <input type="text" id="nmDomain" list="nmDomainsDL" placeholder="${t('nm.domainPh')}">
         <datalist id="nmDomainsDL">${domainDatalist(domains)}</datalist></div>
+      <div class="field"><label for="nmAlso">${t('nm.also')}</label>
+        <input type="text" id="nmAlso" list="nmDomainsDL" placeholder="${t('mm.also.placeholder')}">
+        <div class="hint-sm">${t('mm.also.hint')}</div></div>
       <div class="field"><label for="nmTags">${t('nm.tags')}</label>
         <input type="text" id="nmTags" placeholder="${t('nm.tagsPh')}"></div>
       <div class="field" id="nmContentField"><label for="nmContent">${t('nm.content')}</label>
@@ -53,6 +56,7 @@ export async function openNewMemory() {
         const r = await newDiagramSkeleton({
           title: mq('#nmTitle').value,
           domain: mq('#nmDomain').value,
+          also: mq('#nmAlso').value,
           tags: mq('#nmTags').value });
         closeModal();
         toast(t('nm.created', { uid: r.uid }), 'ok');
@@ -62,8 +66,8 @@ export async function openNewMemory() {
       }
       const r = await api('/api/memories', { body: {
         type: mq('#nmType').value, confidence: mq('#nmConf').value,
-        domain: mq('#nmDomain').value, tags: mq('#nmTags').value,
-        content: mq('#nmContent').value } });
+        domain: mq('#nmDomain').value, also: mq('#nmAlso').value,
+        tags: mq('#nmTags').value, content: mq('#nmContent').value } });
       closeModal();
       toast(t('nm.created', { uid: r.uid }), 'ok');
       invalidateDomains();

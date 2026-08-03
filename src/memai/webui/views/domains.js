@@ -29,11 +29,16 @@ export async function renderDomains(view, params, ctx) {
   const roots = domains.filter(d => !d.parent).length;
   const named = domains.filter(d => !d.implicit).length;
   const collisions = domains.filter(d => d.collides_with).length;
+  /* A subject nothing is filed under, that memories are cross-listed into:
+     the end-to-end flow whose steps all live in other branches. Worth
+     counting in the header, since it is the reason to read the last column. */
+  const crossing = domains.filter(d => d.subtree_also && !d.subtree_active && !d.subtree_archived).length;
 
   view.innerHTML = `<div class="anim">
     <div class="view-head">
       <h2 class="view-title">${t('do.title')}</h2>
       <div class="view-sub">${t('do.sub.count', { n: fmtInt(named) })} · ${t('do.sub.roots', { n: fmtInt(roots) })}${
+        crossing ? ` · ${t('do.sub.crossing', { n: fmtInt(crossing) })}` : ''}${
         collisions ? ` · <span style="color:var(--warn)">${t('do.sub.collide', { n: collisions })}</span>` : ''}</div>
     </div>
     <div class="panel" style="margin-bottom:14px">
@@ -56,7 +61,7 @@ export async function renderDomains(view, params, ctx) {
       </div>
       <div class="table-scroll">
         <table class="table">
-          <thead><tr><th>${t('common.domain')}</th><th class="num">${t('do.th.active')}</th><th class="num">${t('do.th.archived')}</th><th>${t('do.th.types')}</th><th class="num">${t('common.lastActivity')}</th><th></th></tr></thead>
+          <thead><tr><th>${t('common.domain')}</th><th class="num">${t('do.th.active')}</th><th class="num">${t('do.th.archived')}</th><th class="num" title="${esc(t('do.th.alsoWhy'))}">${t('do.th.also')}</th><th>${t('do.th.types')}</th><th class="num">${t('common.lastActivity')}</th><th></th></tr></thead>
           <tbody id="domRows"></tbody>
         </table>
       </div>
@@ -112,17 +117,24 @@ function rows(domains) {
     const roll = (own, sub) => sub > own
       ? `<span class="dom-roll" title="${esc(t('do.rollupWhy'))}">+${fmtInt(sub - own)}</span>` : '';
     const latest = d.latest_at || d.subtree_latest_at;
+    /* Filed here versus cross-listed here are different facts, so the count
+       is its own column. A row with only the second one is a subject that
+       organizes memories living elsewhere -- said outright, or it reads as
+       an empty branch somebody forgot to delete. */
+    const crossing = d.subtree_also && !d.subtree_active && !d.subtree_archived;
     return `<tr title="${esc(d.domain)}">
       <td>
         <span class="dom-cell" style="--d:${d.depth - 1}">
           ${twist}
           <span class="dom-leaf${d.implicit ? ' implicit' : ''}">${esc(domainLeaf(d.domain))}</span>
           ${d.children ? `<span class="dom-kids">${t('do.tree.kids', { n: d.children })}</span>` : ''}
+          ${crossing ? `<span class="dom-kids" title="${esc(t('do.tree.crossingWhy'))}">${t('do.tree.crossing')}</span>` : ''}
           ${collide}
         </span>
       </td>
       <td class="num">${fmtInt(d.active)}${roll(d.active, d.subtree_active)}</td>
       <td class="num" style="color:var(--ink-3)">${fmtInt(d.archived)}${roll(d.archived, d.subtree_archived)}</td>
+      <td class="num" style="color:var(--ink-3)">${d.subtree_also ? fmtInt(d.also) + roll(d.also, d.subtree_also) : ''}</td>
       <td><span class="type-dots">${dots}</span></td>
       <td class="num" style="color:var(--ink-3)" title="${esc(latest)}">${fmtAgo(latest)}</td>
       <td class="actions">

@@ -11,7 +11,7 @@ import { api, query } from '../core/api.js';
 import { icon } from '../core/icons.js';
 import { toast, failed, promptModal } from '../core/ui.js';
 import { typeTag, statusTag, confPill, getDomains, domainOptions,
-         TYPE_ORDER, TYPE_LABEL, CONF } from '../core/shared.js';
+         inDomainPath, TYPE_ORDER, TYPE_LABEL, CONF } from '../core/shared.js';
 import { go, refreshBehind } from '../core/router.js';
 import { onTeardown } from '../core/lifecycle.js';
 import { openRecord } from './record.js';
@@ -126,7 +126,7 @@ export async function renderMemories(view, params, ctx) {
       ${state.session ? `<button type="button" class="chip clickable" id="fSession" title="${t('mem.session.title')}">${t('mem.session.chip', { s: esc(state.session.slice(0, 18)) })}${icon('close')}</button>` : ''}
     </div>
 
-    <div class="mem-list" id="memList">${renderRows(data.items)}</div>
+    <div class="mem-list" id="memList">${renderRows(data.items, state.domain)}</div>
 
     <div class="list-foot">
       <span>${data.searched
@@ -194,9 +194,14 @@ export async function renderMemories(view, params, ctx) {
   syncBulkbar();
 }
 
-function renderRows(items) {
+/* `scope` is the active domain filter, needed to tell a row that LIVES in it
+   from one that is only cross-listed into it. A list that showed both the
+   same way would be claiming the second is filed where it is not. */
+function renderRows(items, scope = '') {
   if (!items.length) return `<div class="empty">${t('mem.empty')}</div>`;
   return items.map(m => {
+    const away = Boolean(scope) && !inDomainPath(m.domain, scope)
+      && (m.also || []).some(p => inDomainPath(p, scope));
     const match = m.match_source
       ? `<span class="match-badge" title="${m.fts_rank !== undefined ? `bm25 ${Number(m.fts_rank).toFixed(2)} ` : ''}${m.vec_distance !== undefined ? `cos ${Number(m.vec_distance).toFixed(3)}` : ''}">${esc(m.match_source)}</span>` : '';
     /* The row keeps its click for the mouse, but the thing that OPENS the
@@ -219,6 +224,7 @@ function renderRows(items) {
       <div class="mem-right">
         ${match}
         ${statusTag(m.status)}
+        ${away ? `<span class="chip" title="${esc(t('mem.alsoWhy', { domain: m.domain }))}">${t('mem.also')}</span>` : ''}
         ${m.domain ? `<span class="chip">${esc(m.domain)}</span>` : ''}
         <span title="${esc(m.created_at)}">${fmtDate(m.created_at)}</span>
       </div>
