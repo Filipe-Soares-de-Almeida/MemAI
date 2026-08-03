@@ -218,6 +218,20 @@
 
   /* smallest pointer target the UI ships (WCAG 2.5.8) */
   --tap: 24px;
+
+  /* ONE control height, and a dense one. Every control that can share a row
+     with another answers to --ctl-h: fields, pickers, buttons, segmented
+     groups. It used to be five different numbers -- a field at 38, a button
+     at 33, a segment at 30 or 32, a small button at 25 -- because each
+     borrowed its size from whatever it was elsewhere, and any row that mixed
+     two of them read as a ragged edge. The graph's floating strip had already
+     invented this variable for itself; the rest of the app is why it is up
+     here now.
+
+     A dense ROW sets --ctl-h to --ctl-h-sm on itself and every child follows,
+     rather than each child being told twice. */
+  --ctl-h: 36px;
+  --ctl-h-sm: 30px;
 }
 
 * { box-sizing: border-box; }
@@ -225,7 +239,7 @@
 
 html, body { height: 100%; }
 
-/* color-scheme so the native half of the UI -- select popups, date pickers,
+/* color-scheme so the native half of the UI -- scrollbars, date pickers,
    the caret, Firefox's scrollbars -- renders dark without being restyled.
    The ::-webkit-scrollbar rules below only ever reached Chromium. */
 html {
@@ -496,7 +510,7 @@ kbd {
 }
 .topbar-right { display: flex; align-items: center; gap: var(--sp-4); }
 .db-badge { font-size: var(--fs-sm); color: var(--ink-3); }
-.lang-sel { font-size: var(--fs-sm); padding: var(--sp-1) var(--sp-5) var(--sp-1) var(--sp-2); }
+.lang-sel { font-size: var(--fs-sm); padding-left: var(--sp-2); padding-right: var(--sp-5); }
 
 /* ── buttons & inputs ────────────────────────────────────────────────── */
 
@@ -507,7 +521,8 @@ kbd {
   background: transparent;
   border: 1px solid var(--line);
   border-radius: var(--r-md);
-  padding: var(--sp-2) var(--sp-4);
+  padding: 0 var(--sp-4);
+  height: var(--ctl-h);
   cursor: pointer;
   transition: background .15s, border-color .15s, color .15s;
   display: inline-flex; align-items: center; gap: var(--sp-2);
@@ -521,16 +536,23 @@ kbd {
 /* declared after .btn-ghost so btn-ghost + btn-danger combos still read as dangerous */
 .btn-danger { color: var(--bad-ink); border-color: var(--bad-line); background: transparent; }
 .btn-danger:hover { background: var(--bad-wash); border-color: var(--bad-line-hi); }
-.btn-sm { padding: var(--sp-1) var(--sp-3); font-size: var(--fs-sm); min-height: var(--tap); }
+/* The dense variant, for a row that is not itself a dense row -- a table's
+   actions cell, a panel title. Inside a dense row every control is already
+   this tall and the class is redundant, not wrong. */
+.btn-sm { padding: 0 var(--sp-3); font-size: var(--fs-sm); height: var(--ctl-h-sm); }
 
 .icon-btn {
   background: none; border: none; cursor: pointer;
   color: var(--ink-3); font-size: var(--fs-md); line-height: 1;
-  /* --tap wide and tall even though the glyph inside is 13px: a 21px target
-     is below the 24x24 floor (WCAG 2.5.8) and these are the controls that
-     delete a relation and close a drawer */
-  min-width: var(--tap); min-height: var(--tap);
-  padding: var(--sp-1) var(--sp-2); border-radius: var(--r-md);
+  /* A square of the dense control height, even though the glyph inside is
+     13px. Two reasons: 21px was below the 24x24 target floor (WCAG 2.5.8) and
+     these are the controls that delete a relation and close a dialog; and it
+     shares a row with text buttons -- the domain table's actions cell has
+     three of those and this -- where anything shorter is the ragged edge
+     --ctl-h exists to end. Never taller than the dense height, because the
+     rows it sits inside are list rows and it must not set their height. */
+  width: var(--ctl-h-sm); height: var(--ctl-h-sm);
+  padding: 0; border-radius: var(--r-md);
   transition: all .12s;
   display: inline-flex; align-items: center; justify-content: center;
   --ico: 13px;
@@ -567,12 +589,11 @@ kbd {
   cursor: pointer;
 }
 
-/* .pick is a BUTTON standing in for a select (see core/pick.js), so it is in
-   both rules rather than restating them: a control that opens a list of
-   choices has no business looking like a different control because of how its
-   popup happens to be built. */
-input[type="text"], input[type="search"], input[type="number"], select, textarea,
-.pick {
+/* .pick is a BUTTON standing in for a select (see core/pick.js) -- there is
+   no <select> left in this app -- so it is in these rules rather than
+   restating them: a control that opens a list of choices has no business
+   looking like a different control because of how its popup is built. */
+input[type="text"], input[type="search"], input[type="number"], textarea, .pick {
   font: 400 var(--fs-body)/1.5 var(--font-ui);
   color: var(--ink);
   background: var(--inset);
@@ -582,21 +603,25 @@ input[type="text"], input[type="search"], input[type="number"], select, textarea
   outline: none;
   transition: border-color .15s;
 }
-input:focus, select:focus, textarea:focus, .pick:focus-visible { border-color: var(--accent); }
-input:disabled, select:disabled, textarea:disabled, .pick:disabled {
-  opacity: .55; cursor: default;
+/* One line of text, so the row's height sets it and the vertical padding
+   would only fight that. A textarea is the exception: it is as tall as what
+   is in it. */
+input[type="text"], input[type="search"], input[type="number"], .pick {
+  height: var(--ctl-h);
+  padding-top: 0; padding-bottom: 0;
 }
+input:focus, textarea:focus, .pick:focus-visible { border-color: var(--accent); }
+input:disabled, textarea:disabled, .pick:disabled { opacity: .55; cursor: default; }
 input::placeholder, textarea::placeholder { color: var(--ink-3); }
-select, .pick {
+.pick {
   cursor: pointer;
-  appearance: none;
-  -webkit-appearance: none;
+  display: inline-flex; align-items: center;
+  overflow: hidden;
   padding-right: var(--sp-6);
   background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'><path d='M1 1l4 4 4-4' fill='none' stroke='%23ffffff' stroke-opacity='.55' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/></svg>");
   background-repeat: no-repeat;
   background-position: right 10px center;
 }
-select option { background: var(--overlay); color: var(--ink); }
 /* the track is thin by design, but the thing you grab has to clear the --tap
    floor like every other control; the browser centres the track inside it */
 input[type="range"] { accent-color: var(--accent); min-height: var(--tap); }
@@ -645,14 +670,18 @@ textarea { resize: vertical; min-height: 110px; width: 100%; font-family: var(--
    toast in the opposite corner of the window, about a field the caret was
    already in -- the message and the problem were 400px apart. */
 .field-error { font-size: var(--fs-label); color: var(--bad-ink); }
-input[aria-invalid="true"], select[aria-invalid="true"], textarea[aria-invalid="true"] {
+input[aria-invalid="true"], .pick[aria-invalid="true"], textarea[aria-invalid="true"] {
   border-color: var(--bad);
 }
 
 .field { display: flex; flex-direction: column; gap: var(--sp-1); }
 .field > label { color: var(--ink-2); }
 
-.seg { display: inline-flex; background: var(--inset); border: 1px solid var(--line); border-radius: var(--r-md); padding: var(--sp-0); gap: var(--sp-0); }
+.seg {
+  display: inline-flex; background: var(--inset);
+  border: 1px solid var(--line); border-radius: var(--r-md);
+  height: var(--ctl-h); padding: var(--sp-0); gap: var(--sp-0);
+}
 .seg button {
   font: 500 var(--fs-sm) var(--font-ui);
   color: var(--ink-2);
@@ -663,6 +692,8 @@ input[aria-invalid="true"], select[aria-invalid="true"], textarea[aria-invalid="
      filter and the drawer's confidence setter -- two of the most-pressed
      targets in the app */
   min-height: var(--tap);
+  /* the group carries the row's height; a button inside it fills that */
+  height: 100%;
   display: inline-flex; align-items: center; gap: var(--sp-2);
   transition: all .13s;
 }
@@ -816,7 +847,7 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
 /* a control and the words naming it, on one line and as one target */
 .inline-label {
   display: inline-flex; align-items: center; gap: var(--sp-2);
-  min-height: var(--tap);
+  min-height: var(--ctl-h);
   font-size: var(--fs-label); color: var(--ink-2);
   white-space: nowrap; cursor: pointer;
 }
@@ -938,7 +969,10 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
   margin-bottom: var(--sp-4);
 }
 .list-toolbar input[type="search"] { flex: 1 1 220px; min-width: 180px; }
-.list-toolbar select, .list-toolbar .pick { max-width: 190px; }
+.list-toolbar .pick { max-width: 190px; }
+/* A row that was authored small -- inside a panel, under a title -- says so
+   once here rather than in every child. */
+.toolbar-sm { --ctl-h: var(--ctl-h-sm); }
 
 /* ── optimization · run cards (level 1) ─────────────────────────────── */
 
@@ -1127,6 +1161,8 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
 }
 
 .bulkbar {
+  /* a floating strip, dense like the other two */
+  --ctl-h: var(--ctl-h-sm);
   /* Centred on the CONTENT, which is half a rail to the right of the middle
      of the window -- not a whole one. `--rail-w + 50%` put the bar 114px
      right of where it belonged at every window size, and the narrow
@@ -1333,18 +1369,15 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
    row of chrome and they are the difference between finding one memory in
    a store of hundreds and scrolling for it. */
 .picker-filters {
+  --ctl-h: var(--ctl-h-sm);
   display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2);
   padding: var(--sp-2) var(--sp-3);
   border-bottom: 1px solid var(--line);
   background: var(--raised);
 }
-.picker-filters select,
-.picker-filters input[type="text"] {
-  font-size: var(--fs-sm);
-  padding: var(--sp-1) var(--sp-2);
-  min-height: var(--tap);
-}
-.picker-filters select { padding-right: var(--sp-5); }
+.picker-filters .pick,
+.picker-filters input[type="text"] { font-size: var(--fs-sm); }
+.picker-filters .pick { flex: none; max-width: 190px; padding-right: var(--sp-5); }
 .picker-filters input[type="text"] { flex: 1; min-width: 90px; }
 /* the archived toggle is an .inline-label; only its wrapping differs */
 .picker-filters .inline-label { flex: none; }
@@ -1599,36 +1632,26 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
 .graph-wrap canvas.dragging { cursor: grabbing; }
 .graph-wrap canvas.linkmode { cursor: crosshair; }
 
-/* One toolbar, one control height. It held four -- selects at 38px, the
-   segment at 30 and the buttons at 25 -- because each borrowed its size from
-   whatever it was elsewhere in the app, and side by side on a floating strip
-   that reads as a ragged edge. --ctl-h is the row's own height and every
-   child answers to it.
+/* A floating strip over the canvas, and the row this app's --ctl-h token was
+   first worked out on: every control in it answers to the dense height.
 
    It spans the canvas rather than hugging its content so the search field can
    take the space left over: it is the filter that answers the most questions
    here, so it leads the row and it is the widest thing in it. */
 .graph-controls {
-  --ctl-h: 32px;
+  --ctl-h: var(--ctl-h-sm);
   position: absolute; top: 12px; left: 12px; right: 12px; z-index: 3;
   display: flex; flex-wrap: wrap; gap: var(--sp-2); align-items: center;
 }
-.graph-controls > select,
-.graph-controls > input,
-.graph-controls > .seg,
-.graph-controls > .btn { height: var(--ctl-h); }
-/* the height comes from --ctl-h, so vertical padding would only fight it */
-.graph-controls > select,
-.graph-controls > input { padding-top: 0; padding-bottom: 0; font-size: var(--fs-sm); }
-.graph-controls > .seg > button { height: 100%; min-height: 0; }
-/* Both selects the same width -- a row of controls that each sizes to its own
-   longest option is the ragged edge again -- and wide enough for the longest
+.graph-controls > input, .graph-controls > .pick { font-size: var(--fs-sm); }
+/* Both pickers the same width -- a row of controls that each sizes to its own
+   longest label is a ragged edge again -- and wide enough for the longest
    PLACEHOLDER, not the shortest: "Todos os domínios" plus the chevron's
    reserved 32px needs 180, and at 150 pt-BR clipped its own first option. */
-.graph-controls > select { flex: none; width: 180px; }
+.graph-controls > .pick { flex: none; width: 180px; }
 /* Capped rather than allowed to eat the row: the leftover has to stay free so
    the match count can sit at the far end without shoving anything when it
-   appears. 380px is roughly what the domain select used to occupy before it
+   appears. 380px is roughly what the domain picker used to occupy before it
    was pinned, which is the width this field was asked for. */
 .graph-find { flex: 1 1 240px; min-width: 150px; max-width: 340px; }
 /* A reserved slot at the far end of the toolbar, held whether it has text in
@@ -1829,7 +1852,7 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
 /* the button's own text: one line, ellipsised -- a domain path is as long as
    its tree is deep and the control is 190px wide */
 .pick-value {
-  display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   text-align: left;
 }
 .pick-value .type-tag, .pick-value .conf-pill { pointer-events: none; }
@@ -1837,7 +1860,8 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
    is already at btn-sm height */
 .pick-sm {
   font-size: var(--fs-sm);
-  padding: var(--sp-1) var(--sp-5) var(--sp-1) var(--sp-2);
+  height: var(--ctl-h-sm);
+  padding-left: var(--sp-2); padding-right: var(--sp-5);
   max-width: 190px;
 }
 
