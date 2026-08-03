@@ -3195,6 +3195,19 @@ def _memory_exists(conn: sqlite3.Connection, uid: str | None) -> bool:
     return bool(uid) and get_memory(conn, uid) is not None
 
 
+def _diagram_content_error(conn: sqlite3.Connection, uid: str | None) -> str | None:
+    """The free-text editors' refusal, for the suggestion kinds that rewrite content.
+
+    A diagram's content is the projection of its graph, so a hand-authored
+    body applied over it survives only until the next diagram_node/
+    diagram_edge edit regenerates it (see is_diagram).
+    """
+    if not (uid and is_diagram(conn, uid)):
+        return None
+    return (f"{uid} is a diagram: its content is generated from the graph. "
+            "Use diagram_node/diagram_edge to change the flow.")
+
+
 def _validate_suggestion(conn: sqlite3.Connection, s: object) -> tuple[dict | None, str | None]:
     """Return (normalized_row, error). error is a human-readable string or None."""
     if not isinstance(s, dict):
@@ -3213,7 +3226,7 @@ def _validate_suggestion(conn: sqlite3.Connection, s: object) -> tuple[dict | No
         return None if _memory_exists(conn, target_uid) else f"target_uid not found: {target_uid!r}"
 
     if kind in ("compact", "reword"):
-        err = target_err()
+        err = target_err() or _diagram_content_error(conn, target_uid)
         if err:
             return None, err
         if not str(payload.get("new_content", "")).strip():
@@ -3446,6 +3459,12 @@ def _update_meta_field(conn: sqlite3.Connection, uid: str, field: str, value: st
 def _apply_kind(conn: sqlite3.Connection, kind: str, target_uid: str | None, payload: dict) -> dict:
     """Execute one suggestion and return the prev_state dict for undo."""
     if kind in ("compact", "reword"):
+        # staging refuses these on a diagram, but a run staged before that
+        # guard existed still holds one, and applying it would write over
+        # the projection
+        err = _diagram_content_error(conn, target_uid)
+        if err:
+            raise ValueError(err)
         row = get_memory(conn, target_uid)
         prev = {"content": row["content"]}
         update_memory_content(conn, target_uid, payload["new_content"], note=f"optimize:{kind}")
