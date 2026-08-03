@@ -252,8 +252,7 @@ function syncBulkbar() {
   bar.setAttribute('aria-label', t('bulk.aria'));
   bar.innerHTML = `
     <span data-count>${t('bulk.selected', { n: selection.size })}</span>
-    ${pickerHTML({ id: 'bulkConf', label: t('bulk.setConf'), ariaLabel: t('bulk.setConf'),
-                   cls: 'pick-sm' })}
+    ${pickerHTML({ id: 'bulkConf', label: t('bulk.setConf'), ariaLabel: t('bulk.setConf') })}
     <button type="button" class="btn btn-sm" id="bulkArch">${t('common.archive')}</button>
     <button type="button" class="btn btn-sm" id="bulkRest">${t('common.restore')}</button>
     <button type="button" class="icon-btn" id="bulkClear"

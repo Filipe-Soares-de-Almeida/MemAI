@@ -73,10 +73,9 @@ export async function renderMaintenance(view) {
              rather than in a settings page nobody opens. -->
         <h3 class="panel-title" style="margin-top:20px">${t('mn.rn.title')}
           <span class="panel-aside">${t('mn.rn.aside')}</span></h3>
-        <div class="list-toolbar" style="margin-bottom:6px">
+        <div class="list-toolbar toolbar-sm" style="margin-bottom:6px">
           <label class="inline-label">${t('mn.rn.keep')}
-            ${pickerFor({ id: 'rnKeep', items: keepItems, ariaLabel: t('mn.rn.keep'),
-                          cls: 'pick-sm' })}</label>
+            ${pickerFor({ id: 'rnKeep', items: keepItems, ariaLabel: t('mn.rn.keep') })}</label>
           <button class="btn btn-sm" data-op="prune-renders">${t('mn.rn.now')}</button>
           <button class="btn btn-sm" data-op="prune-renders-all">${t('mn.rn.all')}</button>
         </div>
@@ -87,11 +86,11 @@ export async function renderMaintenance(view) {
     <div class="panel" style="margin-bottom:14px">
       <h3 class="panel-title">${t('mn.dd.title')}
         <span class="panel-aside">${t('mn.dd.aside')}</span></h3>
-      <div class="list-toolbar" style="margin-bottom:6px">
+      <div class="list-toolbar toolbar-sm" style="margin-bottom:6px">
         <label class="inline-label">
           ${t('mn.dd.threshold')} <input type="range" id="ddThr" min="0.45" max="0.95" step="0.05" value="0.60">
           <b id="ddThrVal">0.60</b></label>
-        ${pickerFor({ id: 'ddType', items: types, ariaLabel: t('common.allTypes'), cls: 'pick-sm' })}
+        ${pickerFor({ id: 'ddType', items: types, ariaLabel: t('common.allTypes') })}
         <input type="text" id="ddDomain" placeholder="${t('mn.dd.domainPh')}"
                aria-label="${t('mn.dd.domainPh')}" list="ddDomainsDL" style="max-width:200px">
         <datalist id="ddDomainsDL"></datalist>

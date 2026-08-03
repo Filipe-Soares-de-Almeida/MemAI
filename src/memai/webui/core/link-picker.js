@@ -135,7 +135,7 @@ export function pickMemories({
                    placeholder="${t('lp.search')}" aria-label="${t('lp.search')}">
             <div class="picker-filters" id="lpFilters">
               ${type ? '' : pickerFor({ id: 'lpFType', items: lpTypes,
-                                        ariaLabel: t('lookup.filter.type'), cls: 'pick-sm' })}
+                                        ariaLabel: t('lookup.filter.type') })}
               ${domainPickerHTML({ id: 'lpFDomain', ariaLabel: t('lookup.filter.domain') })}
               <input type="text" data-f="tag" placeholder="${t('lookup.filter.tag')}"
                      aria-label="${t('lookup.filter.tag')}" autocomplete="off">
