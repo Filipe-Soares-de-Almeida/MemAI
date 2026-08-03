@@ -7,7 +7,8 @@ import { api } from '../core/api.js';
 import { icon } from '../core/icons.js';
 import { toast, failed, promptModal } from '../core/ui.js';
 import { statusTag, confPill, uidChip, wireCopyChips, getDomains,
-         invalidateDomains, domainOptions, domainSegments } from '../core/shared.js';
+         invalidateDomains, domainSegments } from '../core/shared.js';
+import { domainPickerHTML, wireDomainPicker } from '../core/domain-picker.js';
 import { go } from '../core/router.js';
 import { openRecord } from './record.js';
 import { t } from '../i18n.js';
@@ -79,10 +80,8 @@ export async function renderDiagrams(view, params, ctx) {
     <div class="panel" style="margin-bottom:14px">
       <div class="intro">${t('dgl.intro')}</div>
       <div class="act-row">
-        <select id="dglDomain" aria-label="${t('common.allDomains')}">
-          <option value="">${t('common.allDomains')}</option>
-          ${domainOptions(domains, state.domain)}
-        </select>
+        ${domainPickerHTML({ id: 'dglDomain', value: state.domain,
+                             ariaLabel: t('common.allDomains') })}
         <div class="seg" id="dglStatus" role="group" aria-label="${t('mem.status.aria')}">
           <button type="button" data-v="active" aria-pressed="${state.status === 'active'}">${t('common.active')}</button>
           <button type="button" data-v="" aria-pressed="${state.status === ''}">${t('common.all')}</button>
@@ -103,7 +102,7 @@ export async function renderDiagrams(view, params, ctx) {
     if (p.status === '') out.status = '';
     go('diagrams', out);
   };
-  $('#dglDomain').addEventListener('change', e => nav({ domain: e.target.value }));
+  wireDomainPicker(view, { id: 'dglDomain', domains, onPick: domain => nav({ domain }) });
   view.querySelectorAll('#dglStatus button').forEach(b =>
     b.addEventListener('click', () => nav({ status: b.dataset.v })));
   $('#dglNew').addEventListener('click', () => promptNewDiagram(state.domain));

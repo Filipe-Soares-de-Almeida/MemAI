@@ -11,8 +11,10 @@ import { api, query } from '../core/api.js';
 import { icon } from '../core/icons.js';
 import { toast, failed, tipShow, tipHide, openModal, closeModal, setPressed } from '../core/ui.js';
 import { typeTag, typeColor, uidChip, statusTag, confPill, wireCopyChips,
-         getDomains, TYPE_ORDER, TYPE_LABEL, REL_SUGGEST, relTypeField,
+         getDomains, TYPE_ORDER, TYPE_LABEL, typeItems, REL_SUGGEST, relTypeField,
          wireRelTypeField } from '../core/shared.js';
+import { pickerFor, wirePicker, fixedItems } from '../core/pick.js';
+import { domainPickerHTML, wireDomainPicker } from '../core/domain-picker.js';
 import { go, refreshBehind } from '../core/router.js';
 import { onTeardown } from '../core/lifecycle.js';
 import { openRecord } from './record.js';
@@ -46,6 +48,7 @@ export async function renderGraph(view, params, ctx) {
 
   const counts = {};
   data.nodes.forEach(n => { counts[n.type] = (counts[n.type] || 0) + 1; });
+  const types = typeItems({ any: t('common.allTypes') });
 
   /* A cap that says nothing is a cap that reads as "this is everything". */
   const capNote = data.truncated
@@ -73,14 +76,8 @@ export async function renderGraph(view, params, ctx) {
              Nothing is removed, no request is made, the layout never moves. -->
         <input type="search" id="gFind" class="graph-find" spellcheck="false" autocomplete="off"
                placeholder="${t('g.find')}" aria-label="${t('g.find')}">
-        <select id="gDomain" aria-label="${t('common.allDomains')}">
-          <option value="">${t('common.allDomains')}</option>
-          ${domains.map(d => `<option value="${esc(d.domain)}" ${d.domain === state.domain ? 'selected' : ''}>${esc(d.domain)}</option>`).join('')}
-        </select>
-        <select id="gType" aria-label="${t('common.allTypes')}">
-          <option value="">${t('common.allTypes')}</option>
-          ${TYPE_ORDER.map(tp => `<option value="${tp}" ${tp === state.type ? 'selected' : ''}>${TYPE_LABEL[tp]}</option>`).join('')}
-        </select>
+        ${domainPickerHTML({ id: 'gDomain', value: state.domain, ariaLabel: t('common.allDomains') })}
+        ${pickerFor({ id: 'gType', value: state.type, items: types, ariaLabel: t('common.allTypes') })}
         <div class="seg" role="group" aria-label="${t('mem.status.aria')}">
           <button type="button" data-v="active" aria-pressed="${state.status === 'active'}">${t('common.active')}</button>
           <button type="button" data-v="" aria-pressed="${state.status === ''}">${t('common.all')}</button>
@@ -108,8 +105,8 @@ export async function renderGraph(view, params, ctx) {
     if (p.status === 'active') delete out.status;
     go('graph', out);
   };
-  $('#gDomain').addEventListener('change', e => nav({ domain: e.target.value }));
-  $('#gType').addEventListener('change', e => nav({ type: e.target.value }));
+  wireDomainPicker(view, { id: 'gDomain', domains, onPick: domain => nav({ domain }) });
+  wirePicker(view, { id: 'gType', items: fixedItems(types), onPick: type => nav({ type }) });
   view.querySelectorAll('.graph-controls .seg button').forEach(b =>
     b.addEventListener('click', () => nav({ status: b.dataset.v })));
 
@@ -433,7 +430,8 @@ class ForceGraph {
       footHTML: `<button class="btn" data-x>${t('common.cancel')}</button><button class="btn btn-solid" data-ok>${t('g.modal.create')}</button>`,
     });
     const mq = s => modal.querySelector(s);
-    const glRelValue = wireRelTypeField(mq('#glType'), mq('#glTypeCustom'));
+    const glRelValue = wireRelTypeField(modal, {
+      selId: 'glType', customId: 'glTypeCustom', options: REL_SUGGEST });
     mq('[data-x]').onclick = () => { closeModal(); this.linkFrom = null; this.requestDraw(); };
     mq('[data-ok]').onclick = async () => {
       try {

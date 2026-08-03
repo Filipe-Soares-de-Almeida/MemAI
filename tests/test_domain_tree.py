@@ -405,6 +405,75 @@ def test_move_domain_normalizes_both_ends(conn):
     assert db.get_memory(conn, uid)["domain"] == "acme/x100"
 
 
+# ------------------------------------------------- archiving a whole level
+
+def test_archiving_a_domain_takes_the_subtree_and_nothing_else(conn):
+    ids = _tree(conn)
+    result = db.set_domain_status(conn, "acme/x100", "archived")
+    assert set(result["uids"]) == {ids["mod"], ids["proc"]}
+    assert result["domains"] == 2
+    assert db.get_memory(conn, ids["proc"])["status"] == "archived"
+    assert db.get_memory(conn, ids["root"])["status"] == "active"
+    assert db.get_memory(conn, ids["other"])["status"] == "active"
+
+
+def test_archiving_a_domain_reports_only_what_it_changed(conn):
+    """What an Undo has to act on. Restoring the whole scope instead would
+    revive a memory archived long before, for reasons of its own."""
+    old = db.insert_memory(conn, type="note", content="stale", domain="acme/x100")
+    db.set_status(conn, old, "archived")
+    fresh = db.insert_memory(conn, type="note", content="live", domain="acme/x100")
+    assert db.set_domain_status(conn, "acme/x100", "archived")["uids"] == [fresh]
+
+
+def test_restoring_a_domain_is_the_same_call_the_other_way(conn):
+    ids = _tree(conn)
+    db.set_domain_status(conn, "acme/x100", "archived")
+    assert len(db.set_domain_status(conn, "acme/x100", "active")["uids"]) == 2
+    assert db.get_memory(conn, ids["proc"])["status"] == "active"
+
+
+def test_archiving_a_domain_audits_the_reason(conn):
+    ids = _tree(conn)
+    db.set_domain_status(conn, "acme/x100", "archived", note="archived: superseded")
+    assert "archived: superseded" in [e["note"] for e in db.get_edit_history(conn, ids["mod"])]
+
+
+def test_archiving_a_domain_needs_a_path_and_a_known_status(conn):
+    _tree(conn)
+    with pytest.raises(ValueError, match="domain is required"):
+        db.set_domain_status(conn, "  ", "archived")
+    with pytest.raises(ValueError, match="status must be"):
+        db.set_domain_status(conn, "acme", "deleted")
+
+
+# --------------------------------------------------- deleting a whole level
+
+def test_deleting_a_domain_purges_the_subtree(conn):
+    ids = _tree(conn)
+    result = db.purge_domain(conn, "acme/x100")
+    assert result == {"purged": 2, "unlinked": 0, "domains": 2}
+    assert db.get_memory(conn, ids["proc"]) is None
+    assert db.get_memory(conn, ids["mod"]) is None
+    assert db.get_memory(conn, ids["root"])["domain"] == "acme"
+    assert db.get_memory(conn, ids["other"])["domain"] == "acme/x200"
+
+
+def test_deleting_a_domain_takes_the_history_with_it(conn):
+    uid = db.insert_memory(conn, type="note", content="cache warmup", domain="acme/x100")
+    db.update_memory_content(conn, uid, "cache warmup, revised")
+    db.purge_domain(conn, "acme/x100")
+    assert db.get_edit_history(conn, uid) == []
+
+
+def test_deleting_a_domain_with_nothing_in_it_raises(conn):
+    _tree(conn)
+    with pytest.raises(ValueError, match="no memories"):
+        db.purge_domain(conn, "nothing/here")
+    with pytest.raises(ValueError, match="domain is required"):
+        db.purge_domain(conn, " ")
+
+
 # --------------------------------------------------------- nesting proposals
 
 def test_nesting_hints_lift_codes_and_roots_out_of_a_flat_name():
@@ -511,3 +580,38 @@ def test_normalize_repairs_a_malformed_path(client):
     assert plan == [{"from": "acme//x100 ", "to": "acme/x100", "count": 1, "action": "rename"}]
     client.post("/api/domains/normalize", json={"dry_run": False})
     assert client.get(f"/api/memories/{uid}").json()["domain"] == "acme/x100"
+
+
+def test_status_endpoint_archives_a_level_and_echoes_the_uids(client):
+    kept = _create(client, domain="zeta")
+    uid = _create(client, domain="acme/x100")
+    res = client.post("/api/domains/status",
+                      json={"domain": "acme", "status": "archived", "reason": "superseded"}).json()
+    assert res["affected"] == 1 and res["uids"] == [uid]
+    assert client.get(f"/api/memories/{uid}").json()["status"] == "archived"
+    assert client.get(f"/api/memories/{kept}").json()["status"] == "active"
+    # the echoed uids are what /api/bulk takes back, which is what makes Undo work
+    client.post("/api/bulk", json={"action": "restore", "uids": res["uids"]})
+    assert client.get(f"/api/memories/{uid}").json()["status"] == "active"
+
+
+def test_status_endpoint_refuses_an_unknown_status(client):
+    _create(client, domain="acme")
+    assert client.post("/api/domains/status",
+                       json={"domain": "acme", "status": "deleted"}).status_code == 400
+
+
+def test_delete_endpoint_demands_the_exact_phrase(client):
+    uid = _create(client, domain="acme/x100")
+    assert client.post("/api/domains/delete",
+                       json={"domain": "acme/x100"}).status_code == 400
+    assert client.post("/api/domains/delete",
+                       json={"domain": "acme/x100", "confirm": "DELETE acme"}).status_code == 400
+    assert client.get(f"/api/memories/{uid}").status_code == 200
+
+    res = client.post("/api/domains/delete",
+                      json={"domain": "acme/x100", "confirm": "DELETE acme/x100"})
+    assert res.json()["purged"] == 1
+    assert client.get(f"/api/memories/{uid}").status_code == 400
+    # nothing names the levels any more, so the tree loses them both
+    assert client.get("/api/domains").json()["domains"] == []

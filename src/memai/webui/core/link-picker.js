@@ -25,8 +25,9 @@ import { api, seg } from './api.js';
 import { icon } from './icons.js';
 import { openModal, closeModal } from './ui.js';
 import { typeColor, typeClass, confPill, statusTag, uidChip, relTypeField,
-         wireRelTypeField, TYPE_ORDER, TYPE_LABEL, getDomains,
-         domainOptions } from './shared.js';
+         wireRelTypeField, TYPE_LABEL, typeItems, getDomains } from './shared.js';
+import { pickerFor, setPickerValue, wirePicker, fixedItems } from './pick.js';
+import { domainPickerHTML, wireDomainPicker } from './domain-picker.js';
 import { t } from '../i18n.js';
 
 /* Records already fetched for the preview pane. Arrowing down a list of
@@ -118,6 +119,7 @@ export function pickMemories({
        after the search that found it has been typed over */
     const picked = new Map();
     const filters = { type, domain: '', tag: '', status: 'active' };
+    const lpTypes = typeItems({ any: t('lookup.filter.type') });
     let items = [];
     let focused = null;              /* the uid the preview pane is showing */
     let seq = 0;                     /* filters and typing race; last wins */
@@ -132,13 +134,9 @@ export function pickMemories({
             <input type="text" class="lp-q" id="lpQ" autocomplete="off"
                    placeholder="${t('lp.search')}" aria-label="${t('lp.search')}">
             <div class="picker-filters" id="lpFilters">
-              ${type ? '' : `<select data-f="type" aria-label="${t('lookup.filter.type')}">
-                <option value="">${t('lookup.filter.type')}</option>
-                ${TYPE_ORDER.map(tp => `<option value="${tp}">${esc(TYPE_LABEL[tp])}</option>`).join('')}
-              </select>`}
-              <select data-f="domain" aria-label="${t('lookup.filter.domain')}">
-                <option value="">${t('lookup.filter.domain')}</option>
-              </select>
+              ${type ? '' : pickerFor({ id: 'lpFType', items: lpTypes,
+                                        ariaLabel: t('lookup.filter.type'), cls: 'pick-sm' })}
+              ${domainPickerHTML({ id: 'lpFDomain', ariaLabel: t('lookup.filter.domain') })}
               <input type="text" data-f="tag" placeholder="${t('lookup.filter.tag')}"
                      aria-label="${t('lookup.filter.tag')}" autocomplete="off">
               <label class="inline-label">
@@ -174,8 +172,14 @@ export function pickMemories({
     const okBtn = mq('[data-ok]');
     const input = mq('#lpQ');
 
+    /* The domain list arrives after the dialog does, so the picker is wired
+       once it lands -- unfiltered until then rather than absent, which is the
+       same bargain the select version made with its empty <option>. */
     getDomains().then(ds => {
-      mq('[data-f="domain"]')?.insertAdjacentHTML('beforeend', domainOptions(ds));
+      wireDomainPicker(modal, { id: 'lpFDomain', domains: ds, onPick: domain => {
+        filters.domain = domain;
+        run();
+      } });
     }).catch(() => { /* the filter is an accelerator, not a requirement */ });
 
     const anyFilter = () => Boolean((type ? '' : filters.type) || filters.domain || filters.tag)
@@ -283,6 +287,10 @@ export function pickMemories({
         modal.querySelectorAll('[data-f]').forEach(el => {
           if (el.type === 'checkbox') el.checked = false; else el.value = '';
         });
+        /* the pickers hold their own value, so clearing has to say so on the
+           button too -- an emptied filter that still reads "note" is a lie */
+        setPickerValue(mq('#lpFType'), lpTypes[0]);
+        setPickerValue(mq('#lpFDomain'), { value: '', label: t('common.allDomains') });
         run();
       });
       /* Something in the pane from the first paint, so the right half is
@@ -292,6 +300,10 @@ export function pickMemories({
 
     const runSoon = debounce(run, 280);
 
+    wirePicker(modal, { id: 'lpFType', items: fixedItems(lpTypes), onPick: v => {
+      filters.type = v;
+      run();
+    } });
     modal.querySelectorAll('[data-f]').forEach(el => {
       const read = () => {
         if (el.dataset.f === 'archived') filters.status = el.checked ? '' : 'active';
@@ -319,15 +331,15 @@ export function pickMemories({
       (next || input).focus();
     });
 
+    const clear = () => {
+      for (const el of [mq('#lpRel'), mq('#lpRelCustom')]) el?.setAttribute('aria-invalid', 'false');
+      mq('#lpRelError').hidden = true;
+    };
     const readRel = relOptions
-      ? wireRelTypeField(mq('#lpRel'), mq('#lpRelCustom'))
+      ? wireRelTypeField(modal, {
+          selId: 'lpRel', customId: 'lpRelCustom', options: relOptions, onPick: clear })
       : () => '';
     if (relOptions) {
-      const clear = () => {
-        for (const el of [mq('#lpRel'), mq('#lpRelCustom')]) el.setAttribute('aria-invalid', 'false');
-        mq('#lpRelError').hidden = true;
-      };
-      mq('#lpRel').addEventListener('change', clear);
       mq('#lpRelCustom').addEventListener('input', clear);
     }
 
