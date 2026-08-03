@@ -420,3 +420,48 @@ def test_a_store_written_before_the_column_migrates(tmp_path):
         db.add_domain_link(conn, uid, "omni/x900")
         assert [r["uid"] for r in db.list_by_domain(conn, "omni/x900")] == [uid]
         assert [r["uid"] for r in db.search_memories(conn, "x900")] == [uid]
+
+
+# ------------------------------------------------- archiving/deleting a scope
+
+def test_archiving_a_scope_leaves_a_memory_that_only_belongs(conn):
+    """The same reading as a re-home: a cross-listing says a memory belongs
+    to a subject, not that it lives there, so archiving the subject cannot
+    reach into the branch it actually lives in."""
+    ids = _crossing(conn)
+    result = db.set_domain_status(conn, "omni/x900", "archived")
+    assert result["uids"] == []
+    assert db.get_memory(conn, ids["queue"])["status"] == "active"
+
+
+def test_purging_a_memory_takes_its_memberships(conn):
+    """The FK on memory_domains refuses the DELETE while a membership names
+    the row, so this used to raise instead of deleting anything."""
+    ids = _crossing(conn)
+    assert db.purge_memory(conn, ids["queue"]) is True
+    assert conn.execute(
+        "SELECT COUNT(*) AS n FROM memory_domains WHERE memory_uid = ?",
+        (ids["queue"],)).fetchone()["n"] == 0
+
+
+def test_deleting_a_domain_drops_the_cross_listings_pointing_into_it(conn):
+    """The path stops existing, so a membership naming it would dangle. The
+    memory holding it is filed in another branch and stays."""
+    ids = _crossing(conn)
+    result = db.purge_domain(conn, "omni/x900")
+    assert result["purged"] == 0 and result["unlinked"] == 2
+    assert db.get_memory(conn, ids["queue"])["domain"] == "acme/x100/p200"
+    assert db.get_domain_links(conn, ids["queue"]) == []
+    assert db.get_memory(conn, ids["queue"])["also_domains"] == ""
+    # ...and the index the mirror feeds no longer answers for the dead subject
+    assert db.search_memories(conn, "x900") == []
+
+
+def test_deleting_a_domain_purges_what_is_filed_there_and_unlinks_the_rest(conn):
+    ids = _crossing(conn)
+    filed = db.insert_memory(conn, type="note", content="flow overview",
+                             domain="omni/x900")
+    result = db.purge_domain(conn, "omni/x900")
+    assert result["purged"] == 1 and result["unlinked"] == 2
+    assert db.get_memory(conn, filed) is None
+    assert db.get_memory(conn, ids["token"]) is not None

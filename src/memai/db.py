@@ -792,10 +792,17 @@ def purge_memory(conn: sqlite3.Connection, uid: str) -> bool:
     and so does any OTHER diagram's node link or jump that pointed at this
     memory -- otherwise a purged note leaves a node link dangling at a uid
     that no longer resolves.
+
+    `memory_domains` goes with it for the same reason, and the FK on that
+    table means it HAS to: the DELETE below is refused outright while a
+    cross-listing still names this uid, so purging a memory that belonged to
+    a second subject used to fail with a constraint error rather than delete
+    anything. No mirror to rewrite -- the row itself is on its way out.
     """
     row = get_memory(conn, uid)
     if row is None:
         return False
+    conn.execute("DELETE FROM memory_domains WHERE memory_uid = ?", (uid,))
     conn.execute("DELETE FROM edits WHERE memory_uid = ?", (uid,))
     conn.execute("DELETE FROM relations WHERE from_uid = ? OR to_uid = ?", (uid, uid))
     conn.execute("DELETE FROM optimization_suggestions WHERE target_uid = ?", (uid,))
@@ -2675,6 +2682,86 @@ def move_domain(
     return {
         "moved": len(rows), "domains": len(touched), "merged": merged,
         "also_moved": len(relinked),
+    }
+
+
+def set_domain_status(
+    conn: sqlite3.Connection, domain: str, status: str, *, note: str = ""
+) -> dict:
+    """Archive (or restore) every memory FILED in a domain scope.
+
+    A domain has no status of its own -- it exists because memories name it,
+    so "archive this domain" means archiving what is filed under it,
+    subdomains included. The view then reads a level with archived memories
+    and none active as an archived branch.
+
+    Matched on the filed path alone (also=False), like a re-home: a memory
+    cross-listed into the subject lives in another branch, and archiving a
+    subject it merely belongs to would reach outside what was pointed at.
+
+    Only rows that actually change are touched, and their uids come back --
+    which is what makes an Undo exact. Restoring "everything in the scope"
+    would also revive whatever had been archived long before, for reasons
+    that have nothing to do with this pass.
+    """
+    path = normalize_domain(domain)
+    if not path:
+        raise ValueError("domain is required")
+    if status not in ("active", "archived"):
+        raise ValueError("status must be 'active' or 'archived'")
+    clause, params = domain_clause(path, alias="", subtree=True, also=False)
+    rows = conn.execute(
+        f"SELECT uid, domain FROM memories WHERE status <> ? {clause}",
+        [status, *params]).fetchall()
+    for r in rows:
+        set_status(conn, r["uid"], status, note=note)
+    return {
+        "uids": [r["uid"] for r in rows],
+        "domains": len({r["domain"] for r in rows}),
+    }
+
+
+def purge_domain(conn: sqlite3.Connection, domain: str) -> dict:
+    """Irreversibly delete a domain: every memory filed in it, subtree included.
+
+    The scope-wide counterpart of purge_memory, and it carries the same
+    warning N times over -- callers must gate it behind an explicit typed
+    confirmation. set_domain_status(status='archived') is the reversible
+    reading of "get rid of this domain" and is what the UI offers first.
+
+    Cross-listings pointing INTO the scope go too, because the path they name
+    stops existing. The memories holding them do NOT: one is filed in another
+    branch and only belonged to this subject, so it loses the membership and
+    keeps its own life. Dropped through set_domain_links, which is what keeps
+    `memory_domains` and the `also_domains` mirror telling one story.
+    """
+    path = normalize_domain(domain)
+    if not path:
+        raise ValueError("domain is required")
+    clause, params = domain_clause(path, alias="", subtree=True, also=False)
+    rows = conn.execute(
+        f"SELECT uid, domain FROM memories WHERE 1=1 {clause}", params).fetchall()
+    link_rows = conn.execute(
+        f"SELECT memory_uid, domain FROM memory_domains WHERE 1=1 {clause}",
+        params).fetchall()
+    if not rows and not link_rows:
+        raise ValueError(f"no memories in domain '{path}'")
+
+    purged = {r["uid"] for r in rows}
+    for uid in sorted(purged):
+        purge_memory(conn, uid)
+    # a purged memory took its own memberships with it, so what is left here
+    # is the memories filed elsewhere that merely belonged to the scope
+    unlinked = sorted({r["memory_uid"] for r in link_rows} - purged)
+    for uid in unlinked:
+        set_domain_links(
+            conn, uid,
+            [p for p in get_domain_links(conn, uid) if not in_domain(p, path)],
+            coerce=False, note=f"meta: also '{path}' dropped (domain deleted)")
+    return {
+        "purged": len(purged), "unlinked": len(unlinked),
+        "domains": len({r["domain"] for r in rows}
+                       | {r["domain"] for r in link_rows}),
     }
 
 

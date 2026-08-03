@@ -10,8 +10,10 @@ import { $, esc, fmtInt, fmtDate, debounce } from '../core/dom.js';
 import { api, query } from '../core/api.js';
 import { icon } from '../core/icons.js';
 import { toast, failed, promptModal } from '../core/ui.js';
-import { typeTag, statusTag, confPill, getDomains, domainOptions,
-         inDomainPath, TYPE_ORDER, TYPE_LABEL, CONF } from '../core/shared.js';
+import { typeTag, statusTag, confPill, getDomains, inDomainPath,
+         typeItems, confItems } from '../core/shared.js';
+import { pickerHTML, pickerFor, wirePicker, fixedItems } from '../core/pick.js';
+import { domainPickerHTML, wireDomainPicker } from '../core/domain-picker.js';
 import { go, refreshBehind } from '../core/router.js';
 import { onTeardown } from '../core/lifecycle.js';
 import { openRecord } from './record.js';
@@ -82,13 +84,14 @@ export async function renderMemories(view, params, ctx) {
   const data = await api(`/api/memories?${qs}`);
   if (ctx.stale()) return;
 
-  const domainOpts = [`<option value="">${t('common.allDomains')}</option>`,
-    domainOptions(domains, state.domain)];
-  if (state.domain && !domains.some(d => d.domain === state.domain))
-    domainOpts.push(`<option value="${esc(state.domain)}" selected>${esc(state.domain)}</option>`);
   const kids = domains.find(d => d.domain === state.domain)?.children;
-  const typeOpts = [`<option value="">${t('common.allTypes')}</option>`,
-    ...TYPE_ORDER.map(tp => `<option value="${tp}" ${tp === state.type ? 'selected' : ''}>${TYPE_LABEL[tp]}</option>`)];
+  const types = typeItems({ any: t('common.allTypes') });
+  const confs = confItems({ any: t('mem.conf.all') });
+  const sorts = [
+    { value: 'created_at:desc', label: t('mem.sort.newest') },
+    { value: 'created_at:asc', label: t('mem.sort.oldest') },
+    { value: 'updated_at:desc', label: t('mem.sort.updated') },
+  ];
 
   view.innerHTML = `<div class="anim">
     <div class="view-head"><h2 class="view-title">${t('mem.title')}</h2>
@@ -98,8 +101,11 @@ export async function renderMemories(view, params, ctx) {
       <input id="fQ" type="search" placeholder="${t('mem.search.placeholder')}" value="${esc(state.q)}" spellcheck="false">
       <!-- the app's one remaining accelerator, taught where it lands -->
       <kbd class="toolbar-kbd" aria-hidden="true">/</kbd>
-      <select id="fType">${typeOpts.join('')}</select>
-      <select id="fDomain">${domainOpts.join('')}</select>
+      <!-- Pickers, not selects (core/pick.js): a type keeps its colour and a
+           confidence its ring in the list where you choose one, and a domain
+           keeps the tree it is. -->
+      ${pickerFor({ id: 'fType', value: state.type, items: types, ariaLabel: t('common.allTypes') })}
+      ${domainPickerHTML({ id: 'fDomain', value: state.domain, ariaLabel: t('common.allDomains') })}
       <!-- only where the choice exists: a domain with no subdomains reads
            the same either way, and an inert toggle is noise -->
       ${kids ? `<button type="button" class="chip clickable" id="fExact" aria-pressed="${Boolean(state.exact)}"
@@ -114,15 +120,9 @@ export async function renderMemories(view, params, ctx) {
         <button type="button" data-v="archived" aria-pressed="${state.status === 'archived'}">${t('common.archived')}</button>
         <button type="button" data-v="" aria-pressed="${state.status === ''}">${t('common.all')}</button>
       </div>
-      <select id="fConf">
-        <option value="">${t('mem.conf.all')}</option>
-        ${Object.keys(CONF).map(c => `<option value="${c}" ${c === state.confidence ? 'selected' : ''}>${CONF[c].label}</option>`).join('')}
-      </select>
-      ${data.searched ? '' : `<select id="fSort">
-        <option value="created_at:desc" ${state.sort === 'created_at' && state.dir === 'desc' ? 'selected' : ''}>${t('mem.sort.newest')}</option>
-        <option value="created_at:asc" ${state.sort === 'created_at' && state.dir === 'asc' ? 'selected' : ''}>${t('mem.sort.oldest')}</option>
-        <option value="updated_at:desc" ${state.sort === 'updated_at' ? 'selected' : ''}>${t('mem.sort.updated')}</option>
-      </select>`}
+      ${pickerFor({ id: 'fConf', value: state.confidence, items: confs, ariaLabel: t('mem.conf.all') })}
+      ${data.searched ? '' : pickerFor({ id: 'fSort', items: sorts, ariaLabel: t('mem.sort.aria'),
+        value: `${state.sort}:${state.sort === 'updated_at' ? 'desc' : state.dir}` })}
       ${state.session ? `<button type="button" class="chip clickable" id="fSession" title="${t('mem.session.title')}">${t('mem.session.chip', { s: esc(state.session.slice(0, 18)) })}${icon('close')}</button>` : ''}
     </div>
 
@@ -159,20 +159,22 @@ export async function renderMemories(view, params, ctx) {
   $('#fQ').addEventListener('input', debounce(e => {
     if (e.target.value.trim() === '' && state.q) navigate({ q: '', page: 0 });
   }, 500));
-  const fType = $('#fType');
-  if (fType) fType.addEventListener('change', e => navigate({ type: e.target.value, page: 0 }));
+  wirePicker(view, { id: 'fType', items: fixedItems(types),
+                     onPick: type => navigate({ type, page: 0 }) });
   /* a new scope starts inclusive: 'exact' was about the domain just left */
-  $('#fDomain').addEventListener('change', e =>
-    navigate({ domain: e.target.value, exact: '', page: 0 }));
+  wireDomainPicker(view, {
+    id: 'fDomain', domains,
+    onPick: domain => navigate({ domain, exact: '', page: 0 }),
+  });
   const fExact = $('#fExact');
   if (fExact) fExact.addEventListener('click', () =>
     navigate({ exact: state.exact ? '' : '1', page: 0 }));
-  $('#fConf').addEventListener('change', e => navigate({ confidence: e.target.value, page: 0 }));
-  const fSort = $('#fSort');
-  if (fSort) fSort.addEventListener('change', e => {
-    const [sort, dir] = e.target.value.split(':');
+  wirePicker(view, { id: 'fConf', items: fixedItems(confs),
+                     onPick: confidence => navigate({ confidence, page: 0 }) });
+  wirePicker(view, { id: 'fSort', items: fixedItems(sorts), onPick: v => {
+    const [sort, dir] = v.split(':');
     navigate({ sort, dir, page: 0 });
-  });
+  } });
   $('#fStatus').querySelectorAll('button').forEach(b =>
     b.addEventListener('click', () => navigate({ status: b.dataset.v, page: 0 })));
   const fSession = $('#fSession');
@@ -250,10 +252,8 @@ function syncBulkbar() {
   bar.setAttribute('aria-label', t('bulk.aria'));
   bar.innerHTML = `
     <span data-count>${t('bulk.selected', { n: selection.size })}</span>
-    <select id="bulkConf" aria-label="${t('bulk.setConf')}">
-      <option value="">${t('bulk.setConf')}</option>
-      ${Object.keys(CONF).map(c => `<option value="${c}">${CONF[c].label}</option>`).join('')}
-    </select>
+    ${pickerHTML({ id: 'bulkConf', label: t('bulk.setConf'), ariaLabel: t('bulk.setConf'),
+                   cls: 'pick-sm' })}
     <button type="button" class="btn btn-sm" id="bulkArch">${t('common.archive')}</button>
     <button type="button" class="btn btn-sm" id="bulkRest">${t('common.restore')}</button>
     <button type="button" class="icon-btn" id="bulkClear"
@@ -263,9 +263,11 @@ function syncBulkbar() {
   bulkSize = new ResizeObserver(() => publishBulkHeight(bar));
   bulkSize.observe(bar);
 
-  bar.querySelector('#bulkConf').addEventListener('change', async e => {
-    if (!e.target.value) return;
-    await runBulk({ action: 'confidence', value: e.target.value });
+  /* keepLabel: this one is an ACTION and not a state -- it says what will
+     happen to the selection, so it goes on saying it after it has happened */
+  wirePicker(bar, {
+    id: 'bulkConf', items: fixedItems(confItems()), keepLabel: true,
+    onPick: value => runBulk({ action: 'confidence', value }),
   });
   bar.querySelector('#bulkArch').addEventListener('click', async () => {
     const reason = await promptModal({

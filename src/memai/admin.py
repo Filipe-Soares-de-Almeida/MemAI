@@ -16,7 +16,9 @@ before the context manager exits means nothing is committed.
 
 Destructive parity with the MCP tools is kept: archive (forget) is the
 default "delete", and purge demands the literal confirmation phrase
-"DELETE <uid>" typed by the operator, same guardrail as server.py.
+"DELETE <uid>" typed by the operator, same guardrail as server.py. A
+whole domain reads the same way one memory does -- archiving it is the
+reversible option, and deleting it asks for "DELETE <domain>".
 
 Run with `memai-admin` (default http://127.0.0.1:8888); binds to
 loopback unless --host says otherwise. Honors MEMAI_HOME.
@@ -63,6 +65,11 @@ DEDUP_SNIPPET = 480
 KNOWN_TYPES = ("note", "checkpoint", "anti_pattern", "reasoning", "handoff", "diagram")
 CONFIDENCES = ("unverified", "confirmed", "contradicted")
 STATUSES = ("active", "archived")
+
+# How many uids one /api/bulk call carries. Also the cap on the uid list a
+# scope-wide archive echoes back for its Undo -- an Undo that came back longer
+# than bulk accepts would be a button that cannot work.
+BULK_MAX = 500
 
 # The relations graph is laid out in the browser by an O(n^2) force
 # simulation, so handing over the whole store freezes the tab rather than
@@ -474,8 +481,8 @@ def bulk(request, payload) -> dict:
     action = payload.get("action", "")
     if not isinstance(uids, list) or not uids:
         raise ValueError("uids must be a non-empty list")
-    if len(uids) > 500:
-        raise ValueError("at most 500 uids per operation")
+    if len(uids) > BULK_MAX:
+        raise ValueError(f"at most {BULK_MAX} uids per operation")
     reason = (payload.get("reason") or "").strip()
     done = 0
     with db.connect() as conn:
@@ -917,6 +924,52 @@ def rename_domain(request, payload) -> dict:
     return {"ok": True, "affected": moved["moved"],
             "also_affected": moved["also_moved"],
             "domains": moved["domains"], "merged": moved["merged"]}
+
+
+def domain_status(request, payload) -> dict:
+    """Archive or restore a whole domain, subdomains included.
+
+    A domain has no status column -- it is named by the memories filed under
+    it -- so this is the scope-wide reading of the per-memory archive, and
+    the tree draws a level with archived memories and no active ones as an
+    archived branch.
+
+    `uids` is what actually changed, so the UI can offer an exact Undo
+    instead of restoring everything in the scope (see db.set_domain_status).
+    Withheld past BULK_MAX, which is the most /api/bulk would take back.
+    """
+    domain = (payload.get("domain") or "").strip()
+    status = payload.get("status", "")
+    if status not in STATUSES:
+        raise ValueError(f"status must be one of {STATUSES}")
+    reason = (payload.get("reason") or "").strip()
+    verb = "archived" if status == "archived" else "restored"
+    note = f"{verb} with domain '{domain}'" + (f": {reason}" if reason else "")
+    with db.connect() as conn:
+        moved = db.set_domain_status(conn, domain, status, note=note)
+    uids = moved["uids"]
+    return {"ok": True, "affected": len(uids), "domains": moved["domains"],
+            "uids": uids if len(uids) <= BULK_MAX else []}
+
+
+def delete_domain(request, payload) -> dict:
+    """Permanently delete a domain and every memory filed in it.
+
+    Same guardrail as the MCP purge_memory tool and the per-memory purge
+    above, for the same reason and at a much larger blast radius: the
+    operator must type the literal phrase 'DELETE <domain>', and the UI
+    never pre-fills it. Archiving the domain is the reversible option and
+    is what the view offers first.
+    """
+    domain = (payload.get("domain") or "").strip()
+    if not domain:
+        raise ValueError("'domain' is required")
+    expected = f"DELETE {domain}"
+    if payload.get("confirm", "") != expected:
+        raise ValueError(f"confirm phrase must exactly equal '{expected}'")
+    with db.connect() as conn:
+        gone = db.purge_domain(conn, domain)
+    return {"ok": True, **gone}
 
 
 def _normalize_plan(mode: str, counts: dict[str, int]) -> list[dict]:
@@ -1604,6 +1657,8 @@ routes = [
     Route("/api/domains", api(domains)),
     Route("/api/domains/rename", api(rename_domain), methods=["POST"]),
     Route("/api/domains/normalize", api(normalize_domains), methods=["POST"]),
+    Route("/api/domains/status", api(domain_status), methods=["POST"]),
+    Route("/api/domains/delete", api(delete_domain), methods=["POST"]),
     Route("/api/maintenance/health", api(health)),
     Route("/api/maintenance/fts-rebuild", api(fts_rebuild), methods=["POST"]),
     Route("/api/maintenance/reembed", api(reembed), methods=["POST"]),
