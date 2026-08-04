@@ -104,6 +104,16 @@ const ICONS = {
     body: `<circle cx="8" cy="8" r="6.2"/><path d="M8 7.2v4"/>
            <circle cx="8" cy="4.9" r=".85" fill="currentColor" stroke="none"/>`,
   },
+  /* A bin, for the one control in a list row that cannot be undone. Not
+     `close`: dismissing a row and destroying what it names are different
+     acts, and the domain table offers both. */
+  trash: {
+    viewBox: '0 0 16 16',
+    body: `<path d="M2.6 4.4h10.8"/>
+           <path d="M6.2 4.4V2.8h3.6v1.6"/>
+           <path d="M4 4.4l.6 8.4a1.2 1.2 0 0 0 1.2 1.1h4.4a1.2 1.2 0 0 0 1.2-1.1l.6-8.4"/>
+           <path d="M6.8 7v4.2M9.2 7v4.2"/>`,
+  },
   /* the spelling-drift marker in the domain table: two tildes, ≈ */
   approx: {
     viewBox: '0 0 16 16',

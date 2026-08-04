@@ -9,6 +9,7 @@
 import { $, esc, cssVar, fmtBytes, fmtInt } from './dom.js';
 import { api } from './api.js';
 import { icon } from './icons.js';
+import { fixedItems, pickerFor, wirePicker } from './pick.js';
 import { t } from '../i18n.js';
 import { copyUid } from './ui.js';
 
@@ -42,31 +43,45 @@ const REL_OTHER = '__other';
 /* A relation type was a text input behind a <datalist>, and admin.css hides
    the native datalist indicator -- so the field looked like free text and
    gave no sign a known set existed. Recall where recognition was available.
-   A select names the five, and the escape hatch keeps the string open.
+   A named list of the five, and the escape hatch keeps the string open.
 
-   Emits the select AND its custom-value sibling; wireRelTypeField() joins
+   Emits the picker AND its custom-value sibling; wireRelTypeField() joins
    them and returns the value getter. */
+const relItems = options => [
+  { value: '', label: t('dr.rel.type.placeholder'),
+    html: `<span class="pick-any">${t('dr.rel.type.placeholder')}</span>` },
+  ...options.map(r => ({ value: r, label: t(`rel.${r}`) })),
+  { value: REL_OTHER, label: t('dr.rel.type.other'),
+    html: `<span class="pick-any">${t('dr.rel.type.other')}</span>` },
+];
+
 export const relTypeField = ({ selId, customId, options, value = '', ariaLabel }) => {
   const known = !value || options.includes(value);
-  return `
-    <select id="${selId}" class="rel-type-sel" aria-label="${esc(ariaLabel)}">
-      <option value="">${t('dr.rel.type.placeholder')}</option>
-      ${options.map(r => `<option value="${r}"${value === r ? ' selected' : ''}>${esc(t(`rel.${r}`))}</option>`).join('')}
-      <option value="${REL_OTHER}"${known ? '' : ' selected'}>${t('dr.rel.type.other')}</option>
-    </select>
+  return pickerFor({
+    id: selId, value: known ? value : REL_OTHER, items: relItems(options),
+    ariaLabel, cls: 'rel-type-sel',
+  }) + `
     <input type="text" id="${customId}" class="rel-type-custom"${known ? ' hidden' : ''}
            placeholder="${t('dr.rel.type.customPlaceholder')}"
            aria-label="${t('dr.rel.type.customPlaceholder')}"
            value="${known ? '' : esc(value)}" autocomplete="off">`;
 };
 
-export function wireRelTypeField(sel, custom) {
-  sel.addEventListener('change', () => {
-    const other = sel.value === REL_OTHER;
-    custom.hidden = !other;
-    if (other) custom.focus();
+/* `onPick` is the caller's own business on top of revealing the free-text
+   sibling -- the link picker clears its validation error there. */
+export function wireRelTypeField(root, { selId, customId, options, onPick }) {
+  const btn = root.querySelector(`#${selId}`);
+  const custom = root.querySelector(`#${customId}`);
+  wirePicker(root, {
+    id: selId, items: fixedItems(relItems(options)),
+    onPick: value => {
+      const other = value === REL_OTHER;
+      custom.hidden = !other;
+      if (other) custom.focus();
+      onPick?.(value);
+    },
   });
-  return () => (sel.value === REL_OTHER ? custom.value.trim() : sel.value);
+  return () => (btn.dataset.v === REL_OTHER ? custom.value.trim() : btn.dataset.v);
 }
 
 export const typeColor = tp => (TYPES[tp] || {}).color || '#9e9e9e';
@@ -94,6 +109,31 @@ export const uidChip = uid =>
   `<button type="button" class="uid-chip" data-copy="${esc(uid)}"
            title="${t('uid.copyTitle')}"
            aria-label="${esc(t('a11y.copyUid', { uid }))}">${esc(uid)}</button>`;
+
+/* ─── the two closed vocabularies, as picker rows ────────────────────────
+   A type and a confidence are identified everywhere else in this UI by a
+   mark -- a coloured dot, a ringed glyph -- and a native <option> could
+   carry neither, so the one list where you PICK one was the one place the
+   mark went missing. core/pick.js draws markup, so it comes along.
+
+   `any` is the row that stands for no filter at all. It is a sentence and not
+   a value, so it reads as one (.pick-any) instead of impersonating a type. */
+
+export const typeItems = ({ any = '' } = {}) => [
+  ...(any ? [{ value: '', label: any, html: `<span class="pick-any">${esc(any)}</span>` }] : []),
+  /* the type-tag chrome, with the display label rather than the raw enum:
+     the enum is what the payload carries, not what a reader is choosing */
+  ...TYPE_ORDER.map(tp => ({
+    value: tp,
+    label: TYPE_LABEL[tp],
+    html: `<span class="type-tag ${typeClass(tp)}"><span class="dot"></span>${esc(TYPE_LABEL[tp])}</span>`,
+  })),
+];
+
+export const confItems = ({ any = '' } = {}) => [
+  ...(any ? [{ value: '', label: any, html: `<span class="pick-any">${esc(any)}</span>` }] : []),
+  ...Object.keys(CONF).map(c => ({ value: c, label: CONF[c].label, html: confPill(c) })),
+];
 
 /* ─── a load that failed ──────────────────────────────────────────────────
    Six places rendered a fatal load error with `.empty` -- the same grey centred
@@ -146,6 +186,14 @@ export const domainSegments = d => (d || '').split(DOMAIN_SEP).filter(Boolean);
 export const domainLeaf = d => domainSegments(d).slice(-1)[0] || '';
 export const domainDepth = d => domainSegments(d).length;
 
+/* Whether a path IS a scope or sits under it. Segment-wise, like the
+   server's own check: 'acme/x1000' is not inside 'acme/x100' however
+   similar the two read. An empty scope holds everything. */
+export function inDomainPath(domain, scope) {
+  const want = domainSegments(scope), segs = domainSegments(domain);
+  return want.every((s, i) => segs[i] === s);
+}
+
 /* Tree order: a parent, then its whole subtree, then its next sibling.
    Comparing the strings would not do it -- '-' sorts before '/', so a root
    named 'acme-legacy' would land between 'acme' and 'acme/x100' and cut a
@@ -159,19 +207,57 @@ export function byDomainPath(a, b) {
   return x.length - y.length;
 }
 
-/* Options for a domain <select>: tree-ordered, indented by depth, showing
-   the leaf with the full path on hover. Repeating the whole path in every
-   row makes the reader diff strings to see the shape; indentation shows it.
-   The full path is still the value, and still the title -- two sibling
-   trees can hold the same leaf name. */
-export function domainOptions(domains, selected = '') {
-  return domains.slice().sort(byDomainPath).map(d => {
-    /* non-breaking: a run of plain spaces inside an <option> collapses */
-    const pad = '   '.repeat(Math.max(domainDepth(d.domain) - 1, 0));
-    return `<option value="${esc(d.domain)}"${d.domain === selected ? ' selected' : ''}
-             title="${esc(d.domain)}">${pad}${esc(domainLeaf(d.domain))}</option>`;
-  }).join('');
+/* The SHAPE of a domain tree, one entry per row: which ancestor columns
+   still have a row below them (so their line continues through this one),
+   and whether this row closes its branch.
+
+   `list` must already be in tree order (byDomainPath) -- that is what makes
+   this one pass: the next row at this depth or shallower is either a sibling
+   of this row or the end of its parent.
+
+   Kept here rather than in the one view that draws it, because the shape of
+   the tree and the way a given surface draws it are two different things: a
+   second renderer must not work the shape out for itself, or the same tree
+   ends up drawn as two different trees. */
+export function domainGuides(list) {
+  const out = [];
+  /* cont[k - 1]: the row last seen at depth k has a sibling still to come,
+     so the column that branch owns keeps its line through the rows between */
+  const cont = [];
+  list.forEach((d, i) => {
+    const depth = domainDepth(d.domain);
+    let last = true;
+    for (let j = i + 1; j < list.length; j++) {
+      const next = domainDepth(list[j].domain);
+      if (next > depth) continue;
+      last = next < depth;
+      break;
+    }
+    /* one flag per pass-through column; the connector column is this row's
+       own `last`, and a root has neither */
+    out.push({ depth, through: cont.slice(1, depth - 1), last });
+    cont[depth - 1] = !last;
+  });
+  return out;
 }
+
+/* One row's guide rails as markup, from one entry of domainGuides.
+
+   The columns are drawn by admin.css (.dom-rail), which measures them off
+   --dom-step -- so whatever hosts these has to declare that pair and lay its
+   row out the same way: the indent spacer, then an 18px twist slot, then the
+   name. `leaf` says there is no twist in that slot, and the closing stroke
+   runs on across it to the name instead of stopping at an empty box.
+
+   Markup and not just classes, because the domain table and the domain
+   picker draw the same tree, and two copies of this loop is how they would
+   come to draw it differently. */
+export const domainRailHTML = ({ depth, through, last }, { leaf = false } = {}) =>
+  depth > 1
+    ? `<span class="dom-rail${leaf ? ' dg-leaf' : ''}" aria-hidden="true">${
+        through.map(on => `<i class="${on ? 'dg-line' : 'dg-gap'}"></i>`).join('')
+      }<i class="dg-elbow${last ? ' dg-end' : ''}"></i></span>`
+    : '';
 
 /* For a free-text domain field: the whole path is the value, because that
    is what gets typed and stored. Tree-ordered so the suggestions read as

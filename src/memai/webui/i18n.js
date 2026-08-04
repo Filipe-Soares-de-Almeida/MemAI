@@ -52,24 +52,18 @@ const applyStatic = () => {
   document.querySelectorAll('[data-i18n-placeholder]').forEach(el => { el.placeholder = t(el.dataset.i18nPlaceholder); });
   document.querySelectorAll('[data-i18n-title]').forEach(el => { el.title = t(el.dataset.i18nTitle); });
   document.querySelectorAll('[data-i18n-aria]').forEach(el => el.setAttribute('aria-label', t(el.dataset.i18nAria)));
-  const sel = document.getElementById('langSel');
-  if (sel) {
-    sel.innerHTML = Object.entries(LOCALES)
-      .map(([code, name]) => `<option value="${code}" ${code === locale ? 'selected' : ''}>${name}</option>`).join('');
-    sel.title = t('lang.title');
-    sel.setAttribute('aria-label', t('lang.title'));
-    /* The change handler lives in app.js, NOT here. Switching reloads the
-       page and throws away anything typed and unsaved, so the switch has to
-       ask first -- and asking means the modal machinery, which imports this
-       module. Populating the options is all this layer can own. */
-  }
+  /* The language control is built and wired in app.js, NOT here: it is a
+     picker now (core/pick.js, which imports this module for its own strings)
+     and switching reloads the page, so it has to ask first -- which means the
+     modal machinery, which imports this module too. This layer owns the
+     catalogs and the registry below; who draws the switch is not its call. */
 };
 
 /* month names and the number locale fall back per-key like strings do: a
    new catalog that ships `strings` and forgets `months` degrades to
    English month names instead of rendering every date as undefined */
 const I18N = {
-  t, set, applyStatic, locale,
+  t, set, applyStatic, locale, locales: LOCALES,
   months: active.months || en.months,
   numberLocale: active.numberLocale || en.numberLocale,
 };

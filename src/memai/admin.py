@@ -16,7 +16,9 @@ before the context manager exits means nothing is committed.
 
 Destructive parity with the MCP tools is kept: archive (forget) is the
 default "delete", and purge demands the literal confirmation phrase
-"DELETE <uid>" typed by the operator, same guardrail as server.py.
+"DELETE <uid>" typed by the operator, same guardrail as server.py. A
+whole domain reads the same way one memory does -- archiving it is the
+reversible option, and deleting it asks for "DELETE <domain>".
 
 Run with `memai-admin` (default http://127.0.0.1:8888); binds to
 loopback unless --host says otherwise. Honors MEMAI_HOME.
@@ -64,6 +66,11 @@ KNOWN_TYPES = ("note", "checkpoint", "anti_pattern", "reasoning", "handoff", "di
 CONFIDENCES = ("unverified", "confirmed", "contradicted")
 STATUSES = ("active", "archived")
 
+# How many uids one /api/bulk call carries. Also the cap on the uid list a
+# scope-wide archive echoes back for its Undo -- an Undo that came back longer
+# than bulk accepts would be a button that cannot work.
+BULK_MAX = 500
+
 # The relations graph is laid out in the browser by an O(n^2) force
 # simulation, so handing over the whole store freezes the tab rather than
 # drawing anything. Most-connected first, because a graph of unconnected
@@ -81,8 +88,22 @@ def _snip(text: str, limit: int = SNIPPET_LIMIT) -> str:
     return text[:limit].rstrip() + "…"
 
 
+def _paths(d: dict) -> dict:
+    """Swap the `also_domains` mirror for the `also` list a view reads.
+
+    That column exists for the FTS index and the embedder, which cannot
+    join (see db); db.parse_domains is its inverse. No payload carries the
+    mirror -- a view that filtered on it would be reading the copy instead
+    of the rows in memory_domains.
+    """
+    blob = d.pop("also_domains", "")
+    if blob:
+        d["also"] = db.parse_domains(blob)
+    return d
+
+
 def _summary(row, limit: int = SNIPPET_LIMIT) -> dict:
-    d = dict(row)
+    d = _paths(dict(row))
     d["content_len"] = len(d.get("content", ""))
     d["content"] = _snip(d.get("content", ""), limit)
     return d
@@ -285,7 +306,7 @@ def memory_detail(request, payload) -> dict:
         row = db.get_memory(conn, uid)
         if row is None:
             raise ValueError(f"unknown memory: {uid}")
-        result = dict(row)
+        result = _paths(dict(row))
         result["edit_history"] = [dict(e) for e in db.get_edit_history(conn, uid)]
         rels = []
         for r in db.get_relations(conn, uid):
@@ -327,11 +348,12 @@ def create_memory(request, payload) -> dict:
         uid = db.insert_memory(
             conn, type=type_, content=content,
             domain=(payload.get("domain") or "").strip(),
+            also=payload.get("also") or "",
             session=(payload.get("session") or "").strip(),
             tags=(payload.get("tags") or "").strip(),
             confidence=confidence,
         )
-    return {"uid": uid}
+        return {"uid": uid, "also": db.get_domain_links(conn, uid)}
 
 
 def edit_content(request, payload) -> dict:
@@ -353,14 +375,19 @@ def edit_content(request, payload) -> dict:
 
 
 def edit_meta(request, payload) -> dict:
-    """Update domain/tags/session/type. Domain or tags changes re-embed the
-    row (the vector is computed over content+tags+domain) and every change
-    leaves an audit entry in edits, so curation stays traceable."""
+    """Update domain/also/tags/session/type. Domain, also or tags changes
+    re-embed the row (the vector is computed over content+tags+domains) and
+    every change leaves an audit entry in edits, so curation stays traceable.
+
+    `also` is the set of extra domains the memory belongs to, replaced whole
+    -- a list, or one string of comma-separated paths. It is applied AFTER a
+    domain change in the same request, because the policy that drops a
+    redundant cross-listing reads the domain the memory ends up with."""
     uid = request.path_params["uid"]
     allowed = ("domain", "tags", "session", "type")
     updates = {k: str(payload[k]).strip() for k in allowed if k in payload}
-    if not updates:
-        raise ValueError(f"nothing to update (fields: {allowed})")
+    if not updates and "also" not in payload:
+        raise ValueError(f"nothing to update (fields: {(*allowed, 'also')})")
     if "type" in updates and not updates["type"]:
         raise ValueError("type cannot be empty")
     if "type" in updates and updates["type"] not in KNOWN_TYPES:
@@ -378,21 +405,32 @@ def edit_meta(request, payload) -> dict:
         if "domain" in updates:
             updates["domain"] = db.apply_domain_policy(conn, updates["domain"])
         changed = {k: v for k, v in updates.items() if v != row[k]}
-        if not changed:
-            return {"ok": True, "changed": []}
-        sets = ", ".join(f"{k} = ?" for k in changed)
-        conn.execute(
-            f"UPDATE memories SET {sets}, updated_at = ? WHERE uid = ?",
-            [*changed.values(), db.now_iso(), uid])
-        note = "meta: " + "; ".join(f"{k} '{row[k]}' → '{v}'" for k, v in changed.items())
-        conn.execute(
-            "INSERT INTO edits (memory_uid, edited_at, prev_content, new_content, note) VALUES (?, ?, ?, ?, ?)",
-            (uid, db.now_iso(), row["content"], row["content"], note))
-        if "domain" in changed or "tags" in changed:
-            db._upsert_vector(
-                conn, row["rowid_pk"], row["content"],
-                changed.get("tags", row["tags"]), changed.get("domain", row["domain"]))
-    return {"ok": True, "changed": list(changed)}
+        if changed:
+            sets = ", ".join(f"{k} = ?" for k in changed)
+            conn.execute(
+                f"UPDATE memories SET {sets}, updated_at = ? WHERE uid = ?",
+                [*changed.values(), db.now_iso(), uid])
+            note = "meta: " + "; ".join(f"{k} '{row[k]}' → '{v}'" for k, v in changed.items())
+            conn.execute(
+                "INSERT INTO edits (memory_uid, edited_at, prev_content, new_content, note) VALUES (?, ?, ?, ?, ?)",
+                (uid, db.now_iso(), row["content"], row["content"], note))
+            if "domain" in changed or "tags" in changed:
+                db._upsert_vector(
+                    conn, row["rowid_pk"], row["content"],
+                    changed.get("tags", row["tags"]), changed.get("domain", row["domain"]),
+                    row["also_domains"])
+        # a domain change with no `also` in the request still re-runs the
+        # link policy: the new path may already cover a membership the old
+        # one needed (db.apply_link_policy)
+        before = db.get_domain_links(conn, uid)
+        if "also" in payload or ("domain" in changed and before):
+            want = payload["also"] if "also" in payload else before
+            if db.set_domain_links(conn, uid, want) != before:
+                changed["also"] = True
+        result = {"ok": True, "changed": list(changed)}
+        if "also" in changed:
+            result["also"] = db.get_domain_links(conn, uid)
+        return result
 
 
 def edit_confidence(request, payload) -> dict:
@@ -443,8 +481,8 @@ def bulk(request, payload) -> dict:
     action = payload.get("action", "")
     if not isinstance(uids, list) or not uids:
         raise ValueError("uids must be a non-empty list")
-    if len(uids) > 500:
-        raise ValueError("at most 500 uids per operation")
+    if len(uids) > BULK_MAX:
+        raise ValueError(f"at most {BULK_MAX} uids per operation")
     reason = (payload.get("reason") or "").strip()
     done = 0
     with db.connect() as conn:
@@ -523,8 +561,8 @@ def graph(request, payload) -> dict:
         # node below counts only edges between nodes that made it in, so
         # what the legend says matches what is drawn.
         rows = conn.execute(
-            f"SELECT uid, type, domain, status, confidence, content, tags, created_at, "
-            f"       (SELECT COUNT(*) FROM relations r "
+            f"SELECT uid, type, domain, also_domains, status, confidence, content, tags, "
+            f"       created_at, (SELECT COUNT(*) FROM relations r "
             f"        WHERE r.from_uid = memories.uid OR r.to_uid = memories.uid) AS deg "
             f"FROM memories WHERE {' '.join(where)} "
             f"ORDER BY deg DESC, created_at DESC LIMIT ?", [*params, limit]).fetchall()
@@ -538,17 +576,18 @@ def graph(request, payload) -> dict:
     for e in edges:
         degree[e["from_uid"]] = degree.get(e["from_uid"], 0) + 1
         degree[e["to_uid"]] = degree.get(e["to_uid"], 0) + 1
-    # `tags` is here for the graph's spotlight filter, which matches on what a
-    # human would type to find a node again: its opening line, its domain, or
-    # a tag. Everything else on this row is already drawn.
-    nodes = [{
+    # `tags` and `also` are here for the graph's spotlight filter, which
+    # matches on what a human would type to find a node again: its opening
+    # line, a domain it belongs to, or a tag. Everything else is already drawn.
+    nodes = [_paths({
         "uid": r["uid"], "type": r["type"], "domain": r["domain"],
+        "also_domains": r["also_domains"],
         "status": r["status"], "confidence": r["confidence"],
         "tags": r["tags"],
         "label": _snip(r["content"].split("\n", 1)[0], 90),
         "degree": degree.get(r["uid"], 0),
         "created_at": r["created_at"],
-    } for r in rows]
+    }) for r in rows]
     # A cap that says nothing reads as "this is everything".
     return {"nodes": nodes, "edges": edges,
             "total": total, "truncated": total > len(nodes), **scope}
@@ -627,10 +666,11 @@ def diagram_create(request, payload) -> dict:
             summary=(payload.get("summary") or "").strip(),
             kind=(payload.get("kind") or "flowchart").strip(),
             domain=(payload.get("domain") or "").strip(),
+            also=payload.get("also") or "",
             session=(payload.get("session") or "").strip(),
             tags=(payload.get("tags") or "").strip(),
         ))
-    return {"uid": uid}
+        return {"uid": uid, "also": db.get_domain_links(conn, uid)}
 
 
 def diagram_graph(request, payload) -> dict:
@@ -782,12 +822,22 @@ def domains(request, payload) -> dict:
     A level nobody wrote to directly still gets an entry, flagged
     `implicit`: 'acme/x100/p200' means the tree HAS an 'acme/x100', and a
     view that skipped it could not draw the branch its children hang from.
+
+    `also` and `subtree_also` count the memories CROSS-LISTED at a path
+    rather than filed there -- kept out of the status counts, because the
+    tree would otherwise total more than the store. A path with no counts of
+    its own and an `also` above zero is a purely cross-cutting subject, and
+    the view says so instead of drawing it as empty.
     """
     with db.connect() as conn:
         rows = conn.execute(
             """SELECT domain, status, type, COUNT(*) AS n, MAX(created_at) AS latest
                FROM memories WHERE domain <> ''
                GROUP BY domain, status, type""").fetchall()
+        link_rows = conn.execute(
+            """SELECT dl.domain AS domain, COUNT(*) AS n, MAX(m.created_at) AS latest
+               FROM memory_domains dl JOIN memories m ON m.uid = dl.memory_uid
+               WHERE dl.domain <> '' GROUP BY dl.domain""").fetchall()
     agg: dict[str, dict] = {}
 
     def node(path: str) -> dict:
@@ -796,6 +846,7 @@ def domains(request, payload) -> dict:
             "latest_at": "", "parent": db.domain_parent(path),
             "depth": db.domain_depth(path), "children": 0,
             "subtree_active": 0, "subtree_archived": 0,
+            "also": 0, "subtree_also": 0,
             "subtree_latest_at": "", "implicit": True,
         })
 
@@ -811,11 +862,22 @@ def domains(request, payload) -> dict:
         for ancestor in db.domain_ancestors(d["domain"]):
             node(ancestor)
 
+    # being cross-listed at a path names it as surely as being filed there,
+    # so it clears `implicit` and counts as activity for the ordering
+    for r in link_rows:
+        d = node(db.normalize_domain(r["domain"]))
+        d["implicit"] = False
+        d["also"] += r["n"]
+        d["latest_at"] = max(d["latest_at"], r["latest"])
+        for ancestor in db.domain_ancestors(d["domain"]):
+            node(ancestor)
+
     for d in list(agg.values()):
         for scope in db.domain_ancestors(d["domain"], include_self=True):
             holder = agg[scope]
             holder["subtree_active"] += d["active"]
             holder["subtree_archived"] += d["archived"]
+            holder["subtree_also"] += d["also"]
             holder["subtree_latest_at"] = max(holder["subtree_latest_at"], d["latest_at"])
         if d["parent"]:
             agg[d["parent"]]["children"] += 1
@@ -846,6 +908,10 @@ def rename_domain(request, payload) -> dict:
     'x100' to 'acme/x100' moves the bucket (and its subtree) under 'acme'.
     Every affected row is re-embedded (domain is part of the embedding
     source) and audited in edits -- see db.move_domain.
+
+    Cross-listings into the renamed scope follow it (`also_affected`), so a
+    memory that merely belongs to the subject is not left pointing at a path
+    that no longer exists. It is not moved: where it is filed is untouched.
     """
     src = (payload.get("from") or "").strip()
     dst = (payload.get("to") or "").strip()
@@ -856,7 +922,54 @@ def rename_domain(request, payload) -> dict:
     with db.connect() as conn:
         moved = db.move_domain(conn, src, dst)
     return {"ok": True, "affected": moved["moved"],
+            "also_affected": moved["also_moved"],
             "domains": moved["domains"], "merged": moved["merged"]}
+
+
+def domain_status(request, payload) -> dict:
+    """Archive or restore a whole domain, subdomains included.
+
+    A domain has no status column -- it is named by the memories filed under
+    it -- so this is the scope-wide reading of the per-memory archive, and
+    the tree draws a level with archived memories and no active ones as an
+    archived branch.
+
+    `uids` is what actually changed, so the UI can offer an exact Undo
+    instead of restoring everything in the scope (see db.set_domain_status).
+    Withheld past BULK_MAX, which is the most /api/bulk would take back.
+    """
+    domain = (payload.get("domain") or "").strip()
+    status = payload.get("status", "")
+    if status not in STATUSES:
+        raise ValueError(f"status must be one of {STATUSES}")
+    reason = (payload.get("reason") or "").strip()
+    verb = "archived" if status == "archived" else "restored"
+    note = f"{verb} with domain '{domain}'" + (f": {reason}" if reason else "")
+    with db.connect() as conn:
+        moved = db.set_domain_status(conn, domain, status, note=note)
+    uids = moved["uids"]
+    return {"ok": True, "affected": len(uids), "domains": moved["domains"],
+            "uids": uids if len(uids) <= BULK_MAX else []}
+
+
+def delete_domain(request, payload) -> dict:
+    """Permanently delete a domain and every memory filed in it.
+
+    Same guardrail as the MCP purge_memory tool and the per-memory purge
+    above, for the same reason and at a much larger blast radius: the
+    operator must type the literal phrase 'DELETE <domain>', and the UI
+    never pre-fills it. Archiving the domain is the reversible option and
+    is what the view offers first.
+    """
+    domain = (payload.get("domain") or "").strip()
+    if not domain:
+        raise ValueError("'domain' is required")
+    expected = f"DELETE {domain}"
+    if payload.get("confirm", "") != expected:
+        raise ValueError(f"confirm phrase must exactly equal '{expected}'")
+    with db.connect() as conn:
+        gone = db.purge_domain(conn, domain)
+    return {"ok": True, **gone}
 
 
 def _normalize_plan(mode: str, counts: dict[str, int]) -> list[dict]:
@@ -898,22 +1011,30 @@ def normalize_domains(request, payload) -> dict:
     names one exact stored domain, so the moves are exact-path (a
     descendant appears as its own entry, or does not need moving at all).
     No-op when everything already conforms.
+
+    A path that exists only as a cross-listing is in the plan too: it is a
+    stored domain string like any other, and a repair pass that skipped it
+    would leave the one spelling no prefix query can match.
     """
     dry_run = bool(payload.get("dry_run", True))
     with db.connect() as conn:
         mode = db.get_domain_case(conn)
-        counts = {
-            r["domain"]: r["n"] for r in conn.execute(
-                "SELECT domain, COUNT(*) AS n FROM memories WHERE domain <> '' GROUP BY domain").fetchall()
-        }
+        counts: dict[str, int] = {}
+        for sql in (
+            "SELECT domain, COUNT(*) AS n FROM memories WHERE domain <> '' GROUP BY domain",
+            "SELECT domain, COUNT(*) AS n FROM memory_domains WHERE domain <> '' GROUP BY domain",
+        ):
+            for r in conn.execute(sql):
+                counts[r["domain"]] = counts.get(r["domain"], 0) + r["n"]
         plan = _normalize_plan(mode, counts)
         if dry_run:
             return {"mode": mode, "dry_run": True, "plan": plan,
                     "renames": sum(1 for e in plan if e["action"] == "rename"),
                     "merges": sum(1 for e in plan if e["action"] == "merge")}
-        affected = sum(
-            db.move_domain(conn, e["from"], e["to"], subtree=False)["moved"] for e in plan)
-    return {"ok": True, "mode": mode, "moved": len(plan), "affected": affected}
+        moved = [db.move_domain(conn, e["from"], e["to"], subtree=False) for e in plan]
+    return {"ok": True, "mode": mode, "moved": len(plan),
+            "affected": sum(m["moved"] for m in moved),
+            "also_affected": sum(m["also_moved"] for m in moved)}
 
 
 # ------------------------------------------------------------------ config
@@ -1226,6 +1347,9 @@ def _suggestion_json(conn, row) -> dict:
         if target is not None:
             trow = db.get_memory(conn, row["target_uid"])
             target["tags"] = trow["tags"]
+            # a crosslist suggestion replaces the whole set, so the Before
+            # pane needs the whole set, not only the filed path
+            target["also"] = db.get_domain_links(conn, row["target_uid"])
         d["target"] = target
     peers = {}
     for key in ("from_uid", "to_uid", "keep_uid", "drop_uid"):
@@ -1533,6 +1657,8 @@ routes = [
     Route("/api/domains", api(domains)),
     Route("/api/domains/rename", api(rename_domain), methods=["POST"]),
     Route("/api/domains/normalize", api(normalize_domains), methods=["POST"]),
+    Route("/api/domains/status", api(domain_status), methods=["POST"]),
+    Route("/api/domains/delete", api(delete_domain), methods=["POST"]),
     Route("/api/maintenance/health", api(health)),
     Route("/api/maintenance/fts-rebuild", api(fts_rebuild), methods=["POST"]),
     Route("/api/maintenance/reembed", api(reembed), methods=["POST"]),

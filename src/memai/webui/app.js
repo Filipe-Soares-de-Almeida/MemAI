@@ -21,6 +21,7 @@ import { $ } from './core/dom.js';
 import { api } from './core/api.js';
 import { paintIcons } from './core/icons.js';
 import { modalOpen, closeModal, toast } from './core/ui.js';
+import { pickerFor, setPickerValue, wirePicker, fixedItems } from './core/pick.js';
 import { updateRail } from './core/shared.js';
 import { registerViews, route, go, parseHash } from './core/router.js';
 import { I18N, t } from './i18n.js';
@@ -58,15 +59,25 @@ $('#btnNew').addEventListener('click', openNewMemory);
    memory record, which is one of them now. Asking instead is not an option:
    the confirmation would itself be a dialog over the form it is asking
    about, and answering it would leave the stack pointing at nothing. */
-$('#langSel').addEventListener('change', e => {
-  const code = e.target.value;
+/* The language switch. Built here and not in i18n.js: switching RELOADS the
+   page, so it has to ask first when a form is open -- and asking means the
+   modal machinery, which imports i18n.js. */
+const langItems = Object.entries(I18N.locales).map(([value, label]) => ({ value, label }));
+$('#langHost').innerHTML = pickerFor({
+  id: 'langSel', value: I18N.locale, items: langItems,
+  ariaLabel: t('lang.title'), cls: 'lang-sel',
+});
+wirePicker(document, { id: 'langSel', items: fixedItems(langItems), onPick: code => {
+  if (code === I18N.locale) return;
   if (modalOpen()) {
-    e.target.value = I18N.locale;
+    /* the picker has already repainted itself to the language that is not
+       going to be loaded, so put it back before saying why */
+    setPickerValue($('#langSel'), langItems.find(it => it.value === I18N.locale));
     toast(t('lang.busy'), 'bad');
     return;
   }
   I18N.set(code);
-});
+} });
 
 
 document.addEventListener('keydown', e => {

@@ -5,8 +5,9 @@
 import { esc } from '../core/dom.js';
 import { api } from '../core/api.js';
 import { toast, failed, openModal, closeModal } from '../core/ui.js';
-import { TYPE_ORDER, CONF, getDomains, invalidateDomains,
+import { typeItems, confItems, getDomains, invalidateDomains,
          domainDatalist } from '../core/shared.js';
+import { pickerFor, pickerValue, wirePicker, fixedItems } from '../core/pick.js';
 import { go, refreshBehind } from '../core/router.js';
 import { openRecord } from './record.js';
 import { newDiagramSkeleton } from './diagrams.js';
@@ -14,18 +15,23 @@ import { t } from '../i18n.js';
 
 export async function openNewMemory() {
   const domains = await getDomains().catch(() => []);
+  const types = typeItems();
+  const confs = confItems();
   const modal = openModal({
     title: t('nm.title'),
     bodyHTML: `
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
         <div class="field"><label for="nmType">${t('nm.type')}</label>
-          <select id="nmType">${TYPE_ORDER.map(tp => `<option ${tp === 'note' ? 'selected' : ''}>${tp}</option>`).join('')}</select></div>
+          ${pickerFor({ id: 'nmType', value: 'note', items: types, ariaLabel: t('nm.type') })}</div>
         <div class="field"><label for="nmConf">${t('nm.conf')}</label>
-          <select id="nmConf">${Object.keys(CONF).map(c => `<option value="${c}">${CONF[c].label}</option>`).join('')}</select></div>
+          ${pickerFor({ id: 'nmConf', value: 'unverified', items: confs, ariaLabel: t('nm.conf') })}</div>
       </div>
       <div class="field"><label for="nmDomain">${t('nm.domain')}</label>
         <input type="text" id="nmDomain" list="nmDomainsDL" placeholder="${t('nm.domainPh')}">
         <datalist id="nmDomainsDL">${domainDatalist(domains)}</datalist></div>
+      <div class="field"><label for="nmAlso">${t('nm.also')}</label>
+        <input type="text" id="nmAlso" list="nmDomainsDL" placeholder="${t('mm.also.placeholder')}">
+        <div class="hint-sm">${t('mm.also.hint')}</div></div>
       <div class="field"><label for="nmTags">${t('nm.tags')}</label>
         <input type="text" id="nmTags" placeholder="${t('nm.tagsPh')}"></div>
       <div class="field" id="nmContentField"><label for="nmContent">${t('nm.content')}</label>
@@ -37,13 +43,16 @@ export async function openNewMemory() {
   });
   const mq = s => modal.querySelector(s);
 
-  const isDiagram = () => mq('#nmType').value === 'diagram';
+  const isDiagram = () => pickerValue(modal, 'nmType') === 'diagram';
   const sync = () => {
     mq('#nmContentField').hidden = isDiagram();
     mq('#nmTitleField').hidden = !isDiagram();
+    /* a diagram's content is its graph, so it is created unverified and the
+       control says so by being unreachable rather than by being ignored */
     mq('#nmConf').disabled = isDiagram();
   };
-  mq('#nmType').addEventListener('change', sync);
+  wirePicker(modal, { id: 'nmType', items: fixedItems(types), onPick: sync });
+  wirePicker(modal, { id: 'nmConf', items: fixedItems(confs), onPick: () => {} });
   sync();
 
   mq('[data-x]').onclick = closeModal;
@@ -53,6 +62,7 @@ export async function openNewMemory() {
         const r = await newDiagramSkeleton({
           title: mq('#nmTitle').value,
           domain: mq('#nmDomain').value,
+          also: mq('#nmAlso').value,
           tags: mq('#nmTags').value });
         closeModal();
         toast(t('nm.created', { uid: r.uid }), 'ok');
@@ -61,9 +71,9 @@ export async function openNewMemory() {
         return;
       }
       const r = await api('/api/memories', { body: {
-        type: mq('#nmType').value, confidence: mq('#nmConf').value,
-        domain: mq('#nmDomain').value, tags: mq('#nmTags').value,
-        content: mq('#nmContent').value } });
+        type: pickerValue(modal, 'nmType'), confidence: pickerValue(modal, 'nmConf'),
+        domain: mq('#nmDomain').value, also: mq('#nmAlso').value,
+        tags: mq('#nmTags').value, content: mq('#nmContent').value } });
       closeModal();
       toast(t('nm.created', { uid: r.uid }), 'ok');
       invalidateDomains();
