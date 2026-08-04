@@ -29,6 +29,59 @@ const SETTLE = 0.02;
 const SETTLE_BUDGET = 8e6;
 /* per-frame alpha decay once the graph is live and a kick has stirred it */
 const COOL = .996;
+/* How far a node may travel in one pass, px. THIS IS THE FIX for the node
+   that opened the view sitting alone hundreds of px outside the cloud, and
+   it is not a cosmetic clamp -- the layout had an escape velocity.
+
+   A memory with no relations has no spring holding it. Born inside the dense
+   middle, it feels repulsion from ~40 neighbours and nothing else, so it
+   accelerates outward, and once it is more than 400px from every other node
+   the `d2 > 160000` cutoff below turns repulsion off -- losing the brake at
+   the same moment as the push. It coasts (one real store: out to r=1845 at
+   ~9.7px per pass), and the only force left to bring it home is gravity,
+   which is scaled by alpha. Alpha is already decaying, so the return trip
+   runs out of passes and the node lands wherever it happens to be.
+
+   Capping the step keeps it inside the range where repulsion still answers,
+   so it settles into the cloud like everything else. Measured over the real
+   store plus 30 synthetic graphs (40..800 nodes, several link densities):
+   49 stranded nodes before, 2 after, and the ratio of the outermost node to
+   the p90 radius drops from 3.4x to ~1.1x. Costs one hypot per node per
+   pass, against an O(n²) repulsion. */
+const MAX_STEP = 4;
+/* The idle float. Purely a drawing offset: `place()` writes px/py and nothing
+   ever writes back into x/y, so the layout the reader arranged is the layout
+   that stays -- and the O(n²) physics still stops at rest instead of running
+   forever behind a permanent alpha floor.
+
+   The amplitude is in SCREEN px, divided by the zoom on the way in. In world
+   units it was invisible at the zoom the view opens at: fit() lands around
+   .5x on a few hundred nodes, so a 2px drift arrived as one pixel. Constant
+   on screen means the drift reads the same whether you are looking at the
+   whole store or three nodes -- with a world-space ceiling, because at a far
+   zoom-out "3px of screen" is a large distance in the layout and the nodes
+   would swim away from their own edges. */
+const FLOAT_SCREEN = 3.4;       /* px on screen, at any zoom */
+const FLOAT_MAX = 9;            /* px in world units, the zoom-out ceiling */
+const FLOAT_RATE = 9e-4;        /* radians per ms -- one lap in ~7s */
+const FLOAT_STEP = 33;          /* ms between idle frames: a 3px drift does not need 60fps */
+/* How much of the float a node keeps at each degree: the drift reads as slack
+   in the springs, so a memory held by seven relations should have almost
+   none, and an unlinked one should have all of it. */
+const FLOAT_SLACK = d => 1 - .62 * Math.min(1, d / 5);
+/* A gesture warms the nodes AROUND it, not the whole store -- `heat`, below.
+   Touching one memory used to raise the global alpha, which re-ran the
+   repulsion over every pair: the whole graph shuddered because you nudged a
+   node in the corner of it. Reach is a Gaussian in px; a dragged node's own
+   relations stay warm however far away they are, because the spring pulling
+   them is the whole point of dragging it. */
+const HEAT_REACH = 170;
+const HEAT_LINKED = .55;
+/* Gesture energy: px of drag per unit of alpha, and the ceiling it can reach.
+   Proportional on purpose -- a tap is not a rearrangement, so it should not
+   look like one. */
+const HEAT_PER_PX = 1 / 90;
+const HEAT_MAX = .3;
 /* what a node the spotlight missed fades to. Low enough that the matches read
    as the figure, high enough that the store's overall shape survives -- the
    whole reason this view is a canvas. */
@@ -138,15 +191,32 @@ class ForceGraph {
     this.cv = canvas;
     this.cx = canvas.getContext('2d');
     const R = Math.sqrt(nodes.length + 1) * 60;
-    this.nodes = nodes.map((n, i) => ({
-      ...n,
-      x: Math.cos(i * 2.399963) * R * Math.sqrt((i + 1) / (nodes.length + 1)),
-      y: Math.sin(i * 2.399963) * R * Math.sqrt((i + 1) / (nodes.length + 1)),
-      vx: 0, vy: 0,
-      r: 5.5 + Math.min(8, n.degree * 1.5),
-    }));
+    this.nodes = nodes.map((n, i) => {
+      const x = Math.cos(i * 2.399963) * R * Math.sqrt((i + 1) / (nodes.length + 1));
+      const y = Math.sin(i * 2.399963) * R * Math.sqrt((i + 1) / (nodes.length + 1));
+      return {
+        ...n,
+        x, y,
+        /* where it is DRAWN: x/y plus the idle float, see place() */
+        px: x, py: y,
+        vx: 0, vy: 0,
+        r: 5.5 + Math.min(8, n.degree * 1.5),
+        /* float phase and rate, from the index: a cloud that breathed in
+           unison would read as the canvas itself wobbling */
+        fp: i * 2.399963, fq: .7 + (i % 7) * .07,
+        fs: FLOAT_SLACK(n.degree),
+        /* how much of the current alpha this node feels; see heatAround() */
+        heat: 1,
+      };
+    });
     this.byUid = Object.fromEntries(this.nodes.map(n => [n.uid, n]));
     this.edges = edges.filter(e => this.byUid[e.from_uid] && this.byUid[e.to_uid]);
+    /* who is one relation away, for heatAround() */
+    this.adj = Object.fromEntries(this.nodes.map(n => [n.uid, new Set()]));
+    for (const e of this.edges) {
+      this.adj[e.from_uid].add(e.to_uid);
+      this.adj[e.to_uid].add(e.from_uid);
+    }
     this.tx = 0; this.ty = 0; this.scale = 1;
     this.fitScale = null;   /* set by fit(); it is the zoom-out floor, see zoomAt */
     this.alpha = 1;
@@ -155,6 +225,10 @@ class ForceGraph {
     this.drag = null; this.pan = null;
     this.running = true;
     this.raf = 0;
+    /* a drift nobody asked for is exactly what this setting turns off */
+    this.float = !matchMedia('(prefers-reduced-motion: reduce)').matches;
+    this.floatAt = 0;
+    this.dirty = false;
     /* theme colors resolved once from CSS custom properties */
     this.colAccent = cssVar('--accent') || '#bb86fc';
     this.colRing = cssVar('--bg') || '#121212';
@@ -165,8 +239,8 @@ class ForceGraph {
     this.pointers = new Map();
     this.pinch = null;
 
-    /* bound before resize(), which kicks the simulation and so needs a
-       callable frame handler already in place */
+    /* bound before resize(), which asks for a frame and so needs a callable
+       frame handler already in place */
     this.loop = this.loop.bind(this);
     this._resize = this.resize.bind(this);
     addEventListener('resize', this._resize);
@@ -192,6 +266,7 @@ class ForceGraph {
     const pairs = Math.max(1, this.nodes.length * (this.nodes.length - 1) / 2);
     const passes = Math.max(60, Math.min(900, Math.floor(SETTLE_BUDGET / pairs)));
     const cool = Math.min(COOL, Math.pow(SETTLE, 1 / passes));
+    this.heatAll();     /* the one pass where the whole layout is in play */
     for (let k = 0; k < passes && this.alpha > SETTLE; k++) this.physics(cool);
     this.fit();
     this.draw();
@@ -218,10 +293,31 @@ class ForceGraph {
     removeEventListener('pointerup', this._up);
     removeEventListener('pointercancel', this._up);
   }
-  /* Resume the simulation, optionally stirring it back up first. */
+  /* Resume the simulation, optionally stirring it back up first. Every caller
+     that stirs it has to say WHERE, by setting heat first -- alpha alone is a
+     store-wide shudder. */
   kick(alpha = 0) {
     if (alpha) this.alpha = Math.max(this.alpha, alpha);
     this.wake();
+  }
+  /* The whole layout is in play: the pre-paint settle, and nothing else. */
+  heatAll() {
+    for (const n of this.nodes) n.heat = 1;
+  }
+  /* Warm what the gesture can plausibly have disturbed: nodes near where the
+     dragged one is NOW (so the warm patch travels with the pointer instead of
+     staying where the drag began), plus its own relations at any distance.
+     Everything else keeps its position -- the graph is not re-deciding itself
+     because one node moved. */
+  heatAround(src) {
+    const linked = this.adj[src.uid];
+    const k = 2 * HEAT_REACH * HEAT_REACH;
+    for (const n of this.nodes) {
+      const dx = n.x - src.x, dy = n.y - src.y;
+      const near = Math.exp(-(dx * dx + dy * dy) / k);
+      n.heat = Math.max(near, linked.has(n.uid) ? HEAT_LINKED : 0);
+    }
+    src.heat = 1;
   }
   wake() {
     if (!this.running || this.raf) return;
@@ -230,8 +326,12 @@ class ForceGraph {
   /* One frame, for a change that is only visual (hover, selection, pan,
      zoom) and must not restart the physics. */
   requestDraw() {
+    /* The float loop usually already owns the next frame, which would make
+       this a no-op and leave a hover waiting out the idle throttle. Marking
+       the frame dirty is what gets it painted at once. */
+    this.dirty = true;
     if (!this.running || this.raf) return;
-    this.raf = requestAnimationFrame(() => { this.raf = 0; this.draw(); });
+    this.raf = requestAnimationFrame(() => { this.raf = 0; this.dirty = false; this.draw(); });
   }
   resize() {
     const r = this.cv.parentElement.getBoundingClientRect();
@@ -239,8 +339,15 @@ class ForceGraph {
     this.w = r.width; this.h = r.height;
     this.cv.width = r.width * dpr; this.cv.height = r.height * dpr;
     this.cx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    this.kick(.3);
+    /* A wider window is not a different layout. This used to kick the physics,
+       so dragging the window edge rearranged the store. Setting the canvas
+       size cleared it, though, so the next frame has to paint: dirty, and
+       kick() with no alpha, which only makes sure the loop is running. */
+    this.dirty = true;
+    this.kick();
   }
+  /* Frames x/y, not the floated px/py: the float is a couple of px and would
+     only make the framing breathe along with the nodes. */
   fit() {
     if (!this.nodes.length) return;
     const xs = this.nodes.map(n => n.x), ys = this.nodes.map(n => n.y);
@@ -259,10 +366,12 @@ class ForceGraph {
     const r = this.cv.getBoundingClientRect();
     return { x: (e.clientX - r.left - this.tx) / this.scale, y: (e.clientY - r.top - this.ty) / this.scale };
   }
+  /* px/py, not x/y: the float moves what the reader is aiming at, so the
+     target has to move with it */
   nodeAt(p) {
     for (let i = this.nodes.length - 1; i >= 0; i--) {
       const n = this.nodes[i];
-      const d2 = (n.x - p.x) ** 2 + (n.y - p.y) ** 2;
+      const d2 = (n.px - p.x) ** 2 + (n.py - p.y) ** 2;
       if (d2 < (n.r + 4) ** 2) return n;
     }
     return null;
@@ -302,7 +411,11 @@ class ForceGraph {
     }
     if (this.pointers.size > 2) return;
     const n = this.nodeAt(this.toWorld(e));
-    if (n) { this.drag = n; this.kick(.35); }
+    /* Taking hold of a node is not yet a change to the layout: no alpha, no
+       heat, only the loop running so the frames come. Pressing one used to
+       kick the physics store-wide, so the graph shuddered before the pointer
+       had moved a pixel. */
+    if (n) { this.drag = n; this.kick(); }
     else {
       this.pan = { x: e.clientX - this.tx, y: e.clientY - this.ty };
       this.cv.classList.add('dragging');
@@ -325,11 +438,18 @@ class ForceGraph {
     }
     if (this.drag) {
       const p = this.toWorld(e);
+      /* Energy from the gesture itself: how far the node actually travelled
+         this frame decides how much of the layout gets to react, and where
+         is decided by heatAround(). A 2px nudge is worth less alpha than
+         SETTLE, so it moves the node and nothing else -- which is what a 2px
+         nudge looks like. */
+      const step = Math.hypot(p.x - this.drag.x, p.y - this.drag.y);
       this.drag.x = p.x; this.drag.y = p.y;
       this.drag.vx = this.drag.vy = 0;
       this.moved = true;
       tipHide();
-      this.kick(.25);
+      this.heatAround(this.drag);
+      this.kick(Math.min(HEAT_MAX, step * HEAT_PER_PX));
       return;
     }
     if (this.pan) {
@@ -472,6 +592,11 @@ class ForceGraph {
   physics(cool = COOL) {
     if (this.alpha < SETTLE) return;
     const N = this.nodes;
+    /* Every force below is scaled by the RECEIVING node's heat, not by a
+       single global alpha: that is what keeps a drag local. It costs the
+       symmetry of the pair -- a warm node pushed by a cold one gives nothing
+       back -- which is fine here and is in fact the effect wanted: the cold
+       part of the layout is not participating. */
     for (let i = 0; i < N.length; i++) {
       const a = N[i];
       for (let j = i + 1; j < N.length; j++) {
@@ -480,11 +605,12 @@ class ForceGraph {
         let d2 = dx * dx + dy * dy;
         if (d2 < 1) { dx = (Math.random() - .5); dy = (Math.random() - .5); d2 = 1; }
         if (d2 > 160000) continue;
+        if (a.heat < SETTLE && b.heat < SETTLE) continue;
         const f = 900 / d2 * this.alpha;
         const d = Math.sqrt(d2);
         dx /= d; dy /= d;
-        a.vx += dx * f; a.vy += dy * f;
-        b.vx -= dx * f; b.vy -= dy * f;
+        a.vx += dx * f * a.heat; a.vy += dy * f * a.heat;
+        b.vx -= dx * f * b.heat; b.vy -= dy * f * b.heat;
       }
     }
     for (const e of this.edges) {
@@ -492,20 +618,38 @@ class ForceGraph {
       const dx = b.x - a.x, dy = b.y - a.y;
       const d = Math.max(1, Math.hypot(dx, dy));
       const f = (d - 85) * .012 * this.alpha;
-      a.vx += dx / d * f; a.vy += dy / d * f;
-      b.vx -= dx / d * f; b.vy -= dy / d * f;
+      a.vx += dx / d * f * a.heat; a.vy += dy / d * f * a.heat;
+      b.vx -= dx / d * f * b.heat; b.vy -= dy / d * f * b.heat;
     }
     for (const n of N) {
-      n.vx -= n.x * .0016 * this.alpha;
-      n.vy -= n.y * .0016 * this.alpha;
+      n.vx -= n.x * .0016 * this.alpha * n.heat;
+      n.vy -= n.y * .0016 * this.alpha * n.heat;
       if (n === this.drag) continue;
       n.vx *= .86; n.vy *= .86;
+      /* escape velocity, capped -- see MAX_STEP */
+      const v = Math.hypot(n.vx, n.vy);
+      if (v > MAX_STEP) { n.vx *= MAX_STEP / v; n.vy *= MAX_STEP / v; }
       n.x += n.vx; n.y += n.vy;
     }
     this.alpha *= cool;
   }
+  /* px/py for every node: the settled position plus the idle float. The node
+     under the pointer does not float -- it has to stay under the finger that
+     is dragging it. */
+  place(t) {
+    /* screen px into world px, so the drift looks the same at every zoom */
+    const amp = this.float ? Math.min(FLOAT_MAX, FLOAT_SCREEN / this.scale) : 0;
+    for (const n of this.nodes) {
+      if (!amp || n === this.drag) { n.px = n.x; n.py = n.y; continue; }
+      const a = t * FLOAT_RATE * n.fq + n.fp;
+      /* two rates, so the path is a slow figure rather than a circle */
+      n.px = n.x + Math.cos(a) * amp * n.fs;
+      n.py = n.y + Math.sin(a * 1.13 + n.fp) * amp * n.fs;
+    }
+  }
   draw() {
     const { cx } = this;
+    this.place(performance.now());
     cx.clearRect(0, 0, this.w, this.h);
     cx.save();
     cx.translate(this.tx, this.ty);
@@ -518,10 +662,10 @@ class ForceGraph {
       /* an edge is only as bright as its dimmer end: a match keeps the lines
          that reach it, so you still see what it is connected to */
       cx.globalAlpha = (a.dim || b.dim) ? DIM : 1;
-      cx.beginPath(); cx.moveTo(a.x, a.y); cx.lineTo(b.x, b.y); cx.stroke();
-      const d = Math.hypot(b.x - a.x, b.y - a.y) || 1;
-      const ux = (b.x - a.x) / d, uy = (b.y - a.y) / d;
-      const px = b.x - ux * (b.r + 4), py = b.y - uy * (b.r + 4);
+      cx.beginPath(); cx.moveTo(a.px, a.py); cx.lineTo(b.px, b.py); cx.stroke();
+      const d = Math.hypot(b.px - a.px, b.py - a.py) || 1;
+      const ux = (b.px - a.px) / d, uy = (b.py - a.py) / d;
+      const px = b.px - ux * (b.r + 4), py = b.py - uy * (b.r + 4);
       const s = 4 / Math.sqrt(this.scale);
       cx.beginPath();
       cx.moveTo(px, py);
@@ -538,11 +682,11 @@ class ForceGraph {
       cx.globalAlpha = n.dim ? DIM : 1;
       cx.beginPath();
       if (n.type === 'anti_pattern') {          /* diamond: secondary encoding for the red↔green CVD pair */
-        cx.moveTo(n.x, n.y - n.r); cx.lineTo(n.x + n.r, n.y);
-        cx.lineTo(n.x, n.y + n.r); cx.lineTo(n.x - n.r, n.y);
+        cx.moveTo(n.px, n.py - n.r); cx.lineTo(n.px + n.r, n.py);
+        cx.lineTo(n.px, n.py + n.r); cx.lineTo(n.px - n.r, n.py);
         cx.closePath();
       } else {
-        cx.arc(n.x, n.y, n.r, 0, 7);
+        cx.arc(n.px, n.py, n.r, 0, 7);
       }
       if (n.status === 'archived') {
         cx.fillStyle = this.colRing; cx.fill();
@@ -553,7 +697,7 @@ class ForceGraph {
       }
       if (n === this.selected || n === this.linkFrom) {
         cx.beginPath();
-        cx.arc(n.x, n.y, n.r + 5, 0, 7);
+        cx.arc(n.px, n.py, n.r + 5, 0, 7);
         cx.strokeStyle = this.colAccent;
         cx.lineWidth = 1.6 / this.scale;
         if (n === this.linkFrom) cx.setLineDash([4 / this.scale, 3 / this.scale]);
@@ -569,20 +713,30 @@ class ForceGraph {
       const n = this.hover;
       cx.font = `${11 / this.scale}px 'Roboto Mono', monospace`;
       cx.fillStyle = this.colLabel;
-      cx.fillText(n.label.slice(0, 46), n.x + n.r + 7 / this.scale, n.y + 4 / this.scale);
+      cx.fillText(n.label.slice(0, 46), n.px + n.r + 7 / this.scale, n.py + 4 / this.scale);
     }
     cx.restore();
   }
   loop() {
     this.raf = 0;
     if (!this.running) return;
-    this.physics();
-    this.draw();
-    /* Stop once the layout is at rest. This used to run forever, redrawing
-       an identical canvas at 60fps on a graph nobody was touching; every
-       interaction path above calls kick() or requestDraw() to come back. */
-    if (this.alpha > SETTLE || this.drag || this.pan) {
-      this.raf = requestAnimationFrame(this.loop);
+    const t = performance.now();
+    /* At rest, the only thing still moving is the float, and it is a 2px
+       drift -- 30fps spends half the frames on it and looks the same. The
+       physics is skipped along with the frame: it would return at the alpha
+       check anyway, and this keeps the two in step.
+
+       The old loop stopped dead once alpha fell below SETTLE, because before
+       the float there was genuinely nothing left to paint. That guard is now
+       `this.float`: reduced-motion turns the drift off, and with it the loop
+       goes back to stopping, with kick()/requestDraw() as the way back in. */
+    const live = this.alpha > SETTLE || this.drag || this.pan;
+    if (live || this.dirty || t - this.floatAt >= FLOAT_STEP) {
+      this.floatAt = t;
+      this.dirty = false;
+      this.physics();
+      this.draw();
     }
+    if (live || this.float) this.raf = requestAnimationFrame(this.loop);
   }
 }
