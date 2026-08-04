@@ -7,7 +7,8 @@ import { api } from '../core/api.js';
 import { icon } from '../core/icons.js';
 import { toast, failed, promptModal } from '../core/ui.js';
 import { statusTag, confPill, uidChip, wireCopyChips, getDomains,
-         invalidateDomains, domainSegments } from '../core/shared.js';
+         invalidateDomains, domainSegments, inDomainPath,
+         DOMAIN_SEP } from '../core/shared.js';
 import { domainPickerHTML, wireDomainPicker } from '../core/domain-picker.js';
 import { go } from '../core/router.js';
 import { openRecord } from './record.js';
@@ -107,14 +108,14 @@ export async function renderDiagrams(view, params, ctx) {
     b.addEventListener('click', () => nav({ status: b.dataset.v })));
   $('#dglNew').addEventListener('click', () => promptNewDiagram(state.domain));
 
-  /* `branch` is the group this copy of the card is being drawn under. A flow
-     cross-listed into another subject appears under that subject's branch as
-     well as its own, so the copy that is not at home says so -- two cards
-     with one uid otherwise read as a duplicated record. */
+  /* `branch` is the group the card is being drawn under. It is not always
+     where the flow is filed -- a flow whose home is outside the current
+     filter is drawn under the cross-listing that brought it into the list,
+     and it says so, or it reads as filed there. */
   const card = (d, branch) => {
     const issues = d.issues.slice().sort(
       (a, b) => ISSUE_ORDER.indexOf(a.kind) - ISSUE_ORDER.indexOf(b.kind));
-    const away = branch !== undefined && branch !== homeOf(d);
+    const away = branch !== homeOf(d);
     return `<div class="dgl-card${issues.length ? ' has-issues' : ''}">
       <div class="dgl-top">
         <button type="button" class="dgl-title" data-edit="${esc(d.uid)}" title="${esc(d.title)}">${esc(d.title || '—')}</button>
@@ -149,30 +150,36 @@ export async function renderDiagrams(view, params, ctx) {
     </div>`;
   };
 
-  /* Flows are grouped by the OUTERMOST segment of their domain: a store
-     grows one diagram per routine, and thirty cards in one flat grid is a
-     list to read rather than a set to navigate. The heading filters to that
-     branch, which is where the finer grouping comes from -- the server
-     scopes a domain filter to its whole subtree, so picking 'acme' narrows
-     to it and the headings below become its modules.
+  /* Flows are grouped by the segment of their domain just BELOW the active
+     filter -- the outermost one with nothing filtered: a store grows one
+     diagram per routine, and thirty cards in one flat grid is a list to read
+     rather than a set to navigate. The heading filters one level deeper, so
+     picking 'acme' turns the headings below into its modules.
 
-     A flow cross-listed into another subject is grouped under that subject's
-     branch TOO: several routines can each be a step of one end-to-end
-     process without any of them being the parent of the others, and putting
-     each card only where it is filed is exactly the granularity that was
-     missing. A flow with no domain of its own but a cross-listing groups
-     under the cross-listing alone -- the leftover pile is for the ones with
-     no subject at all. */
-  const homeOf = d => domainSegments(d.domain)[0] || '';
-  const branchesOf = d => {
-    const roots = new Set();
-    for (const p of d.also || []) {
-      const r = domainSegments(p)[0];
-      if (r) roots.add(r);
-    }
-    if (d.domain || !roots.size) roots.add(homeOf(d));
-    return roots;
-  };
+     ONE card per flow, always. A flow cross-listed into three subjects used
+     to be drawn under each of their branches, and three cards with one uid
+     read as three records however the copies are marked; the cross-listings
+     are on the card as chips, and filtering to one of them is how you see
+     that subject's set. So a flow is grouped where it is FILED, and only
+     falls back to a cross-listing when its own path is not in the list at
+     all -- outside the active filter, or absent, which is how a purely
+     cross-cutting subject still shows the routines that are steps of it. */
+  const scope = domainSegments(state.domain);
+  const branchOf = p => inDomainPath(p, state.domain)
+    ? domainSegments(p).slice(0, scope.length + 1).join(DOMAIN_SEP)
+    : null;
+  /* Where the flow belongs: its own branch, and the leftover pile for one
+     filed nowhere -- which is a home, not an exile, so a card sitting in the
+     pile is not "cross-listed here". */
+  const homeOf = d => branchOf(d.domain);
+  /* `also` arrives sorted by path, so the fallback is the first cross-listing
+     in scope -- the same branch on every draw, not whichever came back first.
+     Nothing in scope at all leaves the card in the leftover pile: the server
+     matched it, and dropping it out of the grid is worse than filing it
+     loosely. */
+  const groupOf = d => (d.domain ? homeOf(d) : null)
+    ?? (d.also || []).map(branchOf).find(Boolean)
+    ?? '';
 
   const grid = $('#dglGrid');
   const draw = () => {
@@ -183,10 +190,9 @@ export async function renderDiagrams(view, params, ctx) {
       : data.items;
     const groups = new Map();
     for (const d of shown) {
-      for (const k of branchesOf(d)) {
-        if (!groups.has(k)) groups.set(k, []);
-        groups.get(k).push(d);
-      }
+      const k = groupOf(d);
+      if (!groups.has(k)) groups.set(k, []);
+      groups.get(k).push(d);
     }
     /* undomained last: it is the leftover pile, not a branch */
     const order = [...groups.keys()].sort((a, b) =>
@@ -194,7 +200,10 @@ export async function renderDiagrams(view, params, ctx) {
     grid.innerHTML = !shown.length
       ? `<div class="empty">${data.total ? t('dgl.noMatch') : `${t('dgl.empty')}<div class="dg-empty" style="margin-top:8px">${t('dgl.emptyHint')}</div>`}</div>`
       : order.length < 2
-        ? `<div class="dgl-grid">${shown.map(d => card(d)).join('')}</div>`
+        /* one branch draws no heading, but the cards still get told which one
+           they are under: a flow only cross-listed into the filtered subject
+           has to say so, or it reads as filed there */
+        ? `<div class="dgl-grid">${shown.map(d => card(d, groupOf(d))).join('')}</div>`
         : order.map(k => `<section class="dgl-group">
             <div class="dgl-group-head">
               ${k ? `<button type="button" class="chip clickable" data-fdomain="${esc(k)}"
