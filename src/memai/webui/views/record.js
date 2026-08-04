@@ -24,8 +24,9 @@ import { api, seg } from '../core/api.js';
 import { icon } from '../core/icons.js';
 import { toast, failed, openModal, closeModal, confirmModal, promptModal } from '../core/ui.js';
 import { typeTag, typeClass, confPill, uidChip, statusTag, wireCopyChips,
-         failedHTML, TYPE_ORDER, CONF, REL_SUGGEST,
+         failedHTML, CONF, REL_SUGGEST, typeItems,
          cachedDomains, invalidateDomains, domainDatalist } from '../core/shared.js';
+import { pickerFor, pickerValue, wirePicker, fixedItems } from '../core/pick.js';
 import { pickMemories } from '../core/link-picker.js';
 import { go, refreshBehind } from '../core/router.js';
 import { t } from '../i18n.js';
@@ -225,6 +226,12 @@ export async function openRecord(uid) {
         </div>
         <div class="meta-grid">
           <div><div class="mg-label">${t('dr.meta.domain')}</div><div class="mg-val">${m.domain ? `<button type="button" class="chip clickable" data-fdomain="${esc(m.domain)}" aria-label="${esc(t('a11y.filterDomain', { domain: m.domain }))}">${esc(m.domain)}</button>` : '—'}</div></div>
+          <!-- the domains this belongs to beside the one it is filed at: one
+               chip each, filtering the same way, because a cross-listing is
+               a scope you can go and read, not a label -->
+          ${(m.also || []).length ? `<div><div class="mg-label">${t('dr.meta.also')}</div><div class="mg-val">${
+            m.also.map(p => `<button type="button" class="chip clickable" data-fdomain="${esc(p)}" aria-label="${esc(t('a11y.filterDomain', { domain: p }))}">${esc(p)}</button>`).join(' ')
+          }</div></div>` : ''}
           <div><div class="mg-label">${t('dr.meta.session')}</div><div class="mg-val">${m.session ? `<button type="button" class="chip clickable" data-fsession="${esc(m.session)}" title="${esc(m.session)}" aria-label="${esc(t('a11y.filterSession', { session: m.session }))}">${esc(m.session.length > 24 ? m.session.slice(0, 24) + '…' : m.session)}</button>` : '—'}</div></div>
           <div><div class="mg-label">${t('dr.meta.tags')}</div><div class="mg-val">${esc(m.tags || '—')}</div></div>
           <div><div class="mg-label">${t('dr.meta.created')}</div><div class="mg-val" title="${esc(m.created_at)}">${fmtDate(m.created_at)}</div></div>
@@ -481,14 +488,20 @@ export async function openRecord(uid) {
 
 function openMetaModal(m) {
   const dl = domainDatalist(cachedDomains());
+  /* A type the vocabulary does not know is still what this memory IS, so it
+     joins the list rather than being silently replaced by the first row. */
+  const types = typeItems();
+  if (!types.some(it => it.value === m.type)) types.push({ value: m.type, label: m.type });
   const modal = openModal({
     title: t('mm.title'),
     bodyHTML: `
       <div class="field"><label for="mmType">${t('mm.type')}</label>
-        <select id="mmType">${TYPE_ORDER.map(tp => `<option ${tp === m.type ? 'selected' : ''}>${tp}</option>`).join('')}
-        ${TYPE_ORDER.includes(m.type) ? '' : `<option selected>${esc(m.type)}</option>`}</select></div>
+        ${pickerFor({ id: 'mmType', value: m.type, items: types, ariaLabel: t('mm.type') })}</div>
       <div class="field"><label for="mmDomain">${t('dr.meta.domain')}</label>
         <input type="text" id="mmDomain" value="${esc(m.domain)}" list="mmDomainsDL"><datalist id="mmDomainsDL">${dl}</datalist></div>
+      <div class="field"><label for="mmAlso">${t('dr.meta.also')}</label>
+        <input type="text" id="mmAlso" value="${esc((m.also || []).join(', '))}" placeholder="${t('mm.also.placeholder')}" list="mmDomainsDL">
+        <div class="hint-sm">${t('mm.also.hint')}</div></div>
       <div class="field"><label for="mmTags">${t('mm.tags.label')}</label>
         <input type="text" id="mmTags" value="${esc(m.tags)}"></div>
       <div class="field"><label for="mmSession">${t('dr.meta.session')}</label>
@@ -497,11 +510,13 @@ function openMetaModal(m) {
     footHTML: `<button class="btn" data-x>${t('common.cancel')}</button><button class="btn btn-solid" data-ok>${t('common.save')}</button>`,
   });
   const mq = s => modal.querySelector(s);
+  wirePicker(modal, { id: 'mmType', items: fixedItems(types), onPick: () => {} });
   mq('[data-x]').onclick = closeModal;
   mq('[data-ok]').onclick = async () => {
     try {
       const r = await api(`/api/memories/${seg(m.uid)}/meta`, { body: {
-        type: mq('#mmType').value, domain: mq('#mmDomain').value,
+        type: pickerValue(modal, 'mmType'), domain: mq('#mmDomain').value,
+        also: mq('#mmAlso').value,
         tags: mq('#mmTags').value, session: mq('#mmSession').value } });
       closeModal();
       toast(r.changed.length ? t('mm.updated', { list: r.changed.join(', ') }) : t('mm.nothing'), 'ok');

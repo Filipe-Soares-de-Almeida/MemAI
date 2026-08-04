@@ -38,7 +38,19 @@ mcp = FastMCP("memai")
 
 
 def _row_to_dict(row) -> dict:
-    return dict(row) if row is not None else {}
+    """A memory row as a payload dict, with its cross-listings as `also`.
+
+    `also_domains` never leaves here: it is the one-field mirror the FTS
+    index and the embedder read (see db), and db.parse_domains is its
+    inverse. A caller gets the paths as a list or not at all.
+    """
+    if row is None:
+        return {}
+    d = dict(row)
+    blob = d.pop("also_domains", "")
+    if blob:
+        d["also"] = db.parse_domains(blob)
+    return d
 
 
 SNIPPET_LIMIT = 400
@@ -103,8 +115,25 @@ def _coerce_domain(conn, domain: str) -> tuple[str, dict | None]:
     return coerced, {"from": domain, "to": coerced, "policy": mode}
 
 
+def _write_result(conn, uid: str, warning: dict | None, also: str) -> dict:
+    """The dict a writer tool returns: the uid, and whatever was adjusted.
+
+    `also` is echoed only when it was asked for, because the stored set can
+    differ from what was written -- casing policy applies, and a path the
+    memory's own domain already covers is dropped (see
+    db.apply_link_policy). An agent that cross-listed into three subjects
+    and got two back learns which reading was redundant.
+    """
+    result = {"uid": uid}
+    if warning:
+        result["domain_adjusted"] = warning
+    if also:
+        result["also"] = db.get_domain_links(conn, uid)
+    return result
+
+
 @mcp.tool()
-def note(content: str, domain: str = "", tags: str = "", session: str = "") -> dict:
+def note(content: str, domain: str = "", also: str = "", tags: str = "", session: str = "") -> dict:
     """Save a general long-term memory (fact, decision, finding). Stored as type='note'.
 
     Timeless knowledge -- retrieved by relevance, not recency. Bring it
@@ -116,17 +145,23 @@ def note(content: str, domain: str = "", tags: str = "", session: str = "") -> d
     -- a note about one routine goes on the routine, and still comes back
     when someone asks about the module or the product above it.
 
+    also: other domain paths this belongs to, comma-separated. `domain` is
+    where the memory LIVES -- one path, one parent chain. `also` is for the
+    subjects that cut ACROSS that tree: the same routine belongs to the
+    module it runs in and to the end-to-end flow it is one step of, and
+    neither of those is the other's ancestor. Every read scoped to any of
+    those paths returns it. A path that `domain` already sits under is
+    dropped as redundant -- the result echoes what was stored.
+
     tags: comma-separated keywords/synonyms -- write generously; tags
     feed both the keyword index and the embedding, so they make the
     memory findable even when the vector side is unavailable.
     """
     with db.connect() as conn:
         domain, warning = _coerce_domain(conn, domain)
-        uid = db.insert_memory(conn, type=TYPE_NOTE, content=content, domain=domain, session=session, tags=tags)
-    result = {"uid": uid}
-    if warning:
-        result["domain_adjusted"] = warning
-    return result
+        uid = db.insert_memory(conn, type=TYPE_NOTE, content=content, domain=domain,
+                               also=also, session=session, tags=tags)
+        return _write_result(conn, uid, warning, also)
 
 
 @mcp.tool()
@@ -137,6 +172,7 @@ def checkpoint(
     open_questions: str,
     session: str = "",
     domain: str = "",
+    also: str = "",
 ) -> dict:
     """Snapshot current working state (intent/established/pursuing/open_questions).
 
@@ -145,6 +181,9 @@ def checkpoint(
     a readable summary here and put timeless detail into note() --
     checkpoints are read for bearing, not as an archive. Stored as
     type='checkpoint'.
+
+    also: other domain paths this belongs to, comma-separated -- the
+    cross-cutting subjects beside the one it is filed under. See note().
     """
     content = (
         f"INTENT: {intent}\nESTABLISHED: {established}\n"
@@ -153,63 +192,59 @@ def checkpoint(
     with db.connect() as conn:
         domain, warning = _coerce_domain(conn, domain)
         uid = db.insert_memory(
-            conn, type=TYPE_CHECKPOINT, content=content, domain=domain, session=session,
-            tags="checkpoint",
+            conn, type=TYPE_CHECKPOINT, content=content, domain=domain, also=also,
+            session=session, tags="checkpoint",
         )
-    result = {"uid": uid}
-    if warning:
-        result["domain_adjusted"] = warning
-    return result
+        return _write_result(conn, uid, warning, also)
 
 
 @mcp.tool()
-def anti_pattern(pattern: str, why_wrong: str, instead: str, domain: str = "", session: str = "") -> dict:
+def anti_pattern(
+    pattern: str, why_wrong: str, instead: str, domain: str = "", also: str = "",
+    session: str = "",
+) -> dict:
     """Record a mistake/temptation to avoid repeating, and the correct approach.
 
     Stored as type='anti_pattern'; open ones for a domain are surfaced by pulse().
+    `also` cross-lists it into further domain paths -- see note().
     """
     content = f"TEMPTATION: {pattern}\nWHY WRONG: {why_wrong}\nINSTEAD: {instead}"
     with db.connect() as conn:
         domain, warning = _coerce_domain(conn, domain)
         uid = db.insert_memory(
-            conn, type=TYPE_ANTI_PATTERN, content=content, domain=domain, session=session,
-            tags="anti_pattern",
+            conn, type=TYPE_ANTI_PATTERN, content=content, domain=domain, also=also,
+            session=session, tags="anti_pattern",
         )
-    result = {"uid": uid}
-    if warning:
-        result["domain_adjusted"] = warning
-    return result
+        return _write_result(conn, uid, warning, also)
 
 
 @mcp.tool()
-def reasoning(content: str, domain: str = "", session: str = "") -> dict:
+def reasoning(content: str, domain: str = "", also: str = "", session: str = "") -> dict:
     """Record a reasoning trace / analysis worth keeping (not a fact, a thought process).
 
     Stored as type='reasoning' -- filter search/list_* with
-    type='reasoning' to get these back.
+    type='reasoning' to get these back. `also` cross-lists it into further
+    domain paths -- see note().
     """
     with db.connect() as conn:
         domain, warning = _coerce_domain(conn, domain)
-        uid = db.insert_memory(conn, type=TYPE_REASONING, content=content, domain=domain, session=session)
-    result = {"uid": uid}
-    if warning:
-        result["domain_adjusted"] = warning
-    return result
+        uid = db.insert_memory(conn, type=TYPE_REASONING, content=content, domain=domain,
+                               also=also, session=session)
+        return _write_result(conn, uid, warning, also)
 
 
 @mcp.tool()
-def handoff(content: str, domain: str = "", session: str = "") -> dict:
+def handoff(content: str, domain: str = "", also: str = "", session: str = "") -> dict:
     """Leave a note for another agent/session picking up this work.
 
     Stored as type='handoff'; open ones for a domain are surfaced by pulse().
+    `also` cross-lists it into further domain paths -- see note().
     """
     with db.connect() as conn:
         domain, warning = _coerce_domain(conn, domain)
-        uid = db.insert_memory(conn, type=TYPE_HANDOFF, content=content, domain=domain, session=session)
-    result = {"uid": uid}
-    if warning:
-        result["domain_adjusted"] = warning
-    return result
+        uid = db.insert_memory(conn, type=TYPE_HANDOFF, content=content, domain=domain,
+                               also=also, session=session)
+        return _write_result(conn, uid, warning, also)
 
 
 def _errors(errors: list[str]) -> dict:
@@ -233,6 +268,7 @@ def diagram(
     edges: list[dict],
     summary: str = "",
     domain: str = "",
+    also: str = "",
     session: str = "",
     tags: str = "",
     kind: str = "flowchart",
@@ -258,6 +294,13 @@ def diagram(
     and every node must be reachable from it. Cycles are allowed -- a
     retry loop is a real flow, not a mistake.
 
+    also: other domain paths this flow belongs to, comma-separated. `domain`
+    is the routine's own place in the tree; `also` is for the flows that run
+    ACROSS routines -- several of them can be steps of one end-to-end
+    process without any of them being the parent of the others. Cross-list
+    each into that process's path and asking about it returns all of them,
+    instead of hoping one search phrasing reaches every one.
+
     Returns {"uid": ...}, or {"ok": False, "errors": [...]} with nothing
     written at all. Node positions are computed and stored server-side,
     so the flow renders identically for every reader -- see get_diagram().
@@ -266,14 +309,11 @@ def diagram(
         domain, warning = _coerce_domain(conn, domain)
         uid, errors = db.insert_diagram(
             conn, title=title, nodes=nodes, edges=edges, summary=summary,
-            kind=kind, domain=domain, session=session, tags=tags,
+            kind=kind, domain=domain, also=also, session=session, tags=tags,
         )
-    if errors:
-        return _errors(errors)
-    result = {"uid": uid}
-    if warning:
-        result["domain_adjusted"] = warning
-    return result
+        if errors:
+            return _errors(errors)
+        return _write_result(conn, uid, warning, also)
 
 
 @mcp.tool()
@@ -579,7 +619,7 @@ def search(query: str, domain: str = "", type: str = "", limit: int = 30) -> lis
     """
     with db.connect() as conn:
         results = db.search_hybrid(conn, query, domain=domain, type=type, limit=limit)
-    return [_snippet_dict(r) for r in results]
+    return [_snippet_dict(_row_to_dict(r)) for r in results]
 
 
 @mcp.tool()
@@ -598,7 +638,7 @@ def recall(query: str, domain: str = "", limit: int = 20) -> list[dict]:
     """
     with db.connect() as conn:
         results = db.search_hybrid(conn, query, domain=domain, type=TYPE_NOTE, limit=limit)
-    return [_snippet_dict(r) for r in results]
+    return [_snippet_dict(_row_to_dict(r)) for r in results]
 
 
 @mcp.tool()
@@ -659,11 +699,53 @@ def list_domains() -> list[dict]:
     scope worth warming up: a parent holding nothing of its own can still
     be where the work is.
 
+    `also` and `subtree_also` are the same two counts for memories
+    CROSS-LISTED here rather than filed here -- the cross-cutting subjects.
+    A path with `count` 0 and `also` above it is one of those and nothing
+    else: an end-to-end flow whose steps all live under other branches.
+    Reads scoped to it return them all.
+
     Casing may be enforced store-wide -- call get_domain_case() to see
     the active policy before coining a new domain.
     """
     with db.connect() as conn:
         return db.list_domains(conn)
+
+
+@mcp.tool()
+def also_domain(uid: str, domain: str) -> dict:
+    """Cross-list an existing memory into one more domain path.
+
+    For the membership a memory picks up after the fact: it was filed where
+    it lives, and later turns out to be part of a subject that cuts across
+    the tree. Every read scoped to `domain` returns it from now on, without
+    moving it -- use the dashboard's re-home for that.
+
+    Returns {"uid": ..., "also": [...]} with the whole resulting set. A path
+    the memory's own domain already sits under is dropped as redundant, so
+    the echo is what actually holds.
+    """
+    with db.connect() as conn:
+        if db.get_memory(conn, uid) is None:
+            return _errors([f"no memory {uid}"])
+        try:
+            return {"uid": uid, "also": db.add_domain_link(conn, uid, domain)}
+        except ValueError as exc:
+            return _errors([str(exc)])
+
+
+@mcp.tool()
+def unfile_domain(uid: str, domain: str) -> dict:
+    """Drop one of a memory's cross-listings. Does not touch where it is filed.
+
+    Matched on the exact path: dropping 'acme' leaves a separate membership
+    in 'acme/x100' alone, because that is a different scope. Returns
+    {"uid": ..., "also": [...]} with what remains.
+    """
+    with db.connect() as conn:
+        if db.get_memory(conn, uid) is None:
+            return _errors([f"no memory {uid}"])
+        return {"uid": uid, "also": db.remove_domain_link(conn, uid, domain)}
 
 
 @mcp.tool()
@@ -729,6 +811,13 @@ def pulse(domain: str = "") -> dict:
     domain=...) or list_by_domain(domain, type=..., limit=...) on the child
     that holds what this pass only counted. A pulse is the state of a
     scope, never its contents.
+
+    A scope holds what is CROSS-LISTED into it as well as what is filed
+    there, so warming up an end-to-end flow brings back the routines that
+    are steps of it wherever they live. `scope.also` counts how much of the
+    brief arrived that way, and a subdomain carries its own `also` --
+    present only when non-zero, so a store that never cross-lists never
+    sees the field.
     """
     with db.connect() as conn:
         census = db.domain_census(conn, domain)
@@ -773,6 +862,7 @@ def pulse(domain: str = "") -> dict:
             "domain": domain,
             "paths": census["paths"],
             "total": census["total"],
+            **({"also": census["also"]} if census.get("also") else {}),
             "by_type": census["by_type"],
             "not_shown": not_shown,
             "subdomains": census["children"],
@@ -970,6 +1060,12 @@ def optimize_scan(
         Read them as a proposal, not a verdict: the split cannot tell a
         real level from a hyphen inside a name, so check each one and
         stage only the splits that hold,
+      - per memory, `also`: the domains it belongs to beside its own path.
+        There is deliberately no hint listing cross-listing CANDIDATES --
+        which subjects cut across the tree is a judgement about what the
+        memories say, not something a string split can propose. Read the
+        corpus, decide, and stage `crosslist` suggestions; `also` is there
+        so you can tell a new membership from one that already holds,
       - anchors: per memory, the verifiable references found in its FULL
         content (URLs, file paths, table/field identifiers, constants),
         space-joined -- the things to go check against live facts.
@@ -1016,12 +1112,24 @@ def optimize_stage(suggestions: list[dict], note: str = "") -> dict:
       compact / reword   {"new_content": str}
       retag              {"tags": str}                 comma-separated
       redomain           {"domain": str}
+      crosslist          {"also": [path, ...]}         replaces the whole set
       set_confidence     {"confidence": "unverified|confirmed|contradicted"}
       archive            {"reason": str}               soft/reversible; never hard-deletes
       link               {"from_uid", "to_uid", "relation_type", "note"?}
       merge              {"keep_uid", "drop_uid", "note"?}   links supersedes + archives drop
       distill            {"source_uids": [uid, ...], "new_type": "note|reasoning|anti_pattern",
                           "new_content": str, "tags"?, "domain"?}
+
+    redomain moves where a memory is FILED -- one path, one parent chain.
+    crosslist sets what it also BELONGS to: the subjects that cut across
+    that tree, where several routines are each a step of one end-to-end
+    process without any of them being the parent of the others. It replaces
+    the whole set rather than adding to it, so include the memberships that
+    should survive; `also: []` drops them all. The corpus lists each
+    memory's current `also`, so read that before proposing. A path the
+    memory's own domain already sits under is redundant and is dropped --
+    if that leaves nothing, the suggestion is rejected rather than silently
+    staged as a clear.
 
     distill extracts the durable knowledge out of one or MORE source
     memories into a newly authored one: creates it, links it `supersedes`
@@ -1130,6 +1238,8 @@ _TOOLS = {
     "list_by_domain": list_by_domain,
     "list_recent": list_recent,
     "list_domains": list_domains,
+    "also_domain": also_domain,
+    "unfile_domain": unfile_domain,
     "get_domain_case": get_domain_case,
     "set_domain_case": set_domain_case,
     "pulse": pulse,

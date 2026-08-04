@@ -35,6 +35,20 @@ def _mk(conn, content="a fact", **kw):
     return db.insert_memory(conn, type=kw.pop("type", "note"), content=content, **kw)
 
 
+def _mk_diagram(conn):
+    uid, errors = db.insert_diagram(
+        conn, title="Cache warmup routine",
+        nodes=[
+            {"key": "start", "shape": "start", "label": "Receive the warmup trigger"},
+            {"key": "fill", "label": "Load every hot key"},
+            {"key": "done", "shape": "end", "label": "Report the warmup as finished"},
+        ],
+        edges=[{"from": "start", "to": "fill"}, {"from": "fill", "to": "done"}],
+    )
+    assert errors == []
+    return uid
+
+
 def test_stage_validates_and_reports_errors(conn):
     uid = _mk(conn, content="keep me")
     res = db.stage_optimization(conn, "run", [
@@ -53,6 +67,39 @@ def test_stage_no_valid_suggestions_creates_no_run(conn):
     res = db.stage_optimization(conn, "", [{"kind": "bogus", "payload": {}}])
     assert res["run_id"] is None and res["staged"] == 0
     assert db.list_optimization_runs(conn) == []
+
+
+@pytest.mark.parametrize("kind", ["compact", "reword"])
+def test_stage_refuses_rewriting_a_diagram(conn, kind):
+    """A diagram's content is the projection of its graph, so the panel never
+    gets to offer a rewrite the next structural edit would regenerate over."""
+    uid = _mk_diagram(conn)
+    res = db.stage_optimization(conn, "r", [
+        {"kind": kind, "target_uid": uid, "payload": {"new_content": "hand written"}},
+    ])
+    assert res["staged"] == 0 and res["run_id"] is None
+    assert "generated from the graph" in res["errors"][0]["error"]
+    assert db.get_memory(conn, uid)["content"].startswith("DIAGRAM:")
+
+
+def test_apply_refuses_a_diagram_rewrite_staged_before_the_guard(conn):
+    """Runs staged before staging refused this still hold one, so apply checks too."""
+    diag, note = _mk_diagram(conn), _mk(conn, content="untouched")
+    before = db.get_memory(conn, diag)["content"]
+    run = db.stage_optimization(conn, "r", [
+        {"kind": "reword", "target_uid": note, "payload": {"new_content": "better"}},
+    ])
+    conn.execute(
+        """INSERT INTO optimization_suggestions
+           (run_id, kind, target_uid, payload, rationale, verified, status, created_at)
+           VALUES (?, 'reword', ?, ?, '', '', 'pending', ?)""",
+        (run["run_id"], diag, json.dumps({"new_content": "hand written"}), db.now_iso()),
+    )
+    sug = db.get_optimization_suggestions(conn, run["run_id"])[-1]
+    with pytest.raises(ValueError, match="generated from the graph"):
+        db.apply_suggestion(conn, sug["id"])
+    assert db.get_memory(conn, diag)["content"] == before
+    assert db.get_suggestion(conn, sug["id"])["status"] == "pending"
 
 
 @pytest.mark.parametrize("kind,payload,check", [
@@ -84,6 +131,67 @@ def test_apply_and_revert_roundtrip(conn, kind, payload, check):
     assert after["confidence"] == before["confidence"]
     assert after["status"] == before["status"]
     assert db.get_suggestion(conn, sug["id"])["status"] == "pending"
+
+
+def test_crosslist_replaces_the_whole_set_and_reverts(conn):
+    uid = _mk(conn, content="queue drain step", domain="acme/x100/p200",
+              also="omni/x900")
+    run = db.stage_optimization(conn, "r", [
+        {"kind": "crosslist", "target_uid": uid,
+         "payload": {"also": ["omni/x900", "omni/x800"]}, "rationale": "why"},
+    ])
+    sug = db.get_optimization_suggestions(conn, run["run_id"])[0]
+
+    db.apply_suggestion(conn, sug["id"])
+    assert db.get_domain_links(conn, uid) == ["omni/x800", "omni/x900"]
+    # the scope reads it, which is the point of staging this at all
+    assert [r["uid"] for r in db.list_by_domain(conn, "omni/x800")] == [uid]
+
+    db.revert_suggestion(conn, sug["id"])
+    assert db.get_domain_links(conn, uid) == ["omni/x900"]
+    assert db.list_by_domain(conn, "omni/x800") == []
+
+
+def test_crosslist_can_drop_every_membership(conn):
+    uid = _mk(conn, content="x", domain="acme", also="omni/x900")
+    run = db.stage_optimization(conn, "r", [
+        {"kind": "crosslist", "target_uid": uid, "payload": {"also": []}},
+    ])
+    sug = db.get_optimization_suggestions(conn, run["run_id"])[0]
+    db.apply_suggestion(conn, sug["id"])
+    assert db.get_domain_links(conn, uid) == []
+    db.revert_suggestion(conn, sug["id"])
+    assert db.get_domain_links(conn, uid) == ["omni/x900"]
+
+
+def test_crosslist_stages_the_paths_that_will_actually_hold(conn):
+    """The panel shows this payload as the proposal, so the policy that drops
+    a redundant path has to run at staging, not only on apply."""
+    uid = _mk(conn, content="x", domain="acme/x100/p200")
+    run = db.stage_optimization(conn, "r", [
+        {"kind": "crosslist", "target_uid": uid,
+         "payload": {"also": ["acme", " omni // x900 ", "omni/x900"]}},
+    ])
+    sug = db.get_optimization_suggestions(conn, run["run_id"])[0]
+    assert json.loads(sug["payload"])["also"] == ["omni/x900"]
+
+
+def test_crosslist_of_only_redundant_paths_is_rejected(conn):
+    """It would stage as a clear, which is not the suggestion it looks like."""
+    uid = _mk(conn, content="x", domain="acme/x100/p200")
+    res = db.stage_optimization(conn, "r", [
+        {"kind": "crosslist", "target_uid": uid, "payload": {"also": ["acme", "acme/x100"]}},
+    ])
+    assert res["staged"] == 0
+    assert "already covered" in res["errors"][0]["error"]
+
+
+def test_crosslist_requires_the_payload_field(conn):
+    uid = _mk(conn, content="x", domain="acme")
+    res = db.stage_optimization(conn, "r", [
+        {"kind": "crosslist", "target_uid": uid, "payload": {}},
+    ])
+    assert res["staged"] == 0 and "payload.also required" in res["errors"][0]["error"]
 
 
 def test_apply_link_and_revert(conn):
@@ -286,10 +394,21 @@ def test_corpus_omits_empty_fields_and_trims_timestamps(conn):
     uid = _mk(conn, content="bare fact")          # no domain/session/tags
     corpus = db.optimization_corpus(conn)
     m = next(m for m in corpus["memories"] if m["uid"] == uid)
-    for absent in ("domain", "session", "tags", "superseded_by", "status",
+    for absent in ("domain", "also", "session", "tags", "superseded_by", "status",
                    "updated_at", "confidence"):     # confidence: unverified is the default
         assert absent not in m
     assert len(m["created_at"]) == 19             # sub-second precision dropped
+
+
+def test_corpus_lists_the_cross_listings(conn):
+    """A pass proposing a crosslist has to tell a new membership from one
+    that already holds."""
+    uid = _mk(conn, content="queue drain step", domain="acme/x100/p200",
+              also="omni/x900")
+    corpus = db.optimization_corpus(conn)
+    m = next(m for m in corpus["memories"] if m["uid"] == uid)
+    assert m["also"] == ["omni/x900"]
+    assert "also_domains" not in m                # the indexing mirror stays put
 
 
 def test_corpus_truncates_long_tags(conn):
@@ -457,6 +576,23 @@ def test_api_runs_and_suggestions(client):
     assert len(got["suggestions"]) == 1
     s = got["suggestions"][0]
     assert s["kind"] == "redomain" and s["target"]["domain"] == "d"
+
+
+def test_api_crosslist_card_shows_both_sets(client):
+    """Before is the whole current set, After the whole proposed one -- the
+    card would otherwise read as an addition to something it replaces."""
+    uid = _new_memory(client, domain="acme/x100/p200", also="omni/x900")
+    staged = _stage_via_db(uid, "crosslist", {"also": ["omni/x900", "omni/x800"]})
+    s = client.get(
+        f"/api/optimization/suggestions?run={staged['run_id']}").json()["suggestions"][0]
+    assert s["target"]["also"] == ["omni/x900"]
+    # sorted: the payload is a set, and staging shows what will hold
+    assert s["payload"]["also"] == ["omni/x800", "omni/x900"]
+
+    client.post("/api/optimization/apply", json={"id": s["id"]})
+    assert client.get(f"/api/memories/{uid}").json()["also"] == ["omni/x800", "omni/x900"]
+    client.post("/api/optimization/revert", json={"id": s["id"]})
+    assert client.get(f"/api/memories/{uid}").json()["also"] == ["omni/x900"]
 
 
 def test_api_apply_takes_backup_and_mutates(client, tmp_path):

@@ -5,7 +5,8 @@ import { $, esc, fmtInt, fmtBytes, fmtDate } from '../core/dom.js';
 import { api, seg } from '../core/api.js';
 import { toast, failed, confirmModal, promptModal } from '../core/ui.js';
 import { typeTag, typeClass, uidChip, statusTag, wireCopyChips, failedHTML, retryable,
-         getDomains, TYPE_ORDER, TYPE_LABEL, domainDatalist } from '../core/shared.js';
+         getDomains, typeItems, domainDatalist } from '../core/shared.js';
+import { pickerFor, pickerValue, setPickerValue, wirePicker, fixedItems } from '../core/pick.js';
 import { openRecord } from './record.js';
 import { t } from '../i18n.js';
 
@@ -42,6 +43,8 @@ const OPS = {
 const RETENTION = ['1d', '7d', '30d', 'never'];
 
 export async function renderMaintenance(view) {
+  const keepItems = RETENTION.map(m => ({ value: m, label: t('mn.rn.mode.' + m) }));
+  const types = typeItems({ any: t('common.allTypes') });
   view.innerHTML = `<div class="anim">
     <div class="view-head">
       <h2 class="view-title">${t('mn.title')}</h2>
@@ -70,12 +73,9 @@ export async function renderMaintenance(view) {
              rather than in a settings page nobody opens. -->
         <h3 class="panel-title" style="margin-top:20px">${t('mn.rn.title')}
           <span class="panel-aside">${t('mn.rn.aside')}</span></h3>
-        <div class="list-toolbar" style="margin-bottom:6px">
+        <div class="list-toolbar toolbar-sm" style="margin-bottom:6px">
           <label class="inline-label">${t('mn.rn.keep')}
-            <select id="rnKeep" aria-label="${t('mn.rn.keep')}">
-              ${RETENTION.map(m =>
-                `<option value="${m}">${t('mn.rn.mode.' + m)}</option>`).join('')}
-            </select></label>
+            ${pickerFor({ id: 'rnKeep', items: keepItems, ariaLabel: t('mn.rn.keep') })}</label>
           <button class="btn btn-sm" data-op="prune-renders">${t('mn.rn.now')}</button>
           <button class="btn btn-sm" data-op="prune-renders-all">${t('mn.rn.all')}</button>
         </div>
@@ -86,12 +86,11 @@ export async function renderMaintenance(view) {
     <div class="panel" style="margin-bottom:14px">
       <h3 class="panel-title">${t('mn.dd.title')}
         <span class="panel-aside">${t('mn.dd.aside')}</span></h3>
-      <div class="list-toolbar" style="margin-bottom:6px">
+      <div class="list-toolbar toolbar-sm" style="margin-bottom:6px">
         <label class="inline-label">
           ${t('mn.dd.threshold')} <input type="range" id="ddThr" min="0.45" max="0.95" step="0.05" value="0.60">
           <b id="ddThrVal">0.60</b></label>
-        <select id="ddType" aria-label="${t('common.allTypes')}"><option value="">${t('common.allTypes')}</option>
-          ${TYPE_ORDER.map(tp => `<option value="${tp}">${TYPE_LABEL[tp]}</option>`).join('')}</select>
+        ${pickerFor({ id: 'ddType', items: types, ariaLabel: t('common.allTypes') })}
         <input type="text" id="ddDomain" placeholder="${t('mn.dd.domainPh')}"
                aria-label="${t('mn.dd.domainPh')}" list="ddDomainsDL" style="max-width:200px">
         <datalist id="ddDomainsDL"></datalist>
@@ -145,19 +144,20 @@ export async function renderMaintenance(view) {
         ? t('mn.rn.usage', { n: fmtInt(h.renders.files), size: fmtBytes(h.renders.bytes) })
         : t('mn.rn.empty');
       const keep = $('#rnKeep');
-      /* the select reflects the stored value; only a change writes one */
-      if (keep && RETENTION.includes(h.renders.retention)) keep.value = h.renders.retention;
+      /* the control reflects the stored value; only a pick writes one */
+      const stored = keepItems.find(it => it.value === h.renders.retention);
+      if (keep && stored) setPickerValue(keep, stored);
     }
   });
   loadHealth();
 
-  $('#rnKeep').addEventListener('change', async e => {
-    const mode = e.target.value;
+  wirePicker(view, { id: 'rnKeep', items: fixedItems(keepItems), onPick: async mode => {
     try {
       await api('/api/config', { body: { svg_retention: mode } });
       toast(t('mn.msg.retention', { mode: t('mn.rn.mode.' + mode) }), 'ok');
     } catch (err) { failed('err.maintenance', err); }
-  });
+  } });
+  wirePicker(view, { id: 'ddType', items: fixedItems(types), onPick: () => {} });
   /* the same wrapped loader the failure's own Retry calls, so Refresh and Retry
      cannot end up doing two different things */
   $('#hRefresh').addEventListener('click', loadHealth);
@@ -191,7 +191,7 @@ export async function renderMaintenance(view) {
     body.innerHTML = '<div class="loading"><span class="spin"></span></div>';
     try {
       const qs = new URLSearchParams({ threshold: $('#ddThr').value });
-      if ($('#ddType').value) qs.set('type', $('#ddType').value);
+      if (pickerValue(view, 'ddType')) qs.set('type', pickerValue(view, 'ddType'));
       if ($('#ddDomain').value.trim()) qs.set('domain', $('#ddDomain').value.trim());
       const r = await api(`/api/maintenance/dedup?${qs}`);
       if (!r.pairs.length) { body.innerHTML = `<div class="empty">${t('mn.dd.none')}</div>`; return; }

@@ -25,16 +25,19 @@ own durability model, so there is nothing to desync from.
 
 ## How it works
 
-**Storage.** A single SQLite file, WAL mode, holding six things together in
+**Storage.** A single SQLite file, WAL mode, holding seven things together in
 one transactional unit:
 - `memories` — the rows themselves (type, domain, session, tags, content,
   status, confidence, timestamps).
+- `memory_domains` — the extra domains a memory belongs to, one row per
+  path. Every domain filter reads it, so a subject that cuts across the
+  tree is a scope like any other.
 - `memories_fts` — an FTS5 (BM25, porter-stemmed) full-text index over
-  content + tags + domain, kept in sync with `memories` via triggers on
+  content + tags + domains, kept in sync with `memories` via triggers on
   every insert/update/delete.
 - `memories_vec` — a [sqlite-vec](https://github.com/asg017/sqlite-vec)
   `vec0` table holding one embedding per memory (over the same
-  content + tags + domain text FTS indexes). sqlite-vec hooks SQLite's
+  content + tags + domains text FTS indexes). sqlite-vec hooks SQLite's
   transaction lifecycle, so vector writes commit/roll back with the row
   they belong to.
 - `edits` — full edit history; correcting a memory keeps the previous
@@ -65,7 +68,7 @@ degrades to keyword-only (relevant only if `MEMAI_EMBED_MODEL` points
 somewhere unreachable); missing vectors are backfilled automatically on a
 later connect.
 
-**Retrieval.** `search` is hybrid: FTS5 BM25 across content/tags/domain,
+**Retrieval.** `search` is hybrid: FTS5 BM25 across content/tags/domains,
 plus brute-force KNN (cosine, no ANN index — nothing to desync, and at
 memory-store scale linear scan is plenty) over the vectors, merged by
 reciprocal rank fusion. Each result says which side matched
@@ -106,6 +109,35 @@ it did, FTS tokenizes the levels into searchable words for free (a module
 code finds the routines under it), and re-homing a domain in the dashboard
 rewrites the subtree's paths in one audited pass.
 
+**And a memory can belong to more than one.** The path says where a memory
+*lives* — one parent chain, the thing a re-home renames. `also` says which
+other subjects it is *part of*, and those cut across the tree: several
+routines can each be a step of one end-to-end process without any of them
+being the parent of the others. `note(..., domain='acme/x100/p200',
+also='omni/x900')` files the memory on the routine and makes every read
+scoped to `omni/x900` return it too — subtree and all, so
+`pulse('omni')` reaches it as well. `also_domain(uid, domain)` and
+`unfile_domain(uid, domain)` adjust the set afterwards; the dashboard has
+the same field on a record's metadata. Cross-listing a whole store at once
+goes through curation instead of those tools: the agent stages `crosslist`
+suggestions, and the dashboard's Optimization tab shows each one as the set
+before and the set after, applies them in a batch behind a safety backup,
+and undoes any of them individually. Which subjects cut across the tree is
+a judgement about what the memories say, so nothing proposes them
+mechanically — the corpus lists each memory's current `also` and the agent
+reads it.
+
+A cross-listing is a membership, not a move: what the memory's `domain`
+says is untouched, and re-homing `omni/x900` retargets the memberships
+pointing into it without moving anything that merely belongs there. A path
+the memory's own domain already sits under is dropped as redundant (the
+prefix arm matched it already), and every writer echoes the stored set so
+that is visible. A path can exist *only* as a cross-listing — an end-to-end
+flow whose every step lives under some other branch — and it is a scope like
+any other: `list_domains()` reports it with `also`/`subtree_also` counts,
+kept apart from the filed counts so the tree never totals more than the
+store, and `pulse`'s `scope.also` says how much of a brief arrived that way.
+
 **A warm-up says what it left out.** `pulse` is the state of a scope, not its
 contents: each list stops at a handful, and on a parent domain the newest few
 of one busy child can fill it alone — which used to hide both the parent's own
@@ -139,16 +171,18 @@ tool's full signature and docstring, read live from the code.
 
 | Tool | Purpose |
 |---|---|
-| `note(content, domain, tags, session)` | Save a fact/decision/finding (`type='note'`) |
-| `checkpoint(intent, established, pursuing, open_questions, session, domain)` | Save work state; fields are free-length |
-| `anti_pattern(pattern, why_wrong, instead, domain, session)` | Save a pitfall to avoid repeating |
-| `reasoning(content, domain, session)` | Save a reasoning trace (`type='reasoning'`) |
-| `handoff(content, domain, session)` | Leave a note for another agent/session |
+| `note(content, domain, also, tags, session)` | Save a fact/decision/finding (`type='note'`) |
+| `checkpoint(intent, established, pursuing, open_questions, session, domain, also)` | Save work state; fields are free-length |
+| `anti_pattern(pattern, why_wrong, instead, domain, also, session)` | Save a pitfall to avoid repeating |
+| `reasoning(content, domain, also, session)` | Save a reasoning trace (`type='reasoning'`) |
+| `handoff(content, domain, also, session)` | Leave a note for another agent/session |
 | `search(query, domain, type, limit)` | Hybrid BM25 + vector search, source-annotated |
 | `recall(query, domain, limit)` | Relevance-ranked recall of `note()`'d knowledge (search scoped to `type='note'`) |
 | `list_by_domain(domain, type, limit, subtree)` | Recency-ordered list, scoped to a domain path and its subdomains |
 | `list_recent(type, domain, limit, subtree)` | Recency-ordered list, global |
-| `list_domains()` | The domain tree: every path with own/subtree counts + latest activity (warm-up discovery) |
+| `list_domains()` | The domain tree: every path with own/subtree/cross-listed counts + latest activity (warm-up discovery) |
+| `also_domain(uid, domain)` | Cross-list an existing memory into one more domain path |
+| `unfile_domain(uid, domain)` | Drop one cross-listing; where the memory is filed is untouched |
 | `pulse(domain)` | Session warm-up: latest checkpoint + open handoffs/anti-patterns + recent notes, plus a `scope` census of what it did not show |
 | `get_memory(uid)` | Full record, including edit history and relations |
 | `edit_memory(uid, new_content, note)` | Correct a memory, keeping the prior version |
@@ -250,16 +284,19 @@ that only make sense for a person:
   30-day activity, vector coverage.
 - **Memories** — hybrid search + filters (type/domain/status/confidence/
   session), a per-memory record drawer (edit content with history, edit
-  metadata with re-embedding, confidence triage, archive/restore,
-  relations, line-level diffs of past edits, guarded purge), and
-  multi-select bulk actions.
+  metadata with re-embedding — including the extra domains it belongs to —
+  confidence triage, archive/restore, relations, line-level diffs of past
+  edits, guarded purge), and multi-select bulk actions. A row that is in a
+  domain filter only because it is cross-listed into it says so.
 - **Graph** — force-layout of the relations graph; drag, zoom, click to
   inspect, and a link mode to create relations between two nodes.
 - **Domains** — the domain tree: one row per level, expandable, showing what
-  is filed on it and what its subtree holds. Move/rename/merge (typing a
-  path re-homes the domain and its subdomains; every affected row is
-  re-embedded and audited), casing policy, and spelling-drift detection
-  between siblings (`acme/Cache` vs `acme/cache`).
+  is filed on it, what its subtree holds, and what is cross-listed into it
+  (a level with only the last of those is marked as the cross-cutting
+  subject it is). Move/rename/merge (typing a path re-homes the domain and
+  its subdomains; every affected row is re-embedded and audited), casing
+  policy, and spelling-drift detection between siblings (`acme/Cache` vs
+  `acme/cache`).
 - **Maintenance** — integrity/FTS/vector health checks, FTS rebuild,
   vector backfill/re-embed, orphan cleanup, VACUUM, timestamped backups
   (`VACUUM INTO`), a dedup-candidate review queue, and the audit trail.

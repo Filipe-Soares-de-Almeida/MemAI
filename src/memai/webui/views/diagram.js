@@ -12,14 +12,14 @@ import { icon } from '../core/icons.js';
 import { toast, failed, openModal, closeModal, confirmModal, promptModal,
          openCtxMenu, tipShow, tipHide, setPressed } from '../core/ui.js';
 import { typeClass, DG_REL_SUGGEST } from '../core/shared.js';
+import { pickerFor, pickerValue, wirePicker, fixedItems } from '../core/pick.js';
 import { pickMemories } from '../core/link-picker.js';
 import { onTeardown } from '../core/lifecycle.js';
 import { openRecord } from './record.js';
 import { DiagramEditor, NODE_SHAPES, FONT_SCALES } from '../diagram-engine.js';
 import { t } from '../i18n.js';
 
-const shapeOptions = sel => NODE_SHAPES.map(s =>
-  `<option value="${s}"${s === sel ? ' selected' : ''}>${t(`dg.shape.${s}`)}</option>`).join('');
+const shapeItems = () => NODE_SHAPES.map(s => ({ value: s, label: t(`dg.shape.${s}`) }));
 
 /* One modal for "new step" and for retyping an existing one. Resolves to
    {key, label, shape} or null. */
@@ -33,7 +33,8 @@ function dgStepModal({ title, key = '', label = '', shape = 'step', lockKey = fa
             <input type="text" id="dgsKey" value="${esc(key)}" placeholder="${t('dg.keyPh')}"
                    ${lockKey ? 'disabled' : ''} autocomplete="off"></div>
           <div class="field"><label for="dgsShape">${t('dg.shape')}</label>
-            <select id="dgsShape">${shapeOptions(shape)}</select></div>
+            ${pickerFor({ id: 'dgsShape', value: shape, items: shapeItems(),
+                          ariaLabel: t('dg.shape') })}</div>
         </div>
         <div class="field"><label for="dgsLabel">${t('dg.label')}</label>
           <input type="text" id="dgsLabel" value="${esc(label)}" placeholder="${t('dg.labelPh')}"></div>
@@ -42,12 +43,13 @@ function dgStepModal({ title, key = '', label = '', shape = 'step', lockKey = fa
                  <button class="btn btn-solid" data-ok>${t('common.save')}</button>`,
     });
     const mq = s => m.querySelector(s);
+    wirePicker(m, { id: 'dgsShape', items: fixedItems(shapeItems()), onPick: () => {} });
     mq('[data-x]').onclick = () => { closeModal(); resolve(null); };
     mq('[data-ok]').onclick = () => {
       const out = {
         key: (lockKey ? key : mq('#dgsKey').value).trim(),
         label: mq('#dgsLabel').value.trim(),
-        shape: mq('#dgsShape').value,
+        shape: pickerValue(m, 'dgsShape'),
       };
       closeModal();
       resolve(out);
@@ -111,16 +113,18 @@ const chipLabel = title => {
    there. Second half of adding a jump: the first half picked the diagram,
    and only that diagram knows what its steps are called. */
 function dgJumpTargetModal(target) {
+  /* the whole flow is a destination too, and the first row says so */
+  const nodeItems = [
+    { value: '', label: t('dg.jump.wholeDiagram'),
+      html: `<span class="pick-any">${t('dg.jump.wholeDiagram')}</span>` },
+    ...target.nodes.map(n => ({ value: n.key, label: `${n.key} · ${n.label}` })),
+  ];
   return new Promise(resolve => {
     const m = openModal({
       title: t('dg.jump.step.title', { title: esc(target.title) }),
       bodyHTML: `
         <div class="field"><label for="dgjNode">${t('dg.jump.step.label')}</label>
-          <select id="dgjNode">
-            <option value="">${t('dg.jump.wholeDiagram')}</option>
-            ${target.nodes.map(n =>
-              `<option value="${esc(n.key)}">${esc(n.key)} · ${esc(n.label)}</option>`).join('')}
-          </select></div>
+          ${pickerFor({ id: 'dgjNode', items: nodeItems, ariaLabel: t('dg.jump.step.label') })}</div>
         <div class="field"><label for="dgjLabel">${t('dg.jump.label')}</label>
           <input type="text" id="dgjLabel" placeholder="${t('dg.jump.labelPh')}"
                  autocomplete="off"></div>
@@ -128,10 +132,11 @@ function dgJumpTargetModal(target) {
       footHTML: `<button class="btn" data-x>${t('common.cancel')}</button>
                  <button class="btn btn-solid" data-ok>${t('dg.jump.add')}</button>`,
     });
+    wirePicker(m, { id: 'dgjNode', items: fixedItems(nodeItems), onPick: () => {} });
     m.querySelector('[data-x]').onclick = () => { closeModal(); resolve(null); };
     m.querySelector('[data-ok]').onclick = () => {
       const out = {
-        node: m.querySelector('#dgjNode').value,
+        node: pickerValue(m, 'dgjNode'),
         label: m.querySelector('#dgjLabel').value.trim(),
       };
       closeModal();
@@ -687,7 +692,8 @@ export async function renderDiagram(view, params, ctx) {
         <div class="field"><label for="dgLabel">${t('dg.label')}</label>
           <input type="text" id="dgLabel" value="${esc(node.label)}"${ro}></div>
         <div class="field"><label for="dgShape">${t('dg.shape')}</label>
-          <select id="dgShape"${ro}>${shapeOptions(node.shape)}</select></div>
+          ${pickerFor({ id: 'dgShape', value: node.shape, items: shapeItems(),
+                        ariaLabel: t('dg.shape'), disabled: !editing })}</div>
         <div class="field"><label for="dgNote">${t('dg.note')}</label>
           <textarea id="dgNote" rows="5" placeholder="${t('dg.notePh')}"${ro}>${esc(node.note)}</textarea></div>
         ${editing ? `<div class="act-row">
@@ -742,9 +748,10 @@ export async function renderDiagram(view, params, ctx) {
     if (!editing) return;   /* nothing below this point exists in read-only */
 
     /* node fields */
+    wirePicker(side, { id: 'dgShape', items: fixedItems(shapeItems()), onPick: () => {} });
     side.querySelector('#dgSave').onclick = () => act(() => api(`/api/diagrams/${seg(uid)}/node`, { body: {
       key: node.key, label: side.querySelector('#dgLabel').value,
-      shape: side.querySelector('#dgShape').value,
+      shape: pickerValue(side, 'dgShape'),
       note: side.querySelector('#dgNote').value } }), t('dg.saved'));
 
     side.querySelector('#dgDel').onclick = () => deleteStep(node.key);
