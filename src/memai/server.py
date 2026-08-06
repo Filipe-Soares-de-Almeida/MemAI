@@ -23,18 +23,96 @@ list_domains() returns the tree that exists.
 diagram is the one type whose body is not prose: it stores a graph, one
 row per step, and generates the prose the retrieval side indexes. Its
 graph is edited through diagram_* and read back through get_diagram().
+
+Everything above answers a call, and an MCP server cannot make an agent
+call anything. Three things here exist for that gap: INSTRUCTIONS, which
+the host may inject; the warm_up prompt, invoked by the person rather than
+the agent; and the memai-hook CLI (memai.hook), which puts the store's
+state in a session's context without any of this being running. Writes
+carry a per-process `session` stamp unless one is passed.
 """
 
 from __future__ import annotations
 
 import inspect
 import json
+import os
 
 from mcp.server.fastmcp import FastMCP
 
-from memai import autostart, db, diagram_svg
+from memai import autostart, brief, db, diagram_svg
 
-mcp = FastMCP("memai")
+# Sent to the host in the initialize handshake, and injected into the
+# model's context by the hosts that support it. Kept to a paragraph on
+# purpose: it is paid on every request, exactly like a tool schema, and
+# what it has to buy is the first call -- an agent that never calls pulse()
+# has a memory server and no memory. The rest is in help().
+INSTRUCTIONS = """\
+Long-term memory that survives between sessions. Read before working:
+pulse(domain) for the state of a subject, recall(query) or search(query)
+for anything specific, list_domains() for the tree that exists. Write as
+you go, not at the end: note() a durable fact, anti_pattern() a pitfall
+worth not repeating, checkpoint() where the work stands before a pause,
+diagram() a routine start to end.
+
+A domain is a path ('acme/x100/p200') and every read covers its
+subdomains, so the same call asks about a product or one routine depending
+on how much of the path it gives. help() documents every tool from its own
+source."""
+
+mcp = FastMCP("memai", instructions=INSTRUCTIONS)
+
+
+def _new_session_id() -> str:
+    """This process's default `session` stamp for everything it writes.
+
+    Derived here rather than asked of the caller. `session` was an optional
+    free-text argument on every writer, which meant it was usually absent
+    and the dashboard's session filter had nothing to filter -- the value
+    of grouping a conversation's memories is real and the chance of an
+    agent remembering to pass a consistent id on every call is not. An
+    explicit `session=` still wins.
+    """
+    stamp = db.now_iso()[:16].replace("-", "").replace(":", "")
+    return f"{stamp}-{os.getpid():04x}"
+
+
+SESSION = _new_session_id()
+
+
+# Which tools this process offers. A tool's schema -- name, description,
+# argument types -- is sent with EVERY request for the whole session, so the
+# full set is a fixed tax on every context window whether or not a session
+# ever documents a flow or runs a curation pass. Naming the groups lets a
+# session pay for what it uses.
+#
+# 'full' stays the default: dropping a tool an existing setup calls is not
+# something to do to somebody quietly. help() still lists every tool in
+# either case, and says which ones this process did not load, so an agent
+# that needs one can be told rather than left guessing why it is missing.
+TOOL_SETS = ("core", "diagrams", "curation")
+_ACTIVE_SETS = frozenset(
+    TOOL_SETS if (raw := os.environ.get("MEMAI_TOOLS", "full").strip().lower()) in ("", "full")
+    else {"core", *(s.strip() for s in raw.split(",") if s.strip())}
+)
+
+
+_GROUP_OF: dict[str, str] = {}
+
+
+def tool(group: str):
+    """Register a tool with FastMCP when its group is active.
+
+    Always returns the plain function: the module-level name has to stay
+    callable either way, because help() reads its signature and docstring
+    out of the code whether or not the schema was published.
+    """
+    def wrap(fn):
+        _GROUP_OF[fn.__name__] = group
+        if group in _ACTIVE_SETS:
+            mcp.tool()(fn)
+        return fn
+    return wrap
 
 
 def _row_to_dict(row) -> dict:
@@ -50,6 +128,12 @@ def _row_to_dict(row) -> dict:
     blob = d.pop("also_domains", "")
     if blob:
         d["also"] = db.parse_domains(blob)
+    # Blank on most rows, since most memories are not about anything that
+    # goes stale -- and a field that is empty nine times out of ten still
+    # costs its name in every result of every search.
+    for optional in ("review_after", "source_ref"):
+        if not d.get(optional):
+            d.pop(optional, None)
     return d
 
 
@@ -93,11 +177,43 @@ def _snippet_dict(d: dict) -> dict:
     return d
 
 
+def _read(conn, rows):
+    """Count these as read, and hand them straight back.
+
+    Every tool that puts memory content in front of a caller goes through
+    here, and only these tools do -- see db.record_recall for why the
+    dashboard deliberately does not.
+
+    A row that came out of a search carries `match_source`, and that goes
+    with the count: it is what lets the store say later which retriever was
+    worth having, over real queries, without anyone reading transcripts.
+    Reads with no search behind them (a warm-up, a list, get_memory) have
+    no arm to credit and are counted plainly.
+
+    What this is NOT for is ranking. A memory read twice a year is about a
+    rarer subject, not a worse one, and boosting what is already popular
+    buries the rare thing further every time it loses.
+    """
+    sources = {r["uid"]: r["match_source"] for r in rows
+               if isinstance(r, dict) and r.get("match_source")}
+    db.record_recall(conn, [r["uid"] for r in rows], sources=sources or None)
+    return rows
+
+
 def _list_scoped(conn, domain: str, type: str, limit: int) -> list:
-    """Recency-ordered rows of one type: scoped to a domain subtree if given, else global."""
+    """Recency-ordered rows of one type, for a warm-up: scoped to a domain
+    subtree if given, else global.
+
+    Contradicted rows are left out here and nowhere else. This feeds
+    pulse(), which presents what it returns as the current state of a
+    scope, and a pitfall that turned out not to be one reads there as a
+    pitfall. list_by_domain()/list_recent() still return them: a caller
+    asking a scope for everything means everything.
+    """
     if domain:
-        return db.list_by_domain(conn, domain, type=type, limit=limit)
-    return db.list_recent(conn, type=type, limit=limit)
+        return db.list_by_domain(conn, domain, type=type, limit=limit,
+                                 exclude_contradicted=True)
+    return db.list_recent(conn, type=type, limit=limit, exclude_contradicted=True)
 
 
 def _coerce_domain(conn, domain: str) -> tuple[str, dict | None]:
@@ -115,6 +231,16 @@ def _coerce_domain(conn, domain: str) -> tuple[str, dict | None]:
     return coerced, {"from": domain, "to": coerced, "policy": mode}
 
 
+# What to do about a collision the write just revealed. One line, because
+# it is paid for on every write that trips the threshold.
+SIMILAR_HINT = (
+    "the store already held these. If this one CORRECTS one of them, "
+    "edit_memory(uid, ...) or forget(uid, superseded_by=<new uid>); if it "
+    "restates one, forget() the copy; if they are genuinely different "
+    "facts, link_memories() and leave both."
+)
+
+
 def _write_result(conn, uid: str, warning: dict | None, also: str) -> dict:
     """The dict a writer tool returns: the uid, and whatever was adjusted.
 
@@ -123,17 +249,28 @@ def _write_result(conn, uid: str, warning: dict | None, also: str) -> dict:
     memory's own domain already covers is dropped (see
     db.apply_link_policy). An agent that cross-listed into three subjects
     and got two back learns which reading was redundant.
+
+    `similar` is the write-time half of dedup: the agent still has the
+    context that produced this text, so it is the one moment when "the
+    store already said something close to this" can be acted on for free.
+    Present only when something crossed the threshold -- a store with no
+    collision never sees the field, and the write is never blocked by one.
     """
     result = {"uid": uid}
     if warning:
         result["domain_adjusted"] = warning
     if also:
         result["also"] = db.get_domain_links(conn, uid)
+    similar = db.similar_memories(conn, uid)
+    if similar:
+        result["similar"] = similar
+        result["similar_hint"] = SIMILAR_HINT
     return result
 
 
-@mcp.tool()
-def note(content: str, domain: str = "", also: str = "", tags: str = "", session: str = "") -> dict:
+@tool("core")
+def note(content: str, domain: str = "", also: str = "", tags: str = "", session: str = "",
+         review_after: str = "", source_ref: str = "") -> dict:
     """Save a general long-term memory (fact, decision, finding). Stored as type='note'.
 
     Timeless knowledge -- retrieved by relevance, not recency. Bring it
@@ -156,15 +293,26 @@ def note(content: str, domain: str = "", also: str = "", tags: str = "", session
     tags: comma-separated keywords/synonyms -- write generously; tags
     feed both the keyword index and the embedding, so they make the
     memory findable even when the vector side is unavailable.
+
+    review_after: when this stops being safe to trust unchecked, as a date
+    ('2026-11-01') or a span from today ('90d'). pulse() counts what is
+    overdue in a scope as `scope.stale` and optimize_scan lists it. Leave
+    it empty for anything that does not go stale -- most facts do not, and
+    a date nobody meant is worse than none.
+
+    source_ref: what the fact came FROM -- a path, a URL, a table name --
+    so a later pass can check the claim against the thing itself instead
+    of inferring what to check from the wording.
     """
     with db.connect() as conn:
         domain, warning = _coerce_domain(conn, domain)
         uid = db.insert_memory(conn, type=TYPE_NOTE, content=content, domain=domain,
-                               also=also, session=session, tags=tags)
+                               also=also, session=session or SESSION, tags=tags,
+                               review_after=review_after, source_ref=source_ref)
         return _write_result(conn, uid, warning, also)
 
 
-@mcp.tool()
+@tool("core")
 def checkpoint(
     intent: str,
     established: str,
@@ -193,47 +341,51 @@ def checkpoint(
         domain, warning = _coerce_domain(conn, domain)
         uid = db.insert_memory(
             conn, type=TYPE_CHECKPOINT, content=content, domain=domain, also=also,
-            session=session, tags="checkpoint",
+            session=session or SESSION, tags="checkpoint",
         )
         return _write_result(conn, uid, warning, also)
 
 
-@mcp.tool()
+@tool("core")
 def anti_pattern(
     pattern: str, why_wrong: str, instead: str, domain: str = "", also: str = "",
-    session: str = "",
+    session: str = "", review_after: str = "", source_ref: str = "",
 ) -> dict:
     """Record a mistake/temptation to avoid repeating, and the correct approach.
 
     Stored as type='anti_pattern'; open ones for a domain are surfaced by pulse().
-    `also` cross-lists it into further domain paths -- see note().
+    `also` cross-lists it into further domain paths, `review_after` dates
+    when to recheck it and `source_ref` says what it came from -- see note().
     """
     content = f"TEMPTATION: {pattern}\nWHY WRONG: {why_wrong}\nINSTEAD: {instead}"
     with db.connect() as conn:
         domain, warning = _coerce_domain(conn, domain)
         uid = db.insert_memory(
             conn, type=TYPE_ANTI_PATTERN, content=content, domain=domain, also=also,
-            session=session, tags="anti_pattern",
+            session=session or SESSION, tags="anti_pattern",
+            review_after=review_after, source_ref=source_ref,
         )
         return _write_result(conn, uid, warning, also)
 
 
-@mcp.tool()
-def reasoning(content: str, domain: str = "", also: str = "", session: str = "") -> dict:
+@tool("core")
+def reasoning(content: str, domain: str = "", also: str = "", session: str = "",
+              review_after: str = "", source_ref: str = "") -> dict:
     """Record a reasoning trace / analysis worth keeping (not a fact, a thought process).
 
     Stored as type='reasoning' -- filter search/list_* with
-    type='reasoning' to get these back. `also` cross-lists it into further
-    domain paths -- see note().
+    type='reasoning' to get these back. `also`, `review_after` and
+    `source_ref` behave as in note().
     """
     with db.connect() as conn:
         domain, warning = _coerce_domain(conn, domain)
         uid = db.insert_memory(conn, type=TYPE_REASONING, content=content, domain=domain,
-                               also=also, session=session)
+                               also=also, session=session or SESSION,
+                               review_after=review_after, source_ref=source_ref)
         return _write_result(conn, uid, warning, also)
 
 
-@mcp.tool()
+@tool("core")
 def handoff(content: str, domain: str = "", also: str = "", session: str = "") -> dict:
     """Leave a note for another agent/session picking up this work.
 
@@ -243,7 +395,7 @@ def handoff(content: str, domain: str = "", also: str = "", session: str = "") -
     with db.connect() as conn:
         domain, warning = _coerce_domain(conn, domain)
         uid = db.insert_memory(conn, type=TYPE_HANDOFF, content=content, domain=domain,
-                               also=also, session=session)
+                               also=also, session=session or SESSION)
         return _write_result(conn, uid, warning, also)
 
 
@@ -261,7 +413,7 @@ def _capped(body: str) -> str:
     )
 
 
-@mcp.tool()
+@tool("diagrams")
 def diagram(
     title: str,
     nodes: list[dict],
@@ -272,6 +424,8 @@ def diagram(
     session: str = "",
     tags: str = "",
     kind: str = "flowchart",
+    review_after: str = "",
+    source_ref: str = "",
 ) -> dict:
     """Document what a routine does, start to end, as a graph. Stored as type='diagram'.
 
@@ -301,6 +455,10 @@ def diagram(
     each into that process's path and asking about it returns all of them,
     instead of hoping one search phrasing reaches every one.
 
+    `review_after` and `source_ref` behave as in note(), and a flow is
+    exactly the kind of memory they are for: it describes code, and the
+    code moves.
+
     Returns {"uid": ...}, or {"ok": False, "errors": [...]} with nothing
     written at all. Node positions are computed and stored server-side,
     so the flow renders identically for every reader -- see get_diagram().
@@ -309,14 +467,15 @@ def diagram(
         domain, warning = _coerce_domain(conn, domain)
         uid, errors = db.insert_diagram(
             conn, title=title, nodes=nodes, edges=edges, summary=summary,
-            kind=kind, domain=domain, also=also, session=session, tags=tags,
+            kind=kind, domain=domain, also=also, session=session or SESSION, tags=tags,
+            review_after=review_after, source_ref=source_ref,
         )
         if errors:
             return _errors(errors)
         return _write_result(conn, uid, warning, also)
 
 
-@mcp.tool()
+@tool("diagrams")
 def diagram_node(
     uid: str,
     key: str,
@@ -343,7 +502,7 @@ def diagram_node(
     return {"ok": True, "node_key": key} if ok else _errors(errors)
 
 
-@mcp.tool()
+@tool("diagrams")
 def diagram_edge(
     uid: str, from_key: str, to_key: str, label: str = "", delete: bool = False
 ) -> dict:
@@ -361,7 +520,7 @@ def diagram_edge(
     return {"ok": True} if ok else _errors(errors)
 
 
-@mcp.tool()
+@tool("diagrams")
 def diagram_link(
     uid: str, node_key: str, target_uid: str,
     relation_type: str = "explains", delete: bool = False,
@@ -385,7 +544,7 @@ def diagram_link(
     return {"ok": True} if ok else _errors(errors)
 
 
-@mcp.tool()
+@tool("diagrams")
 def diagram_jump(
     uid: str, node_key: str, peer_uid: str, peer_node: str = "",
     label: str = "", delete: bool = False,
@@ -413,7 +572,7 @@ def diagram_jump(
     return {"ok": True} if ok else _errors(errors)
 
 
-@mcp.tool()
+@tool("diagrams")
 def diagram_relayout(uid: str) -> dict:
     """Recompute a diagram's stored node positions from scratch.
 
@@ -430,66 +589,21 @@ def diagram_relayout(uid: str) -> dict:
 _DIAGRAM_FORMATS = ("mermaid", "text", "json", "svg", "svg-interactive")
 
 
-@mcp.tool()
+@tool("core")
 def get_diagram(uid: str, format: str = "mermaid") -> dict:
     """Read a diagram back: format='svg-interactive' to show it, 'json' to reason about it.
 
-    That first line is the whole summary help() prints for this tool, so it
-    names the two formats worth defaulting to rather than describing the
-    signature.
+    Formats: 'svg-interactive' (canvas drawing in a pan/zoom shell -- the one
+    to SHOW), 'svg' (same drawing as a plain file, to attach or link),
+    'mermaid' (portable, but re-lays out and DISCARDS the arrangement the
+    user made), 'text' (the prose projection), 'json' (the full graph with
+    positions, notes and links -- the only round-trippable one, and the one
+    to reason over).
 
-    TO SHOW THE DIAGRAM TO A USER, pick by what you can actually do with it:
-
-      * you can render inline HTML/SVG in your reply (a widget, an artifact,
-        an inline preview) -> format='svg-interactive', then READ THE FILE at
-        the returned `inline_path` and emit its contents inline. That file is
-        the whole answer: a self-contained fragment with pan and zoom, no
-        doctype, no <body>, no network, no external CSS, nothing that reaches
-        the host page. (`path` is the same drawing as a standalone document,
-        for opening in a browser or sending as a file -- do not paste that
-        one inline, most renderers reject a full document.) Do NOT reach for
-        mermaid here -- it draws a different picture (see below).
-      * you can only attach or link a file -> format='svg'. Same drawing,
-        no shell, openable in any browser or image viewer.
-      * you can render neither, but your client draws mermaid natively ->
-        format='mermaid'.
-
-    Both SVG formats WRITE THE MARKUP TO A FILE and return the path plus a
-    thin index of the steps. The file is where the drawing lives; the payload
-    is deliberately too small to draw from.
-
-    That split exists for the calls that do NOT display -- reasoning over a
-    flow, checking what a step says, handing a path to something else, which
-    is most of them. IT IS NOT A REASON TO AVOID EMITTING THE MARKUP WHEN THE
-    USER ASKED TO SEE THE DIAGRAM. In that case, reading the file and putting
-    its contents in your reply IS the deliverable, and the tokens it costs
-    are the cost of doing the work, not an overrun to economise on.
-
-    Attaching or linking the file is NOT showing it: that hands the user
-    something to open later. If your only display mechanism is a file send,
-    at least mark it to render rather than to download.
-
-    Fidelity, which is the reason the SVG formats exist: they reproduce the
-    admin canvas exactly -- the arrangement the user made, the same edge
-    routing around it, the same wrapped labels, node notes as <title>
-    tooltips. MERMAID DOES NOT. Mermaid always applies its own layout, so it
-    discards the stored positions and shows a flow the user never arranged.
-    Prefer it only when nothing else can be displayed.
-
-    'svg-interactive' over 'svg' for anything long: a 34-step routine is
-    ~3000x6300 units, and scaled to fit a chat column that puts its labels
-    under 3px. The interactive shell opens at a readable scale near the
-    start step instead.
-
-    The data formats: 'text' returns the prose projection kept as the
-    memory's content -- readable anywhere, no renderer needed. 'json'
-    returns the full graph including each node's stored x/y, its notes and
-    its links; it is the only format that round-trips back through
-    diagram_node/diagram_edge, and the one to use when you need to REASON
-    about the flow rather than show it.
-
-    Each call also prunes older renders per the retention setting (see the
-    dashboard's maintenance view) and reports how many it removed.
+    Both SVG formats write the markup to a file and return its path plus a
+    thin index of the steps; the payload is deliberately too small to draw
+    from. The returned `next_step` says what to do with the path, at the
+    point where it matters. help(command='get_diagram') has the rest.
     """
     if format not in _DIAGRAM_FORMATS:
         return _errors([f"unknown format {format!r}; use "
@@ -498,6 +612,7 @@ def get_diagram(uid: str, format: str = "mermaid") -> dict:
         data = db.get_diagram(conn, uid)
         if data is None:
             return _errors([f"{uid} is not a diagram"])
+        db.record_recall(conn, [uid])
         if format == "json":
             return {"format": "json", **data}
         if format in ("svg", "svg-interactive"):
@@ -586,18 +701,35 @@ def _write_render(conn, uid: str, data: dict, format: str) -> dict:
     }
 
 
-@mcp.tool()
-def search(query: str, domain: str = "", type: str = "", limit: int = 30) -> list[dict]:
+@tool("core")
+def search(query: str, domain: str = "", type: str = "", limit: int = 10) -> list[dict]:
     """Hybrid search over memory content+tags+domain: BM25 keywords + local-model vectors.
 
     Each result is annotated with match_source ("fts" | "vec" | "both"),
     fts_rank (bm25, lower = better) and/or vec_distance (cosine, lower =
     closer). Both retrievers only widen the candidate set -- judge the
-    returned candidates yourself. Multiple space-separated paraphrases
-    still help the keyword side (they're OR'd together). Only active
-    memories by default. Falls back to keyword-only if the embedding
-    model is unavailable. Content is snippet-truncated per result --
-    call get_memory(uid) for the full record.
+    returned candidates yourself.
+
+    SPEND TERMS FREELY. Every space-separated term is asked for separately
+    and a row matching more of them ranks higher, so piling on synonyms,
+    the identifier, the routine name and the plain-language phrasing into
+    one query costs one call and finds strictly more. Twenty terms beat
+    ten. Write a sentence if that is what you have -- common words score
+    near zero and cost nothing, so there is nothing to strip.
+
+    Only active memories by default.
+    Falls back to keyword-only if the embedding model is unavailable.
+    Content is snippet-truncated per result -- call get_memory(uid) for the
+    full record.
+
+    Two annotations worth acting on. `succeeded_by` means something in the
+    store supersedes this memory: read that one instead. `collapsed` lists
+    near-identical results folded into this one, so a fact written five
+    times spends one slot -- raise `limit` if you want the copies.
+
+    A memory marked confidence='contradicted' sorts behind everything that
+    still holds, but it does come back: knowing a claim was ruled out is
+    worth a slot, and it is what stops it being written again.
 
     A diagram ranks like any other memory: it comes back when it matches
     the query, in the position its scores earn. Nothing lifts a type to the
@@ -618,12 +750,13 @@ def search(query: str, domain: str = "", type: str = "", limit: int = 30) -> lis
     `domain`, which is where to read what the filter actually covered.
     """
     with db.connect() as conn:
-        results = db.search_hybrid(conn, query, domain=domain, type=type, limit=limit)
+        results = _read(conn, db.search_hybrid(conn, query, domain=domain, type=type,
+                                              limit=limit, collapse=True))
     return [_snippet_dict(_row_to_dict(r)) for r in results]
 
 
-@mcp.tool()
-def recall(query: str, domain: str = "", limit: int = 20) -> list[dict]:
+@tool("core")
+def recall(query: str, domain: str = "", limit: int = 10) -> list[dict]:
     """Recall long-term knowledge saved with note() (type='note').
 
     The dedicated verb for "bring back what I noted": a hybrid search
@@ -634,14 +767,16 @@ def recall(query: str, domain: str = "", limit: int = 20) -> list[dict]:
     snippet-truncated -- call get_memory(uid) for the full record.
 
     domain scopes to a path and everything nested under it, and resolves a
-    bare deep segment the same way search() does.
+    bare deep segment the same way search() does. Results carry the same
+    `succeeded_by` / `collapsed` annotations search() explains.
     """
     with db.connect() as conn:
-        results = db.search_hybrid(conn, query, domain=domain, type=TYPE_NOTE, limit=limit)
+        results = _read(conn, db.search_hybrid(conn, query, domain=domain, type=TYPE_NOTE,
+                                              limit=limit, collapse=True))
     return [_snippet_dict(_row_to_dict(r)) for r in results]
 
 
-@mcp.tool()
+@tool("core")
 def list_by_domain(
     domain: str, type: str = "", limit: int = 50, subtree: bool = True
 ) -> list[dict]:
@@ -663,11 +798,12 @@ def list_by_domain(
     full record.
     """
     with db.connect() as conn:
-        rows = db.list_by_domain(conn, domain, type=type, limit=limit, subtree=subtree)
+        rows = _read(conn, db.list_by_domain(conn, domain, type=type, limit=limit,
+                                            subtree=subtree))
     return [_snippet_dict(_row_to_dict(r)) for r in rows]
 
 
-@mcp.tool()
+@tool("core")
 def list_recent(
     type: str = "", domain: str = "", limit: int = 20, subtree: bool = True
 ) -> list[dict]:
@@ -679,11 +815,12 @@ def list_recent(
     get_memory(uid) for the full record.
     """
     with db.connect() as conn:
-        rows = db.list_recent(conn, type=type, domain=domain, limit=limit, subtree=subtree)
+        rows = _read(conn, db.list_recent(conn, type=type, domain=domain, limit=limit,
+                                         subtree=subtree))
     return [_snippet_dict(_row_to_dict(r)) for r in rows]
 
 
-@mcp.tool()
+@tool("core")
 def list_domains() -> list[dict]:
     """List the domain tree: every path with its counts and latest activity.
 
@@ -712,7 +849,7 @@ def list_domains() -> list[dict]:
         return db.list_domains(conn)
 
 
-@mcp.tool()
+@tool("core")
 def also_domain(uid: str, domain: str) -> dict:
     """Cross-list an existing memory into one more domain path.
 
@@ -734,7 +871,7 @@ def also_domain(uid: str, domain: str) -> dict:
             return _errors([str(exc)])
 
 
-@mcp.tool()
+@tool("core")
 def unfile_domain(uid: str, domain: str) -> dict:
     """Drop one of a memory's cross-listings. Does not touch where it is filed.
 
@@ -748,7 +885,7 @@ def unfile_domain(uid: str, domain: str) -> dict:
         return {"uid": uid, "also": db.remove_domain_link(conn, uid, domain)}
 
 
-@mcp.tool()
+@tool("curation")
 def get_domain_case() -> dict:
     """Report the store's domain-casing policy.
 
@@ -762,7 +899,7 @@ def get_domain_case() -> dict:
         return {"mode": db.get_domain_case(conn)}
 
 
-@mcp.tool()
+@tool("curation")
 def set_domain_case(mode: str) -> dict:
     """Set the store's domain-casing policy. mode: 'preserve' | 'lower' | 'upper'.
 
@@ -777,7 +914,7 @@ def set_domain_case(mode: str) -> dict:
         return {"mode": db.set_domain_case(conn, mode)}
 
 
-@mcp.tool()
+@tool("core")
 def pulse(domain: str = "") -> dict:
     """Session warm-up: latest checkpoint + open handoffs/anti-patterns + recent notes.
 
@@ -812,6 +949,12 @@ def pulse(domain: str = "") -> dict:
     that holds what this pass only counted. A pulse is the state of a
     scope, never its contents.
 
+    `scope.stale` is the one thing here about DECAY rather than contents:
+    how many memories in the scope carry a `review_after` date that has
+    passed. Present only when non-zero. It means somebody who knew the
+    subject said when to look again and nobody has -- optimize_scan lists
+    which ones, with their `source_ref`.
+
     A scope holds what is CROSS-LISTED into it as well as what is filed
     there, so warming up an end-to-end flow brings back the routines that
     are steps of it wherever they live. `scope.also` counts how much of the
@@ -821,7 +964,8 @@ def pulse(domain: str = "") -> dict:
     """
     with db.connect() as conn:
         census = db.domain_census(conn, domain)
-        latest_checkpoint = db.latest_by_type(conn, TYPE_CHECKPOINT, domain=domain)
+        latest_checkpoint = db.latest_by_type(conn, TYPE_CHECKPOINT, domain=domain,
+                                              exclude_contradicted=True)
         handoffs = _list_scoped(conn, domain, TYPE_HANDOFF, PULSE_HANDOFFS)
         anti_patterns = _list_scoped(conn, domain, TYPE_ANTI_PATTERN, PULSE_ANTI_PATTERNS)
         recent_notes = _list_scoped(conn, domain, TYPE_NOTE, PULSE_NOTES)
@@ -837,6 +981,10 @@ def pulse(domain: str = "") -> dict:
         checkpoint_dict = _row_to_dict(latest_checkpoint)
         if checkpoint_dict:
             checkpoint_dict["relations"] = [_row_to_dict(r) for r in db.get_relations(conn, checkpoint_dict["uid"])]
+        # A warm-up hands all of this to the caller, so all of it counts as
+        # read -- diagrams included, which are named here and nothing else.
+        _read(conn, [*handoffs, *anti_patterns, *recent_notes, *diagram_rows,
+                     *([latest_checkpoint] if latest_checkpoint else [])])
     shown = {
         "latest_checkpoint": [checkpoint_dict] if checkpoint_dict else [],
         "handoffs": handoffs,
@@ -863,6 +1011,7 @@ def pulse(domain: str = "") -> dict:
             "paths": census["paths"],
             "total": census["total"],
             **({"also": census["also"]} if census.get("also") else {}),
+            **({"stale": census["stale"]} if census.get("stale") else {}),
             "by_type": census["by_type"],
             "not_shown": not_shown,
             "subdomains": census["children"],
@@ -870,7 +1019,21 @@ def pulse(domain: str = "") -> dict:
     }
 
 
-@mcp.tool()
+@mcp.prompt()
+def warm_up(domain: str = "") -> str:
+    """What memai already knows, as text, for a session about to start.
+
+    The same brief the SessionStart hook emits (see memai.hook), offered
+    here for hosts that surface prompts as commands. A prompt is invoked by
+    the person, which makes it the one place in the MCP protocol where the
+    store can be READ without the agent having decided to read it.
+    """
+    with db.connect() as conn:
+        text = brief.session_brief(conn, domain=domain)
+    return text or "The memai store is empty -- nothing to warm up from yet."
+
+
+@tool("core")
 def get_memory(uid: str) -> dict:
     """Fetch a single memory's full record, including its edit history and relations.
 
@@ -882,7 +1045,11 @@ def get_memory(uid: str) -> dict:
     with db.connect() as conn:
         row = db.get_memory(conn, uid)
         if row is None:
-            return {}
+            # Not {}: an empty dict reads as "the record is empty" and sends a
+            # caller looking for content that was never there, when what
+            # happened is that the uid does not name a memory at all.
+            return _errors([f"no memory {uid}"])
+        _read(conn, [row])
         edits = db.get_edit_history(conn, uid)
         rels = db.get_relations(conn, uid)
         result = _row_to_dict(row)
@@ -899,41 +1066,60 @@ def get_memory(uid: str) -> dict:
     return result
 
 
-@mcp.tool()
-def edit_memory(uid: str, new_content: str, note: str = "") -> dict:
-    """Correct/update a memory's content, keeping the previous version in edit history.
+@tool("core")
+def edit_memory(uid: str, new_content: str, note: str = "", mode: str = "replace") -> dict:
+    """Correct a memory's content, or add to it, keeping the previous version.
 
     Corrections are common in append-only memory stores that only
     support delete, not edit; this preserves the old content instead
     of losing it.
 
+    mode='append' adds `new_content` as a new line at the end instead of
+    replacing the body. Use it when a memory gains a fact rather than
+    turning out to be wrong: the alternative is reading the whole thing,
+    restating it and sending it back, which pays for the body twice and
+    stakes the existing text on it being copied faithfully.
+
     Refuses a diagram: its content is generated from the graph, so a
     hand-written replacement would be silently overwritten by the next
     structural change. Edit the flow through diagram_node/diagram_edge.
     """
+    if mode not in ("replace", "append"):
+        return _errors([f"mode must be 'replace' or 'append'; got {mode!r}"])
     with db.connect() as conn:
         if db.is_diagram(conn, uid):
             return _errors([
                 f"{uid} is a diagram: its content is generated from the graph. "
                 "Use diagram_node/diagram_edge to change the flow."
             ])
-        ok = db.update_memory_content(conn, uid, new_content, note=note)
-    return {"ok": ok}
+        ok = db.update_memory_content(conn, uid, new_content, note=note,
+                                      append=mode == "append")
+    if not ok:
+        return _errors([f"no memory {uid}"])
+    return {"ok": True}
 
 
-@mcp.tool()
+@tool("core")
 def link_memories(from_uid: str, to_uid: str, relation_type: str, note: str = "") -> dict:
     """Create a queryable edge between two memories.
 
     relation_type is free text but keep it consistent, e.g.
     'supersedes', 'relates_to', 'contradicts', 'links_to'.
+
+    Refuses an unknown uid, a memory related to itself, and an edge that
+    already exists with that same type -- each as
+    {"ok": False, "errors": [...]}, so a typo comes back as something to
+    fix instead of a dangling edge or a raw database error.
     """
     with db.connect() as conn:
-        rel_id = db.add_relation(conn, from_uid, to_uid, relation_type, note=note)
+        try:
+            rel_id = db.add_relation(conn, from_uid, to_uid, relation_type, note=note)
+        except ValueError as exc:
+            return _errors([str(exc)])
     return {"relation_id": rel_id}
 
 
-@mcp.tool()
+@tool("core")
 def get_relations(uid: str) -> list[dict]:
     """List all relations (incoming and outgoing) for a memory."""
     with db.connect() as conn:
@@ -941,7 +1127,7 @@ def get_relations(uid: str) -> list[dict]:
     return [_row_to_dict(r) for r in rows]
 
 
-@mcp.tool()
+@tool("core")
 def set_confidence(uid: str, confidence: str) -> dict:
     """Set a memory's confidence: unverified | confirmed | contradicted."""
     if confidence not in ("unverified", "confirmed", "contradicted"):
@@ -951,7 +1137,7 @@ def set_confidence(uid: str, confidence: str) -> dict:
     return {"ok": ok}
 
 
-@mcp.tool()
+@tool("core")
 def forget(uid: str, reason: str = "", superseded_by: str = "") -> dict:
     """Archive a memory (soft delete -- content is kept, just excluded from default search/list).
 
@@ -967,7 +1153,7 @@ def forget(uid: str, reason: str = "", superseded_by: str = "") -> dict:
     return {"ok": ok}
 
 
-@mcp.tool()
+@tool("curation")
 def purge_memory(uid: str, confirm_phrase: str) -> dict:
     """PERMANENTLY delete a memory + its edit history + relations. Irreversible.
 
@@ -986,7 +1172,7 @@ def purge_memory(uid: str, confirm_phrase: str) -> dict:
     return {"ok": ok}
 
 
-@mcp.tool()
+@tool("curation")
 def dedup_scan(domain: str = "", type: str = "", threshold: float = 0.6, limit: int = 20) -> list[dict]:
     """Surface likely-duplicate/contradictory memory pairs.
 
@@ -1010,7 +1196,7 @@ def dedup_scan(domain: str = "", type: str = "", threshold: float = 0.6, limit: 
     ]
 
 
-@mcp.tool()
+@tool("curation")
 def optimize_scan(
     domain: str = "", type: str = "", since: str = "",
     include_archived: bool = False, limit: int = 500, offset: int = 0,
@@ -1018,68 +1204,33 @@ def optimize_scan(
 ) -> dict:
     """Dump the memory corpus compactly so you can plan a curation pass.
 
-    Step 1 of the "optimize my memories" workflow. Returns every memory's
-    curation-relevant fields, the relation edges among them, and
-    dedup-candidate pairs as a starting hint. Read this, then decide what
-    to compact/reword/retag/redomain/set_confidence/archive/link/merge/
-    distill and stage it with optimize_stage.
+    Step 1 of the "optimize my memories" workflow: every memory's
+    curation-relevant fields, the relation edges among them, usage counts,
+    dedup and domain hints, and per-memory `anchors` (URLs, paths,
+    identifiers) to check against live facts. Read it, then stage what you
+    decided with optimize_stage.
 
-    The listing is slim on purpose so a few-hundred-memory store fits one
-    response: content is a ~120-char snippet plus `content_len` (tags cut
-    at ~100 with `tags_len`); empty/default fields are omitted (incl.
-    confidence 'unverified' -- stats keeps the aggregate); created_at
-    drops sub-second precision. Pass full=True for whole
-    bodies, or fetch one with get_memory(uid) when a snippet is not
-    enough. A page also ends early if its serialized size hits an
-    internal budget, so one response ALWAYS fits the host's output cap.
-    `truncated: true` means the listing stopped before the corpus ended
-    -- page onward with offset = offset + count (stats.total is the
-    whole corpus).
+    Start with what the store already says is suspect: `due: true` on a
+    memory means its own writer dated it for a recheck and the date has
+    passed, and `source_ref` says what to check it against.
 
-    On a grown store, prefer INCREMENTAL curation over full-corpus
-    passes: `since` limits the scan to memories created or updated
-    at/after an ISO timestamp or date ('2026-07-01'), so a recurring
-    "optimize my memories" only reviews the delta since the last run
-    (optimize_runs shows when that was). Cross-window collisions are
-    still caught: dedup_hints probe FROM the new memories against the
-    whole store (a new memory duplicating an old one outside the window
-    surfaces; old x old pairs are skipped), and domain_hints report any
-    store-wide domain cluster the delta touches. Combine with
-    domain/type to curate one slice at a time. Also included:
-      - stats: totals for the whole filtered corpus (by_type,
-        by_confidence, by_domain, empty_domain) -- computed regardless of
-        `limit`,
-      - domain_hints: clusters of domain-string variants that likely mean
-        the same thing (case/separator drift, ticket-id spellings), with
-        a suggested canonical -- ready-made redomain candidates,
-      - domain_nesting: flat domains that already spell a hierarchy out
-        ('acme-x100-p200-cache-warmup'), each with the path it could
-        become ('acme/x100/p200/cache-warmup'). Domains nest, and a
-        scope only groups what is filed under it, so these are the
-        redomain candidates that turn one string per subject into a tree.
-        Read them as a proposal, not a verdict: the split cannot tell a
-        real level from a hyphen inside a name, so check each one and
-        stage only the splits that hold,
-      - per memory, `also`: the domains it belongs to beside its own path.
-        There is deliberately no hint listing cross-listing CANDIDATES --
-        which subjects cut across the tree is a judgement about what the
-        memories say, not something a string split can propose. Read the
-        corpus, decide, and stage `crosslist` suggestions; `also` is there
-        so you can tell a new membership from one that already holds,
-      - anchors: per memory, the verifiable references found in its FULL
-        content (URLs, file paths, table/field identifiers, constants),
-        space-joined -- the things to go check against live facts.
+    `recalls` and stats.never_recalled are NOT that. A low count means
+    unproven, not useless -- a memory about a rare subject looks exactly
+    like a memory nobody wants, and the rare subject is frequently the
+    reason the store is there. Use the aggregate to judge the STORE and
+    never a single row: do not propose archiving something because it is
+    unread.
 
-    Before proposing any change, CHECK IT AGAINST LIVE FACTS -- do not
-    rewrite or archive something that was true then but stale now, and do
-    not "correct" something that is still true:
-      - cross-check newer memories already in this corpus (supersession /
-        contradiction),
-      - for code/config memories, verify the anchors against the live repo,
-      - for world-facts, web-check current truth.
-    Record what you verified in each suggestion's `verified` field --
-    destructive suggestions (archive, set_confidence=contradicted) are
-    rejected without it.
+    The listing is slim so a big store fits one response, and a page ends
+    early at an internal size budget -- `truncated` means page onward with
+    offset + count. `since` limits the scan to a delta for recurring passes;
+    full=True keeps whole bodies.
+
+    BEFORE PROPOSING ANY CHANGE, CHECK IT AGAINST LIVE FACTS, and record what
+    you checked in each suggestion's `verified`. Destructive kinds are
+    rejected without it. help(command='optimize_scan') has the rest: what
+    every hint means, how `since` stays cross-window, and what "live facts"
+    covers per memory type.
     """
     with db.connect() as conn:
         corpus = db.optimization_corpus(
@@ -1094,64 +1245,35 @@ def optimize_scan(
     return corpus
 
 
-@mcp.tool()
+@tool("curation")
 def optimize_stage(suggestions: list[dict], note: str = "") -> dict:
     """Stage a batch of curation suggestions for human review in the dashboard.
 
-    Step 2 of the "optimize my memories" workflow. Writes the suggestions
-    to a new optimization run; they are NOT applied here -- the user
-    reviews and applies/rejects each one in the admin dashboard's
-    Optimization tab, where a backup is taken before the first apply and
-    every applied change can be undone.
+    Step 2 of the "optimize my memories" workflow. NOT applied here: the
+    user reviews and applies or rejects each one in the admin dashboard,
+    which backs up before the first apply and can undo any of them.
 
-    Each suggestion is an object:
-      {"kind": ..., "target_uid": ..., "payload": {...},
-       "rationale": "why", "verified": "what live-facts check you did"}
+    Each suggestion is {"kind", "target_uid", "payload", "rationale",
+    "verified"}. Kinds: compact/reword {"new_content"}, retag {"tags"},
+    redomain {"domain"}, crosslist {"also": [...]}, set_confidence
+    {"confidence"}, review {"review_after"} (a date or a span like '180d';
+    '' clears it), archive {"reason"}, link {"from_uid","to_uid",
+    "relation_type"}, merge {"keep_uid","drop_uid"}, distill
+    {"source_uids","new_type","new_content"}. link/merge derive target_uid
+    from the payload and distill creates its target -- omit it for those.
 
-    Kinds and their payload:
-      compact / reword   {"new_content": str}
-      retag              {"tags": str}                 comma-separated
-      redomain           {"domain": str}
-      crosslist          {"also": [path, ...]}         replaces the whole set
-      set_confidence     {"confidence": "unverified|confirmed|contradicted"}
-      archive            {"reason": str}               soft/reversible; never hard-deletes
-      link               {"from_uid", "to_uid", "relation_type", "note"?}
-      merge              {"keep_uid", "drop_uid", "note"?}   links supersedes + archives drop
-      distill            {"source_uids": [uid, ...], "new_type": "note|reasoning|anti_pattern",
-                          "new_content": str, "tags"?, "domain"?}
-
-    redomain moves where a memory is FILED -- one path, one parent chain.
-    crosslist sets what it also BELONGS to: the subjects that cut across
-    that tree, where several routines are each a step of one end-to-end
-    process without any of them being the parent of the others. It replaces
-    the whole set rather than adding to it, so include the memberships that
-    should survive; `also: []` drops them all. The corpus lists each
-    memory's current `also`, so read that before proposing. A path the
-    memory's own domain already sits under is redundant and is dropped --
-    if that leaves nothing, the suggestion is rejected rather than silently
-    staged as a clear.
-
-    distill extracts the durable knowledge out of one or MORE source
-    memories into a newly authored one: creates it, links it `supersedes`
-    each source and archives the sources (all reversible). Use it to
-    retire closed-ticket checkpoints without losing what they taught, or
-    as an n-ary merge when the survivor needs synthesized content.
-
-    link/merge derive target_uid from the payload (from_uid / drop_uid)
-    and distill creates its target -- omit target_uid for those kinds.
-    Destructive suggestions (archive, set_confidence=contradicted,
-    distill) require a non-empty `verified` describing the live-facts
-    check that justifies them.
-
-    Invalid suggestions are skipped and reported in `errors`; the rest are
-    staged. Returns {run_id, staged, errors}.
+    Destructive kinds (archive, set_confidence=contradicted, distill)
+    require a non-empty `verified` describing the live-facts check behind
+    them. Invalid suggestions are skipped and reported in `errors`; the rest
+    are staged. Returns {run_id, staged, errors}.
+    help(command='optimize_stage') explains each kind in full.
     """
     with db.connect() as conn:
         result = db.stage_optimization(conn, note, suggestions)
     return result
 
 
-@mcp.tool()
+@tool("curation")
 def optimize_runs() -> list[dict]:
     """List optimization runs with their review progress.
 
@@ -1167,7 +1289,7 @@ def optimize_runs() -> list[dict]:
     return [dict(r) for r in rows]
 
 
-@mcp.tool()
+@tool("curation")
 def optimize_status(run_id: int) -> dict:
     """Inspect one optimization run: every suggestion and its decision.
 
@@ -1191,31 +1313,221 @@ def optimize_status(run_id: int) -> dict:
     }
 
 
-@mcp.tool()
+@tool("core")
 def help(command: str = "") -> dict:
     """Explain the memai tools, read directly from their code docstrings.
 
-    Without arguments: every tool with its one-line summary. With
-    command='<name>': that tool's full signature and docstring. The
-    docs can't drift from behavior because they ARE the code's own
-    docstrings, extracted at call time.
+    Without arguments: every tool with its one-line summary, and which of
+    them this process did not load (MEMAI_TOOLS). With command='<name>':
+    that tool's signature and its FULL documentation -- longer than the
+    schema description, because the schema is paid for on every request
+    and this is paid for when someone reads it.
     """
     if not command:
-        return {
+        result = {
             "tools": {
                 name: (inspect.getdoc(fn) or "").split("\n", 1)[0]
                 for name, fn in _TOOLS.items()
             },
             "hint": "call help(command='<name>') for a tool's full signature and documentation",
         }
+        # Named, not hidden: a tool left out of this process still exists,
+        # and an agent that needs one is better told how to turn it on than
+        # left to infer that memai cannot do the thing at all.
+        missing = sorted(set(_TOOLS) - _published())
+        if missing:
+            result["not_loaded"] = missing
+            result["not_loaded_hint"] = (
+                "these are documented but not offered as tools in this process; set "
+                f"MEMAI_TOOLS=full (or add a group: {', '.join(TOOL_SETS)}) in the "
+                "MCP server's environment to publish them")
+        return result
     fn = _TOOLS.get(command)
     if fn is None:
         return {"error": f"unknown command: {command}", "available": sorted(_TOOLS)}
+    doc = (inspect.getdoc(fn) or "") + _LONG_DOC.get(command, "")
     return {
         "command": command,
         "signature": f"{command}{inspect.signature(fn)}",
-        "doc": inspect.getdoc(fn) or "",
+        "doc": doc,
+        **({"loaded": False} if command not in _published() else {}),
     }
+
+
+def _published() -> set[str]:
+    """The tool names FastMCP is actually offering this session."""
+    return {name for name, group in _GROUP_OF.items() if group in _ACTIVE_SETS}
+
+
+# The half of a tool's documentation that does not belong in its schema.
+#
+# A description is sent with every request for the whole session; this is
+# sent when help() is called, which is when somebody is actually reading
+# it. What stays in the docstring is what a caller needs to pick the tool
+# and its arguments correctly; what moves here is the reasoning, the
+# failure modes and the worked detail -- true, worth having, and not worth
+# a thousand characters of every context window in every session that never
+# calls the tool.
+_LONG_DOC = {
+    "optimize_scan": """
+Dump the memory corpus compactly so you can plan a curation pass.
+
+Step 1 of the "optimize my memories" workflow. Returns every memory's
+curation-relevant fields, the relation edges among them, and
+dedup-candidate pairs as a starting hint. Read this, then decide what
+to compact/reword/retag/redomain/set_confidence/archive/link/merge/
+distill and stage it with optimize_stage.
+
+The listing is slim on purpose so a few-hundred-memory store fits one
+response: content is a ~120-char snippet plus `content_len` (tags cut
+at ~100 with `tags_len`); empty/default fields are omitted (incl.
+confidence 'unverified' -- stats keeps the aggregate); created_at
+drops sub-second precision. Pass full=True for whole
+bodies, or fetch one with get_memory(uid) when a snippet is not
+enough. A page also ends early if its serialized size hits an
+internal budget, so one response ALWAYS fits the host's output cap.
+`truncated: true` means the listing stopped before the corpus ended
+-- page onward with offset = offset + count (stats.total is the
+whole corpus).
+
+On a grown store, prefer INCREMENTAL curation over full-corpus
+passes: `since` limits the scan to memories created or updated
+at/after an ISO timestamp or date ('2026-07-01'), so a recurring
+"optimize my memories" only reviews the delta since the last run
+(optimize_runs shows when that was). Cross-window collisions are
+still caught: dedup_hints probe FROM the new memories against the
+whole store (a new memory duplicating an old one outside the window
+surfaces; old x old pairs are skipped), and domain_hints report any
+store-wide domain cluster the delta touches. Combine with
+domain/type to curate one slice at a time. Also included:
+  - stats: totals for the whole filtered corpus (by_type,
+    by_confidence, by_domain, empty_domain) -- computed regardless of
+    `limit`,
+  - domain_hints: clusters of domain-string variants that likely mean
+    the same thing (case/separator drift, ticket-id spellings), with
+    a suggested canonical -- ready-made redomain candidates,
+  - domain_nesting: flat domains that already spell a hierarchy out
+    ('acme-x100-p200-cache-warmup'), each with the path it could
+    become ('acme/x100/p200/cache-warmup'). Domains nest, and a
+    scope only groups what is filed under it, so these are the
+    redomain candidates that turn one string per subject into a tree.
+    Read them as a proposal, not a verdict: the split cannot tell a
+    real level from a hyphen inside a name, so check each one and
+    stage only the splits that hold,
+  - per memory, `also`: the domains it belongs to beside its own path.
+    There is deliberately no hint listing cross-listing CANDIDATES --
+    which subjects cut across the tree is a judgement about what the
+    memories say, not something a string split can propose. Read the
+    corpus, decide, and stage `crosslist` suggestions; `also` is there
+    so you can tell a new membership from one that already holds,
+  - anchors: per memory, the verifiable references found in its FULL
+    content (URLs, file paths, table/field identifiers, constants),
+    space-joined -- the things to go check against live facts.
+
+Before proposing any change, CHECK IT AGAINST LIVE FACTS -- do not
+rewrite or archive something that was true then but stale now, and do
+not "correct" something that is still true:
+  - cross-check newer memories already in this corpus (supersession /
+    contradiction),
+  - for code/config memories, verify the anchors against the live repo,
+  - for world-facts, web-check current truth.
+Record what you verified in each suggestion's `verified` field --
+destructive suggestions (archive, set_confidence=contradicted) are
+rejected without it.
+""",
+    "optimize_stage": """
+Stage a batch of curation suggestions for human review in the dashboard.
+
+Step 2 of the "optimize my memories" workflow. Writes the suggestions
+to a new optimization run; they are NOT applied here -- the user
+reviews and applies/rejects each one in the admin dashboard's
+Optimization tab, where a backup is taken before the first apply and
+every applied change can be undone.
+
+Each suggestion is an object:
+  {"kind": ..., "target_uid": ..., "payload": {...},
+   "rationale": "why", "verified": "what live-facts check you did"}
+
+Kinds and their payload:
+  compact / reword   {"new_content": str}
+  retag              {"tags": str}                 comma-separated
+  redomain           {"domain": str}
+  crosslist          {"also": [path, ...]}         replaces the whole set
+  set_confidence     {"confidence": "unverified|confirmed|contradicted"}
+  archive            {"reason": str}               soft/reversible; never hard-deletes
+  link               {"from_uid", "to_uid", "relation_type", "note"?}
+  merge              {"keep_uid", "drop_uid", "note"?}   links supersedes + archives drop
+  distill            {"source_uids": [uid, ...], "new_type": "note|reasoning|anti_pattern",
+                      "new_content": str, "tags"?, "domain"?}
+
+redomain moves where a memory is FILED -- one path, one parent chain.
+crosslist sets what it also BELONGS to: the subjects that cut across
+that tree, where several routines are each a step of one end-to-end
+process without any of them being the parent of the others. It replaces
+the whole set rather than adding to it, so include the memberships that
+should survive; `also: []` drops them all. The corpus lists each
+memory's current `also`, so read that before proposing. A path the
+memory's own domain already sits under is redundant and is dropped --
+if that leaves nothing, the suggestion is rejected rather than silently
+staged as a clear.
+
+distill extracts the durable knowledge out of one or MORE source
+memories into a newly authored one: creates it, links it `supersedes`
+each source and archives the sources (all reversible). Use it to
+retire closed-ticket checkpoints without losing what they taught, or
+as an n-ary merge when the survivor needs synthesized content.
+
+link/merge derive target_uid from the payload (from_uid / drop_uid)
+and distill creates its target -- omit target_uid for those kinds.
+Destructive suggestions (archive, set_confidence=contradicted,
+distill) require a non-empty `verified` describing the live-facts
+check that justifies them.
+
+Invalid suggestions are skipped and reported in `errors`; the rest are
+staged. Returns {run_id, staged, errors}.
+""",
+    "get_diagram": """
+TO SHOW THE DIAGRAM TO A USER, pick by what you can actually do with it:
+
+  * you can render inline HTML/SVG in your reply (a widget, an artifact, an
+    inline preview) -> format='svg-interactive', then READ THE FILE at the
+    returned `inline_path` and emit its contents inline. That file is the
+    whole answer: a self-contained fragment with pan and zoom, no doctype,
+    no <body>, no network, no external CSS, nothing that reaches the host
+    page. (`path` is the same drawing as a standalone document, for opening
+    in a browser or sending as a file -- do not paste that one inline, most
+    renderers reject a full document.) Do NOT reach for mermaid here.
+  * you can only attach or link a file -> format='svg'. Same drawing, no
+    shell, openable in any browser or image viewer.
+  * you can render neither, but your client draws mermaid natively ->
+    format='mermaid'.
+
+The file/payload split exists for the calls that do NOT display -- reasoning
+over a flow, checking what a step says, handing a path to something else,
+which is most of them. IT IS NOT A REASON TO AVOID EMITTING THE MARKUP WHEN
+THE USER ASKED TO SEE THE DIAGRAM. In that case, reading the file and
+putting its contents in your reply IS the deliverable, and the tokens it
+costs are the cost of doing the work, not an overrun to economise on.
+
+Attaching or linking the file is NOT showing it: that hands the user
+something to open later. If your only display mechanism is a file send, at
+least mark it to render rather than to download.
+
+Fidelity, which is the reason the SVG formats exist: they reproduce the
+admin canvas exactly -- the arrangement the user made, the same edge routing
+around it, the same wrapped labels, node notes as <title> tooltips. MERMAID
+DOES NOT. Mermaid always applies its own layout, so it discards the stored
+positions and shows a flow the user never arranged. Prefer it only when
+nothing else can be displayed.
+
+'svg-interactive' over 'svg' for anything long: a 34-step routine is
+~3000x6300 units, and scaled to fit a chat column that puts its labels under
+3px. The interactive shell opens at a readable scale near the start step.
+
+Each call also prunes older renders per the retention setting (see the
+dashboard's maintenance view) and reports how many it removed.
+""",
+}
 
 
 # Registry for help(): the decorated functions themselves, so signatures
@@ -1257,6 +1569,14 @@ _TOOLS = {
     "optimize_status": optimize_status,
     "help": help,
 }
+
+# _TOOLS is written by hand and _GROUP_OF by the decorator, so they can drift
+# -- and a tool missing from _TOOLS is a tool help() cannot document and
+# _published() cannot report as absent. Cheap to check, once, at import.
+assert set(_TOOLS) == set(_GROUP_OF), (
+    f"_TOOLS is out of step with the decorated tools: "
+    f"{set(_TOOLS) ^ set(_GROUP_OF)}")
+assert set(_LONG_DOC) <= set(_TOOLS), f"_LONG_DOC names no such tool: {set(_LONG_DOC) - set(_TOOLS)}"
 
 
 def main() -> None:
