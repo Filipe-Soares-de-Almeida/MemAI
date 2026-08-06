@@ -70,6 +70,13 @@ DOMAIN_SEP = "/"
 # Nothing filters on it -- see _write_domain_links, its only writer.
 ALSO_SEP = "\n"
 
+# How much a memory is trusted, on its own axis: `status` says whether a row
+# is in play at all, this says whether what it claims still holds. Up here
+# rather than beside the curation code because retrieval reads it too --
+# a contradicted memory sorts behind everything that still holds, and a
+# warm-up leaves it out (see search_hybrid, _sound_clause).
+CONFIDENCE_CONTRADICTED = "contradicted"
+
 # The FTS index and its triggers, kept separate because they are also what a
 # store built before a new indexed column has to be rebuilt from (_ensure_fts).
 _FTS_COLUMNS = ("content", "tags", "domain", "also_domains")
@@ -822,6 +829,26 @@ def purge_memory(conn: sqlite3.Connection, uid: str) -> bool:
 def add_relation(
     conn: sqlite3.Connection, from_uid: str, to_uid: str, relation_type: str, note: str = ""
 ) -> int:
+    """Create a typed edge, or raise ValueError saying which rule it broke.
+
+    The checks live here rather than in each caller because the two
+    surfaces have to agree: the dashboard refused a self-edge, an unknown
+    uid and a duplicate, and the MCP tool refused nothing -- a typo'd uid
+    reached the INSERT, where the foreign key turned it into a raw
+    IntegrityError rather than something an agent could act on.
+    """
+    if not (from_uid and to_uid and relation_type):
+        raise ValueError("from_uid, to_uid and relation_type are required")
+    if from_uid == to_uid:
+        raise ValueError("a memory cannot relate to itself")
+    for uid in (from_uid, to_uid):
+        if get_memory(conn, uid) is None:
+            raise ValueError(f"unknown memory: {uid}")
+    dup = conn.execute(
+        "SELECT id FROM relations WHERE from_uid = ? AND to_uid = ? AND relation_type = ?",
+        (from_uid, to_uid, relation_type)).fetchone()
+    if dup:
+        raise ValueError(f"identical relation already exists (id {dup['id']})")
     cur = conn.execute(
         "INSERT INTO relations (from_uid, to_uid, relation_type, note, created_at) VALUES (?, ?, ?, ?, ?)",
         (from_uid, to_uid, relation_type, note, now_iso()),
@@ -2088,6 +2115,18 @@ def all_domains_sql() -> str:
     )
 
 
+def _fold(segments: list[str]) -> list[str]:
+    """Segments as a filter compares them: case is not part of the name.
+
+    A domain is a name a caller types from memory, and the two casings of
+    one subject are the same subject -- which is why the dashboard reports
+    'acme/Cache' next to 'acme/cache' as drift to merge rather than as two
+    scopes. Matching folds; the STORED spelling is what comes back, so a
+    resolved scope is always a real path and its equality arm hits.
+    """
+    return [s.lower() for s in segments]
+
+
 def _inner_scope(stored: list[str], want: list[str]) -> str | None:
     """Where `want` sits inside a stored path, as a path down to its end.
 
@@ -2095,9 +2134,14 @@ def _inner_scope(stored: list[str], want: list[str]) -> str | None:
     -- the level asked for, with whatever it contains. The OUTERMOST
     occurrence wins: a repeated segment name inside one path is a level and
     a sublevel of itself, and the level is the one that was asked for.
+
+    Compared folded, returned as stored (see _fold). Position 0 is not a
+    special case here: a path matching at the front is the literal reading,
+    and resolve_domain_scopes takes that pass before this one.
     """
+    folded_stored, folded_want = _fold(stored), _fold(want)
     for i in range(len(stored) - len(want) + 1):
-        if stored[i:i + len(want)] == want:
+        if folded_stored[i:i + len(want)] == folded_want:
             return DOMAIN_SEP.join(stored[: i + len(want)])
     return None
 
@@ -2127,18 +2171,47 @@ def resolve_domain_scopes(conn: sqlite3.Connection, domain: str) -> list[str]:
     Cross-listings count as paths in use on both readings: a subject that
     exists only because memories were cross-listed into it is a real scope,
     and it resolves literally like any other.
+
+    Casing is not part of either reading. The store's policy is applied
+    first, so a store that coerces to one case resolves a filter written in
+    the other; and both passes then match folded (see _fold), because a
+    'preserve' store keeps whatever spelling each write happened to use and
+    a caller has no way to know which one that was. Every scope returned is
+    a path as STORED -- resolving to the caller's spelling instead would
+    hand the equality arm a string no row carries, which is the shape of
+    this bug: `LIKE` ignores case and `=` does not, so a filter in the
+    wrong case used to find a path's descendants and miss the path itself.
     """
-    path = normalize_domain(domain)
+    path = normalize_domain(case_domain(get_domain_case(conn), domain))
     if not path:
         return []
-    clause, params = domain_clause(path, alias="", subtree=True)
-    if conn.execute(f"SELECT 1 FROM memories WHERE 1=1 {clause} LIMIT 1", params).fetchone():
+    # Fast path: something is filed at exactly this string. The literal
+    # reading is then settled and no scan is needed -- which is the common
+    # call, a path taken from list_domains() and passed straight back.
+    if conn.execute(
+        "SELECT 1 FROM (SELECT domain FROM memories UNION "
+        "SELECT domain FROM memory_domains) WHERE domain = ? LIMIT 1",
+        (path,),
+    ).fetchone():
         return [path]
 
     want = split_domain(path)
+    stored = [split_domain(r["domain"]) for r in conn.execute(all_domains_sql())]
+    # The literal reading, folded: every stored path this one is the front
+    # of, cut back to the depth that was asked for. Covers the same-path
+    # spelling and the level that exists only because something deeper is
+    # filed under it -- both are "this path", not a name found inside one.
+    literal = {
+        DOMAIN_SEP.join(segments[:len(want)])
+        for segments in stored
+        if _fold(segments[:len(want)]) == _fold(want)
+    }
+    if literal:
+        return sorted(literal)
+
     scopes: set[str] = set()
-    for r in conn.execute(all_domains_sql()):
-        found = _inner_scope(split_domain(r["domain"]), want)
+    for segments in stored:
+        found = _inner_scope(segments, want)
         if found:
             scopes.add(found)
     # No scope in here can contain another, so there is nothing to collapse:
@@ -2348,22 +2421,43 @@ def search_hybrid(
     fold(search_semantic(conn, query, domain=domain, type=type, tag=tag,
                          status=status, limit=limit, subtree=subtree), "vec")
 
-    results = sorted(merged.values(), key=lambda d: -d["_rrf"])[:limit]
+    # Contradicted last, and only then by score. The flag used to buy
+    # nothing on this side: a memory an agent had marked known-wrong went on
+    # competing for the top slots against the memory that corrected it. It
+    # still comes back -- "we established this is false" is worth having,
+    # and hiding it invites writing the same wrong thing again -- just never
+    # ahead of something that still holds.
+    results = sorted(
+        merged.values(),
+        key=lambda d: (d.get("confidence") == CONFIDENCE_CONTRADICTED, -d["_rrf"]),
+    )[:limit]
     for d in results:
         del d["_rrf"]
     return results
 
 
+def _sound_clause(exclude_contradicted: bool) -> str:
+    """The arm that keeps known-wrong memories out of a list.
+
+    Off by default: list_by_domain/list_recent are the fallback for a search
+    that came back thin, and a caller asking for everything in a scope means
+    everything. pulse() opts in, because a warm-up presents what it returns
+    as the current state -- a contradicted anti-pattern read there is a
+    pitfall to avoid, not one that turned out not to be.
+    """
+    return f" AND confidence <> '{CONFIDENCE_CONTRADICTED}'" if exclude_contradicted else ""
+
+
 def list_by_domain(
     conn: sqlite3.Connection, domain: str, *, type: str = "", status: str = "active",
-    limit: int = 50, subtree: bool = True,
+    limit: int = 50, subtree: bool = True, exclude_contradicted: bool = False,
 ) -> list[sqlite3.Row]:
     """Recency-ordered rows of one domain, its subdomains included.
 
     subtree=False narrows to what is filed at exactly this path.
     """
     clause, params, _ = domain_scope_clause(conn, domain, alias="", subtree=subtree)
-    sql = [f"SELECT * FROM memories WHERE 1=1 {clause}"]
+    sql = [f"SELECT * FROM memories WHERE 1=1 {clause}{_sound_clause(exclude_contradicted)}"]
     if type:
         sql.append("AND type = ?")
         params.append(type)
@@ -2378,8 +2472,9 @@ def list_by_domain(
 def list_recent(
     conn: sqlite3.Connection, *, type: str = "", domain: str = "", tag: str = "",
     status: str = "active", limit: int = 20, subtree: bool = True,
+    exclude_contradicted: bool = False,
 ) -> list[sqlite3.Row]:
-    sql = ["SELECT * FROM memories WHERE 1=1"]
+    sql = [f"SELECT * FROM memories WHERE 1=1{_sound_clause(exclude_contradicted)}"]
     params: list = []
     if type:
         sql.append("AND type = ?")
@@ -2857,9 +2952,11 @@ def remove_domain_link(conn: sqlite3.Connection, uid: str, domain: str) -> list[
 
 
 def latest_by_type(
-    conn: sqlite3.Connection, type: str, *, domain: str = "", status: str = "active"
+    conn: sqlite3.Connection, type: str, *, domain: str = "", status: str = "active",
+    exclude_contradicted: bool = False,
 ) -> sqlite3.Row | None:
-    rows = list_recent(conn, type=type, domain=domain, status=status, limit=1)
+    rows = list_recent(conn, type=type, domain=domain, status=status, limit=1,
+                       exclude_contradicted=exclude_contradicted)
     return rows[0] if rows else None
 
 
@@ -2979,7 +3076,7 @@ def dedup_candidates(
 
 # ------------------------------------------------------------------ optimization
 
-CONFIDENCE_VALUES = ("unverified", "confirmed", "contradicted")
+CONFIDENCE_VALUES = ("unverified", "confirmed", CONFIDENCE_CONTRADICTED)
 SUGGESTION_KINDS = (
     "compact", "reword", "retag", "redomain", "crosslist",
     "set_confidence", "archive", "link", "merge", "distill",

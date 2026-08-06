@@ -94,10 +94,19 @@ def _snippet_dict(d: dict) -> dict:
 
 
 def _list_scoped(conn, domain: str, type: str, limit: int) -> list:
-    """Recency-ordered rows of one type: scoped to a domain subtree if given, else global."""
+    """Recency-ordered rows of one type, for a warm-up: scoped to a domain
+    subtree if given, else global.
+
+    Contradicted rows are left out here and nowhere else. This feeds
+    pulse(), which presents what it returns as the current state of a
+    scope, and a pitfall that turned out not to be one reads there as a
+    pitfall. list_by_domain()/list_recent() still return them: a caller
+    asking a scope for everything means everything.
+    """
     if domain:
-        return db.list_by_domain(conn, domain, type=type, limit=limit)
-    return db.list_recent(conn, type=type, limit=limit)
+        return db.list_by_domain(conn, domain, type=type, limit=limit,
+                                 exclude_contradicted=True)
+    return db.list_recent(conn, type=type, limit=limit, exclude_contradicted=True)
 
 
 def _coerce_domain(conn, domain: str) -> tuple[str, dict | None]:
@@ -821,7 +830,8 @@ def pulse(domain: str = "") -> dict:
     """
     with db.connect() as conn:
         census = db.domain_census(conn, domain)
-        latest_checkpoint = db.latest_by_type(conn, TYPE_CHECKPOINT, domain=domain)
+        latest_checkpoint = db.latest_by_type(conn, TYPE_CHECKPOINT, domain=domain,
+                                              exclude_contradicted=True)
         handoffs = _list_scoped(conn, domain, TYPE_HANDOFF, PULSE_HANDOFFS)
         anti_patterns = _list_scoped(conn, domain, TYPE_ANTI_PATTERN, PULSE_ANTI_PATTERNS)
         recent_notes = _list_scoped(conn, domain, TYPE_NOTE, PULSE_NOTES)
@@ -882,7 +892,10 @@ def get_memory(uid: str) -> dict:
     with db.connect() as conn:
         row = db.get_memory(conn, uid)
         if row is None:
-            return {}
+            # Not {}: an empty dict reads as "the record is empty" and sends a
+            # caller looking for content that was never there, when what
+            # happened is that the uid does not name a memory at all.
+            return _errors([f"no memory {uid}"])
         edits = db.get_edit_history(conn, uid)
         rels = db.get_relations(conn, uid)
         result = _row_to_dict(row)
@@ -927,9 +940,17 @@ def link_memories(from_uid: str, to_uid: str, relation_type: str, note: str = ""
 
     relation_type is free text but keep it consistent, e.g.
     'supersedes', 'relates_to', 'contradicts', 'links_to'.
+
+    Refuses an unknown uid, a memory related to itself, and an edge that
+    already exists with that same type -- each as
+    {"ok": False, "errors": [...]}, so a typo comes back as something to
+    fix instead of a dangling edge or a raw database error.
     """
     with db.connect() as conn:
-        rel_id = db.add_relation(conn, from_uid, to_uid, relation_type, note=note)
+        try:
+            rel_id = db.add_relation(conn, from_uid, to_uid, relation_type, note=note)
+        except ValueError as exc:
+            return _errors([str(exc)])
     return {"relation_id": rel_id}
 
 
