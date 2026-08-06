@@ -162,10 +162,27 @@ CREATE INDEX IF NOT EXISTS idx_memory_domains_domain ON memory_domains(domain);
 -- there would delete and reinsert the row's index entry on every search.
 -- It also keeps usage droppable without touching a memory, and keeps
 -- `updated_at` meaning "the content changed".
+--
+-- NOTHING HERE MAY EVER REACH A RANKING. It is tempting -- boost what gets
+-- read, obviously -- and it is wrong: a memory read twice a year is not
+-- worse than one read weekly, it is about a rarer subject. Some of what a
+-- store exists FOR is the thing nobody remembers to look up, and ranking by
+-- popularity buries exactly that, then buries it deeper every time it loses.
+-- Usage answers "was this ever worth anything", for a human curating. It
+-- does not answer "is this the answer", which is the query's job.
+-- test_usage.py holds that line.
+--
+-- via_* attribute a read to the retriever that surfaced it, so the store can
+-- say whether the vector arm earns its keep without anyone parsing session
+-- transcripts. A read with no search behind it (pulse, a list, get_memory)
+-- counts in recall_count and in none of them.
 CREATE TABLE IF NOT EXISTS memory_usage (
     memory_uid        TEXT PRIMARY KEY REFERENCES memories(uid),
     recall_count      INTEGER NOT NULL DEFAULT 0,
-    last_recalled_at  TEXT NOT NULL
+    last_recalled_at  TEXT NOT NULL,
+    via_fts           INTEGER NOT NULL DEFAULT 0,
+    via_vec           INTEGER NOT NULL DEFAULT 0,
+    via_both          INTEGER NOT NULL DEFAULT 0
 );
 """ + _FTS_SCHEMA + """
 CREATE TABLE IF NOT EXISTS edits (
@@ -664,6 +681,9 @@ _ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
     ("memories", "also_domains", "TEXT NOT NULL DEFAULT ''"),
     ("memories", "review_after", "TEXT NOT NULL DEFAULT ''"),
     ("memories", "source_ref", "TEXT NOT NULL DEFAULT ''"),
+    ("memory_usage", "via_fts", "INTEGER NOT NULL DEFAULT 0"),
+    ("memory_usage", "via_vec", "INTEGER NOT NULL DEFAULT 0"),
+    ("memory_usage", "via_both", "INTEGER NOT NULL DEFAULT 0"),
 )
 
 
@@ -1062,7 +1082,13 @@ def purge_memory(conn: sqlite3.Connection, uid: str) -> bool:
 
 # ----------------------------------------------------------------- usage
 
-def record_recall(conn: sqlite3.Connection, uids, *, at: str | None = None) -> int:
+MATCH_SOURCES = ("fts", "vec", "both")
+
+
+def record_recall(
+    conn: sqlite3.Connection, uids, *, at: str | None = None,
+    sources: dict[str, str] | None = None,
+) -> int:
     """Count one read of each of these memories. Returns how many it touched.
 
     Called from the MCP tools and from nowhere else, deliberately. What
@@ -1070,6 +1096,13 @@ def record_recall(conn: sqlite3.Connection, uids, *, at: str | None = None) -> i
     something", and a person scrolling the dashboard is not that -- letting
     the admin surface inflate the counters would turn the one signal the
     curation pass has into a record of who browsed what.
+
+    `sources` maps uid -> match_source for reads that came out of a search,
+    so the store can later say which retriever is worth its keep. A read
+    with no search behind it passes none, and counts only in recall_count.
+
+    None of this may ever reach a ranking -- see the schema comment on
+    memory_usage for why, and test_usage.py for the test that says so.
 
     Best-effort: a uid that no longer exists is skipped rather than failing
     the read that produced it.
@@ -1080,11 +1113,19 @@ def record_recall(conn: sqlite3.Connection, uids, *, at: str | None = None) -> i
     ts = at or now_iso()
     live = {r["uid"] for r in conn.execute(
         f"SELECT uid FROM memories WHERE uid IN ({', '.join('?' * len(seen))})", seen)}
-    rows = [(u, ts) for u in seen if u in live]
+    rows = []
+    for u in seen:
+        if u not in live:
+            continue
+        arm = (sources or {}).get(u)
+        rows.append((u, ts, int(arm == "fts"), int(arm == "vec"), int(arm == "both")))
     conn.executemany(
-        "INSERT INTO memory_usage (memory_uid, recall_count, last_recalled_at) "
-        "VALUES (?, 1, ?) ON CONFLICT(memory_uid) DO UPDATE SET "
-        "recall_count = recall_count + 1, last_recalled_at = excluded.last_recalled_at",
+        "INSERT INTO memory_usage "
+        "(memory_uid, recall_count, last_recalled_at, via_fts, via_vec, via_both) "
+        "VALUES (?, 1, ?, ?, ?, ?) ON CONFLICT(memory_uid) DO UPDATE SET "
+        "recall_count = recall_count + 1, last_recalled_at = excluded.last_recalled_at, "
+        "via_fts = via_fts + excluded.via_fts, via_vec = via_vec + excluded.via_vec, "
+        "via_both = via_both + excluded.via_both",
         rows,
     )
     return len(rows)
@@ -1100,6 +1141,25 @@ def usage_for(conn: sqlite3.Connection, uids) -> dict[str, dict]:
         f"WHERE memory_uid IN ({', '.join('?' * len(seen))})", seen).fetchall()
     return {r["memory_uid"]: {"recalls": r["recall_count"],
                               "last_recall": r["last_recalled_at"]} for r in rows}
+
+
+def arm_effectiveness(conn: sqlite3.Connection) -> dict:
+    """How much of what got read came from each retriever.
+
+    The question "does the vector arm earn its keep" answered by the store
+    itself, over real use, instead of by a benchmark's guess at what a query
+    looks like. Read it as a ratio between the arms and not as an absolute:
+    a memory can be acted on from its snippet without ever being opened, so
+    every arm is undercounted by the same unknown amount.
+    """
+    row = conn.execute(
+        "SELECT COALESCE(SUM(via_fts), 0) AS fts, COALESCE(SUM(via_vec), 0) AS vec, "
+        "COALESCE(SUM(via_both), 0) AS both, COALESCE(SUM(recall_count), 0) AS reads "
+        "FROM memory_usage").fetchone()
+    out = {arm: row[arm] for arm in MATCH_SOURCES}
+    out["reads"] = row["reads"]
+    out["from_search"] = sum(out[arm] for arm in MATCH_SOURCES)
+    return out
 
 
 def add_relation(
@@ -3872,9 +3932,13 @@ def optimization_corpus(
         "by_confidence": agg("confidence"),
         "by_domain": by_domain,
         "empty_domain": by_domain.get("", 0),
-        # Over the whole filtered corpus, not the page: the number a pass
-        # should be reading first. A store where most rows have never been
-        # read back is not a memory, it is a write log.
+        # Over the whole filtered corpus, not the page. Read it as
+        # UNPROVEN, never as useless: a memory nobody has needed yet is
+        # indistinguishable from one about a rare subject, and the rare
+        # subject is often the reason a store exists at all. The number is
+        # worth knowing store-wide -- if almost nothing has ever been read
+        # back, the store is a write log -- and worth nothing about any
+        # single row.
         "never_recalled": conn.execute(
             f"SELECT COUNT(*) FROM memories WHERE {where_sql} AND uid NOT IN "
             "(SELECT memory_uid FROM memory_usage)", params).fetchone()[0],

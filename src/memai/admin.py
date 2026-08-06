@@ -110,8 +110,10 @@ def _summary(row, limit: int = SNIPPET_LIMIT) -> dict:
 
 
 # What a memory list may be ordered by. 'recalls' is how often an agent was
-# handed it (db.memory_usage) -- the column that separates the rows the store
-# lives on from the ones nobody has needed since they were written.
+# handed it (db.memory_usage). Sorting by it is a way to LOOK; it is not a
+# verdict. A rarely-read memory is usually about a rarely-needed subject,
+# which is not the same as dead weight -- and nothing in retrieval reads
+# this column, deliberately (see the schema comment on memory_usage).
 _MEMORY_SORTS = {
     "created_at": "created_at",
     "updated_at": "updated_at",

@@ -1,10 +1,14 @@
 """Which memories are actually read back.
 
-Curation without this judges text: it can see that a memory is old,
-duplicated or vague, and cannot see that the one nobody has needed since
-it was written is the store's dead weight. The counter is deliberately
-fed by the MCP tools alone -- a person scrolling the dashboard is not an
-agent being answered.
+Curation without this judges text alone: it can see that a memory is old,
+duplicated or vague, and cannot see whether the store has ever needed it.
+The counter is fed by the MCP tools alone -- a person scrolling the
+dashboard is not an agent being answered.
+
+And it stops there. A low count means UNPROVEN, not useless: a memory
+about a rare subject is indistinguishable from one nobody wants, and the
+rare subject is often the reason a store exists. Nothing in retrieval may
+read this table; the tests at the bottom of this file are what say so.
 """
 
 from __future__ import annotations
@@ -151,3 +155,76 @@ def test_the_list_exposes_and_orders_by_recalls(client, monkeypatch, tmp_path):
 def test_an_unknown_sort_falls_back_instead_of_reaching_sql(client):
     client.post("/api/memories", json={"type": "note", "content": "x"})
     assert client.get("/api/memories?sort=recall_count;DROP").status_code == 200
+
+
+# ------------------------------------------------- usage must not rank
+
+def test_a_much_read_memory_does_not_outrank_a_better_match(conn):
+    """The line this whole table lives behind.
+
+    Boosting what gets read is the obvious next idea and it is wrong: a
+    memory read twice a year is about a rarer subject, not a worse one, and
+    a popularity term buries the rare thing further every time it loses.
+    Some of what a store is FOR is the thing nobody remembers to look up.
+    """
+    popular = db.insert_memory(conn, type="note",
+                               content="cache warmup notes, general")
+    exact = db.insert_memory(conn, type="note",
+                             content="cache warmup runs nightly at midnight sharp")
+    for _ in range(500):
+        db.record_recall(conn, [popular])
+    order = [r["uid"] for r in db.search_hybrid(conn, "nightly midnight sharp")]
+    assert order[0] == exact
+
+
+def test_recording_a_read_does_not_change_what_a_search_returns(conn):
+    for i in range(6):
+        db.insert_memory(conn, type="note", content=f"queue drain finding {i}")
+    before = [r["uid"] for r in db.search_hybrid(conn, "queue drain")]
+    for uid in before[3:]:
+        db.record_recall(conn, [uid])
+        db.record_recall(conn, [uid])
+    assert [r["uid"] for r in db.search_hybrid(conn, "queue drain")] == before
+
+
+def test_no_ranking_query_reads_the_usage_table():
+    """Cheaper than trusting the two tests above to catch every future
+    wiring: the SQL that orders results must not name the table at all."""
+    import inspect
+    for fn in (db.search_memories, db.search_semantic, db.search_hybrid,
+               db.list_by_domain, db.list_recent, db.domain_census):
+        src = inspect.getsource(fn)
+        assert "memory_usage" not in src and "recall_count" not in src, fn.__name__
+
+
+# ------------------------------------------------------- which arm paid off
+
+def test_a_search_credits_the_arm_that_surfaced_the_row(store):
+    server.note(content="cache warmup runs nightly", tags="warmup")
+    server.search("cache warmup")
+    with db.connect() as conn:
+        arms = db.arm_effectiveness(conn)
+    assert arms["from_search"] == 1
+    assert arms["fts"] + arms["both"] == 1  # keyword-backed, no vectors in tests
+
+
+def test_a_read_with_no_search_behind_it_credits_nobody(store):
+    uid = server.note(content="row merge keeps the older id", domain="acme/x100")["uid"]
+    server.get_memory(uid)
+    server.pulse("acme/x100")
+    with db.connect() as conn:
+        arms = db.arm_effectiveness(conn)
+    assert arms["reads"] == 2 and arms["from_search"] == 0
+
+
+def test_the_arm_tally_survives_a_store_that_predates_it(conn):
+    """The columns arrive by migration; a store written before them must
+    still count reads rather than fail on the INSERT."""
+    conn.execute("DROP TABLE memory_usage")
+    conn.execute("CREATE TABLE memory_usage (memory_uid TEXT PRIMARY KEY "
+                 "REFERENCES memories(uid), recall_count INTEGER NOT NULL DEFAULT 0, "
+                 "last_recalled_at TEXT NOT NULL)")
+    db._ensure_columns(conn)
+    uid = db.insert_memory(conn, type="note", content="x")
+    assert db.record_recall(conn, [uid], sources={uid: "vec"}) == 1
+    assert db.arm_effectiveness(conn)["vec"] == 1
