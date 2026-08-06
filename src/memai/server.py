@@ -23,18 +23,61 @@ list_domains() returns the tree that exists.
 diagram is the one type whose body is not prose: it stores a graph, one
 row per step, and generates the prose the retrieval side indexes. Its
 graph is edited through diagram_* and read back through get_diagram().
+
+Everything above answers a call, and an MCP server cannot make an agent
+call anything. Three things here exist for that gap: INSTRUCTIONS, which
+the host may inject; the warm_up prompt, invoked by the person rather than
+the agent; and the memai-hook CLI (memai.hook), which puts the store's
+state in a session's context without any of this being running. Writes
+carry a per-process `session` stamp unless one is passed.
 """
 
 from __future__ import annotations
 
 import inspect
 import json
+import os
 
 from mcp.server.fastmcp import FastMCP
 
-from memai import autostart, db, diagram_svg
+from memai import autostart, brief, db, diagram_svg
 
-mcp = FastMCP("memai")
+# Sent to the host in the initialize handshake, and injected into the
+# model's context by the hosts that support it. Kept to a paragraph on
+# purpose: it is paid on every request, exactly like a tool schema, and
+# what it has to buy is the first call -- an agent that never calls pulse()
+# has a memory server and no memory. The rest is in help().
+INSTRUCTIONS = """\
+Long-term memory that survives between sessions. Read before working:
+pulse(domain) for the state of a subject, recall(query) or search(query)
+for anything specific, list_domains() for the tree that exists. Write as
+you go, not at the end: note() a durable fact, anti_pattern() a pitfall
+worth not repeating, checkpoint() where the work stands before a pause,
+diagram() a routine start to end.
+
+A domain is a path ('acme/x100/p200') and every read covers its
+subdomains, so the same call asks about a product or one routine depending
+on how much of the path it gives. help() documents every tool from its own
+source."""
+
+mcp = FastMCP("memai", instructions=INSTRUCTIONS)
+
+
+def _new_session_id() -> str:
+    """This process's default `session` stamp for everything it writes.
+
+    Derived here rather than asked of the caller. `session` was an optional
+    free-text argument on every writer, which meant it was usually absent
+    and the dashboard's session filter had nothing to filter -- the value
+    of grouping a conversation's memories is real and the chance of an
+    agent remembering to pass a consistent id on every call is not. An
+    explicit `session=` still wins.
+    """
+    stamp = db.now_iso()[:16].replace("-", "").replace(":", "")
+    return f"{stamp}-{os.getpid():04x}"
+
+
+SESSION = _new_session_id()
 
 
 def _row_to_dict(row) -> dict:
@@ -202,7 +245,7 @@ def note(content: str, domain: str = "", also: str = "", tags: str = "", session
     with db.connect() as conn:
         domain, warning = _coerce_domain(conn, domain)
         uid = db.insert_memory(conn, type=TYPE_NOTE, content=content, domain=domain,
-                               also=also, session=session, tags=tags)
+                               also=also, session=session or SESSION, tags=tags)
         return _write_result(conn, uid, warning, also)
 
 
@@ -235,7 +278,7 @@ def checkpoint(
         domain, warning = _coerce_domain(conn, domain)
         uid = db.insert_memory(
             conn, type=TYPE_CHECKPOINT, content=content, domain=domain, also=also,
-            session=session, tags="checkpoint",
+            session=session or SESSION, tags="checkpoint",
         )
         return _write_result(conn, uid, warning, also)
 
@@ -255,7 +298,7 @@ def anti_pattern(
         domain, warning = _coerce_domain(conn, domain)
         uid = db.insert_memory(
             conn, type=TYPE_ANTI_PATTERN, content=content, domain=domain, also=also,
-            session=session, tags="anti_pattern",
+            session=session or SESSION, tags="anti_pattern",
         )
         return _write_result(conn, uid, warning, also)
 
@@ -271,7 +314,7 @@ def reasoning(content: str, domain: str = "", also: str = "", session: str = "")
     with db.connect() as conn:
         domain, warning = _coerce_domain(conn, domain)
         uid = db.insert_memory(conn, type=TYPE_REASONING, content=content, domain=domain,
-                               also=also, session=session)
+                               also=also, session=session or SESSION)
         return _write_result(conn, uid, warning, also)
 
 
@@ -285,7 +328,7 @@ def handoff(content: str, domain: str = "", also: str = "", session: str = "") -
     with db.connect() as conn:
         domain, warning = _coerce_domain(conn, domain)
         uid = db.insert_memory(conn, type=TYPE_HANDOFF, content=content, domain=domain,
-                               also=also, session=session)
+                               also=also, session=session or SESSION)
         return _write_result(conn, uid, warning, also)
 
 
@@ -351,7 +394,7 @@ def diagram(
         domain, warning = _coerce_domain(conn, domain)
         uid, errors = db.insert_diagram(
             conn, title=title, nodes=nodes, edges=edges, summary=summary,
-            kind=kind, domain=domain, also=also, session=session, tags=tags,
+            kind=kind, domain=domain, also=also, session=session or SESSION, tags=tags,
         )
         if errors:
             return _errors(errors)
@@ -932,6 +975,20 @@ def pulse(domain: str = "") -> dict:
             "subdomains": census["children"],
         },
     }
+
+
+@mcp.prompt()
+def warm_up(domain: str = "") -> str:
+    """What memai already knows, as text, for a session about to start.
+
+    The same brief the SessionStart hook emits (see memai.hook), offered
+    here for hosts that surface prompts as commands. A prompt is invoked by
+    the person, which makes it the one place in the MCP protocol where the
+    store can be READ without the agent having decided to read it.
+    """
+    with db.connect() as conn:
+        text = brief.session_brief(conn, domain=domain)
+    return text or "The memai store is empty -- nothing to warm up from yet."
 
 
 @mcp.tool()
