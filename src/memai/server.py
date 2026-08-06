@@ -40,7 +40,7 @@ import os
 
 from mcp.server.fastmcp import FastMCP
 
-from memai import autostart, brief, db, diagram_svg
+from memai import autostart, brief, db, diagram_svg, hook_install
 
 # Sent to the host in the initialize handshake, and injected into the
 # model's context by the hosts that support it. Kept to a paragraph on
@@ -60,7 +60,43 @@ subdomains, so the same call asks about a product or one routine depending
 on how much of the path it gives. help() documents every tool from its own
 source."""
 
-mcp = FastMCP("memai", instructions=INSTRUCTIONS)
+# Appended to INSTRUCTIONS while neither the user's settings nor this
+# directory's register a memai hook. `{command}` is filled with the absolute
+# path to this environment's memai-hook: the name alone is on PATH only for a
+# shell with the environment activated, which a host's shell is not.
+HOOKS_MISSING = """\
+NOTE: no memai hook is registered for this session, so nothing puts the store
+in front of it -- memai is read only when you call it, and a session that
+forgets to call it starts blind. Say so in your first reply and offer to run
+this, exactly as written (the name alone is not on PATH):
+
+  {command} install
+
+It registers SessionStart, PreCompact and Stop in the user's settings, for
+every project. Add `--project` for this repository only, `--check` to report
+what is registered, `--print` to show the block without writing it."""
+
+
+def _instructions() -> str:
+    """INSTRUCTIONS, with HOOKS_MISSING appended when no hook is registered.
+
+    Reads the user's settings and this directory's, once, at import: the
+    question is whether THIS session has the hooks, so a registration made
+    for some other project does not answer it. Unreadable settings are read
+    as no registration.
+    """
+    try:
+        if hook_install.anywhere():
+            return INSTRUCTIONS
+        command = hook_install.hook_command()
+    except Exception:
+        return INSTRUCTIONS
+    if " " in command:
+        command = f'"{command}"'
+    return f"{INSTRUCTIONS}\n\n{HOOKS_MISSING.format(command=command)}"
+
+
+mcp = FastMCP("memai", instructions=_instructions())
 
 
 def _new_session_id() -> str:

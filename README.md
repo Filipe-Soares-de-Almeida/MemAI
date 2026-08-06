@@ -319,23 +319,45 @@ payload that is not JSON, all exit 0 with no output.
 
 | event | what it emits |
 |---|---|
-| `session-start` | the store's state as context — counts, active domains, latest checkpoint, open handoffs, pitfalls, recent notes, documented flows |
-| `user-prompt` | the top hits for the user's own words. The session-start brief cannot know the subject; by the time a prompt arrives, its text *is* the query |
+| `session-start` | the store's state as context — counts, active domains, latest checkpoint, open handoffs, pitfalls, recent notes, documented flows — ending in the instruction to call `pulse(domain)` for the subject before the session's first tool call |
 | `pre-compact` | a reminder that what should outlive the transcript belongs in the store |
 | `stop` | a nudge to checkpoint, and **only** when nothing was written recently — a timer-based nudge fires whether or not there is anything to record, which teaches the agent to skip it |
 
+The instruction rides along with the context instead of arriving on its own
+per-prompt hook: one event to register, and this text is already read at the
+moment the instruction is needed. Nothing searches on a prompt's words — what a
+person writes is instruction far more often than subject, so a search on it
+answers confidently about a different subject, and an agent that is told to open
+the subject picks the domain itself.
+
+Register all three with:
+
+```
+memai-hook install            # the user's ~/.claude/settings.json
+memai-hook install --project  # this repository's .claude/settings.local.json
+memai-hook install --check    # what is registered; exit 1 if anything is missing
+memai-hook install --print    # the hooks block it would write, writing nothing
+```
+
+Hooks on the same event that memai did not write are left alone, memai's own
+entries are replaced rather than appended, and an existing settings file is
+copied to `<name>.bak-<stamp>` first. The command is registered as an absolute
+path with forward slashes — a `command` hook is handed to a shell, and a POSIX
+shell reads the backslashes of a Windows path as escapes.
+
+Until a hook has run at least once against the store, the server's MCP
+instructions carry a line asking for `memai-hook install`; after that they never
+mention it again.
+
 `--domain` narrows the session brief, `--budget` caps the characters it emits,
-`--limit` the memories per prompt, `--quiet-minutes` how recent a write has to be
-for `stop` to stay quiet. In a Claude Code `settings.json`:
+`--quiet-minutes` how recent a write has to be for `stop` to stay quiet. The
+registration itself, which `install` writes for you:
 
 ```json
 {
   "hooks": {
     "SessionStart": [
       { "hooks": [{ "type": "command", "command": "memai-hook session-start" }] }
-    ],
-    "UserPromptSubmit": [
-      { "hooks": [{ "type": "command", "command": "memai-hook user-prompt" }] }
     ],
     "PreCompact": [
       { "hooks": [{ "type": "command", "command": "memai-hook pre-compact" }] }
