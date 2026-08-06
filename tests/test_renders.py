@@ -183,16 +183,23 @@ def test_get_diagram_rejects_an_unknown_format(mcp):
 # one the user arranged, because the docstring called mermaid "the fastest
 # way to show a flow in a chat client" and buried the SVG path. Wording is
 # the mechanism here, so the wording gets tests.
+#
+# The guidance now lives in two places, and the split matters. What a caller
+# needs in order to CHOOSE stays in the docstring, because that is the schema
+# and the schema is paid for on every request. The worked detail moved to
+# help(command='get_diagram'), which is read when someone reads it. Each half
+# is asserted where it belongs.
 
 
-def test_the_docstring_leads_with_how_to_display_it(mcp):
+def test_the_schema_leads_with_how_to_display_it(mcp):
     doc = mcp.get_diagram.__doc__
-    head = doc[:doc.index("The data formats")]
-    assert "svg-interactive" in head
-    # the inline path has to appear before mermaid is offered at all
-    assert head.index("svg-interactive") < head.index("format='mermaid'")
-    # and reading the file has to be named as the step, not implied
-    assert "READ THE FILE" in head
+    assert "svg-interactive" in doc
+    # the format that shows the real arrangement, before mermaid is offered
+    assert doc.index("svg-interactive") < doc.index("'mermaid'")
+
+
+def test_the_full_documentation_names_reading_the_file_as_the_step(mcp):
+    assert "READ THE FILE" in mcp.help(command="get_diagram")["doc"]
 
 
 def test_the_help_summary_names_the_format_to_show_it_with(mcp):
@@ -203,8 +210,15 @@ def test_the_help_summary_names_the_format_to_show_it_with(mcp):
     assert mcp.help(command="get_diagram")["doc"].startswith(summary)
 
 
-def test_the_docstring_warns_that_mermaid_relayouts(mcp):
-    doc = mcp.get_diagram.__doc__
+def test_the_schema_itself_warns_that_mermaid_relayouts(mcp):
+    """The load-bearing warning stays in the description a caller always
+    sees, not only in the documentation it has to ask for."""
+    assert "DISCARDS the arrangement" in mcp.get_diagram.__doc__
+
+
+def test_the_full_documentation_explains_the_relayout(mcp):
+    # unwrapped: the claim is the wording, not where the lines happen to break
+    doc = " ".join(mcp.help(command="get_diagram")["doc"].split())
     assert "own layout" in doc and "discards the stored positions" in doc
 
 
@@ -238,7 +252,7 @@ def test_the_token_cost_is_never_offered_as_a_reason_to_skip_display(mcp):
     assert "does NOT display anything" in step
     assert "that is the work" in step
 
-    doc = mcp.get_diagram.__doc__
+    doc = mcp.help(command="get_diagram")["doc"]
     assert "IT IS NOT A REASON TO AVOID EMITTING THE MARKUP" in doc
     assert "is NOT showing it" in doc
 

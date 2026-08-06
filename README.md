@@ -181,7 +181,31 @@ a string that can only plausibly come from a human confirming that id.
 ## Tools
 
 `help()` returns every tool with a one-line summary; `help(command='<name>')`
-returns that tool's signature and docstring, read live from the code.
+returns that tool's signature and its full documentation, read live from the
+code. "Full" is the operative word: a tool's description is sent with every
+request for the whole session, so the reasoning and worked detail live behind
+`help()` and only what a caller needs in order to choose correctly stays in the
+schema.
+
+The same arithmetic applies to the tool list itself. All 35 schemas cost about
+8.8k tokens of every request whether or not the session ever documents a flow
+or runs a curation pass, so `MEMAI_TOOLS` names the groups to publish:
+
+| `MEMAI_TOOLS` | tools | ~tokens/request |
+|---|---|---|
+| `full` (default) | 35 | 8.8k |
+| `core,curation` | 29 | 7.0k |
+| `core,diagrams` | 27 | 7.0k |
+| `core` | 21 | 5.2k |
+
+`core` is the reading, writing, editing and linking surface; `diagrams` is
+authoring one (`get_diagram` stays in core — reading a flow is a read);
+`curation` is the optimize/dedup pass plus the store-wide settings and
+`purge_memory`. Any group implies `core`. The default publishes everything,
+because dropping a tool an existing setup calls is not something to do
+quietly — and either way `help()` documents every tool and names the ones this
+process did not load, so an agent that needs one gets told how to turn it on
+instead of concluding memai cannot do it.
 
 | Writing | |
 |---|---|
