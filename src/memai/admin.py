@@ -511,19 +511,9 @@ def create_relation(request, payload) -> dict:
     from_uid = (payload.get("from_uid") or "").strip()
     to_uid = (payload.get("to_uid") or "").strip()
     rel_type = (payload.get("relation_type") or "").strip()
-    if not (from_uid and to_uid and rel_type):
-        raise ValueError("from_uid, to_uid and relation_type are required")
-    if from_uid == to_uid:
-        raise ValueError("a memory cannot relate to itself")
+    # Every rule this endpoint used to spell out now lives in db.add_relation,
+    # so the MCP tool refuses the same edges with the same words.
     with db.connect() as conn:
-        for uid in (from_uid, to_uid):
-            if db.get_memory(conn, uid) is None:
-                raise ValueError(f"unknown memory: {uid}")
-        dup = conn.execute(
-            "SELECT id FROM relations WHERE from_uid = ? AND to_uid = ? AND relation_type = ?",
-            (from_uid, to_uid, rel_type)).fetchone()
-        if dup:
-            raise ValueError(f"identical relation already exists (id {dup['id']})")
         rel_id = db.add_relation(conn, from_uid, to_uid, rel_type, note=payload.get("note", ""))
     return {"relation_id": rel_id}
 
