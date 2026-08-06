@@ -712,11 +712,10 @@ def search(query: str, domain: str = "", type: str = "", limit: int = 10) -> lis
 
     SPEND TERMS FREELY. Every space-separated term is asked for separately
     and a row matching more of them ranks higher, so piling on synonyms,
-    the identifier, the routine name and the plain-language phrasing all in
-    one query costs one call and finds strictly more. Measured on a real
-    store, recall@5 went 33% at two terms, 59% at five, 67% at twelve and
-    70% at twenty. Sentences are fine -- 'de/da/que' score near zero and
-    cost nothing, so there is no need to strip them.
+    the identifier, the routine name and the plain-language phrasing into
+    one query costs one call and finds strictly more. Twenty terms beat
+    ten. Write a sentence if that is what you have -- common words score
+    near zero and cost nothing, so there is nothing to strip.
 
     Only active memories by default.
     Falls back to keyword-only if the embedding model is unavailable.
