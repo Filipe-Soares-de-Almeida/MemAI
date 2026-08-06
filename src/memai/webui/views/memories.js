@@ -91,7 +91,17 @@ export async function renderMemories(view, params, ctx) {
     { value: 'created_at:desc', label: t('mem.sort.newest') },
     { value: 'created_at:asc', label: t('mem.sort.oldest') },
     { value: 'updated_at:desc', label: t('mem.sort.updated') },
+    /* What the store is actually living on, and what it is carrying. Least
+       recalled puts the never-recalled rows first, which is where a
+       curation pass starts. */
+    { value: 'recalls:desc', label: t('mem.sort.used') },
+    { value: 'recalls:asc', label: t('mem.sort.unused') },
   ];
+  /* sort and dir arrive from the URL and can name a pair no option offers
+     (created_at:desc is the only combination with both directions). Fall
+     back rather than render a picker with nothing selected. */
+  const sortPair = `${state.sort}:${state.dir}`;
+  const activeSort = sorts.some(s => s.value === sortPair) ? sortPair : sorts[0].value;
 
   view.innerHTML = `<div class="anim">
     <div class="view-head"><h2 class="view-title">${t('mem.title')}</h2>
@@ -122,7 +132,7 @@ export async function renderMemories(view, params, ctx) {
       </div>
       ${pickerFor({ id: 'fConf', value: state.confidence, items: confs, ariaLabel: t('mem.conf.all') })}
       ${data.searched ? '' : pickerFor({ id: 'fSort', items: sorts, ariaLabel: t('mem.sort.aria'),
-        value: `${state.sort}:${state.sort === 'updated_at' ? 'desc' : state.dir}` })}
+        value: activeSort })}
       ${state.session ? `<button type="button" class="chip clickable" id="fSession" title="${t('mem.session.title')}">${t('mem.session.chip', { s: esc(state.session.slice(0, 18)) })}${icon('close')}</button>` : ''}
     </div>
 
@@ -228,6 +238,11 @@ function renderRows(items, scope = '') {
         ${statusTag(m.status)}
         ${away ? `<span class="chip" title="${esc(t('mem.alsoWhy', { domain: m.domain }))}">${t('mem.also')}</span>` : ''}
         ${m.domain ? `<span class="chip">${esc(m.domain)}</span>` : ''}
+        <!-- Only when it has been read back. A store where nothing has been
+             recalled yet would otherwise wear a "0" on every row, and the
+             rows that matter are found by sorting, not by reading zeros. -->
+        ${m.recalls ? `<span class="chip" title="${esc(t('mem.recallsWhy',
+            { n: m.recalls, when: m.last_recall || '' }))}">${t('mem.recalls', { n: m.recalls })}</span>` : ''}
         <span title="${esc(m.created_at)}">${fmtDate(m.created_at)}</span>
       </div>
     </div>`;

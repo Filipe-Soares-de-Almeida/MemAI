@@ -62,6 +62,73 @@ def test_update_meta_field_coerces_domain(conn):
     assert db.get_memory(conn, uid)["domain"] == "BETA"
 
 
+# ------------------------------------------------------------ reading it back
+
+def test_filter_in_another_case_finds_the_path_itself(conn):
+    """The bug this pass fixes: `LIKE` ignores case and `=` does not, so a
+    filter in the wrong case used to find a path's descendants and miss
+    every row filed at the path itself."""
+    own = db.insert_memory(conn, type="note", content="a", domain="acme/x100")
+    deep = db.insert_memory(conn, type="note", content="b", domain="acme/x100/p200")
+    assert {r["uid"] for r in db.list_by_domain(conn, "ACME/X100")} == {own, deep}
+
+
+def test_filter_in_another_case_with_nothing_deeper(conn):
+    uid = db.insert_memory(conn, type="note", content="a", domain="acme/x100")
+    assert [r["uid"] for r in db.list_by_domain(conn, "Acme/X100")] == [uid]
+
+
+def test_a_resolved_scope_is_spelled_as_stored(conn):
+    """Not as the caller wrote it -- a scope is reported back (pulse's
+    `scope.paths`, the admin's `domain_scope`) as somewhere to look next,
+    and the caller's spelling may name no path at all."""
+    db.insert_memory(conn, type="note", content="a", domain="acme/x100")
+    assert db.resolve_domain_scopes(conn, "ACME/X100") == ["acme/x100"]
+
+
+def test_case_folding_reaches_a_deep_segment_too(conn):
+    uid = db.insert_memory(conn, type="note", content="a", domain="acme/x100/p200")
+    assert db.resolve_domain_scopes(conn, "P200") == ["acme/x100/p200"]
+    assert [r["uid"] for r in db.list_by_domain(conn, "P200")] == [uid]
+
+
+def test_case_folding_reaches_an_implicit_level(conn):
+    """A level that exists only because something deeper is filed under it
+    is still 'this path', not a name found inside one."""
+    uid = db.insert_memory(conn, type="note", content="a", domain="acme/x100/p200")
+    assert db.resolve_domain_scopes(conn, "ACME/X100") == ["acme/x100"]
+    assert [r["uid"] for r in db.list_by_domain(conn, "ACME/X100")] == [uid]
+
+
+def test_a_lower_policy_store_resolves_a_filter_written_upper(conn):
+    db.set_domain_case(conn, "lower")
+    uid = db.insert_memory(conn, type="note", content="a", domain="Proj-A")
+    assert db.resolve_domain_scopes(conn, "PROJ-A") == ["proj-a"]
+    assert [r["uid"] for r in db.list_by_domain(conn, "PROJ-A")] == [uid]
+
+
+def test_both_spellings_of_one_path_broaden_like_any_ambiguity(conn):
+    """'preserve' keeps whatever each write used, so both are real paths and
+    a filter covers both -- the same widening an ambiguous segment gets."""
+    a = db.insert_memory(conn, type="note", content="a", domain="acme/Cache")
+    b = db.insert_memory(conn, type="note", content="b", domain="acme/cache")
+    assert db.resolve_domain_scopes(conn, "acme/CACHE") == ["acme/Cache", "acme/cache"]
+    assert {r["uid"] for r in db.list_by_domain(conn, "acme/CACHE")} == {a, b}
+
+
+def test_case_folding_reaches_a_crosslisted_only_scope(conn):
+    uid = db.insert_memory(conn, type="note", content="a", domain="acme/x100",
+                           also="omni/x900")
+    assert db.resolve_domain_scopes(conn, "OMNI/X900") == ["omni/x900"]
+    assert [r["uid"] for r in db.list_by_domain(conn, "OMNI/X900")] == [uid]
+
+
+def test_search_and_pulse_inherit_the_folding(conn):
+    db.insert_memory(conn, type="note", content="cache warmup", domain="acme/x100")
+    assert len(db.search_memories(conn, "warmup", domain="ACME/X100")) == 1
+    assert db.domain_census(conn, "ACME/X100")["paths"] == ["acme/x100"]
+
+
 # ---------------------------------------------------------------- MCP tools
 
 def test_writer_reports_domain_adjustment(monkeypatch, tmp_path):
