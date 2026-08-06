@@ -405,6 +405,25 @@ only the fallback and the active locale are fetched. Roboto is bundled in
 `webui/fonts/`, under the SIL Open Font License 1.1 (`webui/fonts/OFL.txt`,
 separate from MemAI's MIT licence).
 
+## Measuring retrieval
+
+Retrieval changes are easy to argue about and hard to be right about — two in
+this repo shipped on textbook reasoning and cost recall before anyone measured
+them. `tools/bench-retrieval.py` scores a store against ground truth the store
+already holds: a diagram step's label and the memory linked to explain it, and
+`relates_to` edges. Both are pairs a *person* asserted were related, so no
+labelling session is needed.
+
+```sh
+python tools/bench-retrieval.py --home /path/to/a-copy-of-a-store
+```
+
+It reports recall@k per arm and fused, the ceiling any fusion of those two arms
+could reach, and how far off the misses were. Point `MEMAI_EMBED_MODEL` at
+another model and run it again — that is the whole procedure for deciding
+whether a model change is worth it. Run it against a *copy*: opening a store
+applies any pending migration.
+
 ## Setup
 
 ```sh
