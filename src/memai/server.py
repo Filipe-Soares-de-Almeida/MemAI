@@ -596,17 +596,28 @@ def _write_render(conn, uid: str, data: dict, format: str) -> dict:
 
 
 @mcp.tool()
-def search(query: str, domain: str = "", type: str = "", limit: int = 30) -> list[dict]:
+def search(query: str, domain: str = "", type: str = "", limit: int = 10) -> list[dict]:
     """Hybrid search over memory content+tags+domain: BM25 keywords + local-model vectors.
 
     Each result is annotated with match_source ("fts" | "vec" | "both"),
     fts_rank (bm25, lower = better) and/or vec_distance (cosine, lower =
     closer). Both retrievers only widen the candidate set -- judge the
     returned candidates yourself. Multiple space-separated paraphrases
-    still help the keyword side (they're OR'd together). Only active
-    memories by default. Falls back to keyword-only if the embedding
-    model is unavailable. Content is snippet-truncated per result --
-    call get_memory(uid) for the full record.
+    still help the keyword side: the terms are asked as one question first
+    and as any-of second, so a row answering all of them outranks a row
+    answering one, and neither is lost. Only active memories by default.
+    Falls back to keyword-only if the embedding model is unavailable.
+    Content is snippet-truncated per result -- call get_memory(uid) for the
+    full record.
+
+    Two annotations worth acting on. `succeeded_by` means something in the
+    store supersedes this memory: read that one instead. `collapsed` lists
+    near-identical results folded into this one, so a fact written five
+    times spends one slot -- raise `limit` if you want the copies.
+
+    A memory marked confidence='contradicted' sorts behind everything that
+    still holds, but it does come back: knowing a claim was ruled out is
+    worth a slot, and it is what stops it being written again.
 
     A diagram ranks like any other memory: it comes back when it matches
     the query, in the position its scores earn. Nothing lifts a type to the
@@ -627,12 +638,13 @@ def search(query: str, domain: str = "", type: str = "", limit: int = 30) -> lis
     `domain`, which is where to read what the filter actually covered.
     """
     with db.connect() as conn:
-        results = db.search_hybrid(conn, query, domain=domain, type=type, limit=limit)
+        results = db.search_hybrid(conn, query, domain=domain, type=type, limit=limit,
+                                   collapse=True)
     return [_snippet_dict(_row_to_dict(r)) for r in results]
 
 
 @mcp.tool()
-def recall(query: str, domain: str = "", limit: int = 20) -> list[dict]:
+def recall(query: str, domain: str = "", limit: int = 10) -> list[dict]:
     """Recall long-term knowledge saved with note() (type='note').
 
     The dedicated verb for "bring back what I noted": a hybrid search
@@ -643,10 +655,12 @@ def recall(query: str, domain: str = "", limit: int = 20) -> list[dict]:
     snippet-truncated -- call get_memory(uid) for the full record.
 
     domain scopes to a path and everything nested under it, and resolves a
-    bare deep segment the same way search() does.
+    bare deep segment the same way search() does. Results carry the same
+    `succeeded_by` / `collapsed` annotations search() explains.
     """
     with db.connect() as conn:
-        results = db.search_hybrid(conn, query, domain=domain, type=TYPE_NOTE, limit=limit)
+        results = db.search_hybrid(conn, query, domain=domain, type=TYPE_NOTE, limit=limit,
+                                   collapse=True)
     return [_snippet_dict(_row_to_dict(r)) for r in results]
 
 
