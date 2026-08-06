@@ -114,6 +114,21 @@ def test_a_trimmed_section_still_reports_its_total(conn):
     assert f"... +{4 - shown} not shown" in text
 
 
+@pytest.mark.parametrize("mode, said, not_said", [
+    ("lower", "stored lowercase", "keeps the casing"),
+    ("upper", "stored UPPERCASE", "lowercase"),
+    ("preserve", "keeps the casing", "stored lowercase"),
+])
+def test_the_instruction_states_the_active_casing_policy(conn, mode, said, not_said):
+    """Under lower/upper a path is folded on the way in and on the way
+    through a read; under preserve two spellings are two domains."""
+    _seed(conn)
+    db.set_domain_case(conn, mode)
+    text = brief.session_brief(conn)
+    assert said in text
+    assert not_said not in text
+
+
 def test_a_contradicted_pitfall_is_not_in_the_warm_up(conn):
     ids = _seed(conn)
     db.set_confidence(conn, ids["pitfall"], "contradicted")
