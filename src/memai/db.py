@@ -150,6 +150,23 @@ CREATE TABLE IF NOT EXISTS memory_domains (
 );
 
 CREATE INDEX IF NOT EXISTS idx_memory_domains_domain ON memory_domains(domain);
+
+-- How often a memory was actually READ BACK, which is the only evidence
+-- that writing it was worth anything. A curation pass without this judges
+-- text: it can see that a memory is old, duplicated or vague, and cannot
+-- see that one nobody has needed in six months is the store's dead weight
+-- while the vague-looking one is answered with three times a week.
+--
+-- Its own table, not two columns on `memories`, for one concrete reason:
+-- the FTS trigger fires on ANY update of that table, so counting a recall
+-- there would delete and reinsert the row's index entry on every search.
+-- It also keeps usage droppable without touching a memory, and keeps
+-- `updated_at` meaning "the content changed".
+CREATE TABLE IF NOT EXISTS memory_usage (
+    memory_uid        TEXT PRIMARY KEY REFERENCES memories(uid),
+    recall_count      INTEGER NOT NULL DEFAULT 0,
+    last_recalled_at  TEXT NOT NULL
+);
 """ + _FTS_SCHEMA + """
 CREATE TABLE IF NOT EXISTS edits (
     id            INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -820,6 +837,7 @@ def purge_memory(conn: sqlite3.Connection, uid: str) -> bool:
     if row is None:
         return False
     conn.execute("DELETE FROM memory_domains WHERE memory_uid = ?", (uid,))
+    conn.execute("DELETE FROM memory_usage WHERE memory_uid = ?", (uid,))
     conn.execute("DELETE FROM edits WHERE memory_uid = ?", (uid,))
     conn.execute("DELETE FROM relations WHERE from_uid = ? OR to_uid = ?", (uid, uid))
     conn.execute("DELETE FROM optimization_suggestions WHERE target_uid = ?", (uid,))
@@ -834,6 +852,48 @@ def purge_memory(conn: sqlite3.Connection, uid: str) -> bool:
         conn.execute("DELETE FROM memories_vec WHERE rowid = ?", (row["rowid_pk"],))
     conn.execute("DELETE FROM memories WHERE uid = ?", (uid,))
     return True
+
+
+# ----------------------------------------------------------------- usage
+
+def record_recall(conn: sqlite3.Connection, uids, *, at: str | None = None) -> int:
+    """Count one read of each of these memories. Returns how many it touched.
+
+    Called from the MCP tools and from nowhere else, deliberately. What
+    this measures is "an agent was handed this memory in answer to
+    something", and a person scrolling the dashboard is not that -- letting
+    the admin surface inflate the counters would turn the one signal the
+    curation pass has into a record of who browsed what.
+
+    Best-effort: a uid that no longer exists is skipped rather than failing
+    the read that produced it.
+    """
+    seen = [u for u in dict.fromkeys(uids) if u]
+    if not seen:
+        return 0
+    ts = at or now_iso()
+    live = {r["uid"] for r in conn.execute(
+        f"SELECT uid FROM memories WHERE uid IN ({', '.join('?' * len(seen))})", seen)}
+    rows = [(u, ts) for u in seen if u in live]
+    conn.executemany(
+        "INSERT INTO memory_usage (memory_uid, recall_count, last_recalled_at) "
+        "VALUES (?, 1, ?) ON CONFLICT(memory_uid) DO UPDATE SET "
+        "recall_count = recall_count + 1, last_recalled_at = excluded.last_recalled_at",
+        rows,
+    )
+    return len(rows)
+
+
+def usage_for(conn: sqlite3.Connection, uids) -> dict[str, dict]:
+    """{uid: {"recalls": n, "last_recall": iso}} for the ones ever read."""
+    seen = [u for u in dict.fromkeys(uids) if u]
+    if not seen:
+        return {}
+    rows = conn.execute(
+        f"SELECT memory_uid, recall_count, last_recalled_at FROM memory_usage "
+        f"WHERE memory_uid IN ({', '.join('?' * len(seen))})", seen).fetchall()
+    return {r["memory_uid"]: {"recalls": r["recall_count"],
+                              "last_recall": r["last_recalled_at"]} for r in rows}
 
 
 def add_relation(
@@ -3413,6 +3473,15 @@ def optimization_corpus(
         if budget_used >= CORPUS_CHAR_BUDGET:
             break
     uids = {m["uid"] for m in mems}
+
+    # What each one has been WORTH, next to what it says. Omitted when zero,
+    # like every other default here -- and a memory with no `recalls` at all
+    # is the interesting case, not a missing field.
+    usage = usage_for(conn, uids)
+    for m in mems:
+        u = usage.get(m["uid"])
+        if u:
+            m["recalls"], m["last_recall"] = u["recalls"], u["last_recall"][:19]
     rels = conn.execute(
         "SELECT id, from_uid, to_uid, relation_type FROM relations"
     ).fetchall()
@@ -3432,6 +3501,12 @@ def optimization_corpus(
         "by_confidence": agg("confidence"),
         "by_domain": by_domain,
         "empty_domain": by_domain.get("", 0),
+        # Over the whole filtered corpus, not the page: the number a pass
+        # should be reading first. A store where most rows have never been
+        # read back is not a memory, it is a write log.
+        "never_recalled": conn.execute(
+            f"SELECT COUNT(*) FROM memories WHERE {where_sql} AND uid NOT IN "
+            "(SELECT memory_uid FROM memory_usage)", params).fetchone()[0],
     }
 
     # domain hints cluster over the WHOLE store; with `since`, keep only

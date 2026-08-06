@@ -109,6 +109,27 @@ def _summary(row, limit: int = SNIPPET_LIMIT) -> dict:
     return d
 
 
+# What a memory list may be ordered by. 'recalls' is how often an agent was
+# handed it (db.memory_usage) -- the column that separates the rows the store
+# lives on from the ones nobody has needed since they were written.
+_MEMORY_SORTS = {
+    "created_at": "created_at",
+    "updated_at": "updated_at",
+    "recalls": "recalls",
+    "last_recall": "last_recall",
+}
+
+
+def _with_usage(conn: sqlite3.Connection, items: list[dict]) -> list[dict]:
+    """Attach recall counts to rows that were selected without the join."""
+    usage = db.usage_for(conn, [i["uid"] for i in items])
+    for i in items:
+        u = usage.get(i["uid"])
+        i["recalls"] = u["recalls"] if u else 0
+        i["last_recall"] = u["last_recall"] if u else None
+    return items
+
+
 def _peer_card(conn: sqlite3.Connection, uid: str) -> dict | None:
     row = db.get_memory(conn, uid)
     if row is None:
@@ -262,7 +283,7 @@ def list_memories(request, payload) -> dict:
     confidence = qp.get("confidence", "")
     session = qp.get("session", "")
     sort = qp.get("sort", "created_at")
-    if sort not in ("created_at", "updated_at"):
+    if sort not in _MEMORY_SORTS:
         sort = "created_at"
     direction = "ASC" if qp.get("dir", "desc").lower() == "asc" else "DESC"
     limit = _int_param(request, "limit", 50, 1, 200)
@@ -279,7 +300,7 @@ def list_memories(request, payload) -> dict:
             if session:
                 hits = [h for h in hits if h["session"] == session]
             total = len(hits)
-            items = [_summary(h) for h in hits[offset:offset + limit]]
+            items = _with_usage(conn, [_summary(h) for h in hits[offset:offset + limit]])
             return {"total": total, "items": items, "searched": True, **scope}
 
         where, params = ["1=1"], []
@@ -294,8 +315,14 @@ def list_memories(request, payload) -> dict:
                 params.append(value)
         clause = " ".join(where)
         total = conn.execute(f"SELECT COUNT(*) FROM memories WHERE {clause}", params).fetchone()[0]
+        # The join is what makes 'recalls' sortable; the filters above name
+        # bare columns, which stay unambiguous because memory_usage shares
+        # none of them. NULLs sort as never-recalled, which is the truth.
         rows = conn.execute(
-            f"SELECT * FROM memories WHERE {clause} ORDER BY {sort} {direction} LIMIT ? OFFSET ?",
+            f"""SELECT m.*, COALESCE(u.recall_count, 0) AS recalls,
+                       u.last_recalled_at AS last_recall
+                FROM memories m LEFT JOIN memory_usage u ON u.memory_uid = m.uid
+                WHERE {clause} ORDER BY {_MEMORY_SORTS[sort]} {direction} LIMIT ? OFFSET ?""",
             [*params, limit, offset]).fetchall()
     return {"total": total, "items": [_summary(r) for r in rows], "searched": False, **scope}
 
@@ -307,6 +334,9 @@ def memory_detail(request, payload) -> dict:
         if row is None:
             raise ValueError(f"unknown memory: {uid}")
         result = _paths(dict(row))
+        usage = db.usage_for(conn, [uid]).get(uid)
+        result["recalls"] = usage["recalls"] if usage else 0
+        result["last_recall"] = usage["last_recall"] if usage else None
         result["edit_history"] = [dict(e) for e in db.get_edit_history(conn, uid)]
         rels = []
         for r in db.get_relations(conn, uid):
