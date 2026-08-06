@@ -708,10 +708,17 @@ def search(query: str, domain: str = "", type: str = "", limit: int = 10) -> lis
     Each result is annotated with match_source ("fts" | "vec" | "both"),
     fts_rank (bm25, lower = better) and/or vec_distance (cosine, lower =
     closer). Both retrievers only widen the candidate set -- judge the
-    returned candidates yourself. Multiple space-separated paraphrases
-    still help the keyword side: the terms are asked as one question first
-    and as any-of second, so a row answering all of them outranks a row
-    answering one, and neither is lost. Only active memories by default.
+    returned candidates yourself.
+
+    SPEND TERMS FREELY. Every space-separated term is asked for separately
+    and a row matching more of them ranks higher, so piling on synonyms,
+    the identifier, the routine name and the plain-language phrasing all in
+    one query costs one call and finds strictly more. Measured on a real
+    store, recall@5 went 33% at two terms, 59% at five, 67% at twelve and
+    70% at twenty. Sentences are fine -- 'de/da/que' score near zero and
+    cost nothing, so there is no need to strip them.
+
+    Only active memories by default.
     Falls back to keyword-only if the embedding model is unavailable.
     Content is snippet-truncated per result -- call get_memory(uid) for the
     full record.

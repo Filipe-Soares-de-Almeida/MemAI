@@ -2385,7 +2385,13 @@ def _fts_query(raw: str) -> str:
     terms = [t.strip() for t in raw.replace(" OR ", " ").split() if t.strip()]
     if not terms:
         return raw
-    escaped = [f'"{t}"' if not t.replace("_", "").isalnum() else t for t in terms]
+    # EVERY term is quoted, not only the ones with punctuation in them. A bare
+    # alphanumeric term looked safe and is not: 'AND', 'NOT' and 'NEAR' are
+    # fts5 operators, so a query containing one reached the engine as syntax
+    # and took the whole search down with an OperationalError -- out of a tool
+    # call, that is a crash rather than a bad result. Quoting is free: a
+    # quoted single token matches exactly what the bare one did.
+    escaped = ['"' + t.replace('"', '""') + '"' for t in terms]
     return " OR ".join(escaped)
 
 
