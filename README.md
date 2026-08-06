@@ -49,6 +49,15 @@ fusion. Each result says which side matched (`match_source`: `fts` | `vec` |
 `both`) and carries the raw `fts_rank` / `vec_distance`. Multi-term queries are
 OR'd on the keyword side, so several paraphrases in one call all help.
 
+The two arms do not get the same vote. Plain RRF assumes both retrievers are
+equally informative; measured against 216 pairs a human had marked as related
+in a real store, an equal vote was a cliff — `relates_to` recall@5 fell from
+66% (keywords alone) to 55.7% fused, because the weaker arm displaced keyword
+hits at the same rank. At any weight below equal it lands on one flat plateau
+at 69.1%, above keywords alone: the vector arm has real signal (it found 11
+targets the keyword arm missed) and simply cannot outrank a keyword hit. The
+weight is 0.5, the middle of that plateau.
+
 Both arms fetch exactly `limit` before the merge. Fetching deeper is the
 textbook move — fusion exists to recover the row ranked just outside one arm's
 window — and against a real 536-memory store it cost recall at every step:

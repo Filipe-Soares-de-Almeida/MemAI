@@ -226,3 +226,28 @@ def test_a_far_row_is_not_labelled_as_a_vector_match(vec_conn):
     db.insert_memory(vec_conn, type="note", content="alpha beta note")
     hits = db.search_hybrid(vec_conn, "car maintenance", limit=50)
     assert all(h["match_source"] != "vec" for h in hits)
+
+
+def test_the_vector_arm_does_not_get_an_equal_vote(vec_conn):
+    """Plain RRF assumes both arms are equally informative. Measured against
+    pairs a human marked as related, the equal vote was a cliff: the weaker
+    arm displaced keyword hits at the same rank and cost ten points of
+    recall. Everything below an equal vote landed on one plateau."""
+    assert 0 < db.VEC_WEIGHT < 1
+
+
+def test_a_keyword_hit_outranks_a_vector_hit_at_the_same_position(vec_conn):
+    keyword = db.insert_memory(vec_conn, type="note", content="the alpha schedule note")
+    semantic = db.insert_memory(vec_conn, type="note", content="car maintenance")
+    # 'alpha' is a keyword match; 'automobile' reaches the other by vector
+    order = [r["uid"] for r in db.search_hybrid(vec_conn, "alpha automobile", limit=2)]
+    assert order.index(keyword) < order.index(semantic)
+
+
+def test_the_vector_arm_still_contributes_what_keywords_miss(vec_conn):
+    """Weighted down, not switched off -- it found targets the keyword arm
+    missed in 11 of the 216 labelled pairs, and that is why it stays."""
+    uid = db.insert_memory(vec_conn, type="note", content="car maintenance schedule")
+    hits = db.search_hybrid(vec_conn, "automobile", limit=5)
+    assert [h["uid"] for h in hits] == [uid]
+    assert hits[0]["match_source"] == "vec"

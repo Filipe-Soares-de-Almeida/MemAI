@@ -2713,10 +2713,10 @@ def search_hybrid(
     K = 60  # standard RRF damping constant
     merged: dict[str, dict] = {}
 
-    def fold(rows, source: str) -> None:
+    def fold(rows, source: str, weight: float = 1.0) -> None:
         for i, row in enumerate(rows):
             uid = row["uid"]
-            contribution = 1.0 / (K + i + 1)
+            contribution = weight / (K + i + 1)
             seen = merged.get(uid)
             if seen is None:
                 d = dict(row)
@@ -2742,7 +2742,7 @@ def search_hybrid(
     fold(search_memories(conn, query, domain=domain, type=type, tag=tag,
                          status=status, limit=deep, subtree=subtree), "fts")
     fold(search_semantic(conn, query, domain=domain, type=type, tag=tag,
-                         status=status, limit=deep, subtree=subtree), "vec")
+                         status=status, limit=deep, subtree=subtree), "vec", VEC_WEIGHT)
 
     # Contradicted last, and only then by score. The flag used to buy
     # nothing on this side: a memory an agent had marked known-wrong went on
@@ -2760,6 +2760,25 @@ def search_hybrid(
         del d["_rrf"]
     return results
 
+
+# What a vector hit is worth next to a keyword hit, in the fusion.
+#
+# Plain RRF gives both arms the same vote, which assumes both are equally
+# informative. Measured against 216 pairs a HUMAN marked as related in a
+# real store -- a diagram step's label and the memory linked to it, and
+# `relates_to` edges -- recall@5:
+#
+#   vector weight   0.00   0.10-0.75   1.00
+#   step label     13.4%       13.4%  14.3%
+#   relates_to     66.0%       69.1%  55.7%
+#
+# Anything below an equal vote lands on the same plateau; the equal vote is
+# a cliff. The vector arm has real signal -- it beats the keyword arm alone
+# on relates_to, and across both sets it found 11 targets the keyword arm
+# missed -- but it cannot be allowed to displace a keyword hit at the same
+# rank. 0.5 is the middle of the plateau, chosen to be far from both edges
+# rather than to be the argmax of 216 cases.
+VEC_WEIGHT = 0.5
 
 # How many rows each retriever fetches per unit of `limit` before fusion.
 #
