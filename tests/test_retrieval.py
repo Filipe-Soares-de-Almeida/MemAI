@@ -22,6 +22,14 @@ def conn(tmp_path):
 
 
 @pytest.fixture
+def vec_conn(tmp_path, fake_embedder):
+    """A store whose vector table exists: _ensure_vec runs at connect time,
+    so the embedder has to be in place before the connection is opened."""
+    with db.connect(tmp_path / "vec.db") as c:
+        yield c
+
+
+@pytest.fixture
 def store(tmp_path, monkeypatch):
     monkeypatch.setenv("MEMAI_HOME", str(tmp_path))
     return tmp_path
@@ -187,3 +195,34 @@ def test_recall_defaults_the_same_way(store):
     for content in _FINDINGS:
         server.note(content=content, tags="finding")
     assert len(server.recall("finding")) == 10
+
+
+# ------------------------------------------------------- how far is too far
+
+def test_a_knn_asked_for_more_than_it_has_does_not_invent_neighbours(vec_conn):
+    """The defect this floor exists for: a search for a word the store has
+    never seen came back with the WHOLE store, every row past the keyword
+    matches labelled match_source='vec' as if the vector side had found it.
+    A KNN has no notion of "nothing here is close" -- ask for 200 and it
+    returns the 200 nearest, however far away."""
+    for text in ("car maintenance schedule", "database tuning note",
+                 "alpha beta note", "car schedule"):
+        db.insert_memory(vec_conn, type="note", content=text)
+    swept = db.search_semantic(vec_conn, "car", limit=100, max_distance=1)
+    bounded = db.search_semantic(vec_conn, "car", limit=100)
+    assert len(swept) == 4          # the KNN happily returns everything
+    assert len(bounded) < len(swept)  # the floor does not
+
+
+def test_the_floor_keeps_what_is_actually_close(vec_conn):
+    uid = db.insert_memory(vec_conn, type="note", content="car maintenance schedule")
+    db.insert_memory(vec_conn, type="note", content="alpha beta note")
+    assert [r["uid"] for r in db.search_semantic(vec_conn, "automobile maintenance")] == [uid]
+
+
+def test_a_far_row_is_not_labelled_as_a_vector_match(vec_conn):
+    """match_source has to mean something: 'vec' should say the vector arm
+    found this, not that the keyword arm did not."""
+    db.insert_memory(vec_conn, type="note", content="alpha beta note")
+    hits = db.search_hybrid(vec_conn, "car maintenance", limit=50)
+    assert all(h["match_source"] != "vec" for h in hits)

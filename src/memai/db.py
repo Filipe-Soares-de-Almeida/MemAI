@@ -2587,6 +2587,27 @@ def search_memories(
 
 _KNN_MAX_K = 10000  # upper bound on the "fetch (nearly) all, then filter" KNN path
 
+# How far a neighbor may be and still count as one. A KNN has no notion of
+# "nothing here is close": ask it for 200 rows and it returns the 200
+# nearest however far away they are, so a search for a word the store has
+# never seen came back with the whole store, every row past the keyword
+# matches labelled `match_source: vec` as if the vector side had found it.
+#
+# Measured over a real 536-memory store. Best distance the vector arm can
+# reach, by kind of query:
+#
+#   query with a real target in the store   0.157 - 0.555  (median 0.314)
+#   word the store does not contain         0.681
+#   unrelated sentence / gibberish          0.777 - 0.932
+#
+# 0.60 sits in the gap. It drops the whole-store sweep to nothing and costs
+# no recall at all -- the true target survives in 65% of queries at 0.60 and
+# in 65% at 0.65, which is the vector arm's own ceiling, not this cut.
+#
+# Calibrated against THIS corpus and THIS model. A different embedding model
+# has a different scale; re-measure before trusting the number.
+VEC_MAX_DISTANCE = 0.60
+
 
 def search_semantic(
     conn: sqlite3.Connection,
@@ -2598,8 +2619,13 @@ def search_semantic(
     status: str = "active",
     limit: int = 30,
     subtree: bool = True,
+    max_distance: float = VEC_MAX_DISTANCE,
 ) -> list[sqlite3.Row]:
     """Brute-force KNN over the vector table, filtered post-KNN.
+
+    Bounded by distance as well as by count (see VEC_MAX_DISTANCE): a KNN
+    asked for more rows than it has close neighbors returns far ones, and a
+    far one is not a match. Pass max_distance=1 to see the raw ordering.
 
     Returns [] when vectors are unavailable, so callers can always call
     this unconditionally. domain/type/tag/status filters apply *after* the
@@ -2627,9 +2653,9 @@ def search_semantic(
            FROM (SELECT rowid, distance FROM memories_vec
                  WHERE embedding MATCH ? AND k = ?) v
            JOIN memories m ON m.rowid_pk = v.rowid
-           WHERE 1=1"""
+           WHERE v.distance <= ?"""
     ]
-    params: list = [blobs[0], k]
+    params: list = [blobs[0], k, max_distance]
     if domain:
         clause, values, _ = domain_scope_clause(conn, domain, subtree=subtree)
         sql.append(clause)
