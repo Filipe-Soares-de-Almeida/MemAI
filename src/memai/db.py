@@ -81,6 +81,16 @@ CONFIDENCE_CONTRADICTED = "contradicted"
 # store built before a new indexed column has to be rebuilt from (_ensure_fts).
 _FTS_COLUMNS = ("content", "tags", "domain", "also_domains")
 
+# BM25 weights per indexed column, in _FTS_COLUMNS order. Unweighted, a
+# domain match scored like a claim: every row filed under 'acme/cache'
+# ranked for the word "cache" whether or not it said anything about one,
+# and in a store organised by domain that is most of the store. The paths
+# stay indexed -- a scope name should be findable -- they just stop
+# outranking the memory that actually discusses the subject. Keyed by name
+# so adding an indexed column without weighting it fails at import.
+_FTS_WEIGHTS = {"content": 1.0, "tags": 0.8, "domain": 0.3, "also_domains": 0.3}
+_BM25 = f"bm25(memories_fts, {', '.join(str(_FTS_WEIGHTS[c]) for c in _FTS_COLUMNS)})"
+
 _FTS_SCHEMA = """
 CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(
     content, tags, domain, also_domains,
@@ -2037,6 +2047,11 @@ def _fts_query(raw: str) -> str:
     Lets the calling agent pass several paraphrases in one call
     ("reranking teacher model" or "best of n dpo critic") and get the
     union of matches back, instead of one narrow AND match.
+
+    Asking AND first and appending the OR-only rows after it was tried and
+    dropped: BM25 already scores a row matching every term far above a row
+    matching one, so the two orderings agreed on every corpus we could
+    build, and the second query bought nothing.
     """
     terms = [t.strip() for t in raw.replace(" OR ", " ").split() if t.strip()]
     if not terms:
@@ -2276,7 +2291,7 @@ def search_memories(
     subtree: bool = True,
 ) -> list[sqlite3.Row]:
     sql = [
-        """SELECT m.*, bm25(memories_fts) AS rank
+        f"""SELECT m.*, {_BM25} AS rank
            FROM memories_fts
            JOIN memories m ON m.rowid_pk = memories_fts.rowid
            WHERE memories_fts MATCH ?"""
@@ -2375,6 +2390,7 @@ def search_hybrid(
     status: str = "active",
     limit: int = 30,
     subtree: bool = True,
+    collapse: bool = False,
 ) -> list[dict]:
     """FTS BM25 + vector KNN, merged by reciprocal rank fusion.
 
@@ -2392,6 +2408,12 @@ def search_hybrid(
     retrieval scoped to type='diagram') to have any to promote. A diagram
     now earns its place the way every other memory does: it comes back when
     it matches, where its scores put it.
+
+    collapse=True folds near-identical results into the best-ranked one of
+    them (see _collapse_near_copies). Off by default: it is a concession to
+    a caller paying for every row in a context window, and the dashboard is
+    the opposite case -- a human curating the store needs to SEE that the
+    same fact was written five times, which is what the dedup queue is for.
     """
     K = 60  # standard RRF damping constant
     merged: dict[str, dict] = {}
@@ -2416,10 +2438,16 @@ def search_hybrid(
                 seen["match_source"] = "both"
                 seen["_rrf"] += contribution
 
+    # Each arm fetches deeper than the caller asked for, because fusion is
+    # the whole point: a memory ranked just outside the keyword window and
+    # near the top of the vector one is exactly what RRF exists to recover,
+    # and fetching `limit` per arm threw it away before the merge could see
+    # it. The extra rows cost one wider LIMIT, not another query.
+    deep = limit * _FUSION_FETCH
     fold(search_memories(conn, query, domain=domain, type=type, tag=tag,
-                         status=status, limit=limit, subtree=subtree), "fts")
+                         status=status, limit=deep, subtree=subtree), "fts")
     fold(search_semantic(conn, query, domain=domain, type=type, tag=tag,
-                         status=status, limit=limit, subtree=subtree), "vec")
+                         status=status, limit=deep, subtree=subtree), "vec")
 
     # Contradicted last, and only then by score. The flag used to buy
     # nothing on this side: a memory an agent had marked known-wrong went on
@@ -2427,13 +2455,72 @@ def search_hybrid(
     # still comes back -- "we established this is false" is worth having,
     # and hiding it invites writing the same wrong thing again -- just never
     # ahead of something that still holds.
-    results = sorted(
+    ranked = sorted(
         merged.values(),
         key=lambda d: (d.get("confidence") == CONFIDENCE_CONTRADICTED, -d["_rrf"]),
-    )[:limit]
+    )
+    results = (_collapse_near_copies(ranked) if collapse else ranked)[:limit]
+    _attach_succession(conn, results)
     for d in results:
         del d["_rrf"]
     return results
+
+
+# How many rows each retriever fetches per unit of `limit` before fusion.
+_FUSION_FETCH = 4
+
+# Above this difflib ratio two results are the same text, not two takes on
+# one subject. Deliberately near-identity: collapsing merely RELATED
+# memories would decide relevance, which is the caller's job -- this only
+# stops one fact from spending five of the ten slots it was given.
+_COPY_RATIO = 0.92
+
+
+def _collapse_near_copies(ranked: list[dict]) -> list[dict]:
+    """Drop a result that repeats one already kept, and say so on the keeper.
+
+    Lexical on purpose, and the same measure dedup_candidates falls back to.
+    The vector side would catch paraphrases too, and catching paraphrases is
+    exactly what would make this a relevance judgement instead of a
+    duplicate filter.
+    """
+    import difflib
+
+    kept: list[dict] = []
+    for d in ranked:
+        content = d.get("content") or ""
+        for k in kept:
+            if difflib.SequenceMatcher(None, content, k.get("content") or "").quick_ratio() >= _COPY_RATIO:
+                k.setdefault("collapsed", []).append(d["uid"])
+                break
+        else:
+            kept.append(d)
+    return kept
+
+
+def _attach_succession(conn: sqlite3.Connection, results: list[dict]) -> None:
+    """Mark a result that something in the store already supersedes.
+
+    The relations graph knew the answer and retrieval did not read it, so a
+    superseded memory came back looking current with its replacement sitting
+    one edge away. `succeeded_by` is the uid(s) to read instead -- separate
+    from the `superseded_by` COLUMN, which set_status writes when archiving
+    and which says nothing about an edge drawn between two active rows.
+    """
+    if not results:
+        return
+    uids = [d["uid"] for d in results]
+    rows = conn.execute(
+        f"SELECT from_uid, to_uid FROM relations WHERE relation_type = 'supersedes' "
+        f"AND to_uid IN ({', '.join('?' * len(uids))})",
+        uids,
+    ).fetchall()
+    after: dict[str, list[str]] = {}
+    for r in rows:
+        after.setdefault(r["to_uid"], []).append(r["from_uid"])
+    for d in results:
+        if d["uid"] in after:
+            d["succeeded_by"] = after[d["uid"]]
 
 
 def _sound_clause(exclude_contradicted: bool) -> str:
