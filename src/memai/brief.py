@@ -124,21 +124,81 @@ def prompt_brief(conn, query: str, *, limit: int = 3, budget: int = DEFAULT_BUDG
                 tail="Not necessarily relevant -- judge it. get_memory(uid) for one in full.")
 
 
-def _fit(parts: list[str], budget: int, *, tail: str) -> str:
-    """Drop whole sections from the end until it fits, and say one went.
+def _shares(sizes: list[int], room: int) -> list[int]:
+    """Split `room` between sections, giving unused space to the hungry ones.
 
-    Truncating mid-sentence would leave a memory that reads as if it said
-    something it did not, which is worse than not showing it. `tail` is
-    what the reader is meant to DO next, so its room comes off the top
-    rather than being the first thing a tight budget throws away.
+    An equal cut each, then whatever the short sections did not need is
+    handed to the ones that overflowed. Two passes rather than a loop to
+    convergence: a third round would move characters nobody can see.
     """
-    kept: list[str] = []
-    used = len(tail)
-    for i, part in enumerate(parts):
-        if used + len(part) > budget and kept:
-            kept.append(f"[{len(parts) - i} more section(s) omitted for length]")
+    if not sizes:
+        return []
+    even = room // len(sizes)
+    spare = sum(even - s for s in sizes if s < even)
+    hungry = sum(1 for s in sizes if s > even)
+    bonus = spare // hungry if hungry else 0
+    return [even + bonus if s > even else s for s in sizes]
+
+
+def _cap(part: str, room: int) -> str:
+    """Trim a section by dropping whole ITEMS off the end of it.
+
+    Never mid-sentence: a memory cut in half reads as if it said something
+    it did not, which is worse than not showing it at all.
+
+    What it drops, it says. _lines writes the heading before this runs and
+    can only count what the QUERY left out, so a section trimmed here would
+    otherwise show two of four items and read as if there were two.
+    """
+    if len(part) <= room:
+        return part
+    lines = part.split("\n")
+    if len(lines[0]) > room:
+        return ""  # not even the heading fits: the section goes, and is counted
+    marker = "  ... +{} not shown"
+    kept, used = [lines[0]], len(lines[0]) + len(marker.format(len(lines) - 1))
+    for line in lines[1:]:
+        if used + len(line) + 1 > room:
             break
-        kept.append(part)
-        used += len(part) + 1
+        kept.append(line)
+        used += len(line) + 1
+    left = len(lines) - len(kept)
+    return "\n".join(kept + ([marker.format(left)] if left else []))
+
+
+def _fit(parts: list[str], budget: int, *, tail: str) -> str:
+    """Fit the sections into the budget, trimming rather than truncating.
+
+    Every section gets a share (see _shares) instead of the budget being
+    spent first-come-first-served. That ordering looked harmless and was
+    not: against a real store, four pitfalls at full length took half the
+    warm-up and the recent notes -- the part a session is most likely to
+    act on -- fell off the end and were reported as "omitted for length".
+
+    `tail` is what the reader is meant to DO next, so its room comes off
+    the top rather than being the first thing a tight budget throws away.
+    """
+    room = max(budget - len(tail) - 1, 0)
+    fitted = [_cap(p, s) for p, s in zip(parts, _shares([len(p) for p in parts], room))]
+
+    # The share is a floor, not a ceiling. Whatever the short sections left
+    # unspent goes back to the trimmed ones, earliest first -- otherwise a
+    # section a few characters over its cut is dropped whole while a third
+    # of the budget sits unused, which is what happened to the latest
+    # checkpoint: one long line, nothing in it to trim, so all or nothing.
+    spare = room - sum(len(f) + 1 for f in fitted if f)
+    for i, part in enumerate(parts):
+        if spare <= 0:
+            break
+        if len(fitted[i]) == len(part):
+            continue
+        grown = _cap(part, len(fitted[i]) + spare)
+        spare -= len(grown) - len(fitted[i])
+        fitted[i] = grown
+
+    kept = [f for f in fitted if f]
+    dropped = len(fitted) - len(kept)
+    if dropped:
+        kept.append(f"[{dropped} more section(s) omitted for length]")
     kept.append(tail)
     return "\n".join(kept)

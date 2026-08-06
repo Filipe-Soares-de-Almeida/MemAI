@@ -88,6 +88,32 @@ def test_a_tight_budget_drops_whole_sections_and_says_so(conn):
     assert "pulse(domain)" in text
 
 
+def test_a_long_section_cannot_starve_the_ones_after_it(conn):
+    """Found against a real store: four pitfalls at full length took half
+    the warm-up and the recent notes fell off the end entirely."""
+    for i in range(4):
+        db.insert_memory(conn, type="anti_pattern", domain="acme/x100",
+                         content=f"TEMPTATION: pitfall {i} " + "spelled out at length " * 12)
+    note = db.insert_memory(conn, type="note", domain="acme/x100",
+                            content="the export window is inclusive on both ends")
+    text = brief.session_brief(conn)
+    assert "Pitfalls on record" in text
+    assert "Recent notes" in text and note in text
+
+
+def test_a_trimmed_section_still_reports_its_total(conn):
+    """Items are dropped, never cut mid-sentence, and the heading says how
+    many there really were."""
+    for i in range(4):
+        db.insert_memory(conn, type="anti_pattern", domain="acme/x100",
+                         content=f"TEMPTATION: pitfall {i} " + "spelled out at length " * 12)
+    text = brief.session_brief(conn, budget=900)
+    section = next(b for b in text.split("\n\n") if "Pitfalls on record" in b)
+    shown = sum(1 for line in section.splitlines() if line.startswith("  - "))
+    assert shown < 4
+    assert f"... +{4 - shown} not shown" in text
+
+
 def test_a_contradicted_pitfall_is_not_in_the_warm_up(conn):
     ids = _seed(conn)
     db.set_confidence(conn, ids["pitfall"], "contradicted")
