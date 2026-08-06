@@ -3122,6 +3122,83 @@ def _timeline_pair(a: sqlite3.Row, b: sqlite3.Row) -> bool:
     return same_domain or same_session
 
 
+# What a just-written memory has to resemble before the writer says so.
+# Higher than dedup_candidates' 0.6, which feeds a review queue a human
+# reads at leisure: this one interrupts an agent mid-write, so it has to be
+# quiet unless the collision is real.
+SIMILAR_ON_WRITE = 0.75
+SIMILAR_ON_WRITE_MAX = 3
+SIMILAR_SNIPPET = 160
+
+
+def similar_memories(
+    conn: sqlite3.Connection, uid: str, *,
+    threshold: float = SIMILAR_ON_WRITE, limit: int = SIMILAR_ON_WRITE_MAX,
+) -> list[dict]:
+    """What the store already held that closely resembles this memory.
+
+    For the moment of writing, which is the only moment the answer is
+    free to act on: the agent still has the context that produced the
+    text, so it can tell a correction from a duplicate from a second
+    unrelated fact. dedup_scan asks the same question later, over the
+    whole store, for a human to answer.
+
+    Never blocks a write and never merges anything -- the memory is
+    already stored when this runs. Diagrams are out on both sides: their
+    content is a projection of a graph, so a resemblance between two of
+    them is not a merge anyone could apply. Consecutive checkpoints of one
+    effort are out too (see _timeline_pair) -- they share a skeleton by
+    design and would fire on every write.
+    """
+    row = get_memory(conn, uid)
+    if row is None or row["type"] == DIAGRAM_TYPE:
+        return []
+
+    scored: list[tuple[sqlite3.Row, float, str]] = []
+    if _vec_ready(conn):
+        emb = conn.execute(
+            "SELECT embedding FROM memories_vec WHERE rowid = ?", (row["rowid_pk"],)).fetchone()
+        if emb is not None:
+            for n in conn.execute(
+                "SELECT rowid, distance FROM memories_vec WHERE embedding MATCH ? AND k = ?",
+                (emb["embedding"], limit + 8),
+            ).fetchall():
+                if n["rowid"] == row["rowid_pk"] or 1.0 - n["distance"] < threshold:
+                    continue
+                other = conn.execute(
+                    "SELECT * FROM memories WHERE rowid_pk = ?", (n["rowid"],)).fetchone()
+                if other is not None:
+                    scored.append((other, 1.0 - n["distance"], "vector"))
+    else:
+        import difflib
+
+        # Without vectors this is a scan, so it stays inside the scope the
+        # memory was filed under -- a write must not get slower as the
+        # store grows in branches it has nothing to do with.
+        clause, params = domain_clause(row["domain"], alias="") if row["domain"] else ("", [])
+        for other in conn.execute(
+            f"SELECT * FROM memories WHERE uid <> ? {clause}", [uid, *params]
+        ).fetchall():
+            ratio = difflib.SequenceMatcher(None, row["content"], other["content"]).quick_ratio()
+            if ratio >= threshold:
+                scored.append((other, ratio, "lexical"))
+
+    out = []
+    for other, score, method in sorted(scored, key=lambda s: -s[1]):
+        if other["status"] != "active" or other["type"] == DIAGRAM_TYPE:
+            continue
+        if _timeline_pair(row, other):
+            continue
+        out.append({
+            "uid": other["uid"], "type": other["type"], "domain": other["domain"],
+            "ratio": round(score, 3), "method": method,
+            "content": other["content"][:SIMILAR_SNIPPET],
+        })
+        if len(out) == limit:
+            break
+    return out
+
+
 def dedup_candidates(
     conn: sqlite3.Connection, *, domain: str = "", type: str = "",
     threshold: float = 0.6, limit: int = 20, since: str = "",

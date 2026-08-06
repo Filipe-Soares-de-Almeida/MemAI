@@ -137,6 +137,16 @@ def _coerce_domain(conn, domain: str) -> tuple[str, dict | None]:
     return coerced, {"from": domain, "to": coerced, "policy": mode}
 
 
+# What to do about a collision the write just revealed. One line, because
+# it is paid for on every write that trips the threshold.
+SIMILAR_HINT = (
+    "the store already held these. If this one CORRECTS one of them, "
+    "edit_memory(uid, ...) or forget(uid, superseded_by=<new uid>); if it "
+    "restates one, forget() the copy; if they are genuinely different "
+    "facts, link_memories() and leave both."
+)
+
+
 def _write_result(conn, uid: str, warning: dict | None, also: str) -> dict:
     """The dict a writer tool returns: the uid, and whatever was adjusted.
 
@@ -145,12 +155,22 @@ def _write_result(conn, uid: str, warning: dict | None, also: str) -> dict:
     memory's own domain already covers is dropped (see
     db.apply_link_policy). An agent that cross-listed into three subjects
     and got two back learns which reading was redundant.
+
+    `similar` is the write-time half of dedup: the agent still has the
+    context that produced this text, so it is the one moment when "the
+    store already said something close to this" can be acted on for free.
+    Present only when something crossed the threshold -- a store with no
+    collision never sees the field, and the write is never blocked by one.
     """
     result = {"uid": uid}
     if warning:
         result["domain_adjusted"] = warning
     if also:
         result["also"] = db.get_domain_links(conn, uid)
+    similar = db.similar_memories(conn, uid)
+    if similar:
+        result["similar"] = similar
+        result["similar_hint"] = SIMILAR_HINT
     return result
 
 
