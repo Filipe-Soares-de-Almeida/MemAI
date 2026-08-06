@@ -56,6 +56,16 @@ window — and against a real 536-memory store it cost recall at every step:
 at 8x. Depth is a claim that both retrievers are informative. Measure it
 against the store before raising it.
 
+The vector arm is bounded by distance as well as by count. A KNN has no
+notion of "nothing here is close": asked for 200 rows it returns the 200
+nearest however far away they are, so a search for a word the store had never
+seen came back with the whole store, every row past the keyword matches
+labelled `match_source: vec` as if the vector side had found it. Measured over
+a real store, the best distance the vector arm reaches is 0.157–0.555 for a
+query with a real target and 0.68–0.93 for one without; the cut sits at 0.60,
+which drops the sweep to nothing and costs no recall. It is calibrated to this
+model — re-measure it if you change `MEMAI_EMBED_MODEL`.
+
 BM25 is weighted per column. `domain` and `also_domains` are indexed so a scope
 name is findable, not so that every row filed under `acme/cache` outranks the
 one memory that discusses the cache; in a store organised by domain, unweighted
