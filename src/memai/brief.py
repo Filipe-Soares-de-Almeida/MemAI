@@ -1,15 +1,14 @@
 """The store as a few hundred words, for a reader that has not asked yet.
 
-Everything else in memai answers a call. This renders the answer to a call
-nobody made -- what a session should know before its first message, and
-what an incoming prompt turns out to touch -- because an MCP server cannot
-make an agent call anything. A host hook can put text in front of one, and
-text is what this produces.
+session_brief renders what the store holds -- its size, active domains, the
+latest checkpoint, open handoffs, pitfalls, recent notes, documented flows --
+and ends with CALL_TO_ACTION, the instruction to open the subject with
+pulse(domain) before working. The SessionStart hook emits it (memai.hook);
+the warm_up prompt returns it.
 
-Plain text, not JSON: it is read by a language model, and a budget spent on
-punctuation is a budget not spent on the memories. Every section is capped
-and every cap is reported, so a brief that stopped short never reads as a
-store that was empty.
+Plain text, not JSON, read by a language model. Every section is capped and
+every cap is reported, so a brief that stopped short does not read as a store
+that was empty.
 """
 
 from __future__ import annotations
@@ -27,12 +26,18 @@ PITFALLS = 4
 NOTES = 4
 FLOWS = 5
 
+# The tail of every brief. _fit reserves its room before dividing what is
+# left between the sections, so it is never the part that gets trimmed.
 CALL_TO_ACTION = (
-    "Go deeper with the memai tools: pulse(domain) for one subject's state, "
-    "search(query, domain) or recall(query) for anything specific, "
-    "get_memory(uid) for a record in full, list_domains() for the tree. "
-    "Write as you go -- note() a durable fact, anti_pattern() a pitfall, "
-    "checkpoint() before a pause."
+    "Before the first tool call of this session, call pulse(domain) for the "
+    "subject the prompt names -- what was decided, what was already tried, "
+    "where the last session stopped. Paths are lowercase ('acme/x100/p200'); "
+    "the wrong case matches nothing and wastes the call. If the path is not "
+    "obvious: list_domains() for the tree, recall(query) or search(query) to "
+    "find a subject by name, get_memory(uid) for one record in full. If the "
+    "memai tools are not loaded yet -- an MCP connection comes up "
+    "asynchronously -- load them first, then call it. Write as you go: note() a "
+    "durable fact, anti_pattern() a pitfall, checkpoint() before a pause."
 )
 
 
@@ -99,29 +104,6 @@ def session_brief(conn, *, domain: str = "", budget: int = DEFAULT_BUDGET) -> st
         parts.append("Documented flows (get_diagram(uid) to read one): " + "; ".join(titles))
 
     return _fit(parts, budget, tail=CALL_TO_ACTION)
-
-
-def prompt_brief(conn, query: str, *, limit: int = 3, budget: int = DEFAULT_BUDGET) -> str:
-    """What the store holds about the thing that was just asked.
-
-    The session-start brief cannot know the subject; by the time a prompt
-    arrives, its text IS the query. One hybrid search, the top few, as
-    lines -- the recall an agent would have had to think to ask for.
-    """
-    query = " ".join((query or "").split())
-    if len(query) < 8:
-        return ""
-    hits = db.search_hybrid(conn, query, limit=limit, collapse=True)
-    if not hits:
-        return ""
-    parts = ["MemAI -- what the store already holds about this:"]
-    for h in hits:
-        where = f" [{h['domain']}]" if h["domain"] else ""
-        after = f" (superseded by {', '.join(h['succeeded_by'])})" if h.get("succeeded_by") else ""
-        flag = " (CONTRADICTED)" if h["confidence"] == db.CONFIDENCE_CONTRADICTED else ""
-        parts.append(f"  - {h['type']} {h['uid']}{where}{flag}{after} {_snip(h['content'])}")
-    return _fit(parts, budget,
-                tail="Not necessarily relevant -- judge it. get_memory(uid) for one in full.")
 
 
 def _shares(sizes: list[int], room: int) -> list[int]:
