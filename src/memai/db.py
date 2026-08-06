@@ -2619,13 +2619,18 @@ def search_semantic(
     status: str = "active",
     limit: int = 30,
     subtree: bool = True,
-    max_distance: float = VEC_MAX_DISTANCE,
+    max_distance: float | None = None,
 ) -> list[sqlite3.Row]:
     """Brute-force KNN over the vector table, filtered post-KNN.
 
     Bounded by distance as well as by count (see VEC_MAX_DISTANCE): a KNN
     asked for more rows than it has close neighbors returns far ones, and a
-    far one is not a match. Pass max_distance=1 to see the raw ordering.
+    far one is not a match. Pass max_distance=2 to see the raw ordering.
+
+    None rather than VEC_MAX_DISTANCE as the default, because a default
+    argument is evaluated once at import: written the other way, the cut
+    could not be changed at runtime, and the tool that exists to calibrate
+    it per model silently measured the old value for both.
 
     Returns [] when vectors are unavailable, so callers can always call
     this unconditionally. domain/type/tag/status filters apply *after* the
@@ -2638,6 +2643,8 @@ def search_semantic(
     right rows in correct distance order; unfiltered searches keep the cheap
     fixed over-fetch.
     """
+    if max_distance is None:
+        max_distance = VEC_MAX_DISTANCE
     if not _vec_ready(conn):
         return []
     blobs = embed.embed_texts([query])
