@@ -15,7 +15,7 @@ A single SQLite file in WAL mode:
 
 | table | holds |
 |---|---|
-| `memories` | the rows: type, domain, session, tags, content, status, confidence, timestamps |
+| `memories` | the rows: type, domain, session, tags, content, status, confidence, timestamps, recheck date and source reference |
 | `memory_domains` | the extra domains a memory belongs to, one row per path — every domain filter reads it |
 | `memories_fts` | FTS5 (BM25, `porter unicode61`) over content + tags + domain + cross-listed domains, synced by triggers |
 | `memories_vec` | [sqlite-vec](https://github.com/asg017/sqlite-vec) `vec0`, one cosine embedding per memory over that same text |
@@ -149,6 +149,21 @@ the database, so it is swept per the retention setting in the dashboard.
 
 ## Curation
 
+A memory about code is true until the code changes, and nothing in a store
+notices that. The durable writers (`note`, `anti_pattern`, `reasoning`,
+`diagram`) take `review_after` — a date, or a span from today like `90d` — which
+is the writer's own estimate of when its claim stops being safe to trust
+unchecked, and `source_ref`, which says what to check it against. Both are
+optional and most memories should leave them empty; a date nobody meant is
+worse than none.
+
+What they buy is that the store can flag its own decay: `pulse` reports
+`scope.stale` when a scope holds memories whose date has passed, `optimize_scan`
+marks each one `due` and lists its `source_ref`, and a curation pass pushes a
+date out with a `review` suggestion after actually rechecking. Verifying a
+`source_ref` against a live tree is not something the store does — it has no way
+to know where that tree is.
+
 Curation starts at the write. A writer probes the store for what it just wrote
 and returns `similar` when something crosses the threshold, plus one line on
 what to do about it — the agent still has the context that produced the text,
@@ -167,7 +182,7 @@ incremental passes. It also carries `recalls`/`last_recall` per memory and
 cannot tell the note answered three times a week from the one nobody has needed
 since it was written. `optimize_stage` writes a batch of suggestions to a run:
 `compact`, `reword`, `retag`, `redomain`, `crosslist`, `set_confidence`,
-`archive`, `link`, `merge`, `distill`.
+`review`, `archive`, `link`, `merge`, `distill`.
 
 Nothing is applied there: the human reviews each one in the dashboard, which
 backs up before the first apply and can undo any of them. Destructive kinds
@@ -209,7 +224,7 @@ instead of concluding memai cannot do it.
 
 | Writing | |
 |---|---|
-| `note(content, domain, also, tags, session)` | Save a fact/decision/finding (`type='note'`) |
+| `note(content, domain, also, tags, session, review_after, source_ref)` | Save a fact/decision/finding (`type='note'`) |
 | `checkpoint(intent, established, pursuing, open_questions, session, domain, also)` | Save work state; fields are free-length |
 | `anti_pattern(pattern, why_wrong, instead, domain, also, session)` | Save a pitfall to avoid repeating |
 | `reasoning(content, domain, also, session)` | Save a reasoning trace |
@@ -217,7 +232,7 @@ instead of concluding memai cannot do it.
 
 | Reading | |
 |---|---|
-| `pulse(domain)` | Warm-up: latest checkpoint, open handoffs/anti-patterns, recent notes, flow titles, `scope` census |
+| `pulse(domain)` | Warm-up: latest checkpoint, open handoffs/anti-patterns, recent notes, flow titles, `scope` census (incl. what is overdue for a recheck) |
 | `search(query, domain, type, limit)` | Hybrid BM25 + vector search, source-annotated |
 | `recall(query, domain, limit)` | Relevance-ranked recall of `note()`'d knowledge |
 | `list_by_domain(domain, type, limit, subtree)` | Recency-ordered, scoped to a path and its subdomains |

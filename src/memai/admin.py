@@ -414,10 +414,15 @@ def edit_meta(request, payload) -> dict:
     domain change in the same request, because the policy that drops a
     redundant cross-listing reads the domain the memory ends up with."""
     uid = request.path_params["uid"]
-    allowed = ("domain", "tags", "session", "type")
+    allowed = ("domain", "tags", "session", "type", "review_after", "source_ref")
     updates = {k: str(payload[k]).strip() for k in allowed if k in payload}
     if not updates and "also" not in payload:
         raise ValueError(f"nothing to update (fields: {(*allowed, 'also')})")
+    if "review_after" in updates:
+        # normalized here so the stored value is a date whatever was typed,
+        # and rejected loudly rather than silently kept as free text -- an
+        # unparseable date would just never come due
+        updates["review_after"] = db.normalize_review_after(updates["review_after"])
     if "type" in updates and not updates["type"]:
         raise ValueError("type cannot be empty")
     if "type" in updates and updates["type"] not in KNOWN_TYPES:
