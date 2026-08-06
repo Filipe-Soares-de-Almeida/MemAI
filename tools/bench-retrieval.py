@@ -145,11 +145,19 @@ def main(argv=None) -> int:
     ap.add_argument("--self-sample", type=int, default=120,
                     help="how many self-retrieval cases (default 120)")
     ap.add_argument("--seed", type=int, default=7)
+    ap.add_argument("--vec-cut", type=float, default=None,
+                    help="override db.VEC_MAX_DISTANCE. Cosine scale is a property of "
+                         "the MODEL, not of retrieval: comparing two models on one cut "
+                         "measures the cut. Calibrate per model before believing a "
+                         "fused number.")
     args = ap.parse_args(argv)
 
     if args.home:
         os.environ["MEMAI_HOME"] = args.home
     from memai import db, embed
+
+    if args.vec_cut is not None:
+        db.VEC_MAX_DISTANCE = args.vec_cut
 
     with db.connect() as conn:
         total = conn.execute(
