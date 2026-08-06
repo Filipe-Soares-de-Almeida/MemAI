@@ -93,6 +93,19 @@ def _snippet_dict(d: dict) -> dict:
     return d
 
 
+def _read(conn, rows):
+    """Count these as read, and hand them straight back.
+
+    Every tool that puts memory content in front of a caller goes through
+    here, and only these tools do -- see db.record_recall for why the
+    dashboard deliberately does not. The count is what lets a curation pass
+    tell the store's dead weight from the rows it lives on; without it,
+    optimize_scan can only judge the text.
+    """
+    db.record_recall(conn, [r["uid"] for r in rows])
+    return rows
+
+
 def _list_scoped(conn, domain: str, type: str, limit: int) -> list:
     """Recency-ordered rows of one type, for a warm-up: scoped to a domain
     subtree if given, else global.
@@ -507,6 +520,7 @@ def get_diagram(uid: str, format: str = "mermaid") -> dict:
         data = db.get_diagram(conn, uid)
         if data is None:
             return _errors([f"{uid} is not a diagram"])
+        db.record_recall(conn, [uid])
         if format == "json":
             return {"format": "json", **data}
         if format in ("svg", "svg-interactive"):
@@ -638,8 +652,8 @@ def search(query: str, domain: str = "", type: str = "", limit: int = 10) -> lis
     `domain`, which is where to read what the filter actually covered.
     """
     with db.connect() as conn:
-        results = db.search_hybrid(conn, query, domain=domain, type=type, limit=limit,
-                                   collapse=True)
+        results = _read(conn, db.search_hybrid(conn, query, domain=domain, type=type,
+                                              limit=limit, collapse=True))
     return [_snippet_dict(_row_to_dict(r)) for r in results]
 
 
@@ -659,8 +673,8 @@ def recall(query: str, domain: str = "", limit: int = 10) -> list[dict]:
     `succeeded_by` / `collapsed` annotations search() explains.
     """
     with db.connect() as conn:
-        results = db.search_hybrid(conn, query, domain=domain, type=TYPE_NOTE, limit=limit,
-                                   collapse=True)
+        results = _read(conn, db.search_hybrid(conn, query, domain=domain, type=TYPE_NOTE,
+                                              limit=limit, collapse=True))
     return [_snippet_dict(_row_to_dict(r)) for r in results]
 
 
@@ -686,7 +700,8 @@ def list_by_domain(
     full record.
     """
     with db.connect() as conn:
-        rows = db.list_by_domain(conn, domain, type=type, limit=limit, subtree=subtree)
+        rows = _read(conn, db.list_by_domain(conn, domain, type=type, limit=limit,
+                                            subtree=subtree))
     return [_snippet_dict(_row_to_dict(r)) for r in rows]
 
 
@@ -702,7 +717,8 @@ def list_recent(
     get_memory(uid) for the full record.
     """
     with db.connect() as conn:
-        rows = db.list_recent(conn, type=type, domain=domain, limit=limit, subtree=subtree)
+        rows = _read(conn, db.list_recent(conn, type=type, domain=domain, limit=limit,
+                                         subtree=subtree))
     return [_snippet_dict(_row_to_dict(r)) for r in rows]
 
 
@@ -861,6 +877,10 @@ def pulse(domain: str = "") -> dict:
         checkpoint_dict = _row_to_dict(latest_checkpoint)
         if checkpoint_dict:
             checkpoint_dict["relations"] = [_row_to_dict(r) for r in db.get_relations(conn, checkpoint_dict["uid"])]
+        # A warm-up hands all of this to the caller, so all of it counts as
+        # read -- diagrams included, which are named here and nothing else.
+        _read(conn, [*handoffs, *anti_patterns, *recent_notes, *diagram_rows,
+                     *([latest_checkpoint] if latest_checkpoint else [])])
     shown = {
         "latest_checkpoint": [checkpoint_dict] if checkpoint_dict else [],
         "handoffs": handoffs,
@@ -910,6 +930,7 @@ def get_memory(uid: str) -> dict:
             # caller looking for content that was never there, when what
             # happened is that the uid does not name a memory at all.
             return _errors([f"no memory {uid}"])
+        _read(conn, [row])
         edits = db.get_edit_history(conn, uid)
         rels = db.get_relations(conn, uid)
         result = _row_to_dict(row)
