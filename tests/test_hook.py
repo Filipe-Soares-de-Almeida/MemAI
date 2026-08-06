@@ -120,36 +120,6 @@ def test_a_contradicted_pitfall_is_not_in_the_warm_up(conn):
     assert ids["pitfall"] not in brief.session_brief(conn)
 
 
-# ------------------------------------------------------- recall from a prompt
-
-def test_a_prompt_brings_back_what_it_touches(conn):
-    ids = _seed(conn)
-    text = brief.prompt_brief(conn, "why does the cache warmup run when it does?")
-    assert ids["note"] in text
-
-
-def test_a_prompt_that_touches_nothing_says_nothing(conn):
-    _seed(conn)
-    assert brief.prompt_brief(conn, "quarterly invoicing thresholds") == ""
-
-
-def test_a_one_word_prompt_is_not_worth_a_search(conn):
-    _seed(conn)
-    assert brief.prompt_brief(conn, "hi") == ""
-
-
-def test_the_prompt_brief_marks_what_not_to_trust(conn):
-    ids = _seed(conn)
-    newer = db.insert_memory(conn, type="note", domain="acme/x100",
-                             content="cache warmup was moved to first request of the hour")
-    db.add_relation(conn, newer, ids["note"], "supersedes")
-    db.set_confidence(conn, ids["note"], "contradicted")
-    # limit past the default: contradicted sorts last by design, so in a
-    # busier store it is the row a three-line brief drops first
-    text = brief.prompt_brief(conn, "when does the cache warmup run", limit=5)
-    assert "CONTRADICTED" in text and f"superseded by {newer}" in text
-
-
 # ------------------------------------------------------------------ the hooks
 
 def test_session_start_emits_the_brief(store, capsysbinary):
@@ -164,12 +134,12 @@ def test_session_start_on_an_empty_store_emits_nothing(store, capsysbinary):
     assert _run("session-start", {}, capsysbinary) is None
 
 
-def test_user_prompt_searches_the_prompt(store, capsysbinary):
+def test_session_start_also_carries_the_instruction(store, capsysbinary):
+    """One hook emits the context and the instruction to act on it."""
     with db.connect() as conn:
-        ids = _seed(conn)
-    out = _run("user-prompt", {"prompt": "when does the cache warmup run?"}, capsysbinary)
-    assert out["hookSpecificOutput"]["hookEventName"] == "UserPromptSubmit"
-    assert ids["note"] in out["hookSpecificOutput"]["additionalContext"]
+        _seed(conn)
+    out = _run("session-start", {}, capsysbinary)
+    assert "pulse(domain)" in out["hookSpecificOutput"]["additionalContext"]
 
 
 def test_pre_compact_asks_for_the_durable_part(store, capsysbinary):
@@ -203,10 +173,11 @@ def test_stop_does_not_answer_its_own_nudge(store, capsysbinary):
 # -------------------------------------------------------------- failure paths
 
 def test_an_unreadable_payload_is_not_an_error(store, capsysbinary):
+    """A payload that will not parse exits 0 with no output."""
     import sys
     sys.stdin = io.StringIO("this is not json")
     try:
-        assert hook.main(["user-prompt"]) == 0
+        assert hook.main(["session-start"]) == 0
     finally:
         sys.stdin = sys.__stdin__
     assert capsysbinary.readouterr().out == b""
