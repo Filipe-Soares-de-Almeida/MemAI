@@ -2,9 +2,10 @@
 
 session_brief renders what the store holds -- its size, active domains, the
 latest checkpoint, open handoffs, pitfalls, recent notes, documented flows --
-and ends with CALL_TO_ACTION, the instruction to open the subject with
-pulse(domain) before working. The SessionStart hook emits it (memai.hook);
-the warm_up prompt returns it.
+and ends with the instruction to open the subject with pulse(domain) before
+working, spelling out what the store's own casing policy means for the path
+that instruction asks for. The SessionStart hook emits it (memai.hook); the
+warm_up prompt returns it.
 
 Plain text, not JSON, read by a language model. Every section is capped and
 every cap is reported, so a brief that stopped short does not read as a store
@@ -26,19 +27,40 @@ PITFALLS = 4
 NOTES = 4
 FLOWS = 5
 
+# What the casing policy means for a caller writing a path. Under `lower`
+# and `upper` a domain is folded on the way in AND on the way through a
+# read, so any spelling finds the same rows; under `preserve` it is not, and
+# two spellings are two paths.
+CASING = {
+    "lower": "Domain paths are stored lowercase here, and a path passed in any "
+             "case is folded to it.",
+    "upper": "Domain paths are stored UPPERCASE here, and a path passed in any "
+             "case is folded to it.",
+    "preserve": "This store keeps the casing a path was written with, so "
+                "'Acme/X100' and 'acme/x100' are two different domains -- reuse "
+                "an existing one exactly as list_domains() spells it.",
+}
+
 # The tail of every brief. _fit reserves its room before dividing what is
 # left between the sections, so it is never the part that gets trimmed.
+# {casing} is filled from the store's active policy, never assumed.
 CALL_TO_ACTION = (
     "Before the first tool call of this session, call pulse(domain) for the "
     "subject the prompt names -- what was decided, what was already tried, "
-    "where the last session stopped. Paths are lowercase ('acme/x100/p200'); "
-    "the wrong case matches nothing and wastes the call. If the path is not "
-    "obvious: list_domains() for the tree, recall(query) or search(query) to "
-    "find a subject by name, get_memory(uid) for one record in full. If the "
-    "memai tools are not loaded yet -- an MCP connection comes up "
-    "asynchronously -- load them first, then call it. Write as you go: note() a "
-    "durable fact, anti_pattern() a pitfall, checkpoint() before a pause."
+    "where the last session stopped. A domain is a path, outermost scope first "
+    "('acme/x100/p200'). {casing} If the path is not obvious: list_domains() "
+    "for the tree, recall(query) or search(query) to find a subject by name, "
+    "get_memory(uid) for one record in full. If the memai tools are not loaded "
+    "yet -- an MCP connection comes up asynchronously -- load them first, then "
+    "call it. Write as you go: note() a durable fact, anti_pattern() a pitfall, "
+    "checkpoint() before a pause."
 )
+
+
+def call_to_action(conn) -> str:
+    """The instruction, with the casing line the store's policy calls for."""
+    mode = db.get_domain_case(conn)
+    return CALL_TO_ACTION.format(casing=CASING.get(mode, CASING[db.DOMAIN_CASE_DEFAULT]))
 
 
 def _snip(text: str, limit: int = SNIPPET) -> str:
@@ -103,7 +125,7 @@ def session_brief(conn, *, domain: str = "", budget: int = DEFAULT_BUDGET) -> st
             titles.append(f"{r['uid']} {meta['title'] if meta else ''}".strip())
         parts.append("Documented flows (get_diagram(uid) to read one): " + "; ".join(titles))
 
-    return _fit(parts, budget, tail=CALL_TO_ACTION)
+    return _fit(parts, budget, tail=call_to_action(conn))
 
 
 def _shares(sizes: list[int], room: int) -> list[int]:
