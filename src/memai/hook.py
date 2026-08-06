@@ -123,8 +123,8 @@ def _stop(args, payload) -> None:
         empty = not conn.execute("SELECT 1 FROM memories LIMIT 1").fetchone()
     note = ("Nothing has been written to the memai store" +
             ("" if empty else f" in the last {args.quiet_minutes} minutes") +
-            ". If this session established anything worth having next time — a "
-            "decision, a pitfall, where the work stands — write it now with "
+            ". If this session established anything worth having next time -- a "
+            "decision, a pitfall, where the work stands -- write it now with "
             "note() / anti_pattern() / checkpoint(). If it did not, ignore this.")
     _emit("Stop", note, system="MemAI: nothing recorded this session.")
 
