@@ -109,6 +109,29 @@ def _summary(row, limit: int = SNIPPET_LIMIT) -> dict:
     return d
 
 
+# What a memory list may be ordered by. 'recalls' is how often an agent was
+# handed it (db.memory_usage). Sorting by it is a way to LOOK; it is not a
+# verdict. A rarely-read memory is usually about a rarely-needed subject,
+# which is not the same as dead weight -- and nothing in retrieval reads
+# this column, deliberately (see the schema comment on memory_usage).
+_MEMORY_SORTS = {
+    "created_at": "created_at",
+    "updated_at": "updated_at",
+    "recalls": "recalls",
+    "last_recall": "last_recall",
+}
+
+
+def _with_usage(conn: sqlite3.Connection, items: list[dict]) -> list[dict]:
+    """Attach recall counts to rows that were selected without the join."""
+    usage = db.usage_for(conn, [i["uid"] for i in items])
+    for i in items:
+        u = usage.get(i["uid"])
+        i["recalls"] = u["recalls"] if u else 0
+        i["last_recall"] = u["last_recall"] if u else None
+    return items
+
+
 def _peer_card(conn: sqlite3.Connection, uid: str) -> dict | None:
     row = db.get_memory(conn, uid)
     if row is None:
@@ -262,7 +285,7 @@ def list_memories(request, payload) -> dict:
     confidence = qp.get("confidence", "")
     session = qp.get("session", "")
     sort = qp.get("sort", "created_at")
-    if sort not in ("created_at", "updated_at"):
+    if sort not in _MEMORY_SORTS:
         sort = "created_at"
     direction = "ASC" if qp.get("dir", "desc").lower() == "asc" else "DESC"
     limit = _int_param(request, "limit", 50, 1, 200)
@@ -279,7 +302,7 @@ def list_memories(request, payload) -> dict:
             if session:
                 hits = [h for h in hits if h["session"] == session]
             total = len(hits)
-            items = [_summary(h) for h in hits[offset:offset + limit]]
+            items = _with_usage(conn, [_summary(h) for h in hits[offset:offset + limit]])
             return {"total": total, "items": items, "searched": True, **scope}
 
         where, params = ["1=1"], []
@@ -294,8 +317,14 @@ def list_memories(request, payload) -> dict:
                 params.append(value)
         clause = " ".join(where)
         total = conn.execute(f"SELECT COUNT(*) FROM memories WHERE {clause}", params).fetchone()[0]
+        # The join is what makes 'recalls' sortable; the filters above name
+        # bare columns, which stay unambiguous because memory_usage shares
+        # none of them. NULLs sort as never-recalled, which is the truth.
         rows = conn.execute(
-            f"SELECT * FROM memories WHERE {clause} ORDER BY {sort} {direction} LIMIT ? OFFSET ?",
+            f"""SELECT m.*, COALESCE(u.recall_count, 0) AS recalls,
+                       u.last_recalled_at AS last_recall
+                FROM memories m LEFT JOIN memory_usage u ON u.memory_uid = m.uid
+                WHERE {clause} ORDER BY {_MEMORY_SORTS[sort]} {direction} LIMIT ? OFFSET ?""",
             [*params, limit, offset]).fetchall()
     return {"total": total, "items": [_summary(r) for r in rows], "searched": False, **scope}
 
@@ -307,6 +336,9 @@ def memory_detail(request, payload) -> dict:
         if row is None:
             raise ValueError(f"unknown memory: {uid}")
         result = _paths(dict(row))
+        usage = db.usage_for(conn, [uid]).get(uid)
+        result["recalls"] = usage["recalls"] if usage else 0
+        result["last_recall"] = usage["last_recall"] if usage else None
         result["edit_history"] = [dict(e) for e in db.get_edit_history(conn, uid)]
         rels = []
         for r in db.get_relations(conn, uid):
@@ -384,10 +416,15 @@ def edit_meta(request, payload) -> dict:
     domain change in the same request, because the policy that drops a
     redundant cross-listing reads the domain the memory ends up with."""
     uid = request.path_params["uid"]
-    allowed = ("domain", "tags", "session", "type")
+    allowed = ("domain", "tags", "session", "type", "review_after", "source_ref")
     updates = {k: str(payload[k]).strip() for k in allowed if k in payload}
     if not updates and "also" not in payload:
         raise ValueError(f"nothing to update (fields: {(*allowed, 'also')})")
+    if "review_after" in updates:
+        # normalized here so the stored value is a date whatever was typed,
+        # and rejected loudly rather than silently kept as free text -- an
+        # unparseable date would just never come due
+        updates["review_after"] = db.normalize_review_after(updates["review_after"])
     if "type" in updates and not updates["type"]:
         raise ValueError("type cannot be empty")
     if "type" in updates and updates["type"] not in KNOWN_TYPES:
@@ -511,19 +548,9 @@ def create_relation(request, payload) -> dict:
     from_uid = (payload.get("from_uid") or "").strip()
     to_uid = (payload.get("to_uid") or "").strip()
     rel_type = (payload.get("relation_type") or "").strip()
-    if not (from_uid and to_uid and rel_type):
-        raise ValueError("from_uid, to_uid and relation_type are required")
-    if from_uid == to_uid:
-        raise ValueError("a memory cannot relate to itself")
+    # Every rule this endpoint used to spell out now lives in db.add_relation,
+    # so the MCP tool refuses the same edges with the same words.
     with db.connect() as conn:
-        for uid in (from_uid, to_uid):
-            if db.get_memory(conn, uid) is None:
-                raise ValueError(f"unknown memory: {uid}")
-        dup = conn.execute(
-            "SELECT id FROM relations WHERE from_uid = ? AND to_uid = ? AND relation_type = ?",
-            (from_uid, to_uid, rel_type)).fetchone()
-        if dup:
-            raise ValueError(f"identical relation already exists (id {dup['id']})")
         rel_id = db.add_relation(conn, from_uid, to_uid, rel_type, note=payload.get("note", ""))
     return {"relation_id": rel_id}
 

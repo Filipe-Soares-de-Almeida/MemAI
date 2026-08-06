@@ -23,6 +23,8 @@ dev = ["pytest>=9.1,<10"]
 [project.scripts]
 memai-mcp = "memai.server:main"
 memai-admin = "memai.admin:main"
+memai-hook = "memai.hook:main"
+memai-store = "memai.portable:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/memai"]
