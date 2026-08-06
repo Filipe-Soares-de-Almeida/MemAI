@@ -2381,6 +2381,15 @@ def _fts_query(raw: str) -> str:
     dropped: BM25 already scores a row matching every term far above a row
     matching one, so the two orderings agreed on every corpus we could
     build, and the second query bought nothing.
+
+    Two measurements over a real 536-memory store, for whoever tunes this
+    next. Query SHAPE does not matter: the same labelled pairs score
+    14.3%/66.0% recall@5 asked as prose and 14.3%/67.0% asked as a bag of
+    content words, because stopwords appear in nearly every document and
+    their IDF is already near zero. Query LENGTH matters a lot, and
+    monotonically: 33% at two terms, 59% at five, 67% at twelve, 70% at
+    twenty. That is why search()'s docstring tells callers to spend terms
+    rather than to phrase carefully.
     """
     terms = [t.strip() for t in raw.replace(" OR ", " ").split() if t.strip()]
     if not terms:
