@@ -447,6 +447,31 @@ The dashboard is detached on purpose: it outlives the session that opened it.
 Autostart is loopback-only; `--host` on the command line still lets a person
 override that, with the warning it prints.
 
+## Export and import
+
+`VACUUM INTO` makes a byte-perfect copy of the store, which restores a machine
+and answers nothing else: you cannot diff two of them, grep one, put one in a
+review, or carry a domain to another store. `memai-store` writes the same
+content as text.
+
+```sh
+memai-store export --out memories.jsonl              # round-trippable
+memai-store export --format md --domain acme/x100    # to read and grep
+memai-store import memories.jsonl --dry-run
+```
+
+`jsonl` is one record per line — every column, cross-listings, relations, and
+whole diagram graphs including the positions somebody arranged by hand — so a
+diff is per memory. `md` is one document grouped by domain, export only.
+
+An import writes what is not already there and skips what is, so running it
+twice changes nothing; the local row always wins, because an import is how a
+store is restored, merged into or carried, and in all three the row somebody
+has been using is the one to keep. uids and timestamps come across unchanged —
+renumbering would break every relation, node link and jump pointing at them.
+The FTS index and the vectors are rebuilt from the content, and the edit
+history is not carried: that is what the binary backup is for.
+
 ## Data location
 
 `$MEMAI_HOME/memai.db` if `MEMAI_HOME` is set, otherwise `~/.memai/memai.db`,

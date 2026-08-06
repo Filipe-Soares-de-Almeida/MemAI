@@ -812,6 +812,107 @@ def insert_memory(
     return uid
 
 
+def restore_memory(conn: sqlite3.Connection, record: dict) -> str:
+    """Write a memory back exactly as it was, uid and timestamps included.
+
+    insert_memory() coins a uid and stamps `now`, which is right for a
+    memory being made and wrong for one being restored: an import that
+    renumbered every row would break every relation, node link and jump
+    pointing at it, and would date a two-year-old decision to today.
+
+    Domain policy is NOT applied. A restore reproduces a store; coercing
+    the paths on the way in would mean an export and its import disagree
+    about where things are filed, which is the one thing a round trip has
+    to get right.
+    """
+    uid = str(record["uid"])
+    ts = record.get("created_at") or now_iso()
+    domain = normalize_domain(record.get("domain", ""))
+    links = [normalize_domain(p) for p in parse_domains(record.get("also") or [])]
+    links = [p for p in links if p and not in_domain(domain, p)]
+    cur = conn.execute(
+        """INSERT INTO memories
+           (uid, type, domain, also_domains, session, tags, content, status,
+            confidence, superseded_by, created_at, updated_at, review_after, source_ref)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (uid, record["type"], domain, ALSO_SEP.join(links),
+         record.get("session", ""), record.get("tags", ""), record.get("content", ""),
+         record.get("status", "active"), record.get("confidence", "unverified"),
+         record.get("superseded_by") or None, ts, record.get("updated_at") or ts,
+         record.get("review_after", ""), record.get("source_ref", "")),
+    )
+    if links:
+        conn.executemany(
+            "INSERT INTO memory_domains (memory_uid, domain, created_at) VALUES (?, ?, ?)",
+            [(uid, path, ts) for path in links])
+    if record.get("recalls"):
+        conn.execute(
+            "INSERT INTO memory_usage (memory_uid, recall_count, last_recalled_at) "
+            "VALUES (?, ?, ?)",
+            (uid, int(record["recalls"]), record.get("last_recall") or ts))
+    _upsert_vector(conn, cur.lastrowid, record.get("content", ""),
+                   record.get("tags", ""), domain, ALSO_SEP.join(links))
+    return uid
+
+
+def restore_diagram(conn: sqlite3.Connection, record: dict) -> None:
+    """Put a diagram's graph back under an already-restored memory row.
+
+    Positions come from the export rather than the layout engine: an
+    arrangement somebody made by hand is part of the record, and
+    recomputing it on import would quietly redraw every flow in the store.
+    """
+    uid = str(record["uid"])
+    conn.execute(
+        "INSERT INTO diagrams (memory_uid, kind, title, summary, font_scale) "
+        "VALUES (?, ?, ?, ?, ?)",
+        (uid, record.get("diagram_kind", "flowchart"), record.get("title", ""),
+         record.get("summary", ""), record.get("font_scale", 1)))
+    conn.executemany(
+        "INSERT INTO diagram_nodes (memory_uid, node_key, shape, label, note, seq, x, y, w, h) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        [(uid, n["key"], n.get("shape", "step"), n.get("label", ""), n.get("note", ""),
+          i, n.get("x") or 0.0, n.get("y") or 0.0, n.get("w"), n.get("h"))
+         for i, n in enumerate(record.get("nodes") or [])])
+    conn.executemany(
+        "INSERT INTO diagram_edges (memory_uid, from_key, to_key, label, seq) "
+        "VALUES (?, ?, ?, ?, ?)",
+        [(uid, e["from"], e["to"], e.get("label", ""), i)
+         for i, e in enumerate(record.get("edges") or [])])
+
+
+def restore_diagram_refs(conn: sqlite3.Connection, record: dict) -> None:
+    """A diagram's links and jumps, once every memory they name exists.
+
+    Separate from restore_diagram because both point at OTHER memories: a
+    flow can link a step to a note filed later in the file, and a jump
+    reaches a diagram that has not been read yet. Skips a reference whose
+    other end is not in the import -- a partial export is a legitimate
+    thing to restore, and a dangling row is not.
+    """
+    uid = str(record["uid"])
+    ts = record.get("created_at") or now_iso()
+
+    def known(other: str) -> bool:
+        return get_memory(conn, other) is not None
+
+    conn.executemany(
+        "INSERT OR IGNORE INTO diagram_node_links "
+        "(memory_uid, node_key, target_uid, relation_type, created_at) VALUES (?, ?, ?, ?, ?)",
+        [(uid, l["node_key"], l["target_uid"], l.get("relation_type", "explains"),
+          l.get("created_at") or ts)
+         for l in (record.get("links") or []) if known(l["target_uid"])])
+    # only the outgoing side: a jump is stored once and read from both ends,
+    # so restoring both would write the same row twice
+    conn.executemany(
+        "INSERT OR IGNORE INTO diagram_jumps "
+        "(from_uid, from_node, to_uid, to_node, label, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+        [(uid, j["node_key"], j["peer_uid"], j.get("peer_node", ""), j.get("label", ""),
+          j.get("created_at") or ts)
+         for j in (record.get("jumps") or [])
+         if j.get("direction") == "out" and known(j["peer_uid"])])
+
+
 def get_memory(conn: sqlite3.Connection, uid: str) -> sqlite3.Row | None:
     return conn.execute("SELECT * FROM memories WHERE uid = ?", (uid,)).fetchone()
 
