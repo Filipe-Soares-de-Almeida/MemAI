@@ -62,10 +62,15 @@ def test_a_scope_name_is_still_searchable(conn):
 
 # ------------------------------------------------------------- fusion depth
 
-def test_each_arm_fetches_deeper_than_the_caller_asked(conn, monkeypatch):
-    """Fusion exists to recover the row ranked just outside one retriever's
-    window and near the top of the other's. Fetching `limit` per arm threw
-    that row away before the merge could see it."""
+def test_the_arms_fetch_what_the_fusion_depth_says(conn, monkeypatch):
+    """Fusion depth is a claim about both retrievers being informative.
+
+    It shipped at 4 on the textbook argument that fusion recovers the row
+    ranked just outside one arm's window; measured against a real store, it
+    cost recall at every step above 1, because the weaker arm's votes push
+    true positives out. The knob stays, wired to the arms; the DEFAULT is
+    what the measurement decided.
+    """
     asked: list[int] = []
     real = db.search_memories
 
@@ -77,6 +82,18 @@ def test_each_arm_fetches_deeper_than_the_caller_asked(conn, monkeypatch):
     db.insert_memory(conn, type="note", content="file upload retry")
     db.search_hybrid(conn, "upload", limit=5)
     assert asked == [5 * db._FUSION_FETCH]
+
+
+def test_fusion_does_not_cost_the_keyword_arm_its_own_top_hit(conn):
+    """The regression the depth caused, in miniature: a row the keyword side
+    ranks first must still be in the fused result."""
+    for i in range(12):
+        db.insert_memory(conn, type="note", content=f"unrelated filler number {i}")
+    target = db.insert_memory(conn, type="note",
+                              content="the export window is inclusive on both ends")
+    top_fts = db.search_memories(conn, "export window inclusive", limit=1)[0]["uid"]
+    fused = [r["uid"] for r in db.search_hybrid(conn, "export window inclusive", limit=3)]
+    assert top_fts == target and target in fused
 
 
 def test_fusion_still_returns_only_what_was_asked_for(conn):

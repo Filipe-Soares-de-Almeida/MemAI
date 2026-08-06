@@ -2736,7 +2736,19 @@ def search_hybrid(
 
 
 # How many rows each retriever fetches per unit of `limit` before fusion.
-_FUSION_FETCH = 4
+#
+# 1, measured, after this shipped as 4 on the textbook reasoning that fusion
+# exists to recover the row ranked just outside one arm's window. That
+# reasoning holds for two GOOD retrievers. Self-retrieval over a real
+# 536-memory store said otherwise, monotonically:
+#
+#   fts alone 100%   1x 100%   2x 96.7%   4x 90%   8x 85%   (recall@5)
+#
+# The deeper the fetch, the more of the weaker arm's ranking gets a vote, and
+# the static embedding is close enough to noise on that corpus that its votes
+# push true positives out of the top 5. Raising this is a claim about both
+# retrievers being informative -- measure it against the store before you do.
+_FUSION_FETCH = 1
 
 # Above this difflib ratio two results are the same text, not two takes on
 # one subject. Deliberately near-identity: collapsing merely RELATED

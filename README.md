@@ -49,9 +49,12 @@ fusion. Each result says which side matched (`match_source`: `fts` | `vec` |
 `both`) and carries the raw `fts_rank` / `vec_distance`. Multi-term queries are
 OR'd on the keyword side, so several paraphrases in one call all help.
 
-Each arm fetches several times `limit` before the merge, because the row fusion
-exists to recover — ranked just outside the keyword window and near the top of
-the vector one — is exactly the row a `limit`-deep fetch throws away first.
+Both arms fetch exactly `limit` before the merge. Fetching deeper is the
+textbook move — fusion exists to recover the row ranked just outside one arm's
+window — and against a real 536-memory store it cost recall at every step:
+100% for the keyword arm alone, 100% fused at 1x, 96.7% at 2x, 90% at 4x, 85%
+at 8x. Depth is a claim that both retrievers are informative. Measure it
+against the store before raising it.
 
 BM25 is weighted per column. `domain` and `also_domains` are indexed so a scope
 name is findable, not so that every row filed under `acme/cache` outranks the
