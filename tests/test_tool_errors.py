@@ -80,3 +80,51 @@ def test_link_memories_still_links(store):
     a = server.note(content="a")["uid"]
     b = server.note(content="b")["uid"]
     assert server.link_memories(a, b, "relates_to")["relation_id"]
+
+
+# ------------------------------------------------------------ editing content
+
+def test_append_adds_a_line_without_restating_the_body(store):
+    uid = server.note(content="cache warmup runs nightly")["uid"]
+    assert server.edit_memory(uid, "it is skipped on holidays", mode="append")["ok"]
+    assert server.get_memory(uid)["content"] == (
+        "cache warmup runs nightly\nit is skipped on holidays")
+
+
+def test_replace_is_still_the_default(store):
+    uid = server.note(content="cache warmup runs nightly")["uid"]
+    server.edit_memory(uid, "cache warmup runs hourly")
+    assert server.get_memory(uid)["content"] == "cache warmup runs hourly"
+
+
+def test_an_append_keeps_the_previous_version(store):
+    uid = server.note(content="cache warmup runs nightly")["uid"]
+    server.edit_memory(uid, "and skips holidays", mode="append", note="learned today")
+    history = server.get_memory(uid)["edit_history"]
+    assert history[-1]["prev_content"] == "cache warmup runs nightly"
+    assert history[-1]["note"] == "learned today"
+
+
+def test_appending_to_an_empty_body_does_not_lead_with_a_blank_line(conn):
+    uid = db.insert_memory(conn, type="note", content="")
+    db.update_memory_content(conn, uid, "the first thing known", append=True)
+    assert db.get_memory(conn, uid)["content"] == "the first thing known"
+
+
+def test_an_unknown_mode_is_refused(store):
+    uid = server.note(content="x")["uid"]
+    assert server.edit_memory(uid, "y", mode="prepend")["ok"] is False
+
+
+def test_editing_a_memory_that_is_not_there_says_so(store):
+    res = server.edit_memory("no-such-uid", "y")
+    assert res["ok"] is False and "no-such-uid" in res["errors"][0]
+
+
+def test_a_diagram_still_refuses_both_modes(store):
+    uid = server.diagram(title="Cache warmup", nodes=[
+        {"key": "start", "shape": "start", "label": "begin"},
+        {"key": "done", "shape": "end", "label": "done"}],
+        edges=[{"from": "start", "to": "done"}])["uid"]
+    for mode in ("replace", "append"):
+        assert server.edit_memory(uid, "hand-written", mode=mode)["ok"] is False

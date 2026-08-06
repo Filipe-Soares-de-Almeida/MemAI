@@ -253,7 +253,7 @@ instead of concluding memai cannot do it.
 
 | Editing and domains | |
 |---|---|
-| `edit_memory(uid, new_content, note)` | Correct a memory, keeping the prior version |
+| `edit_memory(uid, new_content, note, mode)` | Correct a memory, or `mode='append'` add to it; the prior version is kept |
 | `link_memories(from_uid, to_uid, relation_type, note)` | Create a typed relation |
 | `set_confidence(uid, confidence)` | `unverified` \| `confirmed` \| `contradicted` |
 | `also_domain(uid, domain)` | Cross-list a memory into one more path |

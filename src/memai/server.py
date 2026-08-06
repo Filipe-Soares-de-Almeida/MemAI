@@ -1051,25 +1051,36 @@ def get_memory(uid: str) -> dict:
 
 
 @tool("core")
-def edit_memory(uid: str, new_content: str, note: str = "") -> dict:
-    """Correct/update a memory's content, keeping the previous version in edit history.
+def edit_memory(uid: str, new_content: str, note: str = "", mode: str = "replace") -> dict:
+    """Correct a memory's content, or add to it, keeping the previous version.
 
     Corrections are common in append-only memory stores that only
     support delete, not edit; this preserves the old content instead
     of losing it.
 
+    mode='append' adds `new_content` as a new line at the end instead of
+    replacing the body. Use it when a memory gains a fact rather than
+    turning out to be wrong: the alternative is reading the whole thing,
+    restating it and sending it back, which pays for the body twice and
+    stakes the existing text on it being copied faithfully.
+
     Refuses a diagram: its content is generated from the graph, so a
     hand-written replacement would be silently overwritten by the next
     structural change. Edit the flow through diagram_node/diagram_edge.
     """
+    if mode not in ("replace", "append"):
+        return _errors([f"mode must be 'replace' or 'append'; got {mode!r}"])
     with db.connect() as conn:
         if db.is_diagram(conn, uid):
             return _errors([
                 f"{uid} is a diagram: its content is generated from the graph. "
                 "Use diagram_node/diagram_edge to change the flow."
             ])
-        ok = db.update_memory_content(conn, uid, new_content, note=note)
-    return {"ok": ok}
+        ok = db.update_memory_content(conn, uid, new_content, note=note,
+                                      append=mode == "append")
+    if not ok:
+        return _errors([f"no memory {uid}"])
+    return {"ok": True}
 
 
 @tool("core")

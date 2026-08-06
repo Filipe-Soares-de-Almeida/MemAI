@@ -917,10 +917,23 @@ def get_memory(conn: sqlite3.Connection, uid: str) -> sqlite3.Row | None:
     return conn.execute("SELECT * FROM memories WHERE uid = ?", (uid,)).fetchone()
 
 
-def update_memory_content(conn: sqlite3.Connection, uid: str, new_content: str, note: str = "") -> bool:
+def update_memory_content(
+    conn: sqlite3.Connection, uid: str, new_content: str, note: str = "",
+    *, append: bool = False,
+) -> bool:
+    """Replace a memory's content, or add to the end of it.
+
+    append exists because the alternative is a caller reading the whole
+    body, restating it, and sending it back to add one line -- which costs
+    the body twice and stakes the existing text on it being copied
+    faithfully. The edit history records the same thing either way: what it
+    said before, and what it says now.
+    """
     row = get_memory(conn, uid)
     if row is None:
         return False
+    if append:
+        new_content = f"{row['content']}\n{new_content}" if row["content"] else new_content
     conn.execute(
         "INSERT INTO edits (memory_uid, edited_at, prev_content, new_content, note) VALUES (?, ?, ?, ?, ?)",
         (uid, now_iso(), row["content"], new_content, note),
