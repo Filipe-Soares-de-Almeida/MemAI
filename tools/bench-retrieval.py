@@ -209,6 +209,16 @@ def main(argv=None) -> int:
                   f"{m['hybrid']:6.1f}% {m['ceiling']:7.1f}% "
                   f"{m['only_fts']:5} {m['only_vec']:5} {rank:>14}")
 
+        arms = db.arm_effectiveness(conn)
+        if arms["from_search"]:
+            print(f"\nreal use, from this store's own counters "
+                  f"({arms['reads']} reads, {arms['from_search']} of them out of a search):")
+            for arm in db.MATCH_SOURCES:
+                print(f"  surfaced by {arm:5} {arms[arm]:6}  "
+                      f"{100.0 * arms[arm] / arms['from_search']:5.1f}%")
+            print("  Read as a ratio between arms, never as an absolute: a snippet can")
+            print("  be acted on without ever being opened, undercounting all three.")
+
     print("\n+fts / +vec: targets one arm reached in the top-k and the other did not.")
     print("ceiling    : the best ANY fusion of these two arms could do.")
     print("'self' is a non-regression check, not evidence about semantics --")

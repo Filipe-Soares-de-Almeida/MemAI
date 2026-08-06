@@ -182,11 +182,21 @@ def _read(conn, rows):
 
     Every tool that puts memory content in front of a caller goes through
     here, and only these tools do -- see db.record_recall for why the
-    dashboard deliberately does not. The count is what lets a curation pass
-    tell the store's dead weight from the rows it lives on; without it,
-    optimize_scan can only judge the text.
+    dashboard deliberately does not.
+
+    A row that came out of a search carries `match_source`, and that goes
+    with the count: it is what lets the store say later which retriever was
+    worth having, over real queries, without anyone reading transcripts.
+    Reads with no search behind them (a warm-up, a list, get_memory) have
+    no arm to credit and are counted plainly.
+
+    What this is NOT for is ranking. A memory read twice a year is about a
+    rarer subject, not a worse one, and boosting what is already popular
+    buries the rare thing further every time it loses.
     """
-    db.record_recall(conn, [r["uid"] for r in rows])
+    sources = {r["uid"]: r["match_source"] for r in rows
+               if isinstance(r, dict) and r.get("match_source")}
+    db.record_recall(conn, [r["uid"] for r in rows], sources=sources or None)
     return rows
 
 
@@ -1196,9 +1206,14 @@ def optimize_scan(
 
     Start with what the store already says is suspect: `due: true` on a
     memory means its own writer dated it for a recheck and the date has
-    passed, `source_ref` says what to check it against, and `recalls` (with
-    stats.never_recalled) separates the rows the store lives on from the
-    ones nobody has needed since they were written.
+    passed, and `source_ref` says what to check it against.
+
+    `recalls` and stats.never_recalled are NOT that. A low count means
+    unproven, not useless -- a memory about a rare subject looks exactly
+    like a memory nobody wants, and the rare subject is frequently the
+    reason the store is there. Use the aggregate to judge the STORE and
+    never a single row: do not propose archiving something because it is
+    unread.
 
     The listing is slim so a big store fits one response, and a page ends
     early at an internal size budget -- `truncated` means page onward with
