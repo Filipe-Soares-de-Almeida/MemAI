@@ -251,3 +251,35 @@ def test_the_vector_arm_still_contributes_what_keywords_miss(vec_conn):
     hits = db.search_hybrid(vec_conn, "automobile", limit=5)
     assert [h["uid"] for h in hits] == [uid]
     assert hits[0]["match_source"] == "vec"
+
+
+# ------------------------------------------------- queries that are not text
+
+@pytest.mark.parametrize("query", [
+    "cache AND warmup", "AND", "nota NOT fiscal", "termo NEAR outro",
+    'aspas"no"meio', "*", "(", "a\"b\" OR c", "^caret", "-minus",
+])
+def test_an_fts5_operator_in_a_query_is_a_term_not_syntax(conn, query):
+    """It used to be syntax. `_fts_query` quoted only terms with punctuation
+    in them, so a bare 'AND' reached the engine as an operator and took the
+    whole search down with an OperationalError -- from a tool call, a crash
+    rather than a bad result."""
+    db.insert_memory(conn, type="note", content="cache warmup runs nightly")
+    db.search_memories(conn, query, limit=5)          # must not raise
+    db.search_hybrid(conn, query, limit=5)
+
+
+def test_quoting_did_not_change_what_a_plain_query_matches(conn):
+    uid = db.insert_memory(conn, type="note", content="cache warmup runs nightly")
+    db.insert_memory(conn, type="note", content="row merge keeps the older id")
+    assert [r["uid"] for r in db.search_memories(conn, "cache warmup")] == [uid]
+
+
+def test_more_terms_widen_the_net(conn):
+    """Measured on a real store: recall climbs monotonically with the number
+    of content terms, 33% at two and 70% at twenty. The search docstring
+    tells callers so, and this is the shape it is describing."""
+    a = db.insert_memory(conn, type="note", content="the nightly cache warmup")
+    b = db.insert_memory(conn, type="note", content="an index rebuild drops triggers")
+    assert {r["uid"] for r in db.search_memories(conn, "cache")} == {a}
+    assert {r["uid"] for r in db.search_memories(conn, "cache rebuild triggers")} == {a, b}
