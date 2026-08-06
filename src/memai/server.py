@@ -128,6 +128,12 @@ def _row_to_dict(row) -> dict:
     blob = d.pop("also_domains", "")
     if blob:
         d["also"] = db.parse_domains(blob)
+    # Blank on most rows, since most memories are not about anything that
+    # goes stale -- and a field that is empty nine times out of ten still
+    # costs its name in every result of every search.
+    for optional in ("review_after", "source_ref"):
+        if not d.get(optional):
+            d.pop(optional, None)
     return d
 
 
@@ -253,7 +259,8 @@ def _write_result(conn, uid: str, warning: dict | None, also: str) -> dict:
 
 
 @tool("core")
-def note(content: str, domain: str = "", also: str = "", tags: str = "", session: str = "") -> dict:
+def note(content: str, domain: str = "", also: str = "", tags: str = "", session: str = "",
+         review_after: str = "", source_ref: str = "") -> dict:
     """Save a general long-term memory (fact, decision, finding). Stored as type='note'.
 
     Timeless knowledge -- retrieved by relevance, not recency. Bring it
@@ -276,11 +283,22 @@ def note(content: str, domain: str = "", also: str = "", tags: str = "", session
     tags: comma-separated keywords/synonyms -- write generously; tags
     feed both the keyword index and the embedding, so they make the
     memory findable even when the vector side is unavailable.
+
+    review_after: when this stops being safe to trust unchecked, as a date
+    ('2026-11-01') or a span from today ('90d'). pulse() counts what is
+    overdue in a scope as `scope.stale` and optimize_scan lists it. Leave
+    it empty for anything that does not go stale -- most facts do not, and
+    a date nobody meant is worse than none.
+
+    source_ref: what the fact came FROM -- a path, a URL, a table name --
+    so a later pass can check the claim against the thing itself instead
+    of inferring what to check from the wording.
     """
     with db.connect() as conn:
         domain, warning = _coerce_domain(conn, domain)
         uid = db.insert_memory(conn, type=TYPE_NOTE, content=content, domain=domain,
-                               also=also, session=session or SESSION, tags=tags)
+                               also=also, session=session or SESSION, tags=tags,
+                               review_after=review_after, source_ref=source_ref)
         return _write_result(conn, uid, warning, also)
 
 
@@ -321,12 +339,13 @@ def checkpoint(
 @tool("core")
 def anti_pattern(
     pattern: str, why_wrong: str, instead: str, domain: str = "", also: str = "",
-    session: str = "",
+    session: str = "", review_after: str = "", source_ref: str = "",
 ) -> dict:
     """Record a mistake/temptation to avoid repeating, and the correct approach.
 
     Stored as type='anti_pattern'; open ones for a domain are surfaced by pulse().
-    `also` cross-lists it into further domain paths -- see note().
+    `also` cross-lists it into further domain paths, `review_after` dates
+    when to recheck it and `source_ref` says what it came from -- see note().
     """
     content = f"TEMPTATION: {pattern}\nWHY WRONG: {why_wrong}\nINSTEAD: {instead}"
     with db.connect() as conn:
@@ -334,22 +353,25 @@ def anti_pattern(
         uid = db.insert_memory(
             conn, type=TYPE_ANTI_PATTERN, content=content, domain=domain, also=also,
             session=session or SESSION, tags="anti_pattern",
+            review_after=review_after, source_ref=source_ref,
         )
         return _write_result(conn, uid, warning, also)
 
 
 @tool("core")
-def reasoning(content: str, domain: str = "", also: str = "", session: str = "") -> dict:
+def reasoning(content: str, domain: str = "", also: str = "", session: str = "",
+              review_after: str = "", source_ref: str = "") -> dict:
     """Record a reasoning trace / analysis worth keeping (not a fact, a thought process).
 
     Stored as type='reasoning' -- filter search/list_* with
-    type='reasoning' to get these back. `also` cross-lists it into further
-    domain paths -- see note().
+    type='reasoning' to get these back. `also`, `review_after` and
+    `source_ref` behave as in note().
     """
     with db.connect() as conn:
         domain, warning = _coerce_domain(conn, domain)
         uid = db.insert_memory(conn, type=TYPE_REASONING, content=content, domain=domain,
-                               also=also, session=session or SESSION)
+                               also=also, session=session or SESSION,
+                               review_after=review_after, source_ref=source_ref)
         return _write_result(conn, uid, warning, also)
 
 
@@ -392,6 +414,8 @@ def diagram(
     session: str = "",
     tags: str = "",
     kind: str = "flowchart",
+    review_after: str = "",
+    source_ref: str = "",
 ) -> dict:
     """Document what a routine does, start to end, as a graph. Stored as type='diagram'.
 
@@ -421,6 +445,10 @@ def diagram(
     each into that process's path and asking about it returns all of them,
     instead of hoping one search phrasing reaches every one.
 
+    `review_after` and `source_ref` behave as in note(), and a flow is
+    exactly the kind of memory they are for: it describes code, and the
+    code moves.
+
     Returns {"uid": ...}, or {"ok": False, "errors": [...]} with nothing
     written at all. Node positions are computed and stored server-side,
     so the flow renders identically for every reader -- see get_diagram().
@@ -430,6 +458,7 @@ def diagram(
         uid, errors = db.insert_diagram(
             conn, title=title, nodes=nodes, edges=edges, summary=summary,
             kind=kind, domain=domain, also=also, session=session or SESSION, tags=tags,
+            review_after=review_after, source_ref=source_ref,
         )
         if errors:
             return _errors(errors)
@@ -904,6 +933,12 @@ def pulse(domain: str = "") -> dict:
     that holds what this pass only counted. A pulse is the state of a
     scope, never its contents.
 
+    `scope.stale` is the one thing here about DECAY rather than contents:
+    how many memories in the scope carry a `review_after` date that has
+    passed. Present only when non-zero. It means somebody who knew the
+    subject said when to look again and nobody has -- optimize_scan lists
+    which ones, with their `source_ref`.
+
     A scope holds what is CROSS-LISTED into it as well as what is filed
     there, so warming up an end-to-end flow brings back the routines that
     are steps of it wherever they live. `scope.also` counts how much of the
@@ -960,6 +995,7 @@ def pulse(domain: str = "") -> dict:
             "paths": census["paths"],
             "total": census["total"],
             **({"also": census["also"]} if census.get("also") else {}),
+            **({"stale": census["stale"]} if census.get("stale") else {}),
             "by_type": census["by_type"],
             "not_shown": not_shown,
             "subdomains": census["children"],
@@ -1147,6 +1183,12 @@ def optimize_scan(
     identifiers) to check against live facts. Read it, then stage what you
     decided with optimize_stage.
 
+    Start with what the store already says is suspect: `due: true` on a
+    memory means its own writer dated it for a recheck and the date has
+    passed, `source_ref` says what to check it against, and `recalls` (with
+    stats.never_recalled) separates the rows the store lives on from the
+    ones nobody has needed since they were written.
+
     The listing is slim so a big store fits one response, and a page ends
     early at an internal size budget -- `truncated` means page onward with
     offset + count. `since` limits the scan to a delta for recurring passes;
@@ -1182,7 +1224,8 @@ def optimize_stage(suggestions: list[dict], note: str = "") -> dict:
     Each suggestion is {"kind", "target_uid", "payload", "rationale",
     "verified"}. Kinds: compact/reword {"new_content"}, retag {"tags"},
     redomain {"domain"}, crosslist {"also": [...]}, set_confidence
-    {"confidence"}, archive {"reason"}, link {"from_uid","to_uid",
+    {"confidence"}, review {"review_after"} (a date or a span like '180d';
+    '' clears it), archive {"reason"}, link {"from_uid","to_uid",
     "relation_type"}, merge {"keep_uid","drop_uid"}, distill
     {"source_uids","new_type","new_content"}. link/merge derive target_uid
     from the payload and distill creates its target -- omit it for those.

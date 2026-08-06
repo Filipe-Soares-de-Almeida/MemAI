@@ -24,7 +24,7 @@ import re
 import secrets
 import sqlite3
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 from memai import embed
@@ -402,6 +402,67 @@ def prune_renders(mode: str, *, keep: Path | None = None) -> dict:
     return {**swept, "mode": mode}
 
 
+# ------------------------------------------------------------- going stale
+
+# A memory about code is true until the code changes, and the store has no
+# way to notice that on its own. `review_after` is the writer's own estimate
+# of when the claim stops being safe to trust unchecked -- a date, so the
+# question "what in here is overdue" is a comparison rather than a judgement,
+# and a warm-up can ask it without reading anything.
+_REVIEW_RELATIVE = re.compile(r"^(\d{1,4})\s*d$", re.I)
+
+
+def today_iso() -> str:
+    return now_iso()[:10]
+
+
+def normalize_review_after(value: str, *, today: str | None = None) -> str:
+    """A review date as 'YYYY-MM-DD', from a date or from '90d'.
+
+    The relative form is there because that is how the answer arrives: a
+    writer knows "this is worth rechecking in a quarter" and does not know
+    today's date without asking. Empty means never -- most memories are not
+    about anything that goes stale, and a store that made everyone pick a
+    date would get dates nobody meant.
+    """
+    v = (value or "").strip()
+    if not v:
+        return ""
+    rel = _REVIEW_RELATIVE.match(v)
+    if rel:
+        return (date.fromisoformat(today or today_iso())
+                + timedelta(days=int(rel.group(1)))).isoformat()
+    try:
+        return date.fromisoformat(v[:10]).isoformat()
+    except ValueError:
+        raise ValueError(
+            f"review_after must be a date ('2026-11-01') or a span ('90d'); got {value!r}")
+
+
+def _due_clause(at: str | None = None) -> tuple[str, list]:
+    """"this memory is overdue for a recheck", as SQL."""
+    return "review_after <> '' AND review_after <= ?", [at or today_iso()]
+
+
+def due_for_review(
+    conn: sqlite3.Connection, *, domain: str = "", limit: int = 20,
+    at: str | None = None, status: str = "active",
+) -> list[sqlite3.Row]:
+    """Active memories whose own review date has passed, oldest date first."""
+    clause, params = _due_clause(at)
+    sql = [f"SELECT * FROM memories WHERE {clause}"]
+    if domain:
+        scope, values, _ = domain_scope_clause(conn, domain, alias="", subtree=True)
+        sql.append(scope)
+        params.extend(values)
+    if status:
+        sql.append("AND status = ?")
+        params.append(status)
+    sql.append("ORDER BY review_after ASC LIMIT ?")
+    params.append(limit)
+    return conn.execute(" ".join(sql), params).fetchall()
+
+
 def new_uid() -> str:
     return secrets.token_hex(8)
 
@@ -601,6 +662,8 @@ _ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
     ("diagram_nodes", "w", "REAL"),
     ("diagram_nodes", "h", "REAL"),
     ("memories", "also_domains", "TEXT NOT NULL DEFAULT ''"),
+    ("memories", "review_after", "TEXT NOT NULL DEFAULT ''"),
+    ("memories", "source_ref", "TEXT NOT NULL DEFAULT ''"),
 )
 
 
@@ -723,18 +786,22 @@ def insert_memory(
     tags: str = "",
     confidence: str = "unverified",
     created_at: str | None = None,
+    review_after: str = "",
+    source_ref: str = "",
 ) -> str:
     uid = new_uid()
     ts = created_at or now_iso()
     domain = apply_domain_policy(conn, domain)
     links = apply_link_policy(conn, also, domain)
     blob = ALSO_SEP.join(links)
+    review_after = normalize_review_after(review_after, today=(created_at or ts)[:10])
     cur = conn.execute(
         """INSERT INTO memories
            (uid, type, domain, also_domains, session, tags, content, status,
-            confidence, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?)""",
-        (uid, type, domain, blob, session, tags, content, confidence, ts, ts),
+            confidence, created_at, updated_at, review_after, source_ref)
+           VALUES (?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, ?, ?)""",
+        (uid, type, domain, blob, session, tags, content, confidence, ts, ts,
+         review_after, source_ref.strip()),
     )
     if links:
         conn.executemany(
@@ -811,6 +878,31 @@ def set_confidence(conn: sqlite3.Connection, uid: str, confidence: str) -> bool:
         "UPDATE memories SET confidence = ?, updated_at = ? WHERE uid = ?",
         (confidence, now_iso(), uid),
     )
+    return True
+
+
+def set_review_after(conn: sqlite3.Connection, uid: str, value: str) -> bool:
+    """Move (or clear) a memory's recheck date, and audit the move.
+
+    No re-embedding: the vector is computed over content, tags and domains,
+    and a date is none of those. Audited, because "this was rechecked and
+    pushed out six months" is exactly the kind of decision a later pass
+    needs to be able to see it did not invent.
+    """
+    row = get_memory(conn, uid)
+    if row is None:
+        return False
+    value = normalize_review_after(value)
+    if value == row["review_after"]:
+        return True
+    conn.execute(
+        "UPDATE memories SET review_after = ?, updated_at = ? WHERE uid = ?",
+        (value, now_iso(), uid))
+    conn.execute(
+        "INSERT INTO edits (memory_uid, edited_at, prev_content, new_content, note) "
+        "VALUES (?, ?, ?, ?, ?)",
+        (uid, now_iso(), row["content"], row["content"],
+         f"meta: review_after '{row['review_after']}' -> '{value}'"))
     return True
 
 
@@ -1455,6 +1547,8 @@ def insert_diagram(
     also: str = "",
     session: str = "",
     tags: str = "",
+    review_after: str = "",
+    source_ref: str = "",
 ) -> tuple[str | None, list[str]]:
     """Create a type='diagram' memory from a whole graph.
 
@@ -1475,6 +1569,7 @@ def insert_diagram(
     uid = insert_memory(
         conn, type=DIAGRAM_TYPE, content=_render_text(title, summary, kind, n, e),
         domain=domain, also=also, session=session, tags=tags or DIAGRAM_TYPE,
+        review_after=review_after, source_ref=source_ref,
     )
     conn.execute(
         "INSERT INTO diagrams (memory_uid, kind, title, summary) VALUES (?, ?, ?, ?)",
@@ -2812,6 +2907,15 @@ def domain_census(
     }
     if also_total:
         out["also"] = also_total
+    # Overdue for a recheck. One count, omitted when zero, because it is the
+    # one thing a warm-up can say about DECAY -- everything else it reports
+    # is what the scope holds, not whether it still holds.
+    due_clause, due_params = _due_clause()
+    stale = conn.execute(
+        f"SELECT COUNT(*) FROM memories WHERE {where_sql} AND {due_clause}",
+        [*params, *due_params]).fetchone()[0]
+    if stale:
+        out["stale"] = stale
     return out
 
 
@@ -3303,7 +3407,7 @@ def dedup_candidates(
 CONFIDENCE_VALUES = ("unverified", "confirmed", CONFIDENCE_CONTRADICTED)
 SUGGESTION_KINDS = (
     "compact", "reword", "retag", "redomain", "crosslist",
-    "set_confidence", "archive", "link", "merge", "distill",
+    "set_confidence", "review", "archive", "link", "merge", "distill",
 )
 # distill targets must be durable knowledge types -- distilling INTO a
 # checkpoint/handoff would just recreate the ephemera it exists to retire
@@ -3500,6 +3604,7 @@ def optimization_corpus(
     if status:
         where.append("AND status = ?")
         params.append(status)
+    today = today_iso()
     base_where_sql, base_params = " ".join(where), list(params)
     if since:
         where.append("AND updated_at >= ?")
@@ -3508,7 +3613,8 @@ def optimization_corpus(
 
     rows = conn.execute(
         f"""SELECT uid, type, domain, also_domains, session, tags, content, status,
-                   confidence, superseded_by, created_at, updated_at
+                   confidence, superseded_by, created_at, updated_at,
+                   review_after, source_ref
             FROM memories WHERE {where_sql}
             ORDER BY created_at DESC LIMIT ? OFFSET ?""",
         [*params, limit, offset],
@@ -3537,6 +3643,16 @@ def optimization_corpus(
             m["status"] = r["status"]
         if r["superseded_by"]:
             m["superseded_by"] = r["superseded_by"]
+        # What the writer said would need rechecking, and where to check it.
+        # `due` rather than a date comparison the reader has to make: the
+        # question a pass asks is "is this one overdue", and answering it
+        # here is one character against a paragraph of arithmetic.
+        if r["review_after"]:
+            m["review_after"] = r["review_after"]
+            if r["review_after"] <= today:
+                m["due"] = True
+        if r["source_ref"]:
+            m["source_ref"] = r["source_ref"]
         m["created_at"] = r["created_at"][:19]
         content = r["content"]
         m["content_len"] = len(content)
@@ -3584,6 +3700,12 @@ def optimization_corpus(
         "never_recalled": conn.execute(
             f"SELECT COUNT(*) FROM memories WHERE {where_sql} AND uid NOT IN "
             "(SELECT memory_uid FROM memory_usage)", params).fetchone()[0],
+        # Whatever a writer dated for a recheck and nobody rechecked. The
+        # rows here are not suspect because they are old -- they are suspect
+        # because somebody who knew the subject said when to look again.
+        "due_for_review": conn.execute(
+            f"SELECT COUNT(*) FROM memories WHERE {where_sql} AND {_due_clause(today)[0]}",
+            [*params, today]).fetchone()[0],
     }
 
     # domain hints cluster over the WHOLE store; with `since`, keep only
@@ -3660,6 +3782,20 @@ def _validate_suggestion(conn: sqlite3.Connection, s: object) -> tuple[dict | No
             return None, err
         if "tags" not in payload:
             return None, "payload.tags required"
+    elif kind == "review":
+        err = target_err()
+        if err:
+            return None, err
+        if "review_after" not in payload:
+            return None, "payload.review_after required ('' clears the date)"
+        # normalized at staging time for the same reason redomain is: the
+        # panel shows this payload as what will hold, and '90d' means a
+        # different day depending on when it is read
+        try:
+            payload = {**payload,
+                       "review_after": normalize_review_after(str(payload["review_after"]))}
+        except ValueError as exc:
+            return None, str(exc)
     elif kind == "redomain":
         err = target_err()
         if err:
@@ -3897,6 +4033,11 @@ def _apply_kind(conn: sqlite3.Connection, kind: str, target_uid: str | None, pay
         prev = {"tags": row["tags"]}
         _update_meta_field(conn, target_uid, "tags", str(payload["tags"]).strip())
         return prev
+    if kind == "review":
+        row = get_memory(conn, target_uid)
+        prev = {"review_after": row["review_after"]}
+        set_review_after(conn, target_uid, str(payload["review_after"]))
+        return prev
     if kind == "redomain":
         row = get_memory(conn, target_uid)
         prev = {"domain": row["domain"]}
@@ -3958,6 +4099,8 @@ def _revert_kind(
         update_memory_content(conn, target_uid, prev["content"], note=f"optimize:undo {kind}")
     elif kind == "retag":
         _update_meta_field(conn, target_uid, "tags", prev["tags"])
+    elif kind == "review":
+        set_review_after(conn, target_uid, prev["review_after"])
     elif kind == "redomain":
         _update_meta_field(conn, target_uid, "domain", prev["domain"])
     elif kind == "crosslist":
