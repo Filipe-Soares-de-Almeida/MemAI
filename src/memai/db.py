@@ -24,7 +24,7 @@ import re
 import secrets
 import sqlite3
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 from memai import embed
@@ -70,9 +70,26 @@ DOMAIN_SEP = "/"
 # Nothing filters on it -- see _write_domain_links, its only writer.
 ALSO_SEP = "\n"
 
+# How much a memory is trusted, on its own axis: `status` says whether a row
+# is in play at all, this says whether what it claims still holds. Up here
+# rather than beside the curation code because retrieval reads it too --
+# a contradicted memory sorts behind everything that still holds, and a
+# warm-up leaves it out (see search_hybrid, _sound_clause).
+CONFIDENCE_CONTRADICTED = "contradicted"
+
 # The FTS index and its triggers, kept separate because they are also what a
 # store built before a new indexed column has to be rebuilt from (_ensure_fts).
 _FTS_COLUMNS = ("content", "tags", "domain", "also_domains")
+
+# BM25 weights per indexed column, in _FTS_COLUMNS order. Unweighted, a
+# domain match scored like a claim: every row filed under 'acme/cache'
+# ranked for the word "cache" whether or not it said anything about one,
+# and in a store organised by domain that is most of the store. The paths
+# stay indexed -- a scope name should be findable -- they just stop
+# outranking the memory that actually discusses the subject. Keyed by name
+# so adding an indexed column without weighting it fails at import.
+_FTS_WEIGHTS = {"content": 1.0, "tags": 0.8, "domain": 0.3, "also_domains": 0.3}
+_BM25 = f"bm25(memories_fts, {', '.join(str(_FTS_WEIGHTS[c]) for c in _FTS_COLUMNS)})"
 
 _FTS_SCHEMA = """
 CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(
@@ -133,6 +150,40 @@ CREATE TABLE IF NOT EXISTS memory_domains (
 );
 
 CREATE INDEX IF NOT EXISTS idx_memory_domains_domain ON memory_domains(domain);
+
+-- How often a memory was actually READ BACK, which is the only evidence
+-- that writing it was worth anything. A curation pass without this judges
+-- text: it can see that a memory is old, duplicated or vague, and cannot
+-- see that one nobody has needed in six months is the store's dead weight
+-- while the vague-looking one is answered with three times a week.
+--
+-- Its own table, not two columns on `memories`, for one concrete reason:
+-- the FTS trigger fires on ANY update of that table, so counting a recall
+-- there would delete and reinsert the row's index entry on every search.
+-- It also keeps usage droppable without touching a memory, and keeps
+-- `updated_at` meaning "the content changed".
+--
+-- NOTHING HERE MAY EVER REACH A RANKING. It is tempting -- boost what gets
+-- read, obviously -- and it is wrong: a memory read twice a year is not
+-- worse than one read weekly, it is about a rarer subject. Some of what a
+-- store exists FOR is the thing nobody remembers to look up, and ranking by
+-- popularity buries exactly that, then buries it deeper every time it loses.
+-- Usage answers "was this ever worth anything", for a human curating. It
+-- does not answer "is this the answer", which is the query's job.
+-- test_usage.py holds that line.
+--
+-- via_* attribute a read to the retriever that surfaced it, so the store can
+-- say whether the vector arm earns its keep without anyone parsing session
+-- transcripts. A read with no search behind it (pulse, a list, get_memory)
+-- counts in recall_count and in none of them.
+CREATE TABLE IF NOT EXISTS memory_usage (
+    memory_uid        TEXT PRIMARY KEY REFERENCES memories(uid),
+    recall_count      INTEGER NOT NULL DEFAULT 0,
+    last_recalled_at  TEXT NOT NULL,
+    via_fts           INTEGER NOT NULL DEFAULT 0,
+    via_vec           INTEGER NOT NULL DEFAULT 0,
+    via_both          INTEGER NOT NULL DEFAULT 0
+);
 """ + _FTS_SCHEMA + """
 CREATE TABLE IF NOT EXISTS edits (
     id            INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -368,6 +419,67 @@ def prune_renders(mode: str, *, keep: Path | None = None) -> dict:
     return {**swept, "mode": mode}
 
 
+# ------------------------------------------------------------- going stale
+
+# A memory about code is true until the code changes, and the store has no
+# way to notice that on its own. `review_after` is the writer's own estimate
+# of when the claim stops being safe to trust unchecked -- a date, so the
+# question "what in here is overdue" is a comparison rather than a judgement,
+# and a warm-up can ask it without reading anything.
+_REVIEW_RELATIVE = re.compile(r"^(\d{1,4})\s*d$", re.I)
+
+
+def today_iso() -> str:
+    return now_iso()[:10]
+
+
+def normalize_review_after(value: str, *, today: str | None = None) -> str:
+    """A review date as 'YYYY-MM-DD', from a date or from '90d'.
+
+    The relative form is there because that is how the answer arrives: a
+    writer knows "this is worth rechecking in a quarter" and does not know
+    today's date without asking. Empty means never -- most memories are not
+    about anything that goes stale, and a store that made everyone pick a
+    date would get dates nobody meant.
+    """
+    v = (value or "").strip()
+    if not v:
+        return ""
+    rel = _REVIEW_RELATIVE.match(v)
+    if rel:
+        return (date.fromisoformat(today or today_iso())
+                + timedelta(days=int(rel.group(1)))).isoformat()
+    try:
+        return date.fromisoformat(v[:10]).isoformat()
+    except ValueError:
+        raise ValueError(
+            f"review_after must be a date ('2026-11-01') or a span ('90d'); got {value!r}")
+
+
+def _due_clause(at: str | None = None) -> tuple[str, list]:
+    """"this memory is overdue for a recheck", as SQL."""
+    return "review_after <> '' AND review_after <= ?", [at or today_iso()]
+
+
+def due_for_review(
+    conn: sqlite3.Connection, *, domain: str = "", limit: int = 20,
+    at: str | None = None, status: str = "active",
+) -> list[sqlite3.Row]:
+    """Active memories whose own review date has passed, oldest date first."""
+    clause, params = _due_clause(at)
+    sql = [f"SELECT * FROM memories WHERE {clause}"]
+    if domain:
+        scope, values, _ = domain_scope_clause(conn, domain, alias="", subtree=True)
+        sql.append(scope)
+        params.extend(values)
+    if status:
+        sql.append("AND status = ?")
+        params.append(status)
+    sql.append("ORDER BY review_after ASC LIMIT ?")
+    params.append(limit)
+    return conn.execute(" ".join(sql), params).fetchall()
+
+
 def new_uid() -> str:
     return secrets.token_hex(8)
 
@@ -567,6 +679,11 @@ _ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
     ("diagram_nodes", "w", "REAL"),
     ("diagram_nodes", "h", "REAL"),
     ("memories", "also_domains", "TEXT NOT NULL DEFAULT ''"),
+    ("memories", "review_after", "TEXT NOT NULL DEFAULT ''"),
+    ("memories", "source_ref", "TEXT NOT NULL DEFAULT ''"),
+    ("memory_usage", "via_fts", "INTEGER NOT NULL DEFAULT 0"),
+    ("memory_usage", "via_vec", "INTEGER NOT NULL DEFAULT 0"),
+    ("memory_usage", "via_both", "INTEGER NOT NULL DEFAULT 0"),
 )
 
 
@@ -689,18 +806,22 @@ def insert_memory(
     tags: str = "",
     confidence: str = "unverified",
     created_at: str | None = None,
+    review_after: str = "",
+    source_ref: str = "",
 ) -> str:
     uid = new_uid()
     ts = created_at or now_iso()
     domain = apply_domain_policy(conn, domain)
     links = apply_link_policy(conn, also, domain)
     blob = ALSO_SEP.join(links)
+    review_after = normalize_review_after(review_after, today=(created_at or ts)[:10])
     cur = conn.execute(
         """INSERT INTO memories
            (uid, type, domain, also_domains, session, tags, content, status,
-            confidence, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?)""",
-        (uid, type, domain, blob, session, tags, content, confidence, ts, ts),
+            confidence, created_at, updated_at, review_after, source_ref)
+           VALUES (?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, ?, ?)""",
+        (uid, type, domain, blob, session, tags, content, confidence, ts, ts,
+         review_after, source_ref.strip()),
     )
     if links:
         conn.executemany(
@@ -711,14 +832,128 @@ def insert_memory(
     return uid
 
 
+def restore_memory(conn: sqlite3.Connection, record: dict) -> str:
+    """Write a memory back exactly as it was, uid and timestamps included.
+
+    insert_memory() coins a uid and stamps `now`, which is right for a
+    memory being made and wrong for one being restored: an import that
+    renumbered every row would break every relation, node link and jump
+    pointing at it, and would date a two-year-old decision to today.
+
+    Domain policy is NOT applied. A restore reproduces a store; coercing
+    the paths on the way in would mean an export and its import disagree
+    about where things are filed, which is the one thing a round trip has
+    to get right.
+    """
+    uid = str(record["uid"])
+    ts = record.get("created_at") or now_iso()
+    domain = normalize_domain(record.get("domain", ""))
+    links = [normalize_domain(p) for p in parse_domains(record.get("also") or [])]
+    links = [p for p in links if p and not in_domain(domain, p)]
+    cur = conn.execute(
+        """INSERT INTO memories
+           (uid, type, domain, also_domains, session, tags, content, status,
+            confidence, superseded_by, created_at, updated_at, review_after, source_ref)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (uid, record["type"], domain, ALSO_SEP.join(links),
+         record.get("session", ""), record.get("tags", ""), record.get("content", ""),
+         record.get("status", "active"), record.get("confidence", "unverified"),
+         record.get("superseded_by") or None, ts, record.get("updated_at") or ts,
+         record.get("review_after", ""), record.get("source_ref", "")),
+    )
+    if links:
+        conn.executemany(
+            "INSERT INTO memory_domains (memory_uid, domain, created_at) VALUES (?, ?, ?)",
+            [(uid, path, ts) for path in links])
+    if record.get("recalls"):
+        conn.execute(
+            "INSERT INTO memory_usage (memory_uid, recall_count, last_recalled_at) "
+            "VALUES (?, ?, ?)",
+            (uid, int(record["recalls"]), record.get("last_recall") or ts))
+    _upsert_vector(conn, cur.lastrowid, record.get("content", ""),
+                   record.get("tags", ""), domain, ALSO_SEP.join(links))
+    return uid
+
+
+def restore_diagram(conn: sqlite3.Connection, record: dict) -> None:
+    """Put a diagram's graph back under an already-restored memory row.
+
+    Positions come from the export rather than the layout engine: an
+    arrangement somebody made by hand is part of the record, and
+    recomputing it on import would quietly redraw every flow in the store.
+    """
+    uid = str(record["uid"])
+    conn.execute(
+        "INSERT INTO diagrams (memory_uid, kind, title, summary, font_scale) "
+        "VALUES (?, ?, ?, ?, ?)",
+        (uid, record.get("diagram_kind", "flowchart"), record.get("title", ""),
+         record.get("summary", ""), record.get("font_scale", 1)))
+    conn.executemany(
+        "INSERT INTO diagram_nodes (memory_uid, node_key, shape, label, note, seq, x, y, w, h) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        [(uid, n["key"], n.get("shape", "step"), n.get("label", ""), n.get("note", ""),
+          i, n.get("x") or 0.0, n.get("y") or 0.0, n.get("w"), n.get("h"))
+         for i, n in enumerate(record.get("nodes") or [])])
+    conn.executemany(
+        "INSERT INTO diagram_edges (memory_uid, from_key, to_key, label, seq) "
+        "VALUES (?, ?, ?, ?, ?)",
+        [(uid, e["from"], e["to"], e.get("label", ""), i)
+         for i, e in enumerate(record.get("edges") or [])])
+
+
+def restore_diagram_refs(conn: sqlite3.Connection, record: dict) -> None:
+    """A diagram's links and jumps, once every memory they name exists.
+
+    Separate from restore_diagram because both point at OTHER memories: a
+    flow can link a step to a note filed later in the file, and a jump
+    reaches a diagram that has not been read yet. Skips a reference whose
+    other end is not in the import -- a partial export is a legitimate
+    thing to restore, and a dangling row is not.
+    """
+    uid = str(record["uid"])
+    ts = record.get("created_at") or now_iso()
+
+    def known(other: str) -> bool:
+        return get_memory(conn, other) is not None
+
+    conn.executemany(
+        "INSERT OR IGNORE INTO diagram_node_links "
+        "(memory_uid, node_key, target_uid, relation_type, created_at) VALUES (?, ?, ?, ?, ?)",
+        [(uid, l["node_key"], l["target_uid"], l.get("relation_type", "explains"),
+          l.get("created_at") or ts)
+         for l in (record.get("links") or []) if known(l["target_uid"])])
+    # only the outgoing side: a jump is stored once and read from both ends,
+    # so restoring both would write the same row twice
+    conn.executemany(
+        "INSERT OR IGNORE INTO diagram_jumps "
+        "(from_uid, from_node, to_uid, to_node, label, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+        [(uid, j["node_key"], j["peer_uid"], j.get("peer_node", ""), j.get("label", ""),
+          j.get("created_at") or ts)
+         for j in (record.get("jumps") or [])
+         if j.get("direction") == "out" and known(j["peer_uid"])])
+
+
 def get_memory(conn: sqlite3.Connection, uid: str) -> sqlite3.Row | None:
     return conn.execute("SELECT * FROM memories WHERE uid = ?", (uid,)).fetchone()
 
 
-def update_memory_content(conn: sqlite3.Connection, uid: str, new_content: str, note: str = "") -> bool:
+def update_memory_content(
+    conn: sqlite3.Connection, uid: str, new_content: str, note: str = "",
+    *, append: bool = False,
+) -> bool:
+    """Replace a memory's content, or add to the end of it.
+
+    append exists because the alternative is a caller reading the whole
+    body, restating it, and sending it back to add one line -- which costs
+    the body twice and stakes the existing text on it being copied
+    faithfully. The edit history records the same thing either way: what it
+    said before, and what it says now.
+    """
     row = get_memory(conn, uid)
     if row is None:
         return False
+    if append:
+        new_content = f"{row['content']}\n{new_content}" if row["content"] else new_content
     conn.execute(
         "INSERT INTO edits (memory_uid, edited_at, prev_content, new_content, note) VALUES (?, ?, ?, ?, ?)",
         (uid, now_iso(), row["content"], new_content, note),
@@ -780,6 +1015,31 @@ def set_confidence(conn: sqlite3.Connection, uid: str, confidence: str) -> bool:
     return True
 
 
+def set_review_after(conn: sqlite3.Connection, uid: str, value: str) -> bool:
+    """Move (or clear) a memory's recheck date, and audit the move.
+
+    No re-embedding: the vector is computed over content, tags and domains,
+    and a date is none of those. Audited, because "this was rechecked and
+    pushed out six months" is exactly the kind of decision a later pass
+    needs to be able to see it did not invent.
+    """
+    row = get_memory(conn, uid)
+    if row is None:
+        return False
+    value = normalize_review_after(value)
+    if value == row["review_after"]:
+        return True
+    conn.execute(
+        "UPDATE memories SET review_after = ?, updated_at = ? WHERE uid = ?",
+        (value, now_iso(), uid))
+    conn.execute(
+        "INSERT INTO edits (memory_uid, edited_at, prev_content, new_content, note) "
+        "VALUES (?, ?, ?, ?, ?)",
+        (uid, now_iso(), row["content"], row["content"],
+         f"meta: review_after '{row['review_after']}' -> '{value}'"))
+    return True
+
+
 def purge_memory(conn: sqlite3.Connection, uid: str) -> bool:
     """Irreversibly delete a memory row plus its edit history and relations.
 
@@ -803,6 +1063,7 @@ def purge_memory(conn: sqlite3.Connection, uid: str) -> bool:
     if row is None:
         return False
     conn.execute("DELETE FROM memory_domains WHERE memory_uid = ?", (uid,))
+    conn.execute("DELETE FROM memory_usage WHERE memory_uid = ?", (uid,))
     conn.execute("DELETE FROM edits WHERE memory_uid = ?", (uid,))
     conn.execute("DELETE FROM relations WHERE from_uid = ? OR to_uid = ?", (uid, uid))
     conn.execute("DELETE FROM optimization_suggestions WHERE target_uid = ?", (uid,))
@@ -819,9 +1080,111 @@ def purge_memory(conn: sqlite3.Connection, uid: str) -> bool:
     return True
 
 
+# ----------------------------------------------------------------- usage
+
+MATCH_SOURCES = ("fts", "vec", "both")
+
+
+def record_recall(
+    conn: sqlite3.Connection, uids, *, at: str | None = None,
+    sources: dict[str, str] | None = None,
+) -> int:
+    """Count one read of each of these memories. Returns how many it touched.
+
+    Called from the MCP tools and from nowhere else, deliberately. What
+    this measures is "an agent was handed this memory in answer to
+    something", and a person scrolling the dashboard is not that -- letting
+    the admin surface inflate the counters would turn the one signal the
+    curation pass has into a record of who browsed what.
+
+    `sources` maps uid -> match_source for reads that came out of a search,
+    so the store can later say which retriever is worth its keep. A read
+    with no search behind it passes none, and counts only in recall_count.
+
+    None of this may ever reach a ranking -- see the schema comment on
+    memory_usage for why, and test_usage.py for the test that says so.
+
+    Best-effort: a uid that no longer exists is skipped rather than failing
+    the read that produced it.
+    """
+    seen = [u for u in dict.fromkeys(uids) if u]
+    if not seen:
+        return 0
+    ts = at or now_iso()
+    live = {r["uid"] for r in conn.execute(
+        f"SELECT uid FROM memories WHERE uid IN ({', '.join('?' * len(seen))})", seen)}
+    rows = []
+    for u in seen:
+        if u not in live:
+            continue
+        arm = (sources or {}).get(u)
+        rows.append((u, ts, int(arm == "fts"), int(arm == "vec"), int(arm == "both")))
+    conn.executemany(
+        "INSERT INTO memory_usage "
+        "(memory_uid, recall_count, last_recalled_at, via_fts, via_vec, via_both) "
+        "VALUES (?, 1, ?, ?, ?, ?) ON CONFLICT(memory_uid) DO UPDATE SET "
+        "recall_count = recall_count + 1, last_recalled_at = excluded.last_recalled_at, "
+        "via_fts = via_fts + excluded.via_fts, via_vec = via_vec + excluded.via_vec, "
+        "via_both = via_both + excluded.via_both",
+        rows,
+    )
+    return len(rows)
+
+
+def usage_for(conn: sqlite3.Connection, uids) -> dict[str, dict]:
+    """{uid: {"recalls": n, "last_recall": iso}} for the ones ever read."""
+    seen = [u for u in dict.fromkeys(uids) if u]
+    if not seen:
+        return {}
+    rows = conn.execute(
+        f"SELECT memory_uid, recall_count, last_recalled_at FROM memory_usage "
+        f"WHERE memory_uid IN ({', '.join('?' * len(seen))})", seen).fetchall()
+    return {r["memory_uid"]: {"recalls": r["recall_count"],
+                              "last_recall": r["last_recalled_at"]} for r in rows}
+
+
+def arm_effectiveness(conn: sqlite3.Connection) -> dict:
+    """How much of what got read came from each retriever.
+
+    The question "does the vector arm earn its keep" answered by the store
+    itself, over real use, instead of by a benchmark's guess at what a query
+    looks like. Read it as a ratio between the arms and not as an absolute:
+    a memory can be acted on from its snippet without ever being opened, so
+    every arm is undercounted by the same unknown amount.
+    """
+    row = conn.execute(
+        "SELECT COALESCE(SUM(via_fts), 0) AS fts, COALESCE(SUM(via_vec), 0) AS vec, "
+        "COALESCE(SUM(via_both), 0) AS both, COALESCE(SUM(recall_count), 0) AS reads "
+        "FROM memory_usage").fetchone()
+    out = {arm: row[arm] for arm in MATCH_SOURCES}
+    out["reads"] = row["reads"]
+    out["from_search"] = sum(out[arm] for arm in MATCH_SOURCES)
+    return out
+
+
 def add_relation(
     conn: sqlite3.Connection, from_uid: str, to_uid: str, relation_type: str, note: str = ""
 ) -> int:
+    """Create a typed edge, or raise ValueError saying which rule it broke.
+
+    The checks live here rather than in each caller because the two
+    surfaces have to agree: the dashboard refused a self-edge, an unknown
+    uid and a duplicate, and the MCP tool refused nothing -- a typo'd uid
+    reached the INSERT, where the foreign key turned it into a raw
+    IntegrityError rather than something an agent could act on.
+    """
+    if not (from_uid and to_uid and relation_type):
+        raise ValueError("from_uid, to_uid and relation_type are required")
+    if from_uid == to_uid:
+        raise ValueError("a memory cannot relate to itself")
+    for uid in (from_uid, to_uid):
+        if get_memory(conn, uid) is None:
+            raise ValueError(f"unknown memory: {uid}")
+    dup = conn.execute(
+        "SELECT id FROM relations WHERE from_uid = ? AND to_uid = ? AND relation_type = ?",
+        (from_uid, to_uid, relation_type)).fetchone()
+    if dup:
+        raise ValueError(f"identical relation already exists (id {dup['id']})")
     cur = conn.execute(
         "INSERT INTO relations (from_uid, to_uid, relation_type, note, created_at) VALUES (?, ?, ?, ?, ?)",
         (from_uid, to_uid, relation_type, note, now_iso()),
@@ -1358,6 +1721,8 @@ def insert_diagram(
     also: str = "",
     session: str = "",
     tags: str = "",
+    review_after: str = "",
+    source_ref: str = "",
 ) -> tuple[str | None, list[str]]:
     """Create a type='diagram' memory from a whole graph.
 
@@ -1378,6 +1743,7 @@ def insert_diagram(
     uid = insert_memory(
         conn, type=DIAGRAM_TYPE, content=_render_text(title, summary, kind, n, e),
         domain=domain, also=also, session=session, tags=tags or DIAGRAM_TYPE,
+        review_after=review_after, source_ref=source_ref,
     )
     conn.execute(
         "INSERT INTO diagrams (memory_uid, kind, title, summary) VALUES (?, ?, ?, ?)",
@@ -2010,11 +2376,31 @@ def _fts_query(raw: str) -> str:
     Lets the calling agent pass several paraphrases in one call
     ("reranking teacher model" or "best of n dpo critic") and get the
     union of matches back, instead of one narrow AND match.
+
+    Asking AND first and appending the OR-only rows after it was tried and
+    dropped: BM25 already scores a row matching every term far above a row
+    matching one, so the two orderings agreed on every corpus we could
+    build, and the second query bought nothing.
+
+    Two measurements over a real 536-memory store, for whoever tunes this
+    next. Query SHAPE does not matter: the same labelled pairs score
+    14.3%/66.0% recall@5 asked as prose and 14.3%/67.0% asked as a bag of
+    content words, because stopwords appear in nearly every document and
+    their IDF is already near zero. Query LENGTH matters a lot, and
+    monotonically: 33% at two terms, 59% at five, 67% at twelve, 70% at
+    twenty. That is why search()'s docstring tells callers to spend terms
+    rather than to phrase carefully.
     """
     terms = [t.strip() for t in raw.replace(" OR ", " ").split() if t.strip()]
     if not terms:
         return raw
-    escaped = [f'"{t}"' if not t.replace("_", "").isalnum() else t for t in terms]
+    # EVERY term is quoted, not only the ones with punctuation in them. A bare
+    # alphanumeric term looked safe and is not: 'AND', 'NOT' and 'NEAR' are
+    # fts5 operators, so a query containing one reached the engine as syntax
+    # and took the whole search down with an OperationalError -- out of a tool
+    # call, that is a crash rather than a bad result. Quoting is free: a
+    # quoted single token matches exactly what the bare one did.
+    escaped = ['"' + t.replace('"', '""') + '"' for t in terms]
     return " OR ".join(escaped)
 
 
@@ -2088,6 +2474,18 @@ def all_domains_sql() -> str:
     )
 
 
+def _fold(segments: list[str]) -> list[str]:
+    """Segments as a filter compares them: case is not part of the name.
+
+    A domain is a name a caller types from memory, and the two casings of
+    one subject are the same subject -- which is why the dashboard reports
+    'acme/Cache' next to 'acme/cache' as drift to merge rather than as two
+    scopes. Matching folds; the STORED spelling is what comes back, so a
+    resolved scope is always a real path and its equality arm hits.
+    """
+    return [s.lower() for s in segments]
+
+
 def _inner_scope(stored: list[str], want: list[str]) -> str | None:
     """Where `want` sits inside a stored path, as a path down to its end.
 
@@ -2095,9 +2493,14 @@ def _inner_scope(stored: list[str], want: list[str]) -> str | None:
     -- the level asked for, with whatever it contains. The OUTERMOST
     occurrence wins: a repeated segment name inside one path is a level and
     a sublevel of itself, and the level is the one that was asked for.
+
+    Compared folded, returned as stored (see _fold). Position 0 is not a
+    special case here: a path matching at the front is the literal reading,
+    and resolve_domain_scopes takes that pass before this one.
     """
+    folded_stored, folded_want = _fold(stored), _fold(want)
     for i in range(len(stored) - len(want) + 1):
-        if stored[i:i + len(want)] == want:
+        if folded_stored[i:i + len(want)] == folded_want:
             return DOMAIN_SEP.join(stored[: i + len(want)])
     return None
 
@@ -2127,18 +2530,47 @@ def resolve_domain_scopes(conn: sqlite3.Connection, domain: str) -> list[str]:
     Cross-listings count as paths in use on both readings: a subject that
     exists only because memories were cross-listed into it is a real scope,
     and it resolves literally like any other.
+
+    Casing is not part of either reading. The store's policy is applied
+    first, so a store that coerces to one case resolves a filter written in
+    the other; and both passes then match folded (see _fold), because a
+    'preserve' store keeps whatever spelling each write happened to use and
+    a caller has no way to know which one that was. Every scope returned is
+    a path as STORED -- resolving to the caller's spelling instead would
+    hand the equality arm a string no row carries, which is the shape of
+    this bug: `LIKE` ignores case and `=` does not, so a filter in the
+    wrong case used to find a path's descendants and miss the path itself.
     """
-    path = normalize_domain(domain)
+    path = normalize_domain(case_domain(get_domain_case(conn), domain))
     if not path:
         return []
-    clause, params = domain_clause(path, alias="", subtree=True)
-    if conn.execute(f"SELECT 1 FROM memories WHERE 1=1 {clause} LIMIT 1", params).fetchone():
+    # Fast path: something is filed at exactly this string. The literal
+    # reading is then settled and no scan is needed -- which is the common
+    # call, a path taken from list_domains() and passed straight back.
+    if conn.execute(
+        "SELECT 1 FROM (SELECT domain FROM memories UNION "
+        "SELECT domain FROM memory_domains) WHERE domain = ? LIMIT 1",
+        (path,),
+    ).fetchone():
         return [path]
 
     want = split_domain(path)
+    stored = [split_domain(r["domain"]) for r in conn.execute(all_domains_sql())]
+    # The literal reading, folded: every stored path this one is the front
+    # of, cut back to the depth that was asked for. Covers the same-path
+    # spelling and the level that exists only because something deeper is
+    # filed under it -- both are "this path", not a name found inside one.
+    literal = {
+        DOMAIN_SEP.join(segments[:len(want)])
+        for segments in stored
+        if _fold(segments[:len(want)]) == _fold(want)
+    }
+    if literal:
+        return sorted(literal)
+
     scopes: set[str] = set()
-    for r in conn.execute(all_domains_sql()):
-        found = _inner_scope(split_domain(r["domain"]), want)
+    for segments in stored:
+        found = _inner_scope(segments, want)
         if found:
             scopes.add(found)
     # No scope in here can contain another, so there is nothing to collapse:
@@ -2203,7 +2635,7 @@ def search_memories(
     subtree: bool = True,
 ) -> list[sqlite3.Row]:
     sql = [
-        """SELECT m.*, bm25(memories_fts) AS rank
+        f"""SELECT m.*, {_BM25} AS rank
            FROM memories_fts
            JOIN memories m ON m.rowid_pk = memories_fts.rowid
            WHERE memories_fts MATCH ?"""
@@ -2230,6 +2662,27 @@ def search_memories(
 
 _KNN_MAX_K = 10000  # upper bound on the "fetch (nearly) all, then filter" KNN path
 
+# How far a neighbor may be and still count as one. A KNN has no notion of
+# "nothing here is close": ask it for 200 rows and it returns the 200
+# nearest however far away they are, so a search for a word the store has
+# never seen came back with the whole store, every row past the keyword
+# matches labelled `match_source: vec` as if the vector side had found it.
+#
+# Measured over a real 536-memory store. Best distance the vector arm can
+# reach, by kind of query:
+#
+#   query with a real target in the store   0.157 - 0.555  (median 0.314)
+#   word the store does not contain         0.681
+#   unrelated sentence / gibberish          0.777 - 0.932
+#
+# 0.60 sits in the gap. It drops the whole-store sweep to nothing and costs
+# no recall at all -- the true target survives in 65% of queries at 0.60 and
+# in 65% at 0.65, which is the vector arm's own ceiling, not this cut.
+#
+# Calibrated against THIS corpus and THIS model. A different embedding model
+# has a different scale; re-measure before trusting the number.
+VEC_MAX_DISTANCE = 0.60
+
 
 def search_semantic(
     conn: sqlite3.Connection,
@@ -2241,8 +2694,18 @@ def search_semantic(
     status: str = "active",
     limit: int = 30,
     subtree: bool = True,
+    max_distance: float | None = None,
 ) -> list[sqlite3.Row]:
     """Brute-force KNN over the vector table, filtered post-KNN.
+
+    Bounded by distance as well as by count (see VEC_MAX_DISTANCE): a KNN
+    asked for more rows than it has close neighbors returns far ones, and a
+    far one is not a match. Pass max_distance=2 to see the raw ordering.
+
+    None rather than VEC_MAX_DISTANCE as the default, because a default
+    argument is evaluated once at import: written the other way, the cut
+    could not be changed at runtime, and the tool that exists to calibrate
+    it per model silently measured the old value for both.
 
     Returns [] when vectors are unavailable, so callers can always call
     this unconditionally. domain/type/tag/status filters apply *after* the
@@ -2255,6 +2718,8 @@ def search_semantic(
     right rows in correct distance order; unfiltered searches keep the cheap
     fixed over-fetch.
     """
+    if max_distance is None:
+        max_distance = VEC_MAX_DISTANCE
     if not _vec_ready(conn):
         return []
     blobs = embed.embed_texts([query])
@@ -2270,9 +2735,9 @@ def search_semantic(
            FROM (SELECT rowid, distance FROM memories_vec
                  WHERE embedding MATCH ? AND k = ?) v
            JOIN memories m ON m.rowid_pk = v.rowid
-           WHERE 1=1"""
+           WHERE v.distance <= ?"""
     ]
-    params: list = [blobs[0], k]
+    params: list = [blobs[0], k, max_distance]
     if domain:
         clause, values, _ = domain_scope_clause(conn, domain, subtree=subtree)
         sql.append(clause)
@@ -2302,6 +2767,7 @@ def search_hybrid(
     status: str = "active",
     limit: int = 30,
     subtree: bool = True,
+    collapse: bool = False,
 ) -> list[dict]:
     """FTS BM25 + vector KNN, merged by reciprocal rank fusion.
 
@@ -2319,14 +2785,20 @@ def search_hybrid(
     retrieval scoped to type='diagram') to have any to promote. A diagram
     now earns its place the way every other memory does: it comes back when
     it matches, where its scores put it.
+
+    collapse=True folds near-identical results into the best-ranked one of
+    them (see _collapse_near_copies). Off by default: it is a concession to
+    a caller paying for every row in a context window, and the dashboard is
+    the opposite case -- a human curating the store needs to SEE that the
+    same fact was written five times, which is what the dedup queue is for.
     """
     K = 60  # standard RRF damping constant
     merged: dict[str, dict] = {}
 
-    def fold(rows, source: str) -> None:
+    def fold(rows, source: str, weight: float = 1.0) -> None:
         for i, row in enumerate(rows):
             uid = row["uid"]
-            contribution = 1.0 / (K + i + 1)
+            contribution = weight / (K + i + 1)
             seen = merged.get(uid)
             if seen is None:
                 d = dict(row)
@@ -2343,27 +2815,144 @@ def search_hybrid(
                 seen["match_source"] = "both"
                 seen["_rrf"] += contribution
 
+    # Each arm fetches deeper than the caller asked for, because fusion is
+    # the whole point: a memory ranked just outside the keyword window and
+    # near the top of the vector one is exactly what RRF exists to recover,
+    # and fetching `limit` per arm threw it away before the merge could see
+    # it. The extra rows cost one wider LIMIT, not another query.
+    deep = limit * _FUSION_FETCH
     fold(search_memories(conn, query, domain=domain, type=type, tag=tag,
-                         status=status, limit=limit, subtree=subtree), "fts")
+                         status=status, limit=deep, subtree=subtree), "fts")
     fold(search_semantic(conn, query, domain=domain, type=type, tag=tag,
-                         status=status, limit=limit, subtree=subtree), "vec")
+                         status=status, limit=deep, subtree=subtree), "vec", VEC_WEIGHT)
 
-    results = sorted(merged.values(), key=lambda d: -d["_rrf"])[:limit]
+    # Contradicted last, and only then by score. The flag used to buy
+    # nothing on this side: a memory an agent had marked known-wrong went on
+    # competing for the top slots against the memory that corrected it. It
+    # still comes back -- "we established this is false" is worth having,
+    # and hiding it invites writing the same wrong thing again -- just never
+    # ahead of something that still holds.
+    ranked = sorted(
+        merged.values(),
+        key=lambda d: (d.get("confidence") == CONFIDENCE_CONTRADICTED, -d["_rrf"]),
+    )
+    results = (_collapse_near_copies(ranked) if collapse else ranked)[:limit]
+    _attach_succession(conn, results)
     for d in results:
         del d["_rrf"]
     return results
 
 
+# What a vector hit is worth next to a keyword hit, in the fusion.
+#
+# Plain RRF gives both arms the same vote, which assumes both are equally
+# informative. Measured against 216 pairs a HUMAN marked as related in a
+# real store -- a diagram step's label and the memory linked to it, and
+# `relates_to` edges -- recall@5:
+#
+#   vector weight   0.00   0.10-0.75   1.00
+#   step label     13.4%       13.4%  14.3%
+#   relates_to     66.0%       69.1%  55.7%
+#
+# Anything below an equal vote lands on the same plateau; the equal vote is
+# a cliff. The vector arm has real signal -- it beats the keyword arm alone
+# on relates_to, and across both sets it found 11 targets the keyword arm
+# missed -- but it cannot be allowed to displace a keyword hit at the same
+# rank. 0.5 is the middle of the plateau, chosen to be far from both edges
+# rather than to be the argmax of 216 cases.
+VEC_WEIGHT = 0.5
+
+# How many rows each retriever fetches per unit of `limit` before fusion.
+#
+# 1, measured, after this shipped as 4 on the textbook reasoning that fusion
+# exists to recover the row ranked just outside one arm's window. That
+# reasoning holds for two GOOD retrievers. Self-retrieval over a real
+# 536-memory store said otherwise, monotonically:
+#
+#   fts alone 100%   1x 100%   2x 96.7%   4x 90%   8x 85%   (recall@5)
+#
+# The deeper the fetch, the more of the weaker arm's ranking gets a vote, and
+# the static embedding is close enough to noise on that corpus that its votes
+# push true positives out of the top 5. Raising this is a claim about both
+# retrievers being informative -- measure it against the store before you do.
+_FUSION_FETCH = 1
+
+# Above this difflib ratio two results are the same text, not two takes on
+# one subject. Deliberately near-identity: collapsing merely RELATED
+# memories would decide relevance, which is the caller's job -- this only
+# stops one fact from spending five of the ten slots it was given.
+_COPY_RATIO = 0.92
+
+
+def _collapse_near_copies(ranked: list[dict]) -> list[dict]:
+    """Drop a result that repeats one already kept, and say so on the keeper.
+
+    Lexical on purpose, and the same measure dedup_candidates falls back to.
+    The vector side would catch paraphrases too, and catching paraphrases is
+    exactly what would make this a relevance judgement instead of a
+    duplicate filter.
+    """
+    import difflib
+
+    kept: list[dict] = []
+    for d in ranked:
+        content = d.get("content") or ""
+        for k in kept:
+            if difflib.SequenceMatcher(None, content, k.get("content") or "").quick_ratio() >= _COPY_RATIO:
+                k.setdefault("collapsed", []).append(d["uid"])
+                break
+        else:
+            kept.append(d)
+    return kept
+
+
+def _attach_succession(conn: sqlite3.Connection, results: list[dict]) -> None:
+    """Mark a result that something in the store already supersedes.
+
+    The relations graph knew the answer and retrieval did not read it, so a
+    superseded memory came back looking current with its replacement sitting
+    one edge away. `succeeded_by` is the uid(s) to read instead -- separate
+    from the `superseded_by` COLUMN, which set_status writes when archiving
+    and which says nothing about an edge drawn between two active rows.
+    """
+    if not results:
+        return
+    uids = [d["uid"] for d in results]
+    rows = conn.execute(
+        f"SELECT from_uid, to_uid FROM relations WHERE relation_type = 'supersedes' "
+        f"AND to_uid IN ({', '.join('?' * len(uids))})",
+        uids,
+    ).fetchall()
+    after: dict[str, list[str]] = {}
+    for r in rows:
+        after.setdefault(r["to_uid"], []).append(r["from_uid"])
+    for d in results:
+        if d["uid"] in after:
+            d["succeeded_by"] = after[d["uid"]]
+
+
+def _sound_clause(exclude_contradicted: bool) -> str:
+    """The arm that keeps known-wrong memories out of a list.
+
+    Off by default: list_by_domain/list_recent are the fallback for a search
+    that came back thin, and a caller asking for everything in a scope means
+    everything. pulse() opts in, because a warm-up presents what it returns
+    as the current state -- a contradicted anti-pattern read there is a
+    pitfall to avoid, not one that turned out not to be.
+    """
+    return f" AND confidence <> '{CONFIDENCE_CONTRADICTED}'" if exclude_contradicted else ""
+
+
 def list_by_domain(
     conn: sqlite3.Connection, domain: str, *, type: str = "", status: str = "active",
-    limit: int = 50, subtree: bool = True,
+    limit: int = 50, subtree: bool = True, exclude_contradicted: bool = False,
 ) -> list[sqlite3.Row]:
     """Recency-ordered rows of one domain, its subdomains included.
 
     subtree=False narrows to what is filed at exactly this path.
     """
     clause, params, _ = domain_scope_clause(conn, domain, alias="", subtree=subtree)
-    sql = [f"SELECT * FROM memories WHERE 1=1 {clause}"]
+    sql = [f"SELECT * FROM memories WHERE 1=1 {clause}{_sound_clause(exclude_contradicted)}"]
     if type:
         sql.append("AND type = ?")
         params.append(type)
@@ -2378,8 +2967,9 @@ def list_by_domain(
 def list_recent(
     conn: sqlite3.Connection, *, type: str = "", domain: str = "", tag: str = "",
     status: str = "active", limit: int = 20, subtree: bool = True,
+    exclude_contradicted: bool = False,
 ) -> list[sqlite3.Row]:
-    sql = ["SELECT * FROM memories WHERE 1=1"]
+    sql = [f"SELECT * FROM memories WHERE 1=1{_sound_clause(exclude_contradicted)}"]
     params: list = []
     if type:
         sql.append("AND type = ?")
@@ -2570,6 +3160,15 @@ def domain_census(
     }
     if also_total:
         out["also"] = also_total
+    # Overdue for a recheck. One count, omitted when zero, because it is the
+    # one thing a warm-up can say about DECAY -- everything else it reports
+    # is what the scope holds, not whether it still holds.
+    due_clause, due_params = _due_clause()
+    stale = conn.execute(
+        f"SELECT COUNT(*) FROM memories WHERE {where_sql} AND {due_clause}",
+        [*params, *due_params]).fetchone()[0]
+    if stale:
+        out["stale"] = stale
     return out
 
 
@@ -2857,9 +3456,11 @@ def remove_domain_link(conn: sqlite3.Connection, uid: str, domain: str) -> list[
 
 
 def latest_by_type(
-    conn: sqlite3.Connection, type: str, *, domain: str = "", status: str = "active"
+    conn: sqlite3.Connection, type: str, *, domain: str = "", status: str = "active",
+    exclude_contradicted: bool = False,
 ) -> sqlite3.Row | None:
-    rows = list_recent(conn, type=type, domain=domain, status=status, limit=1)
+    rows = list_recent(conn, type=type, domain=domain, status=status, limit=1,
+                       exclude_contradicted=exclude_contradicted)
     return rows[0] if rows else None
 
 
@@ -2876,6 +3477,83 @@ def _timeline_pair(a: sqlite3.Row, b: sqlite3.Row) -> bool:
     same_domain = bool(a["domain"]) and a["domain"] == b["domain"]
     same_session = bool(a["session"]) and a["session"] == b["session"]
     return same_domain or same_session
+
+
+# What a just-written memory has to resemble before the writer says so.
+# Higher than dedup_candidates' 0.6, which feeds a review queue a human
+# reads at leisure: this one interrupts an agent mid-write, so it has to be
+# quiet unless the collision is real.
+SIMILAR_ON_WRITE = 0.75
+SIMILAR_ON_WRITE_MAX = 3
+SIMILAR_SNIPPET = 160
+
+
+def similar_memories(
+    conn: sqlite3.Connection, uid: str, *,
+    threshold: float = SIMILAR_ON_WRITE, limit: int = SIMILAR_ON_WRITE_MAX,
+) -> list[dict]:
+    """What the store already held that closely resembles this memory.
+
+    For the moment of writing, which is the only moment the answer is
+    free to act on: the agent still has the context that produced the
+    text, so it can tell a correction from a duplicate from a second
+    unrelated fact. dedup_scan asks the same question later, over the
+    whole store, for a human to answer.
+
+    Never blocks a write and never merges anything -- the memory is
+    already stored when this runs. Diagrams are out on both sides: their
+    content is a projection of a graph, so a resemblance between two of
+    them is not a merge anyone could apply. Consecutive checkpoints of one
+    effort are out too (see _timeline_pair) -- they share a skeleton by
+    design and would fire on every write.
+    """
+    row = get_memory(conn, uid)
+    if row is None or row["type"] == DIAGRAM_TYPE:
+        return []
+
+    scored: list[tuple[sqlite3.Row, float, str]] = []
+    if _vec_ready(conn):
+        emb = conn.execute(
+            "SELECT embedding FROM memories_vec WHERE rowid = ?", (row["rowid_pk"],)).fetchone()
+        if emb is not None:
+            for n in conn.execute(
+                "SELECT rowid, distance FROM memories_vec WHERE embedding MATCH ? AND k = ?",
+                (emb["embedding"], limit + 8),
+            ).fetchall():
+                if n["rowid"] == row["rowid_pk"] or 1.0 - n["distance"] < threshold:
+                    continue
+                other = conn.execute(
+                    "SELECT * FROM memories WHERE rowid_pk = ?", (n["rowid"],)).fetchone()
+                if other is not None:
+                    scored.append((other, 1.0 - n["distance"], "vector"))
+    else:
+        import difflib
+
+        # Without vectors this is a scan, so it stays inside the scope the
+        # memory was filed under -- a write must not get slower as the
+        # store grows in branches it has nothing to do with.
+        clause, params = domain_clause(row["domain"], alias="") if row["domain"] else ("", [])
+        for other in conn.execute(
+            f"SELECT * FROM memories WHERE uid <> ? {clause}", [uid, *params]
+        ).fetchall():
+            ratio = difflib.SequenceMatcher(None, row["content"], other["content"]).quick_ratio()
+            if ratio >= threshold:
+                scored.append((other, ratio, "lexical"))
+
+    out = []
+    for other, score, method in sorted(scored, key=lambda s: -s[1]):
+        if other["status"] != "active" or other["type"] == DIAGRAM_TYPE:
+            continue
+        if _timeline_pair(row, other):
+            continue
+        out.append({
+            "uid": other["uid"], "type": other["type"], "domain": other["domain"],
+            "ratio": round(score, 3), "method": method,
+            "content": other["content"][:SIMILAR_SNIPPET],
+        })
+        if len(out) == limit:
+            break
+    return out
 
 
 def dedup_candidates(
@@ -2979,10 +3657,10 @@ def dedup_candidates(
 
 # ------------------------------------------------------------------ optimization
 
-CONFIDENCE_VALUES = ("unverified", "confirmed", "contradicted")
+CONFIDENCE_VALUES = ("unverified", "confirmed", CONFIDENCE_CONTRADICTED)
 SUGGESTION_KINDS = (
     "compact", "reword", "retag", "redomain", "crosslist",
-    "set_confidence", "archive", "link", "merge", "distill",
+    "set_confidence", "review", "archive", "link", "merge", "distill",
 )
 # distill targets must be durable knowledge types -- distilling INTO a
 # checkpoint/handoff would just recreate the ephemera it exists to retire
@@ -3179,6 +3857,7 @@ def optimization_corpus(
     if status:
         where.append("AND status = ?")
         params.append(status)
+    today = today_iso()
     base_where_sql, base_params = " ".join(where), list(params)
     if since:
         where.append("AND updated_at >= ?")
@@ -3187,7 +3866,8 @@ def optimization_corpus(
 
     rows = conn.execute(
         f"""SELECT uid, type, domain, also_domains, session, tags, content, status,
-                   confidence, superseded_by, created_at, updated_at
+                   confidence, superseded_by, created_at, updated_at,
+                   review_after, source_ref
             FROM memories WHERE {where_sql}
             ORDER BY created_at DESC LIMIT ? OFFSET ?""",
         [*params, limit, offset],
@@ -3216,6 +3896,16 @@ def optimization_corpus(
             m["status"] = r["status"]
         if r["superseded_by"]:
             m["superseded_by"] = r["superseded_by"]
+        # What the writer said would need rechecking, and where to check it.
+        # `due` rather than a date comparison the reader has to make: the
+        # question a pass asks is "is this one overdue", and answering it
+        # here is one character against a paragraph of arithmetic.
+        if r["review_after"]:
+            m["review_after"] = r["review_after"]
+            if r["review_after"] <= today:
+                m["due"] = True
+        if r["source_ref"]:
+            m["source_ref"] = r["source_ref"]
         m["created_at"] = r["created_at"][:19]
         content = r["content"]
         m["content_len"] = len(content)
@@ -3229,6 +3919,15 @@ def optimization_corpus(
         if budget_used >= CORPUS_CHAR_BUDGET:
             break
     uids = {m["uid"] for m in mems}
+
+    # What each one has been WORTH, next to what it says. Omitted when zero,
+    # like every other default here -- and a memory with no `recalls` at all
+    # is the interesting case, not a missing field.
+    usage = usage_for(conn, uids)
+    for m in mems:
+        u = usage.get(m["uid"])
+        if u:
+            m["recalls"], m["last_recall"] = u["recalls"], u["last_recall"][:19]
     rels = conn.execute(
         "SELECT id, from_uid, to_uid, relation_type FROM relations"
     ).fetchall()
@@ -3248,6 +3947,22 @@ def optimization_corpus(
         "by_confidence": agg("confidence"),
         "by_domain": by_domain,
         "empty_domain": by_domain.get("", 0),
+        # Over the whole filtered corpus, not the page. Read it as
+        # UNPROVEN, never as useless: a memory nobody has needed yet is
+        # indistinguishable from one about a rare subject, and the rare
+        # subject is often the reason a store exists at all. The number is
+        # worth knowing store-wide -- if almost nothing has ever been read
+        # back, the store is a write log -- and worth nothing about any
+        # single row.
+        "never_recalled": conn.execute(
+            f"SELECT COUNT(*) FROM memories WHERE {where_sql} AND uid NOT IN "
+            "(SELECT memory_uid FROM memory_usage)", params).fetchone()[0],
+        # Whatever a writer dated for a recheck and nobody rechecked. The
+        # rows here are not suspect because they are old -- they are suspect
+        # because somebody who knew the subject said when to look again.
+        "due_for_review": conn.execute(
+            f"SELECT COUNT(*) FROM memories WHERE {where_sql} AND {_due_clause(today)[0]}",
+            [*params, today]).fetchone()[0],
     }
 
     # domain hints cluster over the WHOLE store; with `since`, keep only
@@ -3324,6 +4039,20 @@ def _validate_suggestion(conn: sqlite3.Connection, s: object) -> tuple[dict | No
             return None, err
         if "tags" not in payload:
             return None, "payload.tags required"
+    elif kind == "review":
+        err = target_err()
+        if err:
+            return None, err
+        if "review_after" not in payload:
+            return None, "payload.review_after required ('' clears the date)"
+        # normalized at staging time for the same reason redomain is: the
+        # panel shows this payload as what will hold, and '90d' means a
+        # different day depending on when it is read
+        try:
+            payload = {**payload,
+                       "review_after": normalize_review_after(str(payload["review_after"]))}
+        except ValueError as exc:
+            return None, str(exc)
     elif kind == "redomain":
         err = target_err()
         if err:
@@ -3561,6 +4290,11 @@ def _apply_kind(conn: sqlite3.Connection, kind: str, target_uid: str | None, pay
         prev = {"tags": row["tags"]}
         _update_meta_field(conn, target_uid, "tags", str(payload["tags"]).strip())
         return prev
+    if kind == "review":
+        row = get_memory(conn, target_uid)
+        prev = {"review_after": row["review_after"]}
+        set_review_after(conn, target_uid, str(payload["review_after"]))
+        return prev
     if kind == "redomain":
         row = get_memory(conn, target_uid)
         prev = {"domain": row["domain"]}
@@ -3622,6 +4356,8 @@ def _revert_kind(
         update_memory_content(conn, target_uid, prev["content"], note=f"optimize:undo {kind}")
     elif kind == "retag":
         _update_meta_field(conn, target_uid, "tags", prev["tags"])
+    elif kind == "review":
+        set_review_after(conn, target_uid, prev["review_after"])
     elif kind == "redomain":
         _update_meta_field(conn, target_uid, "domain", prev["domain"])
     elif kind == "crosslist":
