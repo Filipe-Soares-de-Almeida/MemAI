@@ -19,6 +19,7 @@ A single SQLite file in WAL mode:
 | `memory_domains` | the extra domains a memory belongs to, one row per path — every domain filter reads it |
 | `memories_fts` | FTS5 (BM25, `porter unicode61`) over content + tags + domain + cross-listed domains, synced by triggers |
 | `memories_vec` | [sqlite-vec](https://github.com/asg017/sqlite-vec) `vec0`, one cosine embedding per memory over that same text |
+| `memory_usage` | how often each memory was read back, and when — fed by the MCP tools only |
 | `edits` | full history; correcting a memory keeps the previous version |
 | `relations` | typed edges between memories (`supersedes`, `relates_to`, `contradicts`, ...) |
 | `diagrams`, `diagram_nodes`, `diagram_edges`, `diagram_node_links`, `diagram_jumps` | documented flows and what they point at |
@@ -47,6 +48,24 @@ ANN index — a linear scan is plenty at this scale), merged by reciprocal rank
 fusion. Each result says which side matched (`match_source`: `fts` | `vec` |
 `both`) and carries the raw `fts_rank` / `vec_distance`. Multi-term queries are
 OR'd on the keyword side, so several paraphrases in one call all help.
+
+Each arm fetches several times `limit` before the merge, because the row fusion
+exists to recover — ranked just outside the keyword window and near the top of
+the vector one — is exactly the row a `limit`-deep fetch throws away first.
+
+BM25 is weighted per column. `domain` and `also_domains` are indexed so a scope
+name is findable, not so that every row filed under `acme/cache` outranks the
+one memory that discusses the cache; in a store organised by domain, unweighted
+that is most of the store.
+
+Three annotations ride along. `succeeded_by` names a memory that supersedes this
+one, read from the relations graph — a stale hit used to come back looking
+current with its replacement one edge away. `collapsed` names near-identical
+results folded into this one, so a fact written five times spends one slot;
+that folding is on for the MCP tools and off for the dashboard, which has to
+*see* the copies. And `confidence: contradicted` sorts behind everything that
+still holds without disappearing — knowing a claim was ruled out is what stops
+it being written again.
 
 Both retrievers only *widen the candidate set*; whether a candidate answers the
 query is the calling agent's judgement. `list_by_domain` / `list_recent` are
@@ -130,12 +149,23 @@ the database, so it is swept per the retention setting in the dashboard.
 
 ## Curation
 
+Curation starts at the write. A writer probes the store for what it just wrote
+and returns `similar` when something crosses the threshold, plus one line on
+what to do about it — the agent still has the context that produced the text,
+so that is the one moment when "the store already said this" is free to act on.
+It never blocks the write. Quiet by design, or the field gets trained away:
+diagrams are out on both sides, archived rows are out, and consecutive
+checkpoints of one effort are out because they share a skeleton by design.
+
 `dedup_scan` surfaces likely-duplicate pairs by lexical overlap. The full pass
 is two tools: `optimize_scan` dumps the corpus compactly — each memory's
 curation fields, the relation edges, dedup hints, domain-variant clusters, flat
 domains that already spell a hierarchy, and per-memory `anchors` (URLs, paths,
 identifiers) to check against live facts — with paging and `since` for
-incremental passes. `optimize_stage` writes a batch of suggestions to a run:
+incremental passes. It also carries `recalls`/`last_recall` per memory and
+`never_recalled` over the whole corpus: without those a pass judges text, and
+cannot tell the note answered three times a week from the one nobody has needed
+since it was written. `optimize_stage` writes a batch of suggestions to a run:
 `compact`, `reword`, `retag`, `redomain`, `crosslist`, `set_confidence`,
 `archive`, `link`, `merge`, `distill`.
 
@@ -204,6 +234,65 @@ returns that tool's signature and docstring, read live from the code.
 Writer tool names match the `type` they store (`note()` → `type='note'`,
 `reasoning()` → `type='reasoning'`, ...), so the verb an agent calls is exactly
 the string it later filters on.
+
+## Getting it read
+
+A memory server has one failure mode that dwarfs the rest: nothing goes wrong,
+and the agent simply never calls it. Three things address that, in order of how
+little they ask of anyone.
+
+**Server instructions.** Sent in the MCP handshake and injected into the model's
+context by hosts that support it — a paragraph naming the read tools and the
+write ones. Nothing to configure.
+
+**The `warm_up` prompt.** MCP prompts are invoked by the *person*, which makes
+this the one place in the protocol where the store can be read without the agent
+having decided to read it. Hosts that surface prompts show it as a command; it
+returns the same brief the hook below emits.
+
+**`memai-hook`.** A console script that reads the SQLite store directly — no MCP,
+so there is no server to wait for, no tool to have been loaded, and no race with
+the host's own startup. It reads the hook payload on stdin and writes one JSON
+object on stdout, and it never fails loudly: no store, an unreadable one, a
+payload that is not JSON, all exit 0 with no output.
+
+| event | what it emits |
+|---|---|
+| `session-start` | the store's state as context — counts, active domains, latest checkpoint, open handoffs, pitfalls, recent notes, documented flows |
+| `user-prompt` | the top hits for the user's own words. The session-start brief cannot know the subject; by the time a prompt arrives, its text *is* the query |
+| `pre-compact` | a reminder that what should outlive the transcript belongs in the store |
+| `stop` | a nudge to checkpoint, and **only** when nothing was written recently — a timer-based nudge fires whether or not there is anything to record, which teaches the agent to skip it |
+
+`--domain` narrows the session brief, `--budget` caps the characters it emits,
+`--limit` the memories per prompt, `--quiet-minutes` how recent a write has to be
+for `stop` to stay quiet. In a Claude Code `settings.json`:
+
+```json
+{
+  "hooks": {
+    "SessionStart": [
+      { "hooks": [{ "type": "command", "command": "memai-hook session-start" }] }
+    ],
+    "UserPromptSubmit": [
+      { "hooks": [{ "type": "command", "command": "memai-hook user-prompt" }] }
+    ],
+    "PreCompact": [
+      { "hooks": [{ "type": "command", "command": "memai-hook pre-compact" }] }
+    ],
+    "Stop": [
+      { "hooks": [{ "type": "command", "command": "memai-hook stop" }] }
+    ]
+  }
+}
+```
+
+The hook reads `MEMAI_HOME` from its own environment, so a store outside
+`~/.memai` has to be set where the hook can see it — the host's `env` block
+reaches the MCP server, not a hook process.
+
+Writes carry a `session` stamp derived per server process unless one is passed,
+so a conversation's memories group together in the dashboard without an agent
+having to remember an id.
 
 ## Admin dashboard
 
