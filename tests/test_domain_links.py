@@ -286,7 +286,7 @@ def test_mcp_writers_take_also_and_echo_what_was_stored(monkeypatch, tmp_path):
                     also="omni/x900, acme")
     # 'acme' is already covered by the filed path, so it is not stored
     assert r["also"] == ["omni/x900"]
-    assert server.list_by_domain(domain="omni/x900")[0]["uid"] == r["uid"]
+    assert server.list_by_domain(domain="omni/x900")["results"][0]["uid"] == r["uid"]
     # a writer without `also` does not grow the field
     assert "also" not in server.note(content="plain", domain="acme")
 
@@ -305,7 +305,7 @@ def test_mcp_never_hands_back_the_indexing_mirror(monkeypatch, tmp_path):
     monkeypatch.setattr(db, "default_db_path", lambda: tmp_path / "test.db")
     uid = server.note(content="x", domain="acme", also="omni/x900")["uid"]
     assert "also_domains" not in server.get_memory(uid)
-    assert "also_domains" not in server.search("x")[0]
+    assert "also_domains" not in server.search("x")["results"][0]
 
 
 def _create(client, **kw):

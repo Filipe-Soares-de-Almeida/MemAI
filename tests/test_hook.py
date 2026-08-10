@@ -59,6 +59,17 @@ def _run(event: str, payload: dict, capsysbinary, argv=()) -> dict | None:
     return json.loads(out.decode("utf-8")) if out else None
 
 
+def _status(capsysbinary, argv=(), stdin: str = "{}") -> str:
+    """Run `statusline` and return the bare text it wrote, without its newline."""
+    import sys
+    sys.stdin = io.StringIO(stdin)
+    try:
+        assert hook.main(["statusline", *argv]) == 0
+    finally:
+        sys.stdin = sys.__stdin__
+    return capsysbinary.readouterr().out.decode("utf-8").rstrip("\n")
+
+
 # ------------------------------------------------------------ the brief text
 
 def test_the_brief_names_what_the_store_holds(conn):
@@ -183,6 +194,108 @@ def test_stop_does_not_answer_its_own_nudge(store, capsysbinary):
     with db.connect() as conn:
         _seed(conn, created_at=old)
     assert _run("stop", {"stop_hook_active": True}, capsysbinary) is None
+
+
+# ---------------------------------------------------------------- statusline
+
+def test_the_statusline_carries_the_count_the_domain_and_the_checkpoint_age(
+        store, capsysbinary):
+    with db.connect() as conn:
+        _seed(conn)
+    line = _status(capsysbinary)
+    assert "4 mem" in line
+    assert "acme/x100" in line
+    assert "cp 0m ago" in line
+
+
+def test_the_statusline_is_one_bare_line_under_eighty_characters(store, capsysbinary):
+    """Plain text closed by a single newline, not the JSON a hook event emits."""
+    import sys
+    with db.connect() as conn:
+        _seed(conn)
+    sys.stdin = io.StringIO("{}")
+    try:
+        assert hook.main(["statusline"]) == 0
+    finally:
+        sys.stdin = sys.__stdin__
+    raw = capsysbinary.readouterr().out.decode("utf-8")
+    assert raw.endswith("\n") and raw.count("\n") == 1
+    assert len(raw) - 1 < 80
+    assert "hookSpecificOutput" not in raw and not raw.startswith("{")
+
+
+def test_a_long_domain_path_does_not_push_the_line_over_the_limit(store, capsysbinary):
+    with db.connect() as conn:
+        db.insert_memory(conn, type="note", domain="acme/" + "x100/" * 20 + "p200",
+                         content="the index rebuild runs after the row merge")
+    line = _status(capsysbinary)
+    assert len(line) < 80
+    assert "..." in line
+
+
+def test_the_busiest_domain_wins_over_the_parent_holding_nothing(store, capsysbinary):
+    """A path is ranked on the memories naming it, not on its subtree."""
+    with db.connect() as conn:
+        for i in range(3):
+            db.insert_memory(conn, type="note", domain="acme/x100/p200",
+                             content=f"queue drain step {i}")
+    assert "acme/x100/p200" in _status(capsysbinary)
+
+
+def test_a_store_with_no_checkpoint_says_so(store, capsysbinary):
+    with db.connect() as conn:
+        db.insert_memory(conn, type="note", domain="acme/x100",
+                         content="the report export window is inclusive")
+    assert "no checkpoint" in _status(capsysbinary)
+
+
+def test_the_statusline_can_be_scoped(store, capsysbinary):
+    with db.connect() as conn:
+        _seed(conn)
+    line = _status(capsysbinary, ["--domain", "omni/x900"])
+    assert "1 mem" in line and "omni/x900" in line
+    assert "acme/x100" not in line
+
+
+def test_an_empty_store_has_no_statusline(store, capsysbinary):
+    assert _status(capsysbinary) == ""
+
+
+def test_an_empty_scope_has_no_statusline(store, capsysbinary):
+    with db.connect() as conn:
+        _seed(conn)
+    assert _status(capsysbinary, ["--domain", "zeta/x200"]) == ""
+
+
+def test_a_store_that_cannot_be_opened_has_no_statusline(monkeypatch, capsysbinary):
+    monkeypatch.setattr(db, "connect", lambda *a, **k: (_ for _ in ()).throw(OSError("nope")))
+    assert _status(capsysbinary) == ""
+
+
+def test_a_payload_that_is_not_json_does_not_stop_the_statusline(store, capsysbinary):
+    """The status line does not depend on stdin, so junk on it changes nothing."""
+    with db.connect() as conn:
+        _seed(conn)
+    assert "4 mem" in _status(capsysbinary, stdin="this is not json")
+
+
+@pytest.mark.parametrize("delta, expected", [
+    (timedelta(seconds=20), "0m"),
+    (timedelta(minutes=7), "7m"),
+    (timedelta(minutes=59), "59m"),
+    (timedelta(hours=3, minutes=30), "3h"),
+    (timedelta(days=9, hours=2), "9d"),
+    (timedelta(minutes=-5), "0m"),
+])
+def test_an_age_reads_in_the_largest_unit_that_fits(delta, expected):
+    now = datetime.now(timezone.utc)
+    assert hook._age((now - delta).isoformat(), now=now) == expected
+
+
+def test_a_timestamp_without_an_offset_is_read_as_utc():
+    now = datetime.now(timezone.utc)
+    naive = (now - timedelta(hours=2)).replace(tzinfo=None).isoformat()
+    assert hook._age(naive, now=now) == "2h"
 
 
 # -------------------------------------------------------------- failure paths
