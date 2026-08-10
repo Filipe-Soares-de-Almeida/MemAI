@@ -123,6 +123,35 @@ def test_a_skill_carries_no_machine_specific_path(skill):
     assert not found, f"{skill.name}/SKILL.md: {found.group(0)!r}"
 
 
+def test_the_curation_skill_lists_the_kinds_that_demand_a_verified():
+    """A skill that names the wrong set tells a pass to work around a guard.
+
+    Every kind in the list is spelled in the skill, and no kind outside it is
+    -- naming one that does not demand `verified` is the same error the other
+    way round. `set_confidence` is deliberately absent from the mapping: it
+    demands one only when its payload says `contradicted`.
+    """
+    text = _text(hook_install.skills_source() / "memai-maintenance")
+    # The claim's own sentence, stopping at the next bullet: a later bullet
+    # naming a kind would otherwise count as part of the list.
+    claim = re.search(r"destructive kinds:\*\*(.+?)\n- ", text, re.S)
+    assert claim, "memai-maintenance no longer states which kinds demand a verified"
+    said = {kind for kind in db.SUGGESTION_KINDS if f"`{kind}`" in claim.group(1)}
+    assert said == set(db.VERIFIED_REQUIRED), said ^ set(db.VERIFIED_REQUIRED)
+
+
+def test_the_distill_skill_lists_the_payload_keys_distill_applies():
+    """The skill tells a caller which keys travel with a distill, and names
+    the rejected ones elsewhere -- so this reads the enumeration itself, not
+    the file. A key present in one and not the other fails either way.
+    """
+    text = _text(hook_install.skills_source() / "memai-distill")
+    claim = re.search(r"payload accepts(.+?)and nothing else", text, re.S)
+    assert claim, "memai-distill no longer enumerates the accepted payload keys"
+    said = set(re.findall(r"`([a-z_]+)`", claim.group(1)))
+    assert said == set(db.DISTILL_PAYLOAD_KEYS), said ^ set(db.DISTILL_PAYLOAD_KEYS)
+
+
 def test_the_curation_skill_documents_every_suggestion_kind():
     """memai-maintenance holds the table of what a pass may stage. A kind
     missing from it is a kind no pass ever proposes -- which is how `review`

@@ -270,6 +270,28 @@ def test_destructive_kinds_require_verified(conn):
     assert all("verified required" in e["error"] for e in res["errors"])
 
 
+def test_every_kind_in_verified_required_is_actually_refused(conn):
+    """The mapping is the list of kinds that demand a live-facts check, and
+    the checks read their message from it -- so a kind added to the mapping
+    without a check site would ask for nothing. Each one is staged here with
+    an otherwise-valid payload and no `verified`.
+    """
+    a, b = _mk(conn, content="one"), _mk(conn, content="two")
+    payloads = {
+        "archive": ({"target_uid": a}, {}),
+        "merge": ({}, {"keep_uid": a, "drop_uid": b}),
+        "distill": ({}, {"source_uids": [a], "new_type": "note",
+                         "new_content": "the durable fact"}),
+    }
+    assert set(payloads) == set(db.VERIFIED_REQUIRED), (
+        "a kind entered VERIFIED_REQUIRED without a case here")
+    for kind, (extra, payload) in payloads.items():
+        res = db.stage_optimization(conn, f"{kind} guard",
+                                    [{"kind": kind, "payload": payload, **extra}])
+        assert res["staged"] == 0, kind
+        assert res["errors"][0]["error"] == db.VERIFIED_REQUIRED[kind], kind
+
+
 def test_merge_requires_verified(conn):
     """merge archives payload.drop_uid, so it takes the same verified as archive."""
     keep, drop = _mk(conn, content="canonical"), _mk(conn, content="dupe")
