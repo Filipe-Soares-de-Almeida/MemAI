@@ -3728,6 +3728,15 @@ SUGGESTION_KINDS = (
 DISTILL_TYPES = ("note", "reasoning", "anti_pattern")
 # the payload keys distill applies; any other key is a staging error
 DISTILL_PAYLOAD_KEYS = ("source_uids", "new_type", "new_content", "tags", "domain")
+# the kinds staging refuses without a non-empty `verified`, mapped to what
+# each one is being asked to justify: every one of them archives a memory.
+# set_confidence belongs here only when its payload says `contradicted`, so
+# it is checked where that payload is read.
+VERIFIED_REQUIRED = {
+    "archive": "verified required: describe the live-facts check that makes this memory archivable",
+    "merge": "verified required: merge archives payload.drop_uid -- describe the live-facts check",
+    "distill": "verified required: distill archives its sources -- describe the live-facts check",
+}
 
 
 CORPUS_SNIPPET_LEN = 120
@@ -4160,7 +4169,7 @@ def _validate_suggestion(conn: sqlite3.Connection, s: object) -> tuple[dict | No
         if err:
             return None, err
         if not verified:
-            return None, "verified required: describe the live-facts check that makes this memory archivable"
+            return None, VERIFIED_REQUIRED[kind]
     elif kind == "link":
         f = (str(payload.get("from_uid", "")) or "").strip()
         t = (str(payload.get("to_uid", "")) or "").strip()
@@ -4187,7 +4196,7 @@ def _validate_suggestion(conn: sqlite3.Connection, s: object) -> tuple[dict | No
         if target_uid and target_uid != drop:
             return None, "merge derives target_uid from payload.drop_uid; omit target_uid or make them match"
         if not verified:
-            return None, "verified required: merge archives payload.drop_uid -- describe the live-facts check"
+            return None, VERIFIED_REQUIRED[kind]
         target_uid = drop
     elif kind == "distill":
         if target_uid:
@@ -4213,7 +4222,7 @@ def _validate_suggestion(conn: sqlite3.Connection, s: object) -> tuple[dict | No
         if not str(payload.get("new_content", "")).strip():
             return None, "payload.new_content required"
         if not verified:
-            return None, "verified required: distill archives its sources -- describe the live-facts check"
+            return None, VERIFIED_REQUIRED[kind]
         payload = {**payload, "source_uids": sources}
 
     return {
