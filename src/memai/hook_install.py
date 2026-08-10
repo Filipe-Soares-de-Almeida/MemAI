@@ -1,4 +1,4 @@
-"""Registering memai's hooks in a host settings file.
+"""Registering memai's hooks, and installing the skills it ships.
 
 `memai-hook install` merges the three hook entries into the user's settings
 (`--project` for one repository's `.claude/settings.local.json`, `--settings`
@@ -6,6 +6,11 @@ for a named file). Hooks on the same event that memai did not write are kept
 as they are; memai's own entries are replaced, so a second run registers
 them once. An existing file is copied to `<name>.bak-<stamp>` before it is
 overwritten.
+
+`memai-hook install --skills` copies the skill directories bundled under
+`memai/skills/` into the `skills/` directory beside that settings file. Only
+the names memai ships are read or written; a file it would overwrite is
+copied to `<name>.bak-<stamp>` first.
 
 The command is written with forward slashes on every platform: a hook of
 `type: command` is handed to a shell, and a POSIX shell reads the
@@ -38,6 +43,35 @@ def user_settings_path() -> Path:
 
 def project_settings_path(root: Path | None = None) -> Path:
     return (root or Path.cwd()) / ".claude" / "settings.local.json"
+
+
+def skills_source() -> Path:
+    """The skill directories this package ships."""
+    return Path(__file__).parent / "skills"
+
+
+def skills_dir(settings: Path) -> Path:
+    """Where the skills belonging to `settings` go: `skills/` beside the file.
+
+    A host reads its skills from `.claude/skills`, and both settings files
+    live in a `.claude` directory -- the user's `settings.json` and a
+    project's `settings.local.json` -- so this lands on that directory for
+    either of them, and beside the file for a `--settings` target.
+    """
+    return settings.parent / "skills"
+
+
+def bundled_skills() -> list[Path]:
+    """The bundled skill directories, by name. Empty when none are shipped.
+
+    A directory whose name starts with `.` or `_` is not a skill.
+    """
+    try:
+        found = [p for p in skills_source().iterdir()
+                 if p.is_dir() and not p.name.startswith((".", "_"))]
+    except OSError:
+        return []
+    return sorted(found, key=lambda p: p.name)
 
 
 def hook_command() -> str:
@@ -147,4 +181,89 @@ def install(path: Path, *, command: str | None = None, write: bool = True) -> st
     lines.append(f"registered {', '.join(changed)} in {path}")
     lines.append(f"command: {command} <event>")
     lines.append("Restart the host (or open a new session) for a SessionStart hook to fire.")
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------- the skills
+
+def _files(skill: Path) -> list[Path]:
+    """Every file anywhere under a skill directory, in a stable order."""
+    return sorted(p for p in skill.rglob("*") if p.is_file())
+
+
+def _same(a: Path, b: Path) -> bool:
+    """Whether both paths are files holding the same bytes."""
+    try:
+        return a.read_bytes() == b.read_bytes()
+    except OSError:
+        return False
+
+
+def _copy_skill(source: Path, dest: Path) -> tuple[list[str], bool]:
+    """Copy `source`'s files into `dest`; return the backups made and whether
+    anything was written.
+
+    A destination file already holding the source bytes is left alone, so a
+    second run copies nothing and backs nothing up. Any other file in the way
+    is copied to `<name>.bak-<stamp>` before it is replaced.
+    """
+    notes: list[str] = []
+    written = False
+    for path in _files(source):
+        out = dest / path.relative_to(source)
+        if out.is_file() and _same(out, path):
+            continue
+        out.parent.mkdir(parents=True, exist_ok=True)
+        if out.is_file():
+            notes.append(f"backed up {backup(out)}")
+        shutil.copy2(path, out)
+        written = True
+    return notes, written
+
+
+def skill_state(target: Path) -> dict[str, str]:
+    """Each bundled skill name mapped to how `target` holds it.
+
+    `installed` when every file is there with the bundled bytes, `outdated`
+    when the directory exists but a file is missing or differs, `missing`
+    when the directory is not there. A skill in `target` that memai does not
+    ship is not reported.
+    """
+    state: dict[str, str] = {}
+    for skill in bundled_skills():
+        dest = target / skill.name
+        if not dest.is_dir():
+            state[skill.name] = "missing"
+            continue
+        files = _files(skill)
+        current = all(_same(dest / p.relative_to(skill), p) for p in files)
+        state[skill.name] = "installed" if current else "outdated"
+    return state
+
+
+def install_skills(target: Path, *, write: bool = True) -> str:
+    """Copy the bundled skills into `target`, one directory per skill, and
+    return a report to print.
+
+    With write=False nothing is copied and the report names the directories
+    it would write. Bundling no skills is not an error -- the report says
+    nothing was installed.
+    """
+    skills = bundled_skills()
+    if not skills:
+        return f"{skills_source()}: no skills bundled -- nothing installed."
+    if not write:
+        return "\n".join(f"would install {target / s.name}" for s in skills)
+
+    lines: list[str] = []
+    installed: list[str] = []
+    for skill in skills:
+        notes, written = _copy_skill(skill, target / skill.name)
+        lines.extend(notes)
+        if written:
+            installed.append(skill.name)
+    if not installed:
+        names = ", ".join(s.name for s in skills)
+        return f"{target}: already holds {names} -- nothing to do."
+    lines.append(f"installed {', '.join(installed)} in {target}")
     return "\n".join(lines)
