@@ -51,16 +51,15 @@ Payload details:
   memory is filed nowhere. A cross-cutting axis does not go here: after
   the apply, `crosslist` (`{"also": ["omni/x900"]}`) or
   `also_domain(uid, 'omni/x900')`.
-- **The payload is read for `new_type`, `new_content`, `tags` and
-  `domain`, and nothing else.** An unrecognized key is staged without an
-  error and dropped at apply time, so `also`, `review_after`, `source_ref`
-  or `session` in a distill payload look accepted and do nothing (§2).
-- **Do not distill a `diagram`.** Its content is the projection of its
-  graph, and archiving it trades a navigable flow for prose. Staging is no
-  guard here — a source only has to exist, so a diagram uid stages
-  cleanly and applies. An obsolete diagram is an explicit `archive`; a
-  **wrong** one is a fix to the graph. A diagram never arrives as a
-  candidate from `dedup_scan`, which excludes them from its pairs.
+- **The payload accepts `source_uids`, `new_type`, `new_content`, `tags`
+  and `domain`, and nothing else.** Any other key is refused at staging
+  and returned in `errors`, so `also`, `review_after`, `source_ref` and
+  `session` do not travel with a distill — they are the follow-up in §2.
+- **A `diagram` cannot be a source.** Its content is the projection of its
+  graph, and archiving it trades a navigable flow for prose, so staging
+  refuses it. An obsolete diagram is an explicit `archive`; a **wrong**
+  one is a fix to the graph. It never arrives as a candidate from
+  `dedup_scan` either, which excludes diagrams from its pairs.
 
 ## 2. The new memory inherits nothing — `review_after` and `source_ref`
 
@@ -131,8 +130,8 @@ A pair with a high `ratio` and **the same durable content** → **`merge`**
 Keep the richer, better-verified side. When each side holds something the
 other does not → n-ary `distill`, synthesizing a new memory from both.
 
-- `verified` is demanded by the validator on `distill` and **not** on
-  `merge`, which archives the `drop` all the same. Write one for both.
+- `verified` is demanded on **both** — each archives a memory. Say which
+  side survives and what the live check was.
 - Pairs that merely **relate** are not a merge → they are a link (hand
   them to [[memai-link]]).
 - `dedup_scan` **never merges anything**: it returns candidate pairs with

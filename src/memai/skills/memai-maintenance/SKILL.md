@@ -122,7 +122,8 @@ sub-skill. Read each source once; nothing below is read twice.
 | `distill` | `{source_uids: […], new_type, new_content, tags?, domain?}` | **n-ary**; `new_type` ∈ `note` \| `reasoning` \| `anti_pattern`; creates the target, links `supersedes` from it to every source and archives them. **Omit `target_uid`** — there is nothing to point at yet |
 
 - **`verified` is mandatory on the destructive kinds:** `archive`,
-  `set_confidence=contradicted`, `distill`. Staging refuses them without it.
+  `set_confidence=contradicted`, `merge`, `distill`. Staging refuses them
+  without it — `merge` and `distill` because they archive a memory too.
   Describe the **live** check that justifies it (file:line, a schema column, a
   commit, the task's own state).
 - An invalid suggestion is **skipped** and returned in `errors` — fix it and
