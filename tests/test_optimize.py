@@ -209,7 +209,8 @@ def test_apply_link_and_revert(conn):
 def test_apply_merge_archives_drop_and_links(conn):
     keep, drop = _mk(conn, content="canonical"), _mk(conn, content="dupe")
     run = db.stage_optimization(conn, "r", [
-        {"kind": "merge", "payload": {"keep_uid": keep, "drop_uid": drop}},
+        {"kind": "merge", "payload": {"keep_uid": keep, "drop_uid": drop},
+         "verified": "read both against the live routine"},
     ])
     sug = db.get_optimization_suggestions(conn, run["run_id"])[0]
     db.apply_suggestion(conn, sug["id"])
@@ -269,13 +270,27 @@ def test_destructive_kinds_require_verified(conn):
     assert all("verified required" in e["error"] for e in res["errors"])
 
 
+def test_merge_requires_verified(conn):
+    """merge archives payload.drop_uid, so it takes the same verified as archive."""
+    keep, drop = _mk(conn, content="canonical"), _mk(conn, content="dupe")
+    res = db.stage_optimization(conn, "merge guard", [
+        {"kind": "merge", "payload": {"keep_uid": keep, "drop_uid": drop}},
+        {"kind": "merge", "payload": {"keep_uid": keep, "drop_uid": drop},
+         "verified": "read both against the live routine"},
+    ])
+    assert res["staged"] == 1
+    assert {e["index"] for e in res["errors"]} == {0}
+    assert "verified required" in res["errors"][0]["error"]
+    assert db.get_memory(conn, drop)["status"] == "active"
+
+
 def test_link_merge_reject_mismatched_target_uid(conn):
     a, b = _mk(conn, content="one"), _mk(conn, content="two")
     res = db.stage_optimization(conn, "targets", [
         {"kind": "link", "target_uid": b,  # mismatch: derived is from_uid
          "payload": {"from_uid": a, "to_uid": b, "relation_type": "relates_to"}},
         {"kind": "merge", "target_uid": a,  # mismatch: derived is drop_uid
-         "payload": {"keep_uid": a, "drop_uid": b}},
+         "payload": {"keep_uid": a, "drop_uid": b}, "verified": "read both"},
         {"kind": "link", "target_uid": a,  # matching is fine
          "payload": {"from_uid": a, "to_uid": b, "relation_type": "relates_to"}},
     ])
@@ -300,6 +315,37 @@ def test_distill_validation(conn):
     ])
     assert res["staged"] == 1
     assert {e["index"] for e in res["errors"]} == {0, 1, 2, 3, 4, 5, 6}
+
+
+def test_distill_rejects_a_payload_key_it_does_not_apply(conn):
+    """A key outside the distill payload comes back in errors instead of being dropped."""
+    a = _mk(conn, content="one")
+    ok = {"source_uids": [a], "new_type": "note", "new_content": "the durable fact"}
+    res = db.stage_optimization(conn, "distill keys", [
+        {"kind": "distill", "payload": {**ok, "review_after": "90d"}, "verified": "checked repo"},
+        {"kind": "distill", "payload": {**ok, "source_ref": "src/memai/db.py", "session": "s"},
+         "verified": "checked repo"},
+        {"kind": "distill", "payload": ok, "verified": "checked repo"},
+    ])
+    assert res["staged"] == 1
+    assert {e["index"] for e in res["errors"]} == {0, 1}
+    assert "review_after" in res["errors"][0]["error"]
+    assert "session, source_ref" in res["errors"][1]["error"]
+    assert all("not accepted by distill" in e["error"] for e in res["errors"])
+
+
+def test_distill_refuses_a_diagram_as_a_source(conn):
+    """A diagram stays out of source_uids: distill archives every source it names."""
+    diag, note = _mk_diagram(conn), _mk(conn, content="the warmup fills every hot key")
+    res = db.stage_optimization(conn, "distill sources", [
+        {"kind": "distill", "payload": {
+            "source_uids": [note, diag], "new_type": "note",
+            "new_content": "warmup loads the hot keys before traffic",
+        }, "verified": "walked the routine in the code"},
+    ])
+    assert res["staged"] == 0 and res["run_id"] is None
+    assert "is a diagram" in res["errors"][0]["error"]
+    assert db.get_memory(conn, diag)["status"] == "active"
 
 
 def test_distill_apply_and_revert(conn):
