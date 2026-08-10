@@ -89,9 +89,25 @@ that folding is on for the MCP tools and off for the dashboard, which has to
 still holds without disappearing — knowing a claim was ruled out is what stops
 it being written again.
 
+Every list-style read is snippet-truncated at 400 characters, so each result
+carries `est_tokens` — the estimated cost of the record's *full* content, not of
+the snippet — and the response carries the sum over what it returned, which is
+what turns a `get_memory(uid)` into a priced decision rather than a guess. It is
+a fixed ratio over the character length, not a tokenizer. The four list tools
+return `{"results": […], "est_tokens": N}` for that reason; `pulse` prices every
+record it hands over, and `get_memory` does not — it already returned the whole
+thing.
+
 Both retrievers only *widen the candidate set*; whether a candidate answers the
 query is the calling agent's judgement. `list_by_domain` / `list_recent` are
 the fallback for a search that comes back thin.
+
+`timeline` asks what the retrievers cannot: not what mentions a record, but what
+was being written when it was. Anchor it with a `uid`, or with a `query` whose
+top hit becomes the anchor (the response says which was used and which record it
+landed on), and it returns the records created immediately `before` and `after`
+it, in creation order. `domain` and `type` narrow the neighbourhood rather than
+the anchor, so one call reads a whole store's week or one routine's.
 
 `pulse` and the `list_*` tools sort by `created_at DESC`, never by similarity —
 a similarity top-1 can surface an old memory over a current one, so the
@@ -224,16 +240,16 @@ request for the whole session, so the reasoning and worked detail live behind
 `help()` and only what a caller needs in order to choose correctly stays in the
 schema.
 
-The same arithmetic applies to the tool list itself. All 35 schemas cost about
-8.8k tokens of every request whether or not the session ever documents a flow
+The same arithmetic applies to the tool list itself. All 36 schemas cost about
+9.5k tokens of every request whether or not the session ever documents a flow
 or runs a curation pass, so `MEMAI_TOOLS` names the groups to publish:
 
 | `MEMAI_TOOLS` | tools | ~tokens/request |
 |---|---|---|
-| `full` (default) | 35 | 8.8k |
-| `core,curation` | 29 | 7.0k |
-| `core,diagrams` | 27 | 7.0k |
-| `core` | 21 | 5.2k |
+| `full` (default) | 36 | 9.5k |
+| `core,curation` | 30 | 7.7k |
+| `core,diagrams` | 28 | 7.7k |
+| `core` | 22 | 5.9k |
 
 `core` is the reading, writing, editing and linking surface; `diagrams` is
 authoring one (`get_diagram` stays in core — reading a flow is a read);
@@ -259,6 +275,7 @@ instead of concluding memai cannot do it.
 | `recall(query, domain, limit)` | Relevance-ranked recall of `note()`'d knowledge |
 | `list_by_domain(domain, type, limit, subtree)` | Recency-ordered, scoped to a path and its subdomains |
 | `list_recent(type, domain, limit, subtree)` | Recency-ordered, global |
+| `timeline(uid, query, before, after, domain, type)` | The records written either side of one memory, in `created_at` order |
 | `list_domains()` | The domain tree: own/subtree/cross-listed counts and latest activity |
 | `get_memory(uid)` | Full record: edit history, relations, referencing diagrams |
 | `get_relations(uid)` | Relations for a memory |
@@ -335,8 +352,9 @@ Register all three with:
 ```
 memai-hook install            # the user's ~/.claude/settings.json
 memai-hook install --project  # this repository's .claude/settings.local.json
-memai-hook install --check    # what is registered; exit 1 if anything is missing
-memai-hook install --print    # the hooks block it would write, writing nothing
+memai-hook install --skills   # copy the bundled skills into .claude/skills/
+memai-hook install --check    # hooks and skills; exit 1 if a hook is missing
+memai-hook install --print    # what it would write, writing nothing
 ```
 
 Hooks on the same event that memai did not write are left alone, memai's own
@@ -376,6 +394,42 @@ reaches the MCP server, not a hook process.
 Writes carry a `session` stamp derived per server process unless one is passed,
 so a conversation's memories group together in the dashboard without an agent
 having to remember an id.
+
+### The status line
+
+`memai-hook statusline` reads the same store the hook events do and writes one
+plain line — not the JSON object an event emits — for a host that renders a
+status line:
+
+    memai 128 mem | acme/x100 | cp 3h ago
+
+How much is stored, the busiest domain, and how old the latest checkpoint is,
+in under 80 characters. The domain path is the field that gives way when the
+line would be too long. `--domain` scopes all three. Same tolerance as the
+events: an empty store, an unreadable one, junk on stdin — no line, exit 0.
+
+The domain is ranked on the memories naming that exact path, filed there or
+cross-listed there, and not on its subtree, so a parent holding nothing of its
+own never outranks the child doing the work.
+
+### Bundled skills
+
+The package ships agent skills as Markdown under `memai/skills/`, one directory
+per skill: how to use the store, and the curation pass as an orchestrator plus
+one skill per decision it makes. `memai-hook install --skills` copies them into
+the `skills/` directory beside the settings file it would otherwise register
+hooks in — `~/.claude/skills` by default, this repository's `.claude/skills`
+with `--project`.
+
+Only the names memai ships are read or written: a skill directory it does not
+ship is left untouched, and a file it would overwrite is copied to
+`<name>.bak-<stamp>` first. A file already holding the bundled bytes is left
+alone, so a second run copies nothing.
+
+`--check` reports each bundled skill as `installed`, `outdated` or `missing`
+alongside the hooks, but only the hooks decide its exit code: a hook that is
+missing puts the store out of reach, while an uninstalled skill is a choice.
+`--check --skills` moves the gate to the skills.
 
 ## Admin dashboard
 
