@@ -187,14 +187,14 @@ def test_search_defaults_to_a_handful(store):
     context for one call. The caller can still ask for more."""
     for content in _FINDINGS:
         server.note(content=content, tags="finding")
-    assert len(server.search("finding")) == 10
-    assert len(server.search("finding", limit=12)) == 12
+    assert len(server.search("finding")["results"]) == 10
+    assert len(server.search("finding", limit=12)["results"]) == 12
 
 
 def test_recall_defaults_the_same_way(store):
     for content in _FINDINGS:
         server.note(content=content, tags="finding")
-    assert len(server.recall("finding")) == 10
+    assert len(server.recall("finding")["results"]) == 10
 
 
 # ------------------------------------------------------- how far is too far

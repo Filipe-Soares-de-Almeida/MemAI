@@ -14,9 +14,12 @@ from __future__ import annotations
 import asyncio
 import importlib
 import json
+import re
 import sys
 
 import pytest
+
+from memai import db
 
 
 def _load(monkeypatch, setting: str | None):
@@ -58,10 +61,18 @@ def test_the_default_offers_everything(monkeypatch):
     assert _published(module) == set(module._TOOLS)
 
 
+def test_the_published_counts_are_the_ones_documented(monkeypatch):
+    """The four counts the README's MEMAI_TOOLS table quotes."""
+    counts = {setting or "full": len(_published(_load(monkeypatch, setting)))
+              for setting in (None, "core,curation", "core,diagrams", "core")}
+    assert counts == {"full": 36, "core,curation": 30, "core,diagrams": 28, "core": 22}
+
+
 def test_core_leaves_out_authoring_and_curation(monkeypatch):
     module = _load(monkeypatch, "core")
     names = _published(module)
-    assert {"note", "pulse", "search", "get_memory", "get_diagram", "help"} <= names
+    assert {"note", "pulse", "search", "timeline", "get_memory", "get_diagram",
+            "help"} <= names
     assert not names & {"diagram", "diagram_node", "optimize_scan", "purge_memory"}
 
 
@@ -134,3 +145,20 @@ def test_the_long_documentation_is_not_in_the_schema(monkeypatch):
     for name, extra in module._LONG_DOC.items():
         assert extra.strip() not in described[name]
         assert extra.strip() in module.help(command=name)["doc"]
+
+
+def test_help_names_every_suggestion_kind(monkeypatch):
+    """A kind absent from the payload table is a kind nobody stages.
+
+    help() is where a caller reads what optimize_stage accepts, so the table
+    there is held to the tuple the validator works from.
+    """
+    module = _load(monkeypatch, None)
+    doc = module.help(command="optimize_stage")["doc"]
+    # The table itself, not the prose around it: `review` is a word a
+    # paragraph about human review would satisfy on its own.
+    table = re.search(r"Kinds and their payload:\n(.+?)\n\n", doc, re.S)
+    assert table, "help() no longer documents the payload table"
+    missing = [kind for kind in db.SUGGESTION_KINDS
+               if not re.search(rf"\b{kind}\b", table.group(1))]
+    assert not missing, missing

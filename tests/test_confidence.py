@@ -70,5 +70,5 @@ def test_listing_a_scope_still_means_everything_in_it(store):
     """The exclusion is pulse's, not the list tools'."""
     uid = server.note(content="row merge keeps the older id", domain="acme/x100")["uid"]
     server.set_confidence(uid, "contradicted")
-    assert [r["uid"] for r in server.list_by_domain("acme/x100")] == [uid]
-    assert [r["uid"] for r in server.list_recent(domain="acme/x100")] == [uid]
+    assert [r["uid"] for r in server.list_by_domain("acme/x100")["results"]] == [uid]
+    assert [r["uid"] for r in server.list_recent(domain="acme/x100")["results"]] == [uid]

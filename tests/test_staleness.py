@@ -84,7 +84,7 @@ def test_a_memory_that_does_not_go_stale_carries_no_field(store):
 
 def test_search_results_stay_clean_too(store):
     server.note(content="cache warmup runs nightly")
-    hit = server.search("cache warmup")[0]
+    hit = server.search("cache warmup")["results"][0]
     assert "review_after" not in hit and "source_ref" not in hit
 
 
