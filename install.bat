@@ -7,7 +7,7 @@ if not exist .venv (
     py -3 -m venv .venv 2>nul || python -m venv .venv
 )
 if not exist .venv\Scripts\activate.bat (
-    echo Failed to create .venv -- is Python 3.11+ on PATH?
+    echo Failed to create .venv -- is Python 3.12+ on PATH?
     exit /b 1
 )
 
