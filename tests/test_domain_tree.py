@@ -191,9 +191,9 @@ def test_mcp_reads_take_the_scope(monkeypatch, tmp_path):
     monkeypatch.setenv("MEMAI_HOME", str(tmp_path))
     server.note(content="module wide", domain="acme/x100")
     server.note(content="routine detail", domain="acme/x100/p200")
-    assert len(server.list_by_domain(domain="acme")) == 2
-    assert len(server.list_by_domain(domain="acme", subtree=False)) == 0
-    assert len(server.list_recent(domain="acme/x100", subtree=False)) == 1
+    assert len(server.list_by_domain(domain="acme")["results"]) == 2
+    assert len(server.list_by_domain(domain="acme", subtree=False)["results"]) == 0
+    assert len(server.list_recent(domain="acme/x100", subtree=False)["results"]) == 1
     assert len(server.pulse(domain="acme")["recent_notes"]) == 2
 
 

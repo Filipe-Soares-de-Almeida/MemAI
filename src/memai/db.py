@@ -488,6 +488,21 @@ def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+# Characters a token is worth in est_tokens. An ESTIMATE, not a tokenizer:
+# no host's tokenizer is reachable from here, so the count is a fixed ratio
+# over the character length.
+CHARS_PER_TOKEN = 4
+
+
+def est_tokens(chars: int) -> int:
+    """Estimated token count for a body of `chars` characters.
+
+    chars / CHARS_PER_TOKEN, rounded up; 0 characters is 0 tokens. Good for
+    budgeting a fetch, not for predicting a host's own accounting.
+    """
+    return (max(chars, 0) + CHARS_PER_TOKEN - 1) // CHARS_PER_TOKEN
+
+
 def _load_vec_extension(conn: sqlite3.Connection) -> bool:
     if sqlite_vec is None:
         return False
@@ -2988,6 +3003,52 @@ def list_recent(
     sql.append("ORDER BY created_at DESC LIMIT ?")
     params.append(limit)
     return conn.execute(" ".join(sql), params).fetchall()
+
+
+def timeline_neighbours(
+    conn: sqlite3.Connection, anchor: sqlite3.Row, *, before: int = 3, after: int = 3,
+    domain: str = "", type: str = "", status: str = "active", subtree: bool = True,
+) -> tuple[list[sqlite3.Row], list[sqlite3.Row]]:
+    """The rows either side of `anchor` in creation order.
+
+    Returns (older, newer): the `before` rows created immediately before the
+    anchor and the `after` rows created immediately after it, both
+    oldest-first. The anchor is in neither list. `domain`/`type`/`status`
+    narrow the neighbourhood only -- the anchor is the row the caller passes
+    in, wherever it is filed and whatever its status.
+
+    Ordering is (created_at, rowid_pk). created_at is not unique: two rows
+    written in the same instant compare equal, and the insertion order is
+    what separates them -- without it a row can land on both sides.
+    """
+    where = ["1=1"]
+    params: list = []
+    if domain:
+        clause, values, _ = domain_scope_clause(conn, domain, alias="", subtree=subtree)
+        where.append(clause)
+        params.extend(values)
+    if type:
+        where.append("AND type = ?")
+        params.append(type)
+    if status:
+        where.append("AND status = ?")
+        params.append(status)
+    where_sql = " ".join(where)
+    at = [anchor["created_at"], anchor["created_at"], anchor["rowid_pk"]]
+
+    older = conn.execute(
+        f"""SELECT * FROM memories WHERE {where_sql}
+              AND (created_at < ? OR (created_at = ? AND rowid_pk < ?))
+            ORDER BY created_at DESC, rowid_pk DESC LIMIT ?""",
+        [*params, *at, max(before, 0)],
+    ).fetchall()
+    newer = conn.execute(
+        f"""SELECT * FROM memories WHERE {where_sql}
+              AND (created_at > ? OR (created_at = ? AND rowid_pk > ?))
+            ORDER BY created_at ASC, rowid_pk ASC LIMIT ?""",
+        [*params, *at, max(after, 0)],
+    ).fetchall()
+    return list(reversed(older)), list(newer)
 
 
 def list_domains(

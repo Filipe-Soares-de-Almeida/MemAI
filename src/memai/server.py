@@ -2,7 +2,7 @@
 
 Tools for long-term agent memory: note/checkpoint/anti_pattern/
 reasoning/handoff/diagram to write, search/recall/list_by_domain/
-list_recent/list_domains/pulse to read, plus edit history, a relations
+list_recent/timeline/list_domains/pulse to read, plus edit history, a relations
 graph, a dedup-candidate scanner, confidence/status tracking, and help()
 for self-documentation straight from these docstrings. Retrieval is
 hybrid FTS5 (BM25) + local model2vec vectors in sqlite-vec, all in one
@@ -201,16 +201,41 @@ TYPE_HANDOFF = "handoff"            # handoff()
 TYPE_DIAGRAM = "diagram"            # diagram()
 
 
+def _with_est_tokens(d: dict) -> dict:
+    """Annotate a result with `est_tokens` for its FULL content.
+
+    Call before truncating: the number a caller budgets a get_memory(uid)
+    with is what the whole record costs, not what the snippet cost.
+    """
+    d["est_tokens"] = db.est_tokens(len(d.get("content", "")))
+    return d
+
+
 def _snippet_dict(d: dict) -> dict:
     """Truncate content in list-style results so N hits can't blow the
     caller's token budget. Full content is one get_memory(uid) away --
     this only needs to be enough for the agent to judge which
     candidates are worth opening.
+
+    Carries `est_tokens` for the full record, so the caller can price that
+    call before making it.
     """
+    _with_est_tokens(d)
     content = d.get("content", "")
     if len(content) > SNIPPET_LIMIT:
         d["content"] = content[:SNIPPET_LIMIT].rstrip() + f"... [+{len(content) - SNIPPET_LIMIT} chars, see get_memory(uid)]"
     return d
+
+
+def _listing(rows) -> dict:
+    """Rows as a list result: {"results": [...], "est_tokens": N}.
+
+    Each result is snippet-truncated and carries its own `est_tokens`; the
+    top-level one is their sum -- what opening everything this response
+    returned would cost.
+    """
+    results = [_snippet_dict(_row_to_dict(r)) for r in rows]
+    return {"results": results, "est_tokens": sum(r["est_tokens"] for r in results)}
 
 
 def _read(conn, rows):
@@ -738,7 +763,7 @@ def _write_render(conn, uid: str, data: dict, format: str) -> dict:
 
 
 @tool("core")
-def search(query: str, domain: str = "", type: str = "", limit: int = 10) -> list[dict]:
+def search(query: str, domain: str = "", type: str = "", limit: int = 10) -> dict:
     """Hybrid search over memory content+tags+domain: BM25 keywords + local-model vectors.
 
     Each result is annotated with match_source ("fts" | "vec" | "both"),
@@ -755,8 +780,11 @@ def search(query: str, domain: str = "", type: str = "", limit: int = 10) -> lis
 
     Only active memories by default.
     Falls back to keyword-only if the embedding model is unavailable.
-    Content is snippet-truncated per result -- call get_memory(uid) for the
-    full record.
+
+    Returns {"results": [...], "est_tokens": N}. Content is
+    snippet-truncated per result -- call get_memory(uid) for the full
+    record; a result's `est_tokens` estimates what that full record costs,
+    and the top-level `est_tokens` is the sum over the results.
 
     Two annotations worth acting on. `succeeded_by` means something in the
     store supersedes this memory: read that one instead. `collapsed` lists
@@ -788,19 +816,23 @@ def search(query: str, domain: str = "", type: str = "", limit: int = 10) -> lis
     with db.connect() as conn:
         results = _read(conn, db.search_hybrid(conn, query, domain=domain, type=type,
                                               limit=limit, collapse=True))
-    return [_snippet_dict(_row_to_dict(r)) for r in results]
+    return _listing(results)
 
 
 @tool("core")
-def recall(query: str, domain: str = "", limit: int = 10) -> list[dict]:
+def recall(query: str, domain: str = "", limit: int = 10) -> dict:
     """Recall long-term knowledge saved with note() (type='note').
 
     The dedicated verb for "bring back what I noted": a hybrid search
     (BM25 + vectors) scoped to type='note', ranked by relevance -- which
     is what you want for timeless facts/rules/decisions. note() has no
     recency warm-up hook the way checkpoints have pulse(); this (or
-    search(type='note')) is how notes come back. Content is
-    snippet-truncated -- call get_memory(uid) for the full record.
+    search(type='note')) is how notes come back.
+
+    Returns {"results": [...], "est_tokens": N}. Content is
+    snippet-truncated -- call get_memory(uid) for the full record; a
+    result's `est_tokens` estimates what that full record costs, and the
+    top-level `est_tokens` is the sum over the results.
 
     domain scopes to a path and everything nested under it, and resolves a
     bare deep segment the same way search() does. Results carry the same
@@ -809,13 +841,13 @@ def recall(query: str, domain: str = "", limit: int = 10) -> list[dict]:
     with db.connect() as conn:
         results = _read(conn, db.search_hybrid(conn, query, domain=domain, type=TYPE_NOTE,
                                               limit=limit, collapse=True))
-    return [_snippet_dict(_row_to_dict(r)) for r in results]
+    return _listing(results)
 
 
 @tool("core")
 def list_by_domain(
     domain: str, type: str = "", limit: int = 50, subtree: bool = True
-) -> list[dict]:
+) -> dict:
     """List active memories for a domain and its subdomains, most recent first.
 
     Fallback when search misses. domain is a path, matched from the
@@ -830,30 +862,99 @@ def list_by_domain(
     branches rather than picking one -- each row's `domain` says which
     branch it came from. list_domains() is the way to see the paths first.
 
-    Content is snippet-truncated per result -- call get_memory(uid) for the
-    full record.
+    Returns {"results": [...], "est_tokens": N}. Content is
+    snippet-truncated per result -- call get_memory(uid) for the full
+    record; a result's `est_tokens` estimates what that full record costs,
+    and the top-level `est_tokens` is the sum over the results.
     """
     with db.connect() as conn:
         rows = _read(conn, db.list_by_domain(conn, domain, type=type, limit=limit,
                                             subtree=subtree))
-    return [_snippet_dict(_row_to_dict(r)) for r in rows]
+    return _listing(rows)
 
 
 @tool("core")
 def list_recent(
     type: str = "", domain: str = "", limit: int = 20, subtree: bool = True
-) -> list[dict]:
+) -> dict:
     """List the most recent active memories, optionally filtered by type/domain.
 
     A domain covers its subdomains, and a bare deep segment resolves to the
     branches holding it (see list_by_domain); subtree=False narrows to that
-    exact path. Content is snippet-truncated per result -- call
-    get_memory(uid) for the full record.
+    exact path.
+
+    Returns {"results": [...], "est_tokens": N}. Content is
+    snippet-truncated per result -- call get_memory(uid) for the full
+    record; a result's `est_tokens` estimates what that full record costs,
+    and the top-level `est_tokens` is the sum over the results.
     """
     with db.connect() as conn:
         rows = _read(conn, db.list_recent(conn, type=type, domain=domain, limit=limit,
                                          subtree=subtree))
-    return [_snippet_dict(_row_to_dict(r)) for r in rows]
+    return _listing(rows)
+
+
+@tool("core")
+def timeline(
+    uid: str = "", query: str = "", before: int = 3, after: int = 3,
+    domain: str = "", type: str = "",
+) -> dict:
+    """What else was being written around one memory, in creation order.
+
+    For the question search cannot ask: not what mentions this record, but
+    what was being written when it was. Neighbours are picked by time
+    alone, so they come back whether or not they share a word with the
+    anchor -- around a checkpoint, that is the notes and pitfalls of the
+    same stretch of work.
+
+    One of uid or query is required. uid names the anchor outright; query
+    searches for it and takes the top hit (the same hybrid search search()
+    runs, scoped by domain/type). Give both and uid wins. The response
+    reports `anchored_by` ('uid' or 'query') and the whole anchor record,
+    so which record the timeline is built around is never a guess.
+
+    Returns {"anchored_by": ..., "anchor": {...}, "before": [...],
+    "after": [...]}: `before` is the `before` records created immediately
+    before the anchor and `after` the `after` records created immediately
+    after it, both oldest first, so before + [anchor] + after reads
+    straight down the clock. Neither list contains the anchor.
+
+    domain and type narrow the NEIGHBOURHOOD, not the anchor: a memory
+    named by uid comes back as named, and the records around it are the ones
+    matching the filters. domain covers a path and everything under it, plus
+    what is cross-listed into it, and resolves a bare deep segment the way
+    the other scoped reads do. Archived records are left out of the
+    neighbourhood, as everywhere else by default.
+
+    Each record is snippet-truncated with `est_tokens` for its full content
+    -- call get_memory(uid) to open one.
+    """
+    if not uid and not query:
+        return _errors(["timeline needs uid or query: one names the anchor, "
+                        "the other searches for it"])
+    with db.connect() as conn:
+        if uid:
+            anchored_by = "uid"
+            anchor = db.get_memory(conn, uid)
+            if anchor is None:
+                return _errors([f"no memory {uid}"])
+        else:
+            anchored_by = "query"
+            hits = db.search_hybrid(conn, query, domain=domain, type=type, limit=1)
+            if not hits:
+                return _errors([f"no memory matches query: {query}"])
+            # Re-read as a record: a search hit carries retrieval annotations
+            # (match_source, ranks) that are not part of the memory.
+            anchor = db.get_memory(conn, hits[0]["uid"])
+        older, newer = db.timeline_neighbours(
+            conn, anchor, before=before, after=after, domain=domain, type=type)
+        _read(conn, [anchor, *older, *newer])
+    return {
+        "anchored_by": anchored_by,
+        "anchor": _snippet_dict(_row_to_dict(anchor)),
+        "before": [_snippet_dict(_row_to_dict(r)) for r in older],
+        "after": [_snippet_dict(_row_to_dict(r)) for r in newer],
+    }
 
 
 @tool("core")
@@ -965,6 +1066,11 @@ def pulse(domain: str = "") -> dict:
     recall()/search(). Those three lists are snippet-truncated -- call
     get_memory(uid) for one in full.
 
+    latest_checkpoint and those three lists carry `est_tokens`, the
+    estimated cost of a record's FULL content: on a truncated one that is
+    what the get_memory(uid) would cost, on latest_checkpoint it is what
+    this response already spent. `diagrams` has no bodies to price.
+
     diagrams lists the documented flows by title only, never inlined:
     a whole graph would swamp a warm-up. Read one with get_diagram(uid)
     when the work actually touches that routine.
@@ -1016,6 +1122,9 @@ def pulse(domain: str = "") -> dict:
             })
         checkpoint_dict = _row_to_dict(latest_checkpoint)
         if checkpoint_dict:
+            # Returned whole, so its est_tokens is what this response spent
+            # on it rather than what a fetch would cost.
+            _with_est_tokens(checkpoint_dict)
             checkpoint_dict["relations"] = [_row_to_dict(r) for r in db.get_relations(conn, checkpoint_dict["uid"])]
         # A warm-up hands all of this to the caller, so all of it counts as
         # read -- diagrams included, which are named here and nothing else.
@@ -1490,6 +1599,7 @@ Kinds and their payload:
   redomain           {"domain": str}
   crosslist          {"also": [path, ...]}         replaces the whole set
   set_confidence     {"confidence": "unverified|confirmed|contradicted"}
+  review             {"review_after": str}         a date or a span ('180d'); '' clears it
   archive            {"reason": str}               soft/reversible; never hard-deletes
   link               {"from_uid", "to_uid", "relation_type", "note"?}
   merge              {"keep_uid", "drop_uid", "note"?}   links supersedes + archives drop
@@ -1585,6 +1695,7 @@ _TOOLS = {
     "recall": recall,
     "list_by_domain": list_by_domain,
     "list_recent": list_recent,
+    "timeline": timeline,
     "list_domains": list_domains,
     "also_domain": also_domain,
     "unfile_domain": unfile_domain,
