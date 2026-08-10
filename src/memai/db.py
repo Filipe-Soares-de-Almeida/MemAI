@@ -3726,6 +3726,8 @@ SUGGESTION_KINDS = (
 # distill targets must be durable knowledge types -- distilling INTO a
 # checkpoint/handoff would just recreate the ephemera it exists to retire
 DISTILL_TYPES = ("note", "reasoning", "anti_pattern")
+# the payload keys distill applies; any other key is a staging error
+DISTILL_PAYLOAD_KEYS = ("source_uids", "new_type", "new_content", "tags", "domain")
 
 
 CORPUS_SNIPPET_LEN = 120
@@ -4184,10 +4186,16 @@ def _validate_suggestion(conn: sqlite3.Connection, s: object) -> tuple[dict | No
             return None, "cannot merge a memory with itself"
         if target_uid and target_uid != drop:
             return None, "merge derives target_uid from payload.drop_uid; omit target_uid or make them match"
+        if not verified:
+            return None, "verified required: merge archives payload.drop_uid -- describe the live-facts check"
         target_uid = drop
     elif kind == "distill":
         if target_uid:
             return None, "distill creates a new memory; omit target_uid"
+        extra = sorted(k for k in payload if k not in DISTILL_PAYLOAD_KEYS)
+        if extra:
+            return None, (f"payload keys not accepted by distill: {', '.join(extra)} "
+                          f"(allowed: {', '.join(DISTILL_PAYLOAD_KEYS)})")
         sources = payload.get("source_uids")
         if not isinstance(sources, list) or not sources:
             return None, "payload.source_uids must be a non-empty list"
@@ -4197,6 +4205,9 @@ def _validate_suggestion(conn: sqlite3.Connection, s: object) -> tuple[dict | No
         for u in sources:
             if not _memory_exists(conn, u):
                 return None, f"payload.source_uids not found: {u!r}"
+            if is_diagram(conn, u):
+                return None, (f"{u} is a diagram: distill archives its sources. "
+                              "Use archive to retire a flow on its own.")
         if payload.get("new_type") not in DISTILL_TYPES:
             return None, f"payload.new_type must be one of {DISTILL_TYPES}"
         if not str(payload.get("new_content", "")).strip():
