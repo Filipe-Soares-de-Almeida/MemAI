@@ -7,7 +7,13 @@ JSON object on stdout:
   pre-compact     a reminder to checkpoint before the context is summarised
   stop            a nudge to checkpoint, only when nothing was written
 
-`memai-hook install` registers all three with the host rather than emitting
+One more subcommand reads the store the same way and writes plain text
+instead:
+
+  statusline      the store in a single line, for a host's status line
+
+`memai-hook install` registers the three events with the host, and
+`install --skills` copies the bundled skills into place, rather than emitting
 anything -- see memai.hook_install.
 
 No MCP: the SQLite store is opened directly, so a hook needs no server to be
@@ -33,6 +39,10 @@ from memai import brief, db, hook_install
 # discussion after the last note; short enough that a session which wrote
 # nothing at all still gets asked.
 QUIET_MINUTES = 45
+
+# Characters the statusline may occupy. A host renders it on one row beside
+# whatever else it shows, so the line has to fit without wrapping.
+STATUS_WIDTH = 79
 
 
 def _payload() -> dict:
@@ -109,37 +119,134 @@ def _stop(args, payload) -> None:
     _emit("Stop", note, system="MemAI: nothing recorded this session.")
 
 
+def _line(text: str) -> None:
+    """One plain line on stdout, as UTF-8 bytes. Silence when empty.
+
+    A status line is rendered verbatim, so this writes the text itself and
+    not the {"hookSpecificOutput": ...} object the hook events emit. Bytes
+    rather than sys.stdout for the reason given in _emit.
+    """
+    if not text:
+        return
+    sys.stdout.buffer.write(text.encode("utf-8") + b"\n")
+    sys.stdout.buffer.flush()
+
+
+def _age(iso: str, *, now: datetime | None = None) -> str:
+    """An ISO-8601 timestamp as a coarse age: `7m`, `3h`, `9d`.
+
+    A timestamp carrying no offset is read as UTC, which is what the store
+    writes. A timestamp in the future reads as `0m`.
+    """
+    stamp = datetime.fromisoformat(iso)
+    if stamp.tzinfo is None:
+        stamp = stamp.replace(tzinfo=timezone.utc)
+    seconds = max((now or datetime.now(timezone.utc)) - stamp, timedelta(0)).total_seconds()
+    if seconds < 3600:
+        return f"{int(seconds // 60)}m"
+    if seconds < 86400:
+        return f"{int(seconds // 3600)}h"
+    return f"{int(seconds // 86400)}d"
+
+
+def _status_text(total: int, domain: str, age: str) -> str:
+    """The status line: how much is stored, the busiest domain, how old the
+    latest checkpoint is, joined by ` | ` and at most STATUS_WIDTH characters.
+
+    The domain path is the field that gives way when the line is too long,
+    cut to its tail behind a leading `...`; below the room that leaves
+    anything readable it is dropped instead.
+    """
+    head = f"memai {total} mem"
+    tail = f"cp {age} ago" if age else "no checkpoint"
+    room = STATUS_WIDTH - len(head) - len(tail) - 2 * len(" | ")
+    if domain and len(domain) > room:
+        domain = "..." + domain[-(room - 3):] if room > 8 else ""
+    return " | ".join(p for p in (head, domain, tail) if p)
+
+
+def _statusline(args, payload) -> None:
+    """The store in one line for a host's status line, or nothing at all.
+
+    An empty store -- or an empty `--domain` scope -- emits no line.
+    """
+    with db.connect() as conn:
+        census = db.domain_census(conn, args.domain)
+        if not census["total"]:
+            return
+        tree = [d for d in db.list_domains(conn)
+                if not args.domain or db.in_domain(d["domain"], args.domain)]
+        checkpoint = db.latest_by_type(conn, "checkpoint", domain=args.domain,
+                                       exclude_contradicted=True)
+    # Ranked on the memories naming the path itself -- filed there plus
+    # cross-listed there -- not on the subtree, so an implicit parent never
+    # outranks its child. list_domains orders by recency, so max() takes the
+    # most recent of equal scores.
+    busiest = max(tree, key=lambda d: d["count"] + d["also"])["domain"] if tree else ""
+    age = _age(checkpoint["created_at"]) if checkpoint is not None else ""
+    _line(_status_text(census["total"], busiest, age))
+
+
 _EVENTS = {
     "session-start": _session_start,
     "pre-compact": _pre_compact,
     "stop": _stop,
+    "statusline": _statusline,
 }
 
 
+def _check(path, *, skills: bool = False) -> int:
+    """Report the hooks registered in `path` and the skills installed beside
+    it, and exit non-zero for what `skills` selects: the skills when it is
+    set, the hooks when it is not.
+
+    Both are always reported; only the exit code narrows. A hook that is
+    missing breaks the store's own reachability, while an uninstalled skill
+    is a choice, so the two cannot share one gate.
+    """
+    command = hook_install.hook_command()
+    found = hook_install.registered(path)
+    print(f"{path}:")
+    stale = False
+    for host_event, event in zip(hook_install.EVENTS.values(), hook_install.EVENTS):
+        got = found.get(host_event)
+        if got is None:
+            print(f"  {host_event}: not registered")
+        elif got == f"{command} {event}":
+            print(f"  {host_event}: {got}")
+        else:
+            stale = True
+            print(f"  {host_event}: registers another command -- {got}")
+
+    target = hook_install.skills_dir(path)
+    state = hook_install.skill_state(target)
+    print(f"{target}:")
+    if not state:
+        print("  no skills bundled")
+    for name, how in sorted(state.items()):
+        print(f"  {name}: {how}")
+
+    if skills:
+        return 1 if any(how != "installed" for how in state.values()) else 0
+    return 1 if len(found) < len(hook_install.EVENTS) or stale else 0
+
+
 def _install(args) -> int:
-    """Register the hooks and print the report.
+    """Register the hooks, or install the skills, and print the report.
 
     Unlike the hook events, this writes to stdout for a person and lets an
-    error surface. --check exits 1 when any hook is missing.
+    error surface. --check reports the hooks and the skills, and exits 1 for
+    whichever --skills selects.
     """
     path = (Path(args.settings) if args.settings else
             hook_install.project_settings_path() if args.project else
             hook_install.user_settings_path())
     if args.check:
-        command = hook_install.hook_command()
-        found = hook_install.registered(path)
-        print(f"{path}:")
-        stale = False
-        for host_event, event in zip(hook_install.EVENTS.values(), hook_install.EVENTS):
-            got = found.get(host_event)
-            if got is None:
-                print(f"  {host_event}: not registered")
-            elif got == f"{command} {event}":
-                print(f"  {host_event}: {got}")
-            else:
-                stale = True
-                print(f"  {host_event}: registers another command -- {got}")
-        return 1 if (len(found) < len(hook_install.EVENTS) or stale) else 0
+        return _check(path, skills=args.skills)
+    if args.skills:
+        print(hook_install.install_skills(hook_install.skills_dir(path),
+                                          write=not args.print_only))
+        return 0
     print(hook_install.install(path, write=not args.print_only))
     return 0
 
@@ -149,12 +256,15 @@ def main(argv: list[str] | None = None) -> int:
         prog="memai-hook",
         description="Emit memai context for a host hook. Reads the hook payload on "
                     "stdin, writes one JSON object on stdout, never fails loudly. "
-                    "`install` registers all of them with the host instead.")
+                    "`statusline` writes one plain line instead, and `install` "
+                    "registers the hooks with the host.")
     parser.add_argument("event", nargs="?", choices=[*sorted(_EVENTS), "install"],
-                        help="which hook is calling, or `install` to register them; "
-                             "may be omitted when an install flag is given")
+                        help="which hook is calling, `statusline` for one plain line, "
+                             "or `install` to register them; may be omitted when an "
+                             "install flag is given")
     parser.add_argument("--domain", default="",
-                        help="narrow the session-start brief to one domain path")
+                        help="narrow the session-start brief, or the statusline, to "
+                             "one domain path")
     parser.add_argument("--budget", type=int, default=brief.DEFAULT_BUDGET,
                         help=f"characters of context to emit at most (default {brief.DEFAULT_BUDGET})")
     parser.add_argument("--quiet-minutes", type=int, default=QUIET_MINUTES,
@@ -165,18 +275,24 @@ def main(argv: list[str] | None = None) -> int:
                              "instead of the user's settings")
     parser.add_argument("--settings", default="",
                         help="install into this settings file, whatever it is")
+    parser.add_argument("--skills", action="store_true",
+                        help="install: copy the bundled skills into the `skills/` "
+                             "directory beside the settings file, instead of "
+                             "registering the hooks")
     parser.add_argument("--check", action="store_true",
-                        help="install: report whether the hooks are registered, "
-                             "exit non-zero if any is missing")
+                        help="install: report the hooks registered and the skills "
+                             "installed; exit non-zero if a hook is missing, or a "
+                             "skill is when --skills is given too")
     parser.add_argument("--print", dest="print_only", action="store_true",
-                        help="install: print the hooks block it would write, write nothing")
+                        help="install: print what it would write, write nothing")
     args = parser.parse_args(argv)
 
     # `--check` and friends only mean anything to install, so they name it:
     # the flags are visible in --help before the positional is, and reaching
     # for them without it is the obvious reading.
     if args.event is None:
-        if not (args.check or args.print_only or args.project or args.settings):
+        if not (args.check or args.print_only or args.project or args.settings
+                or args.skills):
             parser.error("an event is required (or an install flag)")
         args.event = "install"
     if args.event == "install":

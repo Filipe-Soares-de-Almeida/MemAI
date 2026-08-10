@@ -488,6 +488,21 @@ def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+# Characters a token is worth in est_tokens. An ESTIMATE, not a tokenizer:
+# no host's tokenizer is reachable from here, so the count is a fixed ratio
+# over the character length.
+CHARS_PER_TOKEN = 4
+
+
+def est_tokens(chars: int) -> int:
+    """Estimated token count for a body of `chars` characters.
+
+    chars / CHARS_PER_TOKEN, rounded up; 0 characters is 0 tokens. Good for
+    budgeting a fetch, not for predicting a host's own accounting.
+    """
+    return (max(chars, 0) + CHARS_PER_TOKEN - 1) // CHARS_PER_TOKEN
+
+
 def _load_vec_extension(conn: sqlite3.Connection) -> bool:
     if sqlite_vec is None:
         return False
@@ -2990,6 +3005,52 @@ def list_recent(
     return conn.execute(" ".join(sql), params).fetchall()
 
 
+def timeline_neighbours(
+    conn: sqlite3.Connection, anchor: sqlite3.Row, *, before: int = 3, after: int = 3,
+    domain: str = "", type: str = "", status: str = "active", subtree: bool = True,
+) -> tuple[list[sqlite3.Row], list[sqlite3.Row]]:
+    """The rows either side of `anchor` in creation order.
+
+    Returns (older, newer): the `before` rows created immediately before the
+    anchor and the `after` rows created immediately after it, both
+    oldest-first. The anchor is in neither list. `domain`/`type`/`status`
+    narrow the neighbourhood only -- the anchor is the row the caller passes
+    in, wherever it is filed and whatever its status.
+
+    Ordering is (created_at, rowid_pk). created_at is not unique: two rows
+    written in the same instant compare equal, and the insertion order is
+    what separates them -- without it a row can land on both sides.
+    """
+    where = ["1=1"]
+    params: list = []
+    if domain:
+        clause, values, _ = domain_scope_clause(conn, domain, alias="", subtree=subtree)
+        where.append(clause)
+        params.extend(values)
+    if type:
+        where.append("AND type = ?")
+        params.append(type)
+    if status:
+        where.append("AND status = ?")
+        params.append(status)
+    where_sql = " ".join(where)
+    at = [anchor["created_at"], anchor["created_at"], anchor["rowid_pk"]]
+
+    older = conn.execute(
+        f"""SELECT * FROM memories WHERE {where_sql}
+              AND (created_at < ? OR (created_at = ? AND rowid_pk < ?))
+            ORDER BY created_at DESC, rowid_pk DESC LIMIT ?""",
+        [*params, *at, max(before, 0)],
+    ).fetchall()
+    newer = conn.execute(
+        f"""SELECT * FROM memories WHERE {where_sql}
+              AND (created_at > ? OR (created_at = ? AND rowid_pk > ?))
+            ORDER BY created_at ASC, rowid_pk ASC LIMIT ?""",
+        [*params, *at, max(after, 0)],
+    ).fetchall()
+    return list(reversed(older)), list(newer)
+
+
 def list_domains(
     conn: sqlite3.Connection, *, status: str = "active"
 ) -> list[dict]:
@@ -3665,6 +3726,17 @@ SUGGESTION_KINDS = (
 # distill targets must be durable knowledge types -- distilling INTO a
 # checkpoint/handoff would just recreate the ephemera it exists to retire
 DISTILL_TYPES = ("note", "reasoning", "anti_pattern")
+# the payload keys distill applies; any other key is a staging error
+DISTILL_PAYLOAD_KEYS = ("source_uids", "new_type", "new_content", "tags", "domain")
+# the kinds staging refuses without a non-empty `verified`, mapped to what
+# each one is being asked to justify: every one of them archives a memory.
+# set_confidence belongs here only when its payload says `contradicted`, so
+# it is checked where that payload is read.
+VERIFIED_REQUIRED = {
+    "archive": "verified required: describe the live-facts check that makes this memory archivable",
+    "merge": "verified required: merge archives payload.drop_uid -- describe the live-facts check",
+    "distill": "verified required: distill archives its sources -- describe the live-facts check",
+}
 
 
 CORPUS_SNIPPET_LEN = 120
@@ -4097,7 +4169,7 @@ def _validate_suggestion(conn: sqlite3.Connection, s: object) -> tuple[dict | No
         if err:
             return None, err
         if not verified:
-            return None, "verified required: describe the live-facts check that makes this memory archivable"
+            return None, VERIFIED_REQUIRED[kind]
     elif kind == "link":
         f = (str(payload.get("from_uid", "")) or "").strip()
         t = (str(payload.get("to_uid", "")) or "").strip()
@@ -4123,10 +4195,16 @@ def _validate_suggestion(conn: sqlite3.Connection, s: object) -> tuple[dict | No
             return None, "cannot merge a memory with itself"
         if target_uid and target_uid != drop:
             return None, "merge derives target_uid from payload.drop_uid; omit target_uid or make them match"
+        if not verified:
+            return None, VERIFIED_REQUIRED[kind]
         target_uid = drop
     elif kind == "distill":
         if target_uid:
             return None, "distill creates a new memory; omit target_uid"
+        extra = sorted(k for k in payload if k not in DISTILL_PAYLOAD_KEYS)
+        if extra:
+            return None, (f"payload keys not accepted by distill: {', '.join(extra)} "
+                          f"(allowed: {', '.join(DISTILL_PAYLOAD_KEYS)})")
         sources = payload.get("source_uids")
         if not isinstance(sources, list) or not sources:
             return None, "payload.source_uids must be a non-empty list"
@@ -4136,12 +4214,15 @@ def _validate_suggestion(conn: sqlite3.Connection, s: object) -> tuple[dict | No
         for u in sources:
             if not _memory_exists(conn, u):
                 return None, f"payload.source_uids not found: {u!r}"
+            if is_diagram(conn, u):
+                return None, (f"{u} is a diagram: distill archives its sources. "
+                              "Use archive to retire a flow on its own.")
         if payload.get("new_type") not in DISTILL_TYPES:
             return None, f"payload.new_type must be one of {DISTILL_TYPES}"
         if not str(payload.get("new_content", "")).strip():
             return None, "payload.new_content required"
         if not verified:
-            return None, "verified required: distill archives its sources -- describe the live-facts check"
+            return None, VERIFIED_REQUIRED[kind]
         payload = {**payload, "source_uids": sources}
 
     return {
