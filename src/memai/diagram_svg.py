@@ -80,8 +80,6 @@ _METRICS_FILE = Path(__file__).with_name("roboto_metrics.json")
 FACE_UI = "ui"
 FACE_MONO = "mono"
 
-# Compiled up here rather than inline: a backslash is not allowed inside an
-# f-string expression before Python 3.12, and this package supports 3.11.
 _ELLIPSIS_TAIL = re.compile(r"…$")
 _TRAILING_PUNCT = re.compile(r"[\s,;:.\-/]+$")
 
