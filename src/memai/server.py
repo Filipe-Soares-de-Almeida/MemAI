@@ -1298,10 +1298,10 @@ def optimize_stage(suggestions: list[dict], note: str = "") -> dict:
     {"source_uids","new_type","new_content"}. link/merge derive target_uid
     from the payload and distill creates its target -- omit it for those.
 
-    Destructive kinds (archive, set_confidence=contradicted, distill)
-    require a non-empty `verified` describing the live-facts check behind
-    them. Invalid suggestions are skipped and reported in `errors`; the rest
-    are staged. Returns {run_id, staged, errors}.
+    Destructive kinds (archive, set_confidence=contradicted, merge,
+    distill) require a non-empty `verified` describing the live-facts
+    check behind them. Invalid suggestions are skipped and reported in
+    `errors`; the rest are staged. Returns {run_id, staged, errors}.
     help(command='optimize_stage') explains each kind in full.
     """
     with db.connect() as conn:
@@ -1511,11 +1511,14 @@ distill extracts the durable knowledge out of one or MORE source
 memories into a newly authored one: creates it, links it `supersedes`
 each source and archives the sources (all reversible). Use it to
 retire closed-ticket checkpoints without losing what they taught, or
-as an n-ary merge when the survivor needs synthesized content.
+as an n-ary merge when the survivor needs synthesized content. Those
+payload keys are the whole set it applies -- any other key is reported
+in `errors`. A diagram cannot be a source: its content is generated
+from its graph, so retire a flow with archive instead.
 
 link/merge derive target_uid from the payload (from_uid / drop_uid)
 and distill creates its target -- omit target_uid for those kinds.
-Destructive suggestions (archive, set_confidence=contradicted,
+Destructive suggestions (archive, set_confidence=contradicted, merge,
 distill) require a non-empty `verified` describing the live-facts
 check that justifies them.
 
