@@ -154,6 +154,8 @@
     "dr.step.prev": "Memória anterior (←)",
     "dr.step.next": "Próxima memória (→)",
     "dr.step.at": "{i} / {n}",
+    "dr.step.atGone": "— / {n}",
+    "dr.step.gone": "Esta memória saiu da lista; as setas seguem de onde ela estava",
     "dr.content": "Conteúdo",
     "dr.editNote.placeholder": "Nota da edição (por que mudou?)",
     "dr.saveVersion": "Salvar nova versão",
