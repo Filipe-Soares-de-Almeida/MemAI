@@ -187,6 +187,45 @@ def test_moving_the_date_is_audited_but_not_re_embedded(conn):
     assert any("review_after" in n for n in notes)
 
 
+# --------------------------------------------- setting it after the fact
+
+def test_a_reference_can_be_added_to_a_memory_that_has_none(store):
+    """A memory written before anyone knew where the code lived is the
+    normal case, and it used to leave the dashboard as the only way in."""
+    uid = server.note(content="the export window is inclusive")["uid"]
+    res = server.edit_memory(uid, source_ref="src/acme/x100/export.py")
+    assert res["ok"] and res["changed"] == ["source_ref"]
+    assert server.get_memory(uid)["source_ref"] == "src/acme/x100/export.py"
+
+
+def test_repointing_leaves_the_body_alone_and_says_where_it_moved(store):
+    uid = server.note(content="the export window is inclusive",
+                      source_ref="src/acme/x100/old.py")["uid"]
+    server.edit_memory(uid, source_ref="src/acme/x100/export.py", note="the file moved")
+    row = server.get_memory(uid)
+    assert row["content"] == "the export window is inclusive"
+    assert row["edit_history"][-1]["note"] == (
+        "meta: source_ref 'src/acme/x100/old.py' -> 'src/acme/x100/export.py' "
+        "(the file moved)")
+
+
+def test_the_body_and_the_reference_can_move_in_one_call(store):
+    uid = server.note(content="the export window is inclusive")["uid"]
+    res = server.edit_memory(uid, "the export window excludes the last day",
+                             source_ref="src/acme/x100/export.py")
+    assert res["changed"] == ["content", "source_ref"]
+    row = server.get_memory(uid)
+    assert row["content"] == "the export window excludes the last day"
+    assert row["source_ref"] == "src/acme/x100/export.py"
+
+
+def test_repointing_at_the_same_reference_writes_no_audit_entry(conn):
+    uid = db.insert_memory(conn, type="note", content="x",
+                           source_ref="src/acme/x100/export.py")
+    assert db.set_source_ref(conn, uid, "src/acme/x100/export.py")
+    assert db.get_edit_history(conn, uid) == []
+
+
 # -------------------------------------------------------------- dashboard
 
 def test_the_dashboard_can_set_and_clear_the_date(client):
