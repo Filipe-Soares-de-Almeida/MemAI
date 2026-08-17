@@ -16,7 +16,7 @@ import { pickerHTML, pickerFor, wirePicker, fixedItems } from '../core/pick.js';
 import { domainPickerHTML, wireDomainPicker } from '../core/domain-picker.js';
 import { go, refreshBehind } from '../core/router.js';
 import { onTeardown } from '../core/lifecycle.js';
-import { openRecord } from './record.js';
+import { openRecord, setRecordSequence } from './record.js';
 import { t } from '../i18n.js';
 
 const PAGE = 50;
@@ -54,6 +54,29 @@ function dropBulkbar(bar) {
   (bar instanceof HTMLElement ? bar : document.querySelector('.bulkbar'))?.remove();
   publishBulkHeight(null);
   selection.clear();
+}
+
+/* The one place that writes a row's selected-ness. The tick, the row's own
+   wash, the state a screen reader reads off the row, and the set the bulk bar
+   acts on are four faces of one fact, and four call sites used to each set
+   the ones they happened to remember. */
+function selectRow(row, on) {
+  row.querySelector('input[type=checkbox]').checked = on;
+  row.classList.toggle('selected', on);
+  row.setAttribute('aria-selected', on ? 'true' : 'false');
+  if (on) selection.add(row.dataset.uid); else selection.delete(row.dataset.uid);
+}
+
+/* The header box reports as much as it commands: ticked when the whole page
+   is in the selection, dashed when only part of it is -- so it never claims
+   to have selected rows that a range or a stray click left out. */
+function syncSelectAll() {
+  const box = document.getElementById('memAll');
+  if (!box) return;
+  const rows = [...document.querySelectorAll('#memList .mem-row')];
+  const n = rows.filter(r => selection.has(r.dataset.uid)).length;
+  box.checked = Boolean(n) && n === rows.length;
+  box.indeterminate = Boolean(n) && n < rows.length;
 }
 
 export async function renderMemories(view, params, ctx) {
@@ -136,7 +159,21 @@ export async function renderMemories(view, params, ctx) {
       ${state.session ? `<button type="button" class="chip clickable" id="fSession" title="${t('mem.session.title')}">${t('mem.session.chip', { s: esc(state.session.slice(0, 18)) })}${icon('close')}</button>` : ''}
     </div>
 
-    <div class="mem-list" id="memList">${renderRows(data.items, state.domain)}</div>
+    <!-- The header strip is a sibling of the rows and not the first of them:
+         a select-all is a control OVER the list, and putting it inside the
+         grid would have made it a row you can arrow onto and try to open. -->
+    <div class="mem-list">
+      ${data.items.length ? `<div class="mem-head">
+        <div class="mem-check"><input type="checkbox" id="memAll" aria-label="${t('mem.selectAll.aria')}"></div>
+        <label class="mem-head-label" for="memAll">${t('mem.selectAll', { n: data.items.length })}</label>
+        <div class="mem-head-keys" aria-hidden="true">${t('mem.keys.hint')}</div>
+      </div>` : ''}
+      <!-- role="grid" and not listbox: a row owns a checkbox and an open
+           button, which an option is not allowed to contain. The grid is the
+           role that expects widgets in its cells, and it is what licenses the
+           roving tabindex the wiring below installs. -->
+      <div id="memList"${data.items.length ? ` role="grid" aria-multiselectable="true" aria-label="${t('mem.title')}"` : ''}>${renderRows(data.items, state.domain)}</div>
+    </div>
 
     <div class="list-foot">
       <span>${data.searched
@@ -193,16 +230,114 @@ export async function renderMemories(view, params, ctx) {
   $('#pgNext').addEventListener('click', () => navigate({ page: state.page + 1 }));
 
   const list = $('#memList');
-  list.querySelectorAll('.mem-row').forEach(row => {
+  const rows = [...list.querySelectorAll('.mem-row')];
+
+  /* What the record steps through when it is opened from here: this page, in
+     the order it is shown. Cleared on the way out, so a record opened from
+     somewhere else does not inherit a list that is no longer on screen. */
+  setRecordSequence(rows.map(r => r.dataset.uid));
+  onTeardown(() => setRecordSequence([]));
+
+  /* Roving tabindex: the list is ONE tab stop and the arrows move inside it.
+     `cursor` is which row currently holds that stop. */
+  let cursor = 0;
+  const setCursor = i => {
+    if (i < 0 || i >= rows.length || i === cursor) return;
+    rows[cursor].tabIndex = -1;
+    cursor = i;
+    rows[i].tabIndex = 0;
+  };
+  const moveTo = i => {
+    if (i < 0 || i >= rows.length) return;
+    setCursor(i);
+    rows[i].focus();
+  };
+  rows.forEach((row, i) => { row.tabIndex = i ? -1 : 0; });
+  /* a click lands the caret on the row (or on a control inside it), and the
+     tab stop follows it -- otherwise Tab would come back to row 1 */
+  list.addEventListener('focusin', e => {
+    const row = e.target.closest('.mem-row');
+    if (row) setCursor(rows.indexOf(row));
+  });
+
+  /* Where a range starts: the last row ticked deliberately. Shift runs from
+     there to wherever it lands, and only ever writes the run it covers -- a
+     range that also cleared what was already ticked would silently throw away
+     picks made before it. */
+  let anchor = 0;
+  const toggle = (i, on = !selection.has(rows[i].dataset.uid)) => {
+    selectRow(rows[i], on);
+    anchor = i;
+    syncBulkbar();
+  };
+  const range = (to, on) => {
+    const [a, b] = anchor <= to ? [anchor, to] : [to, anchor];
+    for (let i = a; i <= b; i++) selectRow(rows[i], on);
+    syncBulkbar();
+  };
+  const setAll = on => {
+    rows.forEach(row => selectRow(row, on));
+    anchor = 0;
+    syncBulkbar();
+  };
+
+  const memAll = $('#memAll');
+  if (memAll) memAll.addEventListener('change', () => setAll(memAll.checked));
+
+  rows.forEach((row, i) => {
     row.addEventListener('click', () => openRecord(row.dataset.uid));
     const cb = row.querySelector('input[type=checkbox]');
     cb.addEventListener('click', e => {
       e.stopPropagation();
-      cb.checked ? selection.add(row.dataset.uid) : selection.delete(row.dataset.uid);
-      row.classList.toggle('selected', cb.checked);
-      syncBulkbar();
+      /* the box has already flipped, so its state is the one being applied --
+         shift-clicking an untick clears the run the same way ticking sets it */
+      if (e.shiftKey) range(i, cb.checked); else toggle(i, cb.checked);
     });
   });
+
+  list.addEventListener('keydown', e => {
+    const row = e.target.closest('.mem-row');
+    if (!row) return;
+    const i = rows.indexOf(row);
+    const step = { ArrowDown: 1, ArrowUp: -1 }[e.key];
+    if (step !== undefined) {
+      const to = Math.min(rows.length - 1, Math.max(0, i + step));
+      e.preventDefault();
+      if (e.shiftKey) { selectRow(rows[i], true); range(to, true); }
+      moveTo(to);
+      return;
+    }
+    if (e.key === 'Home' || e.key === 'End') {
+      e.preventDefault();
+      moveTo(e.key === 'Home' ? 0 : rows.length - 1);
+      return;
+    }
+    if (e.key === ' ') {
+      /* the checkbox has its own Space when the caret is on the box itself */
+      if (e.target.tagName === 'INPUT') return;
+      e.preventDefault();
+      if (e.shiftKey) range(i, true); else toggle(i);
+      return;
+    }
+    if (e.key === 'Enter') { e.preventDefault(); openRecord(row.dataset.uid); return; }
+    if ((e.ctrlKey || e.metaKey) && (e.key === 'a' || e.key === 'A')) {
+      e.preventDefault();          /* selecting the page's text is not what this list is for */
+      setAll(true);
+      return;
+    }
+    /* Escape with nothing selected is left alone: it is the app's key for
+       closing what is layered over the view, and this list is not that. */
+    if (e.key === 'Escape' && selection.size) setAll(false);
+  });
+
+  /* Down out of the search field lands in the list, so finding rows and
+     acting on them is one uninterrupted keyboard path. */
+  $('#fQ').addEventListener('keydown', e => {
+    if (e.key !== 'ArrowDown' || !rows.length) return;
+    e.preventDefault();
+    rows[cursor].focus();
+  });
+
   syncBulkbar();
 }
 
@@ -222,18 +357,22 @@ function renderRows(items, scope = '') {
        control inside a control is a control neither the keyboard nor a
        screen reader can make sense of. Enter on the button bubbles a click
        to the row, so there is still exactly one handler. */
-    return `<div class="mem-row" data-uid="${esc(m.uid)}">
-      <div class="mem-check"><input type="checkbox" aria-label="${t('mem.select.aria', { uid: esc(m.uid) })}"></div>
+    return `<div class="mem-row" role="row" aria-selected="false" tabindex="-1" data-uid="${esc(m.uid)}">
+      <!-- The two controls in the row are reachable by pointer and by the
+           row's own keys (Space ticks, Enter opens), and they are OUT of the
+           tab order: fifty rows of them is a hundred stops to cross one page,
+           and it took two tabs to reach the second checkbox. -->
+      <div class="mem-check" role="gridcell"><input type="checkbox" tabindex="-1" aria-label="${t('mem.select.aria', { uid: esc(m.uid) })}"></div>
       <!-- Confidence leads this column. It used to be the second of four
            whispers stacked in .mem-right, at 60% white, quieter than the uid
            beside it -- in a store whose whole point is that a human vets what
            an agent wrote, the vetting was the faintest thing in the row. -->
-      <div class="mem-col-type">${confPill(m.confidence, true)}${typeTag(m.type)}</div>
-      <div class="mem-main">
-        <button type="button" class="row-open mem-snippet"
+      <div class="mem-col-type" role="gridcell">${confPill(m.confidence, true)}${typeTag(m.type)}</div>
+      <div class="mem-main" role="gridcell">
+        <button type="button" class="row-open mem-snippet" tabindex="-1"
                 aria-label="${esc(t('a11y.openRecord', { uid: m.uid }))}">${esc(m.content)}</button>
       </div>
-      <div class="mem-right">
+      <div class="mem-right" role="gridcell">
         ${match}
         ${statusTag(m.status)}
         ${away ? `<span class="chip" title="${esc(t('mem.alsoWhy', { domain: m.domain }))}">${t('mem.also')}</span>` : ''}
@@ -253,6 +392,9 @@ function renderRows(items, scope = '') {
    recreated on every checkbox, which replayed its entrance animation each
    time and threw away the focus of whoever was tabbing through it. */
 function syncBulkbar() {
+  /* every path that changes the selection ends here, so the header box is
+     brought along from one place rather than from each of them */
+  syncSelectAll();
   const existing = document.querySelector('.bulkbar');
   if (!selection.size) { dropBulkbar(existing); return; }
   if (existing) {
@@ -296,11 +438,8 @@ function syncBulkbar() {
      It used to call refreshBehind(), which re-ran the whole route -- a fetch
      and a full repaint to undo three checkboxes. */
   bar.querySelector('#bulkClear').addEventListener('click', () => {
-    selection.clear();
-    document.querySelectorAll('#memList .mem-row').forEach(row => {
-      row.querySelector('input[type=checkbox]').checked = false;
-      row.classList.remove('selected');
-    });
+    document.querySelectorAll('#memList .mem-row').forEach(row => selectRow(row, false));
+    selection.clear();          /* rows from a page that has since been left */
     syncBulkbar();
   });
 }
