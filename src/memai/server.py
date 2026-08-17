@@ -1212,8 +1212,9 @@ def get_memory(uid: str) -> dict:
 
 
 @tool("core")
-def edit_memory(uid: str, new_content: str, note: str = "", mode: str = "replace") -> dict:
-    """Correct a memory's content, or add to it, keeping the previous version.
+def edit_memory(uid: str, new_content: str = "", note: str = "", mode: str = "replace",
+                source_ref: str = "") -> dict:
+    """Correct a memory's content or its source reference, keeping the previous version.
 
     Corrections are common in append-only memory stores that only
     support delete, not edit; this preserves the old content instead
@@ -1225,23 +1226,41 @@ def edit_memory(uid: str, new_content: str, note: str = "", mode: str = "replace
     restating it and sending it back, which pays for the body twice and
     stakes the existing text on it being copied faithfully.
 
-    Refuses a diagram: its content is generated from the graph, so a
-    hand-written replacement would be silently overwritten by the next
-    structural change. Edit the flow through diagram_node/diagram_edge.
+    source_ref points the memory at what its claim came from -- the field
+    note() takes at write time, and the one a later pass checks the claim
+    against. It is settable on its own, with no `new_content`, for the
+    common case of a body that is right and a reference that is missing or
+    has moved; an empty source_ref leaves the stored one alone, and
+    clearing one is a dashboard edit. Passing neither is an error rather
+    than a silent no-op.
+
+    Refuses to rewrite a diagram's content: that is generated from the
+    graph, so a hand-written replacement would be silently overwritten by
+    the next structural change -- edit the flow through
+    diagram_node/diagram_edge. Its source_ref is ordinary metadata and is
+    editable here like any other memory's.
     """
     if mode not in ("replace", "append"):
         return _errors([f"mode must be 'replace' or 'append'; got {mode!r}"])
+    if not new_content.strip() and not source_ref.strip():
+        return _errors(["nothing to change: pass new_content, source_ref, or both"])
+    changed = []
     with db.connect() as conn:
-        if db.is_diagram(conn, uid):
-            return _errors([
-                f"{uid} is a diagram: its content is generated from the graph. "
-                "Use diagram_node/diagram_edge to change the flow."
-            ])
-        ok = db.update_memory_content(conn, uid, new_content, note=note,
-                                      append=mode == "append")
-    if not ok:
-        return _errors([f"no memory {uid}"])
-    return {"ok": True}
+        if new_content.strip():
+            if db.is_diagram(conn, uid):
+                return _errors([
+                    f"{uid} is a diagram: its content is generated from the graph. "
+                    "Use diagram_node/diagram_edge to change the flow."
+                ])
+            if not db.update_memory_content(conn, uid, new_content, note=note,
+                                            append=mode == "append"):
+                return _errors([f"no memory {uid}"])
+            changed.append("content")
+        if source_ref.strip():
+            if not db.set_source_ref(conn, uid, source_ref, note=note):
+                return _errors([f"no memory {uid}"])
+            changed.append("source_ref")
+    return {"ok": True, "changed": changed}
 
 
 @tool("core")

@@ -1055,6 +1055,32 @@ def set_review_after(conn: sqlite3.Connection, uid: str, value: str) -> bool:
     return True
 
 
+def set_source_ref(conn: sqlite3.Connection, uid: str, value: str, note: str = "") -> bool:
+    """Point (or repoint) a memory at what it came from, and audit the move.
+
+    No re-embedding, for the same reason as the date: the vector is computed
+    over content, tags and domains. Audited, because the reference is what a
+    later pass checks the claim against, and "this was pointed at that file
+    on purpose" is not something it should have to infer.
+    """
+    row = get_memory(conn, uid)
+    if row is None:
+        return False
+    value = value.strip()
+    if value == row["source_ref"]:
+        return True
+    conn.execute(
+        "UPDATE memories SET source_ref = ?, updated_at = ? WHERE uid = ?",
+        (value, now_iso(), uid))
+    audit = f"meta: source_ref '{row['source_ref']}' -> '{value}'"
+    conn.execute(
+        "INSERT INTO edits (memory_uid, edited_at, prev_content, new_content, note) "
+        "VALUES (?, ?, ?, ?, ?)",
+        (uid, now_iso(), row["content"], row["content"],
+         f"{audit} ({note})" if note else audit))
+    return True
+
+
 def purge_memory(conn: sqlite3.Connection, uid: str) -> bool:
     """Irreversibly delete a memory row plus its edit history and relations.
 

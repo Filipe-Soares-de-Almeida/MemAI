@@ -184,6 +184,11 @@ whose date has passed, `optimize_scan` marks each one `due` and lists its
 suggestion **after** actually rechecking. Verifying a `source_ref` against a
 live tree is not something the store does.
 
+Neither field has to be right at write time: `edit_memory(uid,
+source_ref=…)` sets or repoints one afterwards, without touching the body,
+which is how a memory written before anyone knew where the code lived — or
+one whose file has since moved — gets its reference.
+
 **When to set them:** a memory that describes code, config, a schema or an
 external URL — a diagram is the clearest case, since it describes code and
 code moves. **When to leave them empty:** everything that does not go stale,
@@ -312,10 +317,13 @@ both if they are genuinely different facts.
 
 **Curation, one record at a time:**
 
-- `edit_memory(uid, new_content, note, mode)` corrects while keeping the
-  previous version; `mode='append'` adds a line instead of replacing the body,
+- `edit_memory(uid, new_content, note, mode, source_ref)` corrects while keeping
+  the previous version; `mode='append'` adds a line instead of replacing the body,
   for a memory that **gains** a fact rather than turning out wrong. It
-  **refuses a diagram** — that content is generated from the graph.
+  **refuses a diagram's body** — that content is generated from the graph.
+  `source_ref` repoints the memory at its source and takes no `new_content`,
+  so a missing or moved reference is a one-argument fix
+  ([§2.4](#24-decay--review_after-and-source_ref)); a diagram accepts that one.
 - `set_confidence(uid, unverified|confirmed|contradicted)`.
 - `link_memories(from_uid, to_uid, relation_type, note)` creates a typed edge
   (`supersedes`, `relates_to`, `contradicts`, `links_to`); `get_relations(uid)`
@@ -507,7 +515,7 @@ always published, `diagrams` and `curation` only when named (or under the
 
 | Editing and domains | | group |
 |---|---|---|
-| `edit_memory(uid, new_content, note, mode)` | Correct (or `mode='append'` add to) a memory, keeping the previous version; **refuses a diagram** | core |
+| `edit_memory(uid, new_content, note, mode, source_ref)` | Correct (or `mode='append'` add to) a memory, keeping the previous version; **refuses a diagram's body**. `source_ref` repoints it at its source, alone or with the edit | core |
 | `link_memories(from_uid, to_uid, relation_type, note)` | A typed edge between two memories | core |
 | `set_confidence(uid, confidence)` | `unverified` \| `confirmed` \| `contradicted` | core |
 | `also_domain(uid, domain)` / `unfile_domain(uid, domain)` | Cross-list / drop one cross-listing — **never** moves the `domain` | core |
