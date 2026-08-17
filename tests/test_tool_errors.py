@@ -128,3 +128,26 @@ def test_a_diagram_still_refuses_both_modes(store):
         edges=[{"from": "start", "to": "done"}])["uid"]
     for mode in ("replace", "append"):
         assert server.edit_memory(uid, "hand-written", mode=mode)["ok"] is False
+
+
+def test_a_diagrams_reference_is_editable_though_its_body_is_not(store):
+    """source_ref is ordinary metadata -- nothing generates it from the
+    graph -- and a diagram describes code, so it is the likeliest to move."""
+    uid = server.diagram(title="Cache warmup", nodes=[
+        {"key": "start", "shape": "start", "label": "begin"},
+        {"key": "done", "shape": "end", "label": "done"}],
+        edges=[{"from": "start", "to": "done"}])["uid"]
+    assert server.edit_memory(uid, source_ref="src/acme/x100/warmup.py")["ok"]
+    assert server.get_memory(uid)["source_ref"] == "src/acme/x100/warmup.py"
+
+
+def test_an_edit_that_asks_for_nothing_is_refused(store):
+    """Neither field given is a caller mistake, not a no-op to swallow."""
+    uid = server.note(content="cache warmup runs nightly")["uid"]
+    res = server.edit_memory(uid)
+    assert res["ok"] is False and "nothing to change" in res["errors"][0]
+
+
+def test_repointing_a_memory_that_is_not_there_says_so(store):
+    res = server.edit_memory("no-such-uid", source_ref="src/acme/x100/warmup.py")
+    assert res["ok"] is False and "no-such-uid" in res["errors"][0]

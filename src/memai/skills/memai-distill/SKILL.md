@@ -78,8 +78,9 @@ payload:
   memories that already exist, so nothing in the same batch can point at
   the memory a `distill` is going to create — a follow-up `review`,
   `crosslist` or `link` waits until the human has applied the distill.
-- **`source_ref`** → no tool writes it after the fact. It is set by the
-  writer that creates the memory, or edited in the dashboard.
+- **`source_ref`** → `edit_memory(uid, source_ref=…)` once the human has
+  applied the distill and the new uid exists. It takes no `new_content`,
+  so setting the reference does not touch the distilled body.
 
 When the recheck date and the reference matter more than archiving the
 sources, write the memory with `note(..., review_after='90d',
