@@ -139,6 +139,11 @@ the decay but not resolve it: `pulse` counts the overdue rows in a scope as
   `{"review_after": "180d"}` (or a date, or `''` to clear it for a claim that
   no longer tracks anything that moves). A memory confirmed and left on a
   passed date comes back `due` on every later scan and reads as never checked.
+- **A reference that no longer resolves is fixed, not worked around.** When
+  the recheck finds the file renamed or moved, `edit_memory(uid,
+  source_ref=<the path today>)` repoints it without touching the body — an
+  anchor pointing at nothing makes the next pass re-derive the target from
+  the wording, which is what `source_ref` exists to prevent.
 - **A confirmation is not a reason to invent a date.** Confirming says the
   claim holds today, not that it needs looking at again. **Most memories should
   leave `review_after` empty** — a date nobody meant is worse than none. Set
