@@ -61,17 +61,95 @@ const trailTop = () => trail[trail.length - 1] || null;
    was opened from anywhere else simply finds itself absent from it and
    shows no stepper. */
 let seq = [];
-export const setRecordSequence = uids => { seq = Array.isArray(uids) ? [...uids] : []; };
+export const setRecordSequence = uids => {
+  seq = Array.isArray(uids) ? [...uids] : [];
+  syncStepper();
+};
+
+/* Which memory the dialog is currently SHOWING -- not which one it is on its
+   way to. The trail is pushed before the fetch, so a sequence arriving in that
+   gap would patch the head of the record still on screen with the index of the
+   next one.
+
+   `slot` is where that memory sat in the sequence the last time the sequence
+   still held it, and it is what keeps the stepper alive across a write that
+   drops the row: archiving from a list filtered to active memories takes the
+   record the dialog is on out of the list under it. Without an anchor that
+   ended the walk -- the one act you perform while curating a page cost you the
+   page. It is per-record and reset whenever a DIFFERENT memory is shown, so
+   following a relation to something off-list is still a dead end with a Back
+   button rather than a stepper pointing at where the last record was. */
+let shown = null;
+let slot = null;
+
+/* Which memory the dialog SHOWS, where the arrows go from it, and whether the
+   list still holds it. Everything after a dropped row shifted up by one, so the
+   record that took the slot IS the next one and the slot itself is where to
+   resume; that also covers a row that fell off the end of a shrinking page. */
+function stepPos() {
+  const at = seq.indexOf(shown);
+  if (at >= 0) { slot = at; return { at, prev: at - 1, next: at + 1, gone: false }; }
+  if (slot === null || !seq.length) return null;
+  const anchor = Math.min(slot, seq.length - 1);
+  return { at: anchor, prev: anchor - 1, next: anchor, gone: true };
+}
 
 /* Stepping is not the same move as following a link: the memory it lands on
    is the one the list itself would have opened, so it starts a trail of its
    own rather than stacking a Back button that walks the page a row at a time. */
 function stepRecord(delta) {
-  const at = seq.indexOf(trailTop()?.uid);
-  const to = at + delta;
-  if (at < 0 || to < 0 || to >= seq.length) return;
+  const pos = stepPos();
+  if (!pos) return;
+  const to = delta < 0 ? pos.prev : pos.next;
+  if (to < 0 || to >= seq.length) return;
   trail.length = 0;
   openRecord(seq[to]);
+}
+
+/* Where this memory sits in the list that opened it, and the way to the ones
+   either side of it. Empty when the record was reached from somewhere with no
+   list behind it (a relation, the audit trail, the canvas) or when there is
+   nowhere left to step -- a stepper that cannot step is a lie about context.
+   A record the list no longer holds counts its position out rather than
+   claiming a row that now belongs to another memory. */
+function stepperHTML() {
+  const pos = stepPos();
+  if (!pos) return '';
+  const noPrev = pos.prev < 0, noNext = pos.next >= seq.length;
+  if (noPrev && noNext) return '';
+  return `<div class="record-step" role="group" aria-label="${esc(t('dr.step.aria'))}"
+               ${pos.gone ? `title="${esc(t('dr.step.gone'))}"` : ''}>
+    <button type="button" class="icon-btn" id="dPrev" ${noPrev ? 'disabled' : ''}
+            title="${esc(t('dr.step.prev'))}" aria-label="${esc(t('dr.step.prev'))}">${icon('chevron-left')}</button>
+    <span class="record-step-at">${pos.gone
+      ? t('dr.step.atGone', { n: seq.length })
+      : t('dr.step.at', { i: pos.at + 1, n: seq.length })}</span>
+    <button type="button" class="icon-btn" id="dNext" ${noNext ? 'disabled' : ''}
+            title="${esc(t('dr.step.next'))}" aria-label="${esc(t('dr.step.next'))}">${icon('chevron-right')}</button>
+  </div>`;
+}
+
+const wireStepper = () => {
+  dq('#dPrev')?.addEventListener('click', () => stepRecord(-1));
+  dq('#dNext')?.addEventListener('click', () => stepRecord(1));
+};
+
+/* Every write in here ends with openRecord(uid) AND refreshBehind(), and the
+   refresh tears the old page down -- clearing the sequence -- before it has
+   fetched the new one. The record repaints inside that gap, so the stepper it
+   built had nothing to step through: curating a record cost you the way to the
+   next one until the dialog was closed and reopened. The sequence tells the
+   open record when it lands instead of being read once at paint time. */
+function syncStepper() {
+  if (!recordOpen() || !shown) return;
+  const head = rec.querySelector('.record-head');
+  if (!head) return;
+  const html = stepperHTML();
+  const cur = head.querySelector('.record-step');
+  if (!html) { cur?.remove(); return; }
+  if (cur) cur.outerHTML = html;
+  else dq('#dClose').insertAdjacentHTML('beforebegin', html);
+  wireStepper();
 }
 
 /* One path per write, shared by the button that performs it and by the Undo
@@ -102,6 +180,8 @@ export function closeRecord() {
   while (recordOpen()) closeModal();
   rec = null;
   trail = [];
+  shown = null;
+  slot = null;
 }
 
 /* Where a render writes. The dialog exists once; opening the same record
@@ -197,7 +277,10 @@ export async function openRecord(uid) {
   const here = trailTop();
   if (here?.uid === uid) here.label = m.content.split('\n', 1)[0].slice(0, 70);
   const behind = trail.length > 1 ? trail[trail.length - 2] : null;
-  const at = seq.indexOf(uid);
+  /* A re-render of the same memory keeps the slot it was walking; landing on a
+     different one starts from that memory's own place in the list, or from no
+     place at all when the list does not hold it. */
+  if (shown !== uid) { shown = uid; slot = null; }
 
   paint(`
     <div class="record-head">
@@ -211,17 +294,7 @@ export async function openRecord(uid) {
       ${statusTag(m.status)}
       ${confPill(m.confidence)}
       <span class="spacer"></span>
-      <!-- Where this memory sits in the list that opened it, and the way to
-           the ones either side of it. Absent when the record was reached from
-           somewhere with no list behind it (a relation, the audit trail, the
-           canvas) -- a stepper with nowhere to step is a lie about context. -->
-      ${at >= 0 && seq.length > 1 ? `<div class="record-step" role="group" aria-label="${esc(t('dr.step.aria'))}">
-        <button type="button" class="icon-btn" id="dPrev" ${at === 0 ? 'disabled' : ''}
-                title="${esc(t('dr.step.prev'))}" aria-label="${esc(t('dr.step.prev'))}">${icon('chevron-left')}</button>
-        <span class="record-step-at">${t('dr.step.at', { i: at + 1, n: seq.length })}</span>
-        <button type="button" class="icon-btn" id="dNext" ${at === seq.length - 1 ? 'disabled' : ''}
-                title="${esc(t('dr.step.next'))}" aria-label="${esc(t('dr.step.next'))}">${icon('chevron-right')}</button>
-      </div>` : ''}
+      ${stepperHTML()}
       <button type="button" class="icon-btn" id="dClose" title="${t('dr.close.title')}"
               aria-label="${t('dr.close.title')}" style="--ico:17px">${icon('close')}</button>
     </div>`, `
@@ -360,8 +433,7 @@ export async function openRecord(uid) {
     const prev = trailTop();
     if (prev) openRecord(prev.uid);
   });
-  dq('#dPrev')?.addEventListener('click', () => stepRecord(-1));
-  dq('#dNext')?.addEventListener('click', () => stepRecord(1));
+  wireStepper();
   rec.querySelectorAll('[data-open]').forEach(el =>
     el.addEventListener('click', () => openRecord(el.dataset.open)));
   rec.querySelectorAll('[data-fdomain]').forEach(el =>

@@ -154,6 +154,8 @@
     "dr.step.prev": "Previous memory (←)",
     "dr.step.next": "Next memory (→)",
     "dr.step.at": "{i} / {n}",
+    "dr.step.atGone": "— / {n}",
+    "dr.step.gone": "This memory left the list; the arrows step from where it was",
     "dr.content": "Content",
     "dr.editNote.placeholder": "Edit note (why did it change?)",
     "dr.saveVersion": "Save new version",
