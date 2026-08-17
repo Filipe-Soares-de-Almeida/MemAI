@@ -1110,6 +1110,21 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
    a FIXED width so the snippet's left edge does not jitter from row to row,
    which is the whole point of a list. */
 .mem-list { border-radius: var(--r-lg); background: var(--surface); overflow: hidden; }
+/* The select-all strip. Its first column is the row's first column to the
+   pixel -- a header tick that does not line up under the ticks it commands
+   reads as a filter, not as a select-all. */
+.mem-head {
+  display: grid; grid-template-columns: var(--tap) 1fr auto;
+  gap: var(--sp-3); align-items: center;
+  padding: var(--sp-2) var(--sp-4);
+  border-bottom: 1px solid var(--line);
+  background: var(--hover-1);
+  font-size: var(--fs-label); color: var(--ink-2);
+}
+.mem-head-label { cursor: pointer; }
+/* the keys, where the keys are used. Dropped first when the row gets tight,
+   because it teaches something the pointer does not need. */
+.mem-head-keys { color: var(--ink-3); font-family: var(--font-m); }
 .mem-row {
   display: grid; grid-template-columns: var(--tap) 150px 1fr auto;
   gap: var(--sp-3); align-items: center;
@@ -1209,6 +1224,15 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
 .record-back { max-width: 260px; }
 .record-back .record-back-text {
   min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
+/* Position in the list that opened this record, with the way to either side
+   of it. It sits beside Close rather than in the body: it is navigation, not
+   something you do to the memory. */
+.record-step { display: flex; align-items: center; gap: var(--sp-1); --ico: 13px; }
+.record-step-at {
+  font-family: var(--font-m); font-size: var(--fs-label); color: var(--ink-3);
+  min-width: 56px; text-align: center;
 }
 
 .record-grid {
@@ -2656,6 +2680,10 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
     padding: var(--sp-3);
   }
   .mem-check { padding-top: var(--sp-0); }
+  /* the keyboard hint goes first: there is no keyboard to hint at here, and
+     the strip has to keep the tick and its label on one line */
+  .mem-head { padding: var(--sp-2) var(--sp-3); grid-template-columns: var(--tap) 1fr; }
+  .mem-head-keys { display: none; }
   .mem-main { grid-column: 2; grid-row: 1; }
   .mem-snippet {
     white-space: normal; line-height: 1.5;   /* two clamped lines, not two 24px ones */

@@ -51,6 +51,29 @@ const dq = s => rec.querySelector(s);
 let trail = [];
 const trailTop = () => trail[trail.length - 1] || null;
 
+/* The list this record can step through, in the order it was shown.
+   Registered by whoever put the record on screen -- views/memories.js hands
+   over the page it just rendered and clears it on the way out.
+
+   Without it the dialog is a dead end: curating a page of memories meant
+   closing it, finding the next row, opening it again, fifty times over. It
+   is a plain array of uids and not the rows themselves, so a record that
+   was opened from anywhere else simply finds itself absent from it and
+   shows no stepper. */
+let seq = [];
+export const setRecordSequence = uids => { seq = Array.isArray(uids) ? [...uids] : []; };
+
+/* Stepping is not the same move as following a link: the memory it lands on
+   is the one the list itself would have opened, so it starts a trail of its
+   own rather than stacking a Back button that walks the page a row at a time. */
+function stepRecord(delta) {
+  const at = seq.indexOf(trailTop()?.uid);
+  const to = at + delta;
+  if (at < 0 || to < 0 || to >= seq.length) return;
+  trail.length = 0;
+  openRecord(seq[to]);
+}
+
 /* One path per write, shared by the button that performs it and by the Undo
    that reverses it. An undo which reimplements the call it is undoing is an
    undo that drifts away from it on the next change. */
@@ -100,13 +123,26 @@ export async function openRecord(uid) {
      openRecord(uid) -- and that is not a step in the trail. Only a move to
      a different memory is. */
   if (!reopening) trail = [{ uid }];
-  else if (trailTop().uid !== uid) trail.push({ uid });
+  /* `?.` because stepping through the sequence empties the trail first: the
+     memory it lands on is a starting point, not somewhere you followed a
+     link to */
+  else if (trailTop()?.uid !== uid) trail.push({ uid });
   if (!reopening) {
     rec = openModal({
       ariaLabel: t('dr.dialogAria'),
       title: '',
       bodyHTML: '<div class="loading"><span class="spin"></span></div>',
       wide: true, tall: true,
+    });
+    /* Left and right step through the list the record was opened from. Bound
+       to the dialog rather than the document, so a sub-form raised over it
+       keeps its own arrows; skipped wherever a caret or a listbox already
+       owns them. */
+    rec.addEventListener('keydown', e => {
+      if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+      if (e.target.closest('input, textarea, select, [contenteditable], [role=listbox]')) return;
+      e.preventDefault();
+      stepRecord(e.key === 'ArrowRight' ? 1 : -1);
     });
   }
   let m;
@@ -161,6 +197,7 @@ export async function openRecord(uid) {
   const here = trailTop();
   if (here?.uid === uid) here.label = m.content.split('\n', 1)[0].slice(0, 70);
   const behind = trail.length > 1 ? trail[trail.length - 2] : null;
+  const at = seq.indexOf(uid);
 
   paint(`
     <div class="record-head">
@@ -174,6 +211,17 @@ export async function openRecord(uid) {
       ${statusTag(m.status)}
       ${confPill(m.confidence)}
       <span class="spacer"></span>
+      <!-- Where this memory sits in the list that opened it, and the way to
+           the ones either side of it. Absent when the record was reached from
+           somewhere with no list behind it (a relation, the audit trail, the
+           canvas) -- a stepper with nowhere to step is a lie about context. -->
+      ${at >= 0 && seq.length > 1 ? `<div class="record-step" role="group" aria-label="${esc(t('dr.step.aria'))}">
+        <button type="button" class="icon-btn" id="dPrev" ${at === 0 ? 'disabled' : ''}
+                title="${esc(t('dr.step.prev'))}" aria-label="${esc(t('dr.step.prev'))}">${icon('chevron-left')}</button>
+        <span class="record-step-at">${t('dr.step.at', { i: at + 1, n: seq.length })}</span>
+        <button type="button" class="icon-btn" id="dNext" ${at === seq.length - 1 ? 'disabled' : ''}
+                title="${esc(t('dr.step.next'))}" aria-label="${esc(t('dr.step.next'))}">${icon('chevron-right')}</button>
+      </div>` : ''}
       <button type="button" class="icon-btn" id="dClose" title="${t('dr.close.title')}"
               aria-label="${t('dr.close.title')}" style="--ico:17px">${icon('close')}</button>
     </div>`, `
@@ -312,6 +360,8 @@ export async function openRecord(uid) {
     const prev = trailTop();
     if (prev) openRecord(prev.uid);
   });
+  dq('#dPrev')?.addEventListener('click', () => stepRecord(-1));
+  dq('#dNext')?.addEventListener('click', () => stepRecord(1));
   rec.querySelectorAll('[data-open]').forEach(el =>
     el.addEventListener('click', () => openRecord(el.dataset.open)));
   rec.querySelectorAll('[data-fdomain]').forEach(el =>
