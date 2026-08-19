@@ -436,16 +436,19 @@ content around.
 no MCP, so no server to wait for and no tool that has to have been loaded. It
 reads the host's hook payload on stdin, writes one JSON object on stdout, and
 never fails loudly (no store, an unreadable one, a payload that is not JSON —
-all exit 0 with no output). **Three events:**
+all exit 0 with no output). **Four events:**
 
 | Event | What it emits |
 |---|---|
 | `session-start` | the store's state as context — counts, active domains, the latest checkpoint, open handoffs, pitfalls, recent notes, documented flows — ending in the instruction to call `pulse(domain)` for the subject **before the session's first tool call**, and what the store's casing policy means for that path |
 | `pre-compact` | a reminder that whatever should outlive the transcript belongs in the store: `checkpoint()` where the work stands, `note()` what was established, `anti_pattern()` what turned out to be a trap |
 | `stop` | a nudge to checkpoint, and **only when nothing was written recently** (`--quiet-minutes`, 45 by default) — a nudge that fires regardless of whether there is anything to record teaches the agent to skip it |
+| `guard` | refuses a memai write whose **required** text never arrived — a parameter tag opened without the `antml:` prefix is dropped before the call leaves the client, so the text it held is gone. It exits 2 with the cause on stderr, the one event that stops the call it reads rather than emitting context. A parameter the tool does not require cannot break the write, so that is a `systemMessage` and the call goes through |
 
-Register all three with `memai-hook install`, which writes them into the user's
-`~/.claude/settings.json` — the only scope memai maintains and reads back.
+Register all four with `memai-hook install`, which writes them into the user's
+`~/.claude/settings.json` — the only scope memai maintains and reads back. The
+first three are registered on the host events of the same name, `guard` on
+`PreToolUse` with a matcher over memai's writers.
 `--settings <file>` writes the same block into a named file instead, and what it
 registers there is nobody's to keep current but yours. `--check`
 reports what is registered and exits non-zero if anything is missing;
@@ -462,7 +465,9 @@ renders a status line; an empty store emits nothing. **`memai-hook install
 --skills`** copies the skill directories memai ships into the `skills/`
 directory beside the settings file, so this skill and its siblings install
 with the tool; a file already holding the bundled bytes is left alone and any
-other in the way is backed up first.
+other in the way is backed up first. Each run leaves a receipt beside them, so
+a later `--check` can tell an untouched copy the bundle has moved past from one
+somebody edited; only the former is reported as an update waiting.
 
 **The `warm_up` prompt.** An MCP prompt is invoked by the **person**, which
 makes it the one place in the protocol where the store is read without the
