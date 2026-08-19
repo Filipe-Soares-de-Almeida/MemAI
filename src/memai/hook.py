@@ -7,12 +7,17 @@ JSON object on stdout:
   pre-compact     a reminder to checkpoint before the context is summarised
   stop            a nudge to checkpoint, only when nothing was written
 
+A fourth reads the call the host is about to make instead of the store, and
+is the one exception to everything the last paragraph of this docstring says:
+
+  guard           refuses a memai write whose required text never arrived
+
 One more subcommand reads the store the same way and writes plain text
 instead:
 
   statusline      the store in a single line, for a host's status line
 
-`memai-hook install` registers the three events with the host, and
+`memai-hook install` registers the four events in the user's settings, and
 `install --skills` copies the bundled skills into place, rather than emitting
 anything -- see memai.hook_install.
 
@@ -21,7 +26,10 @@ running and no tool to have been loaded.
 
 Every failure path exits 0 with no output -- no store, an unreadable one, a
 payload that is not JSON, an unknown event -- so a hook cannot stop the
-session it is attached to.
+session it is attached to. `guard` is the deliberate exception: stopping the
+call IS what it is for, and it exits 2 to do it. It never reads the store,
+so the only way it can fail is by refusing, and it refuses only on a payload
+it read and understood.
 """
 
 from __future__ import annotations
@@ -32,7 +40,7 @@ import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from memai import brief, db, hook_install
+from memai import brief, db, guard, hook_install
 
 # How long after the last write a Stop hook assumes the session already
 # recorded what it learned. Long enough to cover a stretch of reading and
@@ -187,6 +195,39 @@ def _statusline(args, payload) -> None:
     _line(_status_text(census["total"], busiest, age))
 
 
+def _guard(payload: dict) -> int:
+    """Read the call the host is about to make; 2 to refuse it, 0 to allow.
+
+    Refusing writes the reason on stderr, which is where a host shows the
+    model what it did wrong. A call that goes through with an optional
+    parameter missing gets a systemMessage instead, so a write is never
+    interrupted over something that is not an error.
+
+    Anything unrecognised is allowed: a tool of another server, one memai
+    does not guard, a payload without an input, and anything at all that
+    raises on the way. The matcher this hook is registered with lives in a
+    file people edit, and the cost of a wrong refusal is a session that
+    cannot write to its memory -- so everything this is not sure about goes
+    through.
+    """
+    try:
+        tool = guard.tool_of(payload.get("tool_name", ""))
+        params = payload.get("tool_input")
+        if not tool or not isinstance(params, dict):
+            return 0
+
+        missing, warn, debris = guard.check(tool, params)
+        if missing:
+            sys.stderr.write(guard.refusal(tool, missing) + "\n")
+            return 2
+        text = guard.warning(tool, warn, debris)
+        if text:
+            sys.stdout.write(json.dumps({"systemMessage": text}, ensure_ascii=True))
+    except Exception:
+        return 0
+    return 0
+
+
 _EVENTS = {
     "session-start": _session_start,
     "pre-compact": _pre_compact,
@@ -203,32 +244,46 @@ def _check(path, *, skills: bool = False) -> int:
     Both are always reported; only the exit code narrows. A hook that is
     missing breaks the store's own reachability, while an uninstalled skill
     is a choice, so the two cannot share one gate.
+
+    A registration that is neither missing nor the current entry is reported
+    as the command it fires: this version's through an older entry, another
+    one, or another one whose file is gone.
+
+    A skill is reported against the install receipt beside it -- installed,
+    outdated, edited or missing -- and anything but `installed` fails the
+    `skills` gate, an edited copy included.
     """
-    command = hook_install.hook_command()
     found = hook_install.registered(path)
+    events = hook_install.event_state(path)
     print(f"{path}:")
-    stale = False
-    for host_event, event in zip(hook_install.EVENTS.values(), hook_install.EVENTS):
-        got = found.get(host_event)
-        if got is None:
+    for host_event, how in events.items():
+        if how == "missing":
             print(f"  {host_event}: not registered")
-        elif got == f"{command} {event}":
-            print(f"  {host_event}: {got}")
+        elif how == "current":
+            print(f"  {host_event}: {found[host_event]}")
+        elif how == "outdated":
+            print(f"  {host_event}: {found[host_event]} -- through an entry this "
+                  "version would write differently")
+        elif how == "broken":
+            print(f"  {host_event}: registers another command, and it is not on "
+                  f"disk -- {found[host_event]}")
         else:
-            stale = True
-            print(f"  {host_event}: registers another command -- {got}")
+            print(f"  {host_event}: registers another command -- {found[host_event]}")
 
     target = hook_install.skills_dir(path)
     state = hook_install.skill_state(target)
-    print(f"{target}:")
+    installed_by = hook_install.read_receipt(target).get("memai")
+    behind = hook_install.skill_behind(target)
+    print(f"{target}:" if not installed_by else f"{target}: installed by memai {installed_by}")
     if not state:
         print("  no skills bundled")
     for name, how in sorted(state.items()):
-        print(f"  {name}: {how}")
+        also = " -- and an update shipped since" if how == "edited" and name in behind else ""
+        print(f"  {name}: {how}{also}")
 
     if skills:
         return 1 if any(how != "installed" for how in state.values()) else 0
-    return 1 if len(found) < len(hook_install.EVENTS) or stale else 0
+    return 1 if any(how != "current" for how in events.values()) else 0
 
 
 def _install(args) -> int:
@@ -238,9 +293,7 @@ def _install(args) -> int:
     error surface. --check reports the hooks and the skills, and exits 1 for
     whichever --skills selects.
     """
-    path = (Path(args.settings) if args.settings else
-            hook_install.project_settings_path() if args.project else
-            hook_install.user_settings_path())
+    path = Path(args.settings) if args.settings else hook_install.user_settings_path()
     if args.check:
         return _check(path, skills=args.skills)
     if args.skills:
@@ -258,10 +311,11 @@ def main(argv: list[str] | None = None) -> int:
                     "stdin, writes one JSON object on stdout, never fails loudly. "
                     "`statusline` writes one plain line instead, and `install` "
                     "registers the hooks with the host.")
-    parser.add_argument("event", nargs="?", choices=[*sorted(_EVENTS), "install"],
-                        help="which hook is calling, `statusline` for one plain line, "
-                             "or `install` to register them; may be omitted when an "
-                             "install flag is given")
+    parser.add_argument("event", nargs="?", choices=[*sorted(_EVENTS), "guard", "install"],
+                        help="which hook is calling, `guard` to vet a memai write "
+                             "the host is about to make, `statusline` for one plain "
+                             "line, or `install` to register them; may be omitted "
+                             "when an install flag is given")
     parser.add_argument("--domain", default="",
                         help="narrow the session-start brief, or the statusline, to "
                              "one domain path")
@@ -270,11 +324,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--quiet-minutes", type=int, default=QUIET_MINUTES,
                         help=f"a write this recent counts as recorded (stop only, "
                              f"default {QUIET_MINUTES})")
-    parser.add_argument("--project", action="store_true",
-                        help="install into this project's .claude/settings.local.json "
-                             "instead of the user's settings")
     parser.add_argument("--settings", default="",
-                        help="install into this settings file, whatever it is")
+                        help="install into this settings file instead of the user's; "
+                             "memai maintains the user's settings and checks nothing "
+                             "else, so what this registers is yours to keep current")
     parser.add_argument("--skills", action="store_true",
                         help="install: copy the bundled skills into the `skills/` "
                              "directory beside the settings file, instead of "
@@ -291,14 +344,18 @@ def main(argv: list[str] | None = None) -> int:
     # the flags are visible in --help before the positional is, and reaching
     # for them without it is the obvious reading.
     if args.event is None:
-        if not (args.check or args.print_only or args.project or args.settings
-                or args.skills):
+        if not (args.check or args.print_only or args.settings or args.skills):
             parser.error("an event is required (or an install flag)")
         args.event = "install"
     if args.event == "install":
         return _install(args)
 
     payload = _payload()
+    # Outside the catch below. The guard's non-zero exit is the point of it,
+    # which the generic handler would swallow.
+    if args.event == "guard":
+        return _guard(payload)
+
     try:
         _EVENTS[args.event](args, payload)
     except Exception:
