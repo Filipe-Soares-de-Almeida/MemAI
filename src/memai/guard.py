@@ -1,0 +1,138 @@
+"""The PreToolUse check that stops a write whose text never arrived.
+
+A tool call is written by the model as tagged parameters. A tag opened
+without the `antml:` prefix is dropped by the parser BEFORE the call leaves
+the client: the server never sees the parameter, and the text it held is
+gone -- not truncated, not empty, gone. Nothing downstream can recover it,
+which is why this is a hook and not a validation in `server.py`.
+
+What that looks like from inside the session is the reason it costs so much:
+the server names ONE missing field at a time, so each retry reads as a new
+problem, and reusing the text block from the failed attempt carries the typo
+with it. Measured on the transcripts of one host in August 2026: ~50 calls
+blocked across 10 sessions, 32 of them `anti_pattern` and 18 `checkpoint`.
+
+So the guard refuses the call (exit 2) naming the cause, and says what to do
+about it: type the tags again, do not paste the block back. A field the tool
+does not require cannot be refused the same way -- its absence raises nothing
+at all -- so those are reported as a warning the write goes through.
+
+`GUARDED` is read from the tool signatures in `memai.server`: a parameter
+with no default is one the call cannot do without. Getting that table wrong
+in either direction is what makes a guard worse than none -- the first
+version of this check, written by hand elsewhere, assumed `content` for
+`anti_pattern` and refused every correct call -- so a tool added here is
+checked against its signature, not against what its siblings take.
+"""
+
+from __future__ import annotations
+
+# tool -> the parameters it has no default for.
+GUARDED: dict[str, tuple[str, ...]] = {
+    "note": ("content",),
+    "reasoning": ("content",),
+    "handoff": ("content",),
+    "checkpoint": ("intent", "established", "pursuing", "open_questions"),
+    "anti_pattern": ("pattern", "why_wrong", "instead"),
+}
+
+# tool -> the optional parameters worth missing. Absence here is not an
+# error, and that is the problem: a dropped `domain` or `source_ref` writes
+# a memory nobody can file or check, with nothing on screen to say so.
+WATCHED: dict[str, tuple[str, ...]] = {
+    "note": ("domain", "tags", "source_ref"),
+    "reasoning": ("domain", "source_ref"),
+    "handoff": ("domain",),
+    "checkpoint": ("domain",),
+    "anti_pattern": ("domain", "source_ref"),
+}
+
+# What a dropped tag leaves behind when it lands inside the NEXT parameter's
+# text instead of vanishing: the tag's own source, written into a memory's
+# body. Warned about, never refused -- a memory documenting this defect
+# quotes these on purpose, and a guard that cannot be written about is a
+# guard that gets removed.
+DEBRIS = ("parameter name=", "</", "<parameter")
+
+
+def matcher() -> str:
+    """The tool names the guard's registration fires for, as a regex.
+
+    The server's name in a host config is the user's to choose, so the middle
+    segment is matched rather than spelled.
+    """
+    return f"mcp__[Mm]em[Aa][Ii]__({'|'.join(GUARDED)})"
+
+
+def tool_of(name: str) -> str:
+    """The memai tool a host's `tool_name` refers to, or "" for anything else.
+
+    `mcp__MemAI__note` -> `note`. A tool of another server, or one this does
+    not guard, is not ours to judge: the matcher is a regex in a file people
+    edit, so the name is checked here as well.
+    """
+    parts = str(name).split("__")
+    if len(parts) != 3 or parts[0] != "mcp" or parts[1].lower() != "memai":
+        return ""
+    return parts[2] if parts[2] in GUARDED else ""
+
+
+def _blank(value: object) -> bool:
+    """Whether a parameter arrived with nothing in it.
+
+    A value that is not a string counts as present: the tools this guards
+    take text, so anything else is the host's business, not the typo's.
+    """
+    if value is None:
+        return True
+    return not str(value).strip() if isinstance(value, str) else False
+
+
+def check(tool: str, params: dict) -> tuple[list[str], list[str], list[str]]:
+    """What is wrong with `params` for `tool`: (missing, warn, debris).
+
+    `missing` are the required parameters that did not arrive -- the call
+    cannot proceed. `warn` are the optional ones. `debris` are the parameters
+    whose text carries a tag's own source, which means a dropped tag landed
+    in the body of the one after it.
+    """
+    missing = [k for k in GUARDED.get(tool, ()) if _blank(params.get(k))]
+    warn = [k for k in WATCHED.get(tool, ()) if _blank(params.get(k))]
+    debris = sorted({k for k, v in params.items() if isinstance(v, str)
+                     and any(mark in v for mark in DEBRIS)})
+    return missing, warn, debris
+
+
+def _table() -> str:
+    return " | ".join(f"{tool}={','.join(fields)}" for tool, fields in GUARDED.items())
+
+
+def refusal(tool: str, missing: list[str]) -> str:
+    """What to tell a caller whose required text never arrived."""
+    return (
+        f"BLOCKED (mcp__MemAI__{tool}): required parameter(s) missing: "
+        f"{', '.join(missing)}. MOST LIKELY CAUSE: a parameter tag opened "
+        f"without the antml: prefix -- the parser drops the parameter and the "
+        f"text is LOST before the call leaves the client, so nothing here can "
+        f"recover it. REDO the call typing EVERY tag again with the prefix, "
+        f"and do NOT reuse the text block from the attempt that failed, "
+        f"because the typo comes with it. The server names one missing field "
+        f"at a time, so a retry that fixes only the field named above will "
+        f"fail again on the next one. Required per tool: {_table()}."
+    )
+
+
+def warning(tool: str, warn: list[str], debris: list[str]) -> str:
+    """What to tell a caller whose write goes through with something off."""
+    parts = []
+    if warn:
+        parts.append(f"optional parameter(s) missing ({', '.join(warn)}) -- if that "
+                     f"was not deliberate it is the same dropped-tag typo")
+    if debris:
+        parts.append(f"a parameter tag's own source is inside the text of "
+                     f"{', '.join(debris)} -- a dropped tag landed in the body "
+                     f"of the parameter after it")
+    if not parts:
+        return ""
+    return (f"MemAI mcp__MemAI__{tool}: " + "; ".join(parts)
+            + ". The write goes through; fix it afterwards with edit_memory.")

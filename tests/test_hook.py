@@ -118,7 +118,7 @@ def test_a_trimmed_section_still_reports_its_total(conn):
     for i in range(4):
         db.insert_memory(conn, type="anti_pattern", domain="acme/x100",
                          content=f"TEMPTATION: pitfall {i} " + "spelled out at length " * 12)
-    text = brief.session_brief(conn, budget=900)
+    text = brief.session_brief(conn, budget=1400)
     section = next(b for b in text.split("\n\n") if "Pitfalls on record" in b)
     shown = sum(1 for line in section.splitlines() if line.startswith("  - "))
     assert shown < 4
