@@ -53,7 +53,8 @@ CALL_TO_ACTION = (
     "get_memory(uid) for one record in full. If the memai tools are not loaded "
     "yet -- an MCP connection comes up asynchronously -- load them first, then "
     "call it. Write as you go: note() a durable fact, anti_pattern() a pitfall, "
-    "checkpoint() before a pause."
+    "checkpoint() before a pause, set_confidence(uid, 'confirmed'|'contradicted') "
+    "once evidence settles a claim you could not check when you wrote it."
 )
 
 

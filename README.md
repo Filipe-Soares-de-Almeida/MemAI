@@ -81,8 +81,8 @@ one memory that discusses the cache; in a store organised by domain, unweighted
 that is most of the store.
 
 Three annotations ride along. `succeeded_by` names a memory that supersedes this
-one, read from the relations graph — a stale hit used to come back looking
-current with its replacement one edge away. `collapsed` names near-identical
+one, read from the relations graph, so a superseded hit does not come back
+looking current with its replacement one edge away. `collapsed` names near-identical
 results folded into this one, so a fact written five times spends one slot;
 that folding is on for the MCP tools and off for the dashboard, which has to
 *see* the copies. And `confidence: contradicted` sorts behind everything that
@@ -332,13 +332,15 @@ returns the same brief the hook below emits.
 so there is no server to wait for, no tool to have been loaded, and no race with
 the host's own startup. It reads the hook payload on stdin and writes one JSON
 object on stdout, and it never fails loudly: no store, an unreadable one, a
-payload that is not JSON, all exit 0 with no output.
+payload that is not JSON, all exit 0 with no output. `guard` is the one
+exception, and the only event that reads the call rather than the store.
 
 | event | what it emits |
 |---|---|
 | `session-start` | the store's state as context — counts, active domains, latest checkpoint, open handoffs, pitfalls, recent notes, documented flows — ending in the instruction to call `pulse(domain)` for the subject before the session's first tool call |
 | `pre-compact` | a reminder that what should outlive the transcript belongs in the store |
 | `stop` | a nudge to checkpoint, and **only** when nothing was written recently — a timer-based nudge fires whether or not there is anything to record, which teaches the agent to skip it |
+| `guard` | refuses a memai write whose required text never arrived — `PreToolUse`, exit 2, and the reason on stderr |
 
 The instruction rides along with the context instead of arriving on its own
 per-prompt hook: one event to register, and this text is already read at the
@@ -347,14 +349,28 @@ person writes is instruction far more often than subject, so a search on it
 answers confidently about a different subject, and an agent that is told to open
 the subject picks the domain itself.
 
-Register all three with:
+**Why the guard is one of them.** A tool call is written as tagged parameters,
+and a tag opened without the `antml:` prefix is dropped by the parser before the
+call leaves the client: the server never sees the parameter, and the text it
+held is gone. The server then names one missing field at a time, so each retry
+reads as a new problem and reusing the text block carries the typo with it —
+measured on one host's transcripts in August 2026, ~50 calls blocked across 10
+sessions, 32 of them `anti_pattern` and 18 `checkpoint`. The guard refuses the
+call naming that cause; a parameter the tool does not require cannot raise
+anything at all, so those are reported as a `systemMessage` and the write goes
+through. What it checks is read from the tool signatures and tested against
+them, and everything else — another server's tool, one it does not guard, a
+payload it cannot read, an error of its own — goes through untouched.
+
+Register all four with:
 
 ```
 memai-hook install            # the user's ~/.claude/settings.json
-memai-hook install --project  # this repository's .claude/settings.local.json
-memai-hook install --skills   # copy the bundled skills into .claude/skills/
-memai-hook install --check    # hooks and skills; exit 1 if a hook is missing
+memai-hook install --skills   # copy the bundled skills into ~/.claude/skills/
+memai-hook install --check    # hooks and skills; exit 1 unless every hook
+                              #   is registered as this version writes it
 memai-hook install --print    # what it would write, writing nothing
+memai-hook install --settings <path>   # write that block somewhere else
 ```
 
 Hooks on the same event that memai did not write are left alone, memai's own
@@ -363,9 +379,27 @@ copied to `<name>.bak-<stamp>` first. The command is registered as an absolute
 path with forward slashes — a `command` hook is handed to a shell, and a POSIX
 shell reads the backslashes of a Windows path as escapes.
 
-Until a hook has run at least once against the store, the server's MCP
-instructions carry a line asking for `memai-hook install`; after that they never
-mention it again.
+### One scope: the user's settings
+
+`~/.claude/settings.json`, with the skills directory beside it, is the scope
+memai installs into and the only one it reads back. One registration covers
+every project.
+
+`--settings <path>` writes the same block into any other file — a repository's
+`.claude/settings.local.json` included. Nothing reads that file back, and
+nothing reports it as out of date; keeping it current is yours.
+
+While the user's settings register no memai hook, the server's MCP instructions
+carry a line asking for `memai-hook install`. Once they do, the instructions stay
+quiet until the installation is out of date, and then they name what drifted and
+the command that fixes it: a host event that is not registered, a registration
+whose command has left the disk, one that fires this version's command through an
+entry it would write differently, or a bundled skill whose installed copy is
+untouched while the bundle has moved on. An install does not keep itself current,
+and nothing writes to `~/.claude` without being asked.
+
+A registration that fires some other `memai-hook` still on disk is left alone —
+edit the command by hand and it stays yours.
 
 `--domain` narrows the session brief, `--budget` caps the characters it emits,
 `--quiet-minutes` how recent a write has to be for `stop` to stay quiet. The
@@ -382,6 +416,12 @@ registration itself, which `install` writes for you:
     ],
     "Stop": [
       { "hooks": [{ "type": "command", "command": "memai-hook stop" }] }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "mcp__[Mm]em[Aa][Ii]__(note|reasoning|handoff|checkpoint|anti_pattern)",
+        "hooks": [{ "type": "command", "command": "memai-hook guard" }]
+      }
     ]
   }
 }
@@ -418,8 +458,7 @@ The package ships agent skills as Markdown under `memai/skills/`, one directory
 per skill: how to use the store, and the curation pass as an orchestrator plus
 one skill per decision it makes. `memai-hook install --skills` copies them into
 the `skills/` directory beside the settings file it would otherwise register
-hooks in — `~/.claude/skills` by default, this repository's `.claude/skills`
-with `--project`.
+hooks in — `~/.claude/skills`, or beside a `--settings` target.
 
 Only the names memai ships are read or written: a skill directory it does not
 ship is left untouched, and a file it would overwrite is copied to
@@ -430,6 +469,28 @@ alone, so a second run copies nothing.
 alongside the hooks, but only the hooks decide its exit code: a hook that is
 missing puts the store out of reach, while an uninstalled skill is a choice.
 `--check --skills` moves the gate to the skills.
+
+Each run leaves a receipt in that directory — `.memai-skills.json`, holding one
+sha256 per installed file and the memai version that wrote it — and the states
+are read against it:
+
+| state | what it means |
+|---|---|
+| `installed` | the bundled bytes are there |
+| `outdated` | what is there is the copy the receipt recorded, and the bundle has moved on — **an update waiting to be copied** |
+| `edited` | somebody changed it after it was installed |
+| `missing` | the directory is not there |
+
+Only `outdated` reaches the MCP instructions; `missing` and `edited` are left
+alone. `--check` prints the version that installed them, and says when an edited
+skill is also behind the bundle. Re-installing takes the update and leaves the
+local copy in `<name>.bak-<stamp>` beside it.
+
+Both sides are compared over the same file names, so a backup sitting inside a
+skill directory is not a difference, and `edited` is judged against the names the
+receipt holds, so a bundle that gained or lost a file can still tell an untouched
+copy. Without a receipt, a skill whose bytes differ reads as `outdated`, and the
+next install records the hashes.
 
 ## Admin dashboard
 
