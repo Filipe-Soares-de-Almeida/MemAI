@@ -444,9 +444,10 @@ all exit 0 with no output). **Three events:**
 | `pre-compact` | a reminder that whatever should outlive the transcript belongs in the store: `checkpoint()` where the work stands, `note()` what was established, `anti_pattern()` what turned out to be a trap |
 | `stop` | a nudge to checkpoint, and **only when nothing was written recently** (`--quiet-minutes`, 45 by default) — a nudge that fires regardless of whether there is anything to record teaches the agent to skip it |
 
-Register all three with `memai-hook install` (the user's
-`~/.claude/settings.json`), `--project` for this repository's
-`.claude/settings.local.json`, `--settings <file>` for a named one. `--check`
+Register all three with `memai-hook install`, which writes them into the user's
+`~/.claude/settings.json` — the only scope memai maintains and reads back.
+`--settings <file>` writes the same block into a named file instead, and what it
+registers there is nobody's to keep current but yours. `--check`
 reports what is registered and exits non-zero if anything is missing;
 `--print` shows what it would write without writing it. `--domain` narrows the
 session brief and `--budget` caps the characters it emits. Hooks on the same

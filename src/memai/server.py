@@ -53,47 +53,104 @@ pulse(domain) for the state of a subject, recall(query) or search(query)
 for anything specific, list_domains() for the tree that exists. Write as
 you go, not at the end: note() a durable fact, anti_pattern() a pitfall
 worth not repeating, checkpoint() where the work stands before a pause,
-diagram() a routine start to end.
+diagram() a routine start to end. A claim you could not check says so in
+its own body; set_confidence(uid, 'confirmed'|'contradicted') closes it
+once the evidence turns up.
 
 A domain is a path ('acme/x100/p200') and every read covers its
 subdomains, so the same call asks about a product or one routine depending
 on how much of the path it gives. help() documents every tool from its own
 source."""
 
-# Appended to INSTRUCTIONS while neither the user's settings nor this
-# directory's register a memai hook. `{command}` is filled with the absolute
-# path to this environment's memai-hook: the name alone is on PATH only for a
-# shell with the environment activated, which a host's shell is not.
+# Appended to INSTRUCTIONS while the user's settings register no memai hook.
+# `{command}` is filled with the absolute path to this environment's
+# memai-hook: the name alone is on PATH only for a shell with the environment
+# activated, which a host's shell is not.
 HOOKS_MISSING = """\
-NOTE: no memai hook is registered for this session, so nothing puts the store
-in front of it -- memai is read only when you call it, and a session that
-forgets to call it starts blind. Say so in your first reply and offer to run
-this, exactly as written (the name alone is not on PATH):
+NOTE: no memai hook is registered in the user's settings, so nothing puts the
+store in front of this session -- memai is read only when you call it, and a
+session that forgets to call it starts blind. Say so in your first reply and
+offer to run this, exactly as written (the name alone is not on PATH):
 
   {command} install
 
-It registers SessionStart, PreCompact and Stop in the user's settings, for
-every project. Add `--project` for this repository only, `--check` to report
-what is registered, `--print` to show the block without writing it."""
+It registers SessionStart, PreCompact, Stop and PreToolUse in
+`~/.claude/settings.json`, for every project -- the last of those is the guard
+that refuses a memai write whose required text never arrived. `--check` reports what is registered, `--print` shows the block
+without writing it."""
+
+
+# Appended to INSTRUCTIONS while memai is registered for this session but part
+# of what was installed is out of date. `{findings}` and `{commands}` are
+# rendered by _stale_note; the command is absolute for the same reason as
+# above.
+INSTALL_STALE = """\
+NOTE: memai is registered for this session, but part of the installation is out
+of date -- an install does not keep itself current, so a hook or a skill copied
+by an earlier version stays as it was:
+
+{findings}
+
+Say so in your first reply and offer to run this, exactly as written (the name
+alone is not on PATH):
+
+{commands}
+
+memai's own hook entries are replaced rather than appended, the bundled skills
+are copied over, and any file either has to overwrite is backed up first. Add
+`--check` to report the state without writing anything."""
+
+
+def _quoted(command: str) -> str:
+    """A command a shell reads as one word."""
+    return f'"{command}"' if " " in command else command
+
+
+def _stale_note(command: str) -> str:
+    """INSTALL_STALE for what hook_install.stale() reports, or "" when the
+    installation is current."""
+    stale = hook_install.stale()
+    findings: list[str] = []
+    commands: list[str] = []
+    if stale["events"]:
+        findings.append(f"  - {', '.join(stale['events'])}: not registered.")
+    if stale["broken"]:
+        findings.append(f"  - {', '.join(stale['broken'])}: registered, but the "
+                        "command they fire is not on disk any more.")
+    if stale["outdated"]:
+        findings.append(f"  - {', '.join(stale['outdated'])}: registered through an "
+                        "entry this version would write differently.")
+    if stale["events"] or stale["broken"] or stale["outdated"]:
+        commands.append(f"  {command} install")
+    if stale["skills"]:
+        findings.append("  - an update is waiting for these skills, and what is "
+                        f"installed is untouched: {', '.join(stale['skills'])}.")
+        commands.append(f"  {command} install --skills")
+    if not findings:
+        return ""
+    return INSTALL_STALE.format(findings="\n".join(findings),
+                                commands="\n".join(commands))
 
 
 def _instructions() -> str:
-    """INSTRUCTIONS, with HOOKS_MISSING appended when no hook is registered.
+    """INSTRUCTIONS, with a note appended when the installation needs a hand.
 
-    Reads the user's settings and this directory's, once, at import: the
-    question is whether THIS session has the hooks, so a registration made
-    for some other project does not answer it. Unreadable settings are read
-    as no registration.
+    HOOKS_MISSING when the user's settings register no memai hook,
+    INSTALL_STALE when they do but an event is unregistered, a registered
+    command has left the disk, an entry is not the one an install writes, or
+    an installed skill is not the version this package ships.
+
+    Read once, at import, from the user's settings alone -- the scope memai
+    installs into. Unreadable settings are read as no registration.
     """
     try:
-        if hook_install.anywhere():
-            return INSTRUCTIONS
-        command = hook_install.hook_command()
+        command = _quoted(hook_install.hook_command())
+        note = (_stale_note(command)
+                if hook_install.registered(hook_install.user_settings_path())
+                else HOOKS_MISSING.format(command=command))
     except Exception:
         return INSTRUCTIONS
-    if " " in command:
-        command = f'"{command}"'
-    return f"{INSTRUCTIONS}\n\n{HOOKS_MISSING.format(command=command)}"
+    return f"{INSTRUCTIONS}\n\n{note}" if note else INSTRUCTIONS
 
 
 mcp = FastMCP("memai", instructions=_instructions())
