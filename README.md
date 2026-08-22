@@ -43,82 +43,39 @@ gaps are backfilled on a later connect.
 
 ## Retrieval
 
-`search` is hybrid: FTS5 BM25 plus brute-force cosine KNN over the vectors (no
-ANN index — a linear scan is plenty at this scale), merged by reciprocal rank
-fusion. Each result says which side matched (`match_source`: `fts` | `vec` |
-`both`) and carries the raw `fts_rank` / `vec_distance`. Multi-term queries are
-OR'd on the keyword side, so several paraphrases in one call all help.
+`search` is hybrid: FTS5 BM25 over content, tags and domains, plus cosine KNN
+over the vectors (brute force, no ANN index), merged by reciprocal rank fusion.
+Each result says which side matched (`match_source`: `fts` | `vec` | `both`) and
+carries the raw `fts_rank` / `vec_distance`. Multi-term queries are OR'd on the
+keyword side, so several paraphrases in one call all help.
 
-The two arms do not get the same vote. Plain RRF assumes both retrievers are
-equally informative; measured against 216 pairs a human had marked as related
-in a real store, an equal vote was a cliff — `relates_to` recall@5 fell from
-66% (keywords alone) to 55.7% fused, because the weaker arm displaced keyword
-hits at the same rank. At any weight below equal it lands on one flat plateau
-at 69.1%, above keywords alone: the vector arm has real signal (it found 11
-targets the keyword arm missed) and simply cannot outrank a keyword hit. The
-weight is 0.5, the middle of that plateau.
-
-Both arms fetch exactly `limit` before the merge. Fetching deeper is the
-textbook move — fusion exists to recover the row ranked just outside one arm's
-window — and against a real 536-memory store it cost recall at every step:
-100% for the keyword arm alone, 100% fused at 1x, 96.7% at 2x, 90% at 4x, 85%
-at 8x. Depth is a claim that both retrievers are informative. Measure it
-against the store before raising it.
-
-The vector arm is bounded by distance as well as by count. A KNN has no
-notion of "nothing here is close": asked for 200 rows it returns the 200
-nearest however far away they are, so a search for a word the store had never
-seen came back with the whole store, every row past the keyword matches
-labelled `match_source: vec` as if the vector side had found it. Measured over
-a real store, the best distance the vector arm reaches is 0.157–0.555 for a
-query with a real target and 0.68–0.93 for one without; the cut sits at 0.60,
-which drops the sweep to nothing and costs no recall. It is calibrated to this
-model — re-measure it if you change `MEMAI_EMBED_MODEL`.
-
-BM25 is weighted per column. `domain` and `also_domains` are indexed so a scope
-name is findable, not so that every row filed under `acme/cache` outranks the
-one memory that discusses the cache; in a store organised by domain, unweighted
-that is most of the store.
+Three values shape the fusion: the vector arm carries less than a full vote,
+each arm fetches exactly `limit` rows before the merge, and a neighbour past the
+distance cut is dropped rather than returned as the nearest of a bad lot. All
+three are calibrated against the bundled model and one corpus —
+`tools/bench-retrieval.py` re-measures them, and a change to `MEMAI_EMBED_MODEL`
+needs it. BM25 is weighted per column: `domain` and `also_domains` are indexed
+so a scope name is findable, not so that every row filed under `acme/cache`
+outranks the one memory that discusses the cache.
 
 Three annotations ride along. `succeeded_by` names a memory that supersedes this
-one, read from the relations graph, so a superseded hit does not come back
-looking current with its replacement one edge away. `collapsed` names near-identical
-results folded into this one, so a fact written five times spends one slot;
-that folding is on for the MCP tools and off for the dashboard, which has to
-*see* the copies. And `confidence: contradicted` sorts behind everything that
-still holds without disappearing — knowing a claim was ruled out is what stops
-it being written again.
+one, read from the relations graph. `collapsed` names near-identical results
+folded into this one — on for the MCP tools, off for the dashboard, which has to
+*see* the copies. `confidence: contradicted` sorts behind everything that still
+holds, without disappearing.
 
-Every list-style read is snippet-truncated at 400 characters, so each result
-carries `est_tokens` — the estimated cost of the record's *full* content, not of
-the snippet — and the response carries the sum over what it returned, which is
-what turns a `get_memory(uid)` into a priced decision rather than a guess. It is
-a fixed ratio over the character length, not a tokenizer. The four list tools
-return `{"results": […], "est_tokens": N}` for that reason; `pulse` prices every
-record it hands over, and `get_memory` does not — it already returned the whole
-thing.
+Every list-style read is snippet-truncated at 400 characters and carries
+`est_tokens`, the estimated cost of the record's *full* content — a fixed ratio
+over the character length, not a tokenizer — so a `get_memory(uid)` has a price
+before it is called. `pulse` prices every record it hands over; `get_memory`
+does not, having already returned the whole thing.
 
 Both retrievers only *widen the candidate set*; whether a candidate answers the
-query is the calling agent's judgement. `list_by_domain` / `list_recent` are
-the fallback for a search that comes back thin.
-
-`timeline` asks what the retrievers cannot: not what mentions a record, but what
-was being written when it was. Anchor it with a `uid`, or with a `query` whose
-top hit becomes the anchor (the response says which was used and which record it
-landed on), and it returns the records created immediately `before` and `after`
-it, in creation order. `domain` and `type` narrow the neighbourhood rather than
-the anchor, so one call reads a whole store's week or one routine's.
-
-`pulse` and the `list_*` tools sort by `created_at DESC`, never by similarity —
-a similarity top-1 can surface an old memory over a current one, so the
-"what is the latest state" tools stay recency-only.
-
-`pulse` is the state of a scope, not its contents: each list stops at a handful
-and its `scope` block is the rest — where it read (`paths`), what the scope
-holds (`total`, `by_type`), what each list left behind (`not_shown`), and the
-level below it (`subdomains`, with `own` and `subtree` counts). That is the
-drill-down plan for `search(query, domain=…)` or `list_by_domain(domain,
-type=…)`.
+query is the calling agent's judgement. `list_by_domain` / `list_recent` are the
+fallback for a search that comes back thin, and they — with `pulse` — sort by
+`created_at DESC`, never by similarity. `pulse` returns the state of a scope
+rather than its contents: each list stops at a handful, and its `scope` block
+reports the rest (`paths`, `total`, `by_type`, `not_shown`, `subdomains`).
 
 ## Domains
 
@@ -204,11 +161,10 @@ to know where that tree is.
 
 Curation starts at the write. A writer probes the store for what it just wrote
 and returns `similar` when something crosses the threshold, plus one line on
-what to do about it — the agent still has the context that produced the text,
-so that is the one moment when "the store already said this" is free to act on.
-It never blocks the write. Quiet by design, or the field gets trained away:
-diagrams are out on both sides, archived rows are out, and consecutive
-checkpoints of one effort are out because they share a skeleton by design.
+what to do about it, while the agent still has the context that produced the
+text. It never blocks the write. Diagrams are out on both sides, archived rows
+are out, and consecutive checkpoints of one effort are out — they share a
+skeleton by design.
 
 `dedup_scan` surfaces likely-duplicate pairs by lexical overlap. The full pass
 is two tools: `optimize_scan` dumps the corpus compactly — each memory's
@@ -228,8 +184,7 @@ require a non-empty `verified` describing the live-facts check behind them.
 
 `forget` is a soft delete — content kept, row out of default search/list output
 (`status: archived`). `purge_memory` permanently deletes the row plus its edit
-history and relations, gated on a `confirm_phrase` equal to `"DELETE <uid>"`,
-a string that can only plausibly come from a human confirming that id.
+history and relations, gated on a `confirm_phrase` equal to `"DELETE <uid>"`.
 
 ## Tools
 
@@ -254,11 +209,9 @@ or runs a curation pass, so `MEMAI_TOOLS` names the groups to publish:
 `core` is the reading, writing, editing and linking surface; `diagrams` is
 authoring one (`get_diagram` stays in core — reading a flow is a read);
 `curation` is the optimize/dedup pass plus the store-wide settings and
-`purge_memory`. Any group implies `core`. The default publishes everything,
-because dropping a tool an existing setup calls is not something to do
-quietly — and either way `help()` documents every tool and names the ones this
-process did not load, so an agent that needs one gets told how to turn it on
-instead of concluding memai cannot do it.
+`purge_memory`. Any group implies `core`. The default publishes everything, and
+`help()` documents every tool, naming the ones this process did not load and the
+group that turns them on.
 
 | Writing | |
 |---|---|
@@ -275,7 +228,7 @@ instead of concluding memai cannot do it.
 | `recall(query, domain, limit)` | Relevance-ranked recall of `note()`'d knowledge |
 | `list_by_domain(domain, type, limit, subtree)` | Recency-ordered, scoped to a path and its subdomains |
 | `list_recent(type, domain, limit, subtree)` | Recency-ordered, global |
-| `timeline(uid, query, before, after, domain, type)` | The records written either side of one memory, in `created_at` order |
+| `timeline(uid, query, before, after, domain, type)` | The records written either side of one memory, in `created_at` order; anchored by `uid`, or by a `query` whose top hit becomes the anchor |
 | `list_domains()` | The domain tree: own/subtree/cross-listed counts and latest activity |
 | `get_memory(uid)` | Full record: edit history, relations, referencing diagrams |
 | `get_relations(uid)` | Relations for a memory |
@@ -315,22 +268,19 @@ the string it later filters on.
 
 ## Getting it read
 
-A memory server has one failure mode that dwarfs the rest: nothing goes wrong,
-and the agent simply never calls it. Three things address that, in order of how
-little they ask of anyone.
+A store is only read if something asks for it. Three mechanisms do, in order of
+how little they ask of anyone.
 
 **Server instructions.** Sent in the MCP handshake and injected into the model's
 context by hosts that support it — a paragraph naming the read tools and the
 write ones. Nothing to configure.
 
-**The `warm_up` prompt.** MCP prompts are invoked by the *person*, which makes
-this the one place in the protocol where the store can be read without the agent
-having decided to read it. Hosts that surface prompts show it as a command; it
-returns the same brief the hook below emits.
+**The `warm_up` prompt.** An MCP prompt is invoked by the *person*, not by the
+agent. Hosts that surface prompts show it as a command; it returns the same
+brief the hook below emits.
 
-**`memai-hook`.** A console script that reads the SQLite store directly — no MCP,
-so there is no server to wait for, no tool to have been loaded, and no race with
-the host's own startup. It reads the hook payload on stdin and writes one JSON
+**`memai-hook`.** A console script that reads the SQLite store directly, with no
+MCP server involved. It reads the hook payload on stdin and writes one JSON
 object on stdout, and it never fails loudly: no store, an unreadable one, a
 payload that is not JSON, all exit 0 with no output. `guard` is the one
 exception, and the only event that reads the call rather than the store.
@@ -339,28 +289,22 @@ exception, and the only event that reads the call rather than the store.
 |---|---|
 | `session-start` | the store's state as context — counts, active domains, latest checkpoint, open handoffs, pitfalls, recent notes, documented flows — ending in the instruction to call `pulse(domain)` for the subject before the session's first tool call |
 | `pre-compact` | a reminder that what should outlive the transcript belongs in the store |
-| `stop` | a nudge to checkpoint, and **only** when nothing was written recently — a timer-based nudge fires whether or not there is anything to record, which teaches the agent to skip it |
+| `stop` | a nudge to checkpoint, and **only** when nothing was written recently |
 | `guard` | refuses a memai write whose required text never arrived — `PreToolUse`, exit 2, and the reason on stderr |
 
-The instruction rides along with the context instead of arriving on its own
-per-prompt hook: one event to register, and this text is already read at the
-moment the instruction is needed. Nothing searches on a prompt's words — what a
-person writes is instruction far more often than subject, so a search on it
-answers confidently about a different subject, and an agent that is told to open
-the subject picks the domain itself.
+The `session-start` context carries the instruction to call `pulse` rather than
+a separate per-prompt hook, and nothing searches on the prompt's words: the
+agent is told to open the subject and picks the domain itself.
 
-**Why the guard is one of them.** A tool call is written as tagged parameters,
-and a tag opened without the `antml:` prefix is dropped by the parser before the
-call leaves the client: the server never sees the parameter, and the text it
-held is gone. The server then names one missing field at a time, so each retry
-reads as a new problem and reusing the text block carries the typo with it —
-measured on one host's transcripts in August 2026, ~50 calls blocked across 10
-sessions, 32 of them `anti_pattern` and 18 `checkpoint`. The guard refuses the
-call naming that cause; a parameter the tool does not require cannot raise
-anything at all, so those are reported as a `systemMessage` and the write goes
-through. What it checks is read from the tool signatures and tested against
-them, and everything else — another server's tool, one it does not guard, a
-payload it cannot read, an error of its own — goes through untouched.
+**What the guard checks.** A tag opened without the `antml:` prefix is dropped
+by the parser before the call leaves the client, so the server never sees the
+parameter and the text it held is gone. The guard refuses such a call on
+`PreToolUse` — exit 2, the cause on stderr — and says to type the tags again
+rather than paste the block back. A parameter the tool does not require is
+reported as a `systemMessage` and the write goes through. The required set is
+read from the tool signatures and tested against them; everything else —
+another server's tool, one it does not guard, a payload it cannot read, an
+error of its own — goes through untouched.
 
 Register all four with:
 
@@ -466,9 +410,8 @@ ship is left untouched, and a file it would overwrite is copied to
 alone, so a second run copies nothing.
 
 `--check` reports each bundled skill as `installed`, `outdated` or `missing`
-alongside the hooks, but only the hooks decide its exit code: a hook that is
-missing puts the store out of reach, while an uninstalled skill is a choice.
-`--check --skills` moves the gate to the skills.
+alongside the hooks, but only the hooks decide its exit code: a missing hook
+puts the store out of reach. `--check --skills` moves the gate to the skills.
 
 Each run leaves a receipt in that directory — `.memai-skills.json`, holding one
 sha256 per installed file and the memai version that wrote it — and the states
@@ -544,9 +487,7 @@ separate from MemAI's MIT licence).
 
 ## Measuring retrieval
 
-Retrieval changes are easy to argue about and hard to be right about — two in
-this repo shipped on textbook reasoning and cost recall before anyone measured
-them. `tools/bench-retrieval.py` scores a store against ground truth the store
+`tools/bench-retrieval.py` scores a store against ground truth the store
 already holds: a diagram step's label and the memory linked to explain it, and
 `relates_to` edges. Both are pairs a *person* asserted were related, so no
 labelling session is needed.
@@ -557,9 +498,8 @@ python tools/bench-retrieval.py --home /path/to/a-copy-of-a-store
 
 It reports recall@k per arm and fused, the ceiling any fusion of those two arms
 could reach, and how far off the misses were. Point `MEMAI_EMBED_MODEL` at
-another model and run it again — that is the whole procedure for deciding
-whether a model change is worth it. Run it against a *copy*: opening a store
-applies any pending migration.
+another model and run it again to compare. Run it against a *copy*: opening a
+store applies any pending migration.
 
 ## Setup
 
@@ -589,8 +529,7 @@ config) pointing at the installed console script:
 ### Starting the dashboard with it
 
 The MCP server can bring the dashboard up with it, so a session begins with
-both. Off unless asked — a memory server has no business opening a web port
-uninvited:
+both. Off unless asked:
 
 ```json
 {
@@ -617,8 +556,8 @@ A host starts several MCP servers per session, so "start it" has to mean "start
 it once". Each one asks `/api/ping` whether a MemAI dashboard already answers —
 first at the address a running one recorded in `$MEMAI_HOME/admin.json`, then
 at its own configured port — and only then tries to bind. Whichever wins the
-kernel's race keeps the port and the rest exit, with no lock file to survive a
-killed session. A port that answers but is not MemAI stops the attempt, logged.
+kernel's race keeps the port and the rest exit; no lock file is written. A port
+that answers but is not MemAI stops the attempt, logged.
 
 The dashboard is detached on purpose: it outlives the session that opened it.
 `memai-admin --status` says where it is, `memai-admin --stop` stops it.
@@ -643,12 +582,10 @@ whole diagram graphs including the positions somebody arranged by hand — so a
 diff is per memory. `md` is one document grouped by domain, export only.
 
 An import writes what is not already there and skips what is, so running it
-twice changes nothing; the local row always wins, because an import is how a
-store is restored, merged into or carried, and in all three the row somebody
-has been using is the one to keep. uids and timestamps come across unchanged —
-renumbering would break every relation, node link and jump pointing at them.
-The FTS index and the vectors are rebuilt from the content, and the edit
-history is not carried: that is what the binary backup is for.
+twice changes nothing, and the local row always wins. uids and timestamps come
+across unchanged, so every relation, node link and jump keeps pointing at the
+record it named. The FTS index and the vectors are rebuilt from the content,
+and the edit history is not carried: that is what the binary backup is for.
 
 ## Data location
 
