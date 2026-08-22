@@ -1,11 +1,5 @@
 """Measure retrieval against a real store, using the store's own ground truth.
 
-Retrieval changes are easy to argue about and hard to be right about. Two
-in this repo shipped on textbook reasoning and cost recall: fusing deeper
-than `limit`, and giving both arms an equal vote. Both looked obviously
-correct and both were measured wrong only afterwards. This is the thing
-that should have existed first.
-
 The ground truth is not invented here. A store accumulates pairs that a
 PERSON asserted were related, and they make a labelled set nobody had to
 sit down and write:
@@ -19,9 +13,7 @@ sit down and write:
   self        a slice of a memory's own text, used to find it again. The
               weakest of the three -- the query is a literal substring, so
               the keyword arm cannot lose -- kept as a NON-REGRESSION
-              check, not as evidence about semantics. Reading it as
-              evidence is the mistake that made the vector arm look
-              worthless.
+              check, not as evidence about semantics.
 
 Run it against a copy of a store, not the live one: it opens the database,
 which applies any pending schema migration.
@@ -34,27 +26,6 @@ these two arms could reach -- when the headline is near it, tuning the
 fusion is finished and only a better retriever moves anything. `median
 rank` says how far off the arm that missed was: rank 8 of 200 is a model
 that nearly knows, rank 100 is a model that does not.
-
-Already tried against a real 536-memory store, and NOT worth trying again
-without a reason the measurement did not have. Baseline 13.4% node-link /
-66.0% relates_to:
-
-  a bigger, multilingual static model      4.2% / 24.7% vector-arm recall,
-    (potion-multilingual-128M, 507MB)      and it stopped separating "I
-                                           know" from "I know nothing"
-  a Portuguese Snowball stemmer            11.8% / 60.8%
-  the same, sparing identifiers            10.9% / 63.9%
-  the trigram tokenizer                    13.4% / 63.9%
-  chunking the embedded unit               non-monotonic across 1500/700/
-    (1500, 700, 300 chars)                 300 chars -- noise, not a trend
-  dropping tags from the index             costs ~1 point, so the tags are
-                                           buying almost nothing here
-
-The stemmers lose because this corpus is half identifiers, and because
-emitting stem+original lengthens every document, which BM25 penalises. The
-one lever the literature still points at is a cross-encoder rerank over
-the fused candidates, and that needs a real encoder -- a dependency, a
-bundle, and the end of a 300ms cold start.
 """
 
 from __future__ import annotations

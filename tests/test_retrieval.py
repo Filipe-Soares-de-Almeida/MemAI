@@ -71,13 +71,8 @@ def test_a_scope_name_is_still_searchable(conn):
 # ------------------------------------------------------------- fusion depth
 
 def test_the_arms_fetch_what_the_fusion_depth_says(conn, monkeypatch):
-    """Fusion depth is a claim about both retrievers being informative.
-
-    It shipped at 4 on the textbook argument that fusion recovers the row
-    ranked just outside one arm's window; measured against a real store, it
-    cost recall at every step above 1, because the weaker arm's votes push
-    true positives out. The knob stays, wired to the arms; the DEFAULT is
-    what the measurement decided.
+    """Each arm is asked for `limit * _FUSION_FETCH` rows, so the knob
+    reaches the retrievers rather than sitting unread.
     """
     asked: list[int] = []
     real = db.search_memories
@@ -229,10 +224,7 @@ def test_a_far_row_is_not_labelled_as_a_vector_match(vec_conn):
 
 
 def test_the_vector_arm_does_not_get_an_equal_vote(vec_conn):
-    """Plain RRF assumes both arms are equally informative. Measured against
-    pairs a human marked as related, the equal vote was a cliff: the weaker
-    arm displaced keyword hits at the same rank and cost ten points of
-    recall. Everything below an equal vote landed on one plateau."""
+    """The vector arm's weight stays between silence and an equal vote."""
     assert 0 < db.VEC_WEIGHT < 1
 
 
@@ -245,8 +237,7 @@ def test_a_keyword_hit_outranks_a_vector_hit_at_the_same_position(vec_conn):
 
 
 def test_the_vector_arm_still_contributes_what_keywords_miss(vec_conn):
-    """Weighted down, not switched off -- it found targets the keyword arm
-    missed in 11 of the 216 labelled pairs, and that is why it stays."""
+    """A vector hit is still returned when the query shares no keyword with it."""
     uid = db.insert_memory(vec_conn, type="note", content="car maintenance schedule")
     hits = db.search_hybrid(vec_conn, "automobile", limit=5)
     assert [h["uid"] for h in hits] == [uid]
@@ -276,9 +267,7 @@ def test_quoting_did_not_change_what_a_plain_query_matches(conn):
 
 
 def test_more_terms_widen_the_net(conn):
-    """Measured on a real store: recall climbs monotonically with the number
-    of content terms, 33% at two and 70% at twenty. The search docstring
-    tells callers so, and this is the shape it is describing."""
+    """Each added term widens the match set: the terms are OR'd, not AND'd."""
     a = db.insert_memory(conn, type="note", content="the nightly cache warmup")
     b = db.insert_memory(conn, type="note", content="an index rebuild drops triggers")
     assert {r["uid"] for r in db.search_memories(conn, "cache")} == {a}
