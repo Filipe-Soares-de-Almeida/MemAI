@@ -38,9 +38,8 @@ def store(tmp_path, monkeypatch):
 # ----------------------------------------------------- what a match is worth
 
 def test_content_outranks_a_domain_that_merely_spells_the_word(conn):
-    """A store organised by domain used to rank every row filed under
-    'acme/cache' for the word "cache", whether or not it said anything
-    about one -- and in such a store that is most of the store."""
+    """Content outranks a domain that merely spells the query word. In a
+    store organised by domain that would otherwise be most of the store."""
     filed = [
         db.insert_memory(conn, type="note", domain="acme/cache", content=text)
         for text in ("the queue drain retries twice before giving up",
@@ -251,10 +250,9 @@ def test_the_vector_arm_still_contributes_what_keywords_miss(vec_conn):
     'aspas"no"meio', "*", "(", "a\"b\" OR c", "^caret", "-minus",
 ])
 def test_an_fts5_operator_in_a_query_is_a_term_not_syntax(conn, query):
-    """It used to be syntax. `_fts_query` quoted only terms with punctuation
-    in them, so a bare 'AND' reached the engine as an operator and took the
-    whole search down with an OperationalError -- from a tool call, a crash
-    rather than a bad result."""
+    """Every term is quoted, so a bare 'AND', 'NOT' or 'NEAR' reaches the
+    engine as a term. Unquoted it is an fts5 operator and the search raises
+    OperationalError, which out of a tool call is a crash."""
     db.insert_memory(conn, type="note", content="cache warmup runs nightly")
     db.search_memories(conn, query, limit=5)          # must not raise
     db.search_hybrid(conn, query, limit=5)

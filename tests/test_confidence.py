@@ -1,9 +1,8 @@
-"""What `confidence` buys on the reading side.
+"""What `confidence` does on the reading side.
 
 `status` says whether a row is in play; `confidence` says whether what it
-claims still holds. Marking a memory contradicted used to change nothing a
-reader saw -- it went on competing for the top of a search and went on
-being presented by pulse() as the current state.
+claims still holds. A contradicted memory sorts behind everything that
+still holds, in search and in pulse(), without disappearing.
 """
 
 from __future__ import annotations
