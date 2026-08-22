@@ -38,8 +38,8 @@ except Exception:  # pragma: no cover - extension unavailable
     sqlite_vec = None
 
 # Domain-casing policy. Stored in the `meta` table under DOMAIN_CASE_KEY and
-# enforced at every domain write path. 'preserve' keeps free-text casing (the
-# historical behaviour); 'lower'/'upper' coerce every stored domain.
+# enforced at every domain write path. 'preserve' keeps free-text casing;
+# 'lower'/'upper' coerce every stored domain.
 DOMAIN_CASE_KEY = "domain_case"
 DOMAIN_CASE_MODES = ("preserve", "lower", "upper")
 DOMAIN_CASE_DEFAULT = "preserve"
@@ -47,14 +47,11 @@ DOMAIN_CASE_DEFAULT = "preserve"
 # A domain is one string that reads as a PATH: the segments between
 # DOMAIN_SEP nest, outermost first, so 'acme/x100/p200' files a memory
 # under a routine that belongs to a module that belongs to a product.
-# One flat bucket per subject stops being enough as soon as subjects
-# contain subjects -- and the whole point of a scope is that asking about
-# the module includes its routines.
+# Asking about the module includes its routines.
 #
-# The nesting lives in the string on purpose. No domains table, no id to
-# resolve: a store with no separator anywhere is a tree of depth 1, every
-# scoped read keeps working unchanged, and FTS keeps tokenizing the
-# ancestors into searchable words for free.
+# The nesting lives in the string: no domains table, no id to resolve. A
+# store with no separator anywhere is a tree of depth 1, and FTS tokenizes
+# the ancestors into searchable words.
 DOMAIN_SEP = "/"
 
 # A memory is FILED at one path and can additionally BELONG to others. The
@@ -1096,9 +1093,8 @@ def purge_memory(conn: sqlite3.Connection, uid: str) -> bool:
 
     `memory_domains` goes with it for the same reason, and the FK on that
     table means it HAS to: the DELETE below is refused outright while a
-    cross-listing still names this uid, so purging a memory that belonged to
-    a second subject used to fail with a constraint error rather than delete
-    anything. No mirror to rewrite -- the row itself is on its way out.
+    cross-listing still names this uid. No mirror to rewrite -- the row
+    itself is on its way out.
     """
     row = get_memory(conn, uid)
     if row is None:
@@ -1557,13 +1553,9 @@ def _layout_graph(
     for k in stragglers:
         depth[k] = floor
 
-    # Within a row, discovery order. A barycentre pass over these rows --
-    # the textbook crossing-reduction step -- was tried and measured on a
-    # 33-step branchy flow and on a deliberately reversed one: 37 crossings
-    # became 35 on the first and 0 stayed 0 on the second. BFS already
-    # groups a node's children next to each other, and what crossings
-    # remain come from many-to-many fan-in, which no ordering can remove.
-    # It was removed rather than kept on the strength of the textbook.
+    # Within a row, discovery order. BFS already groups a node's children
+    # next to each other, and the crossings that remain come from
+    # many-to-many fan-in, which no ordering within a row can remove.
     rows: dict[int, list[str]] = {}
     for k in order + [k for k in stragglers if k not in seen]:
         rows.setdefault(depth[k], []).append(k)
@@ -2415,22 +2407,14 @@ def _fts_query(raw: str) -> str:
     """Turn free-text/multi-term input into an FTS5 OR query across terms.
 
     Lets the calling agent pass several paraphrases in one call
-    ("reranking teacher model" or "best of n dpo critic") and get the
-    union of matches back, instead of one narrow AND match.
+    ("reranking teacher model" or "best of n dpo critic") and get the union
+    of matches back, instead of one narrow AND match. BM25 scores a row
+    matching every term far above a row matching one, so the union does not
+    cost the precise query its rank.
 
-    Asking AND first and appending the OR-only rows after it was tried and
-    dropped: BM25 already scores a row matching every term far above a row
-    matching one, so the two orderings agreed on every corpus we could
-    build, and the second query bought nothing.
-
-    Two measurements over a real 536-memory store, for whoever tunes this
-    next. Query SHAPE does not matter: the same labelled pairs score
-    14.3%/66.0% recall@5 asked as prose and 14.3%/67.0% asked as a bag of
-    content words, because stopwords appear in nearly every document and
-    their IDF is already near zero. Query LENGTH matters a lot, and
-    monotonically: 33% at two terms, 59% at five, 67% at twelve, 70% at
-    twenty. That is why search()'s docstring tells callers to spend terms
-    rather than to phrase carefully.
+    Recall rises with the number of terms and barely moves with their
+    phrasing, which is why search() tells callers to spend terms rather than
+    to word the query carefully. tools/bench-retrieval.py measures both.
     """
     terms = [t.strip() for t in raw.replace(" OR ", " ").split() if t.strip()]
     if not terms:
@@ -2577,10 +2561,9 @@ def resolve_domain_scopes(conn: sqlite3.Connection, domain: str) -> list[str]:
     the other; and both passes then match folded (see _fold), because a
     'preserve' store keeps whatever spelling each write happened to use and
     a caller has no way to know which one that was. Every scope returned is
-    a path as STORED -- resolving to the caller's spelling instead would
-    hand the equality arm a string no row carries, which is the shape of
-    this bug: `LIKE` ignores case and `=` does not, so a filter in the
-    wrong case used to find a path's descendants and miss the path itself.
+    a path as STORED. `LIKE` ignores case and `=` does not, so a scope
+    resolved to the caller's spelling hands the equality arm a string no row
+    carries: the descendants match and the path itself is missed.
     """
     path = normalize_domain(case_domain(get_domain_case(conn), domain))
     if not path:
@@ -2704,24 +2687,14 @@ def search_memories(
 _KNN_MAX_K = 10000  # upper bound on the "fetch (nearly) all, then filter" KNN path
 
 # How far a neighbor may be and still count as one. A KNN has no notion of
-# "nothing here is close": ask it for 200 rows and it returns the 200
-# nearest however far away they are, so a search for a word the store has
-# never seen came back with the whole store, every row past the keyword
-# matches labelled `match_source: vec` as if the vector side had found it.
+# "nothing here is close": ask it for 200 rows and it returns the 200 nearest
+# however far away they are, so without a cut a query for a word the store
+# does not hold sweeps in the whole store, every row past the keyword matches
+# labelled `match_source: vec`.
 #
-# Measured over a real 536-memory store. Best distance the vector arm can
-# reach, by kind of query:
-#
-#   query with a real target in the store   0.157 - 0.555  (median 0.314)
-#   word the store does not contain         0.681
-#   unrelated sentence / gibberish          0.777 - 0.932
-#
-# 0.60 sits in the gap. It drops the whole-store sweep to nothing and costs
-# no recall at all -- the true target survives in 65% of queries at 0.60 and
-# in 65% at 0.65, which is the vector arm's own ceiling, not this cut.
-#
-# Calibrated against THIS corpus and THIS model. A different embedding model
-# has a different scale; re-measure before trusting the number.
+# Calibrated against ONE corpus and ONE embedding model. A different model has
+# a different distance scale; re-measure with tools/bench-retrieval.py before
+# trusting the number.
 VEC_MAX_DISTANCE = 0.60
 
 
@@ -2743,10 +2716,9 @@ def search_semantic(
     asked for more rows than it has close neighbors returns far ones, and a
     far one is not a match. Pass max_distance=2 to see the raw ordering.
 
-    None rather than VEC_MAX_DISTANCE as the default, because a default
-    argument is evaluated once at import: written the other way, the cut
-    could not be changed at runtime, and the tool that exists to calibrate
-    it per model silently measured the old value for both.
+    None rather than VEC_MAX_DISTANCE as the default: a default argument is
+    evaluated once at import, so naming the constant here would freeze the
+    cut at its import-time value and put a runtime change out of reach.
 
     Returns [] when vectors are unavailable, so callers can always call
     this unconditionally. domain/type/tag/status filters apply *after* the
@@ -2818,14 +2790,9 @@ def search_hybrid(
     Ordering is RRF, but it's a candidate ordering, not a verdict --
     the agent decides relevance, same as FTS-only did.
 
-    Type is not part of the ordering. A diagram used to be lifted above the
-    rest of the candidate set, on the reasoning that a whole documented
-    routine is worth reading before the notes annotating it -- and in a
-    grown store that reliably spent the top slots on flows the query was
-    not about, because promotion had to go LOOK for diagrams (a second
-    retrieval scoped to type='diagram') to have any to promote. A diagram
-    now earns its place the way every other memory does: it comes back when
-    it matches, where its scores put it.
+    Type is not part of the ordering. A diagram earns its place the way
+    every other memory does: it comes back when it matches, where its
+    scores put it.
 
     collapse=True folds near-identical results into the best-ranked one of
     them (see _collapse_near_copies). Off by default: it is a concession to
@@ -2856,23 +2823,16 @@ def search_hybrid(
                 seen["match_source"] = "both"
                 seen["_rrf"] += contribution
 
-    # Each arm fetches deeper than the caller asked for, because fusion is
-    # the whole point: a memory ranked just outside the keyword window and
-    # near the top of the vector one is exactly what RRF exists to recover,
-    # and fetching `limit` per arm threw it away before the merge could see
-    # it. The extra rows cost one wider LIMIT, not another query.
+    # `_FUSION_FETCH` rows per unit of `limit` from each arm, taken as one
+    # wider LIMIT rather than a second query.
     deep = limit * _FUSION_FETCH
     fold(search_memories(conn, query, domain=domain, type=type, tag=tag,
                          status=status, limit=deep, subtree=subtree), "fts")
     fold(search_semantic(conn, query, domain=domain, type=type, tag=tag,
                          status=status, limit=deep, subtree=subtree), "vec", VEC_WEIGHT)
 
-    # Contradicted last, and only then by score. The flag used to buy
-    # nothing on this side: a memory an agent had marked known-wrong went on
-    # competing for the top slots against the memory that corrected it. It
-    # still comes back -- "we established this is false" is worth having,
-    # and hiding it invites writing the same wrong thing again -- just never
-    # ahead of something that still holds.
+    # Contradicted last, and only then by score: a memory marked known-wrong
+    # still comes back, never ahead of one that still holds.
     ranked = sorted(
         merged.values(),
         key=lambda d: (d.get("confidence") == CONFIDENCE_CONTRADICTED, -d["_rrf"]),
@@ -2884,54 +2844,31 @@ def search_hybrid(
     return results
 
 
-# What a vector hit is worth next to a keyword hit, in the fusion.
+# What a vector hit is worth next to a keyword hit, in the fusion. Below the
+# equal vote plain RRF would give it: at an equal vote the vector arm displaces
+# keyword hits at the same rank.
 #
-# Plain RRF gives both arms the same vote, which assumes both are equally
-# informative. Measured against 216 pairs a HUMAN marked as related in a
-# real store -- a diagram step's label and the memory linked to it, and
-# `relates_to` edges -- recall@5:
-#
-#   vector weight   0.00   0.10-0.75   1.00
-#   step label     13.4%       13.4%  14.3%
-#   relates_to     66.0%       69.1%  55.7%
-#
-# Anything below an equal vote lands on the same plateau; the equal vote is
-# a cliff. The vector arm has real signal -- it beats the keyword arm alone
-# on relates_to, and across both sets it found 11 targets the keyword arm
-# missed -- but it cannot be allowed to displace a keyword hit at the same
-# rank. 0.5 is the middle of the plateau, chosen to be far from both edges
-# rather than to be the argmax of 216 cases.
+# Calibrated against ONE corpus and ONE embedding model, like
+# VEC_MAX_DISTANCE; re-measure with tools/bench-retrieval.py before moving it.
 VEC_WEIGHT = 0.5
 
-# How many rows each retriever fetches per unit of `limit` before fusion.
-#
-# 1, measured, after this shipped as 4 on the textbook reasoning that fusion
-# exists to recover the row ranked just outside one arm's window. That
-# reasoning holds for two GOOD retrievers. Self-retrieval over a real
-# 536-memory store said otherwise, monotonically:
-#
-#   fts alone 100%   1x 100%   2x 96.7%   4x 90%   8x 85%   (recall@5)
-#
-# The deeper the fetch, the more of the weaker arm's ranking gets a vote, and
-# the static embedding is close enough to noise on that corpus that its votes
-# push true positives out of the top 5. Raising this is a claim about both
-# retrievers being informative -- measure it against the store before you do.
+# How many rows each retriever fetches per unit of `limit` before fusion. The
+# deeper the fetch, the more of the weaker arm's ranking gets a vote, so
+# raising this is a claim that both retrievers are informative -- measure it
+# against the store with tools/bench-retrieval.py first.
 _FUSION_FETCH = 1
 
 # Above this difflib ratio two results are the same text, not two takes on
-# one subject. Deliberately near-identity: collapsing merely RELATED
-# memories would decide relevance, which is the caller's job -- this only
-# stops one fact from spending five of the ten slots it was given.
+# one subject. Near-identity on purpose: this drops copies of one fact, it
+# does not judge whether two related memories are each worth a slot.
 _COPY_RATIO = 0.92
 
 
 def _collapse_near_copies(ranked: list[dict]) -> list[dict]:
     """Drop a result that repeats one already kept, and say so on the keeper.
 
-    Lexical on purpose, and the same measure dedup_candidates falls back to.
-    The vector side would catch paraphrases too, and catching paraphrases is
-    exactly what would make this a relevance judgement instead of a
-    duplicate filter.
+    Lexical, the same measure dedup_candidates falls back to: it matches
+    near-identical text, not paraphrases.
     """
     import difflib
 

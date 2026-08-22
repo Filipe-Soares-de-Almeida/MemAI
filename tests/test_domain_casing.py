@@ -65,9 +65,8 @@ def test_update_meta_field_coerces_domain(conn):
 # ------------------------------------------------------------ reading it back
 
 def test_filter_in_another_case_finds_the_path_itself(conn):
-    """The bug this pass fixes: `LIKE` ignores case and `=` does not, so a
-    filter in the wrong case used to find a path's descendants and miss
-    every row filed at the path itself."""
+    """`LIKE` ignores case and `=` does not, so a filter in another case has
+    to reach the rows filed at the path itself, not only its descendants."""
     own = db.insert_memory(conn, type="note", content="a", domain="acme/x100")
     deep = db.insert_memory(conn, type="note", content="b", domain="acme/x100/p200")
     assert {r["uid"] for r in db.list_by_domain(conn, "ACME/X100")} == {own, deep}

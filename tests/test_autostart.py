@@ -258,8 +258,8 @@ def test_port_config(monkeypatch, raw, expected):
 
 
 def test_the_default_port_is_the_one_the_launcher_uses():
-    """run-admin.bat used to override this, which is how the dashboard and
-    the documented default came to disagree. One number now, in one place."""
+    """One default port, in one place: the number the launcher and the
+    documentation both name."""
     assert autostart.DEFAULT_PORT == 8888
 
 

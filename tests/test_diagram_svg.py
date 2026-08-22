@@ -337,10 +337,8 @@ def test_golden_was_recorded_from_this_fixture(fixture_data, golden):
 def test_the_fixture_exercises_every_routing_branch(golden):
     """A fixture that stopped covering a branch is a test that stopped testing.
 
-    Every one of these was absent from the first version of the fixture,
-    and the margin-lane case in particular is the hardest code in the
-    module -- alternating sides, stacked reach, and the span fit() has to
-    reserve.
+    The margin-lane case needs all three at once: alternating sides,
+    stacked reach, and the span fit() has to reserve.
     """
     edges = golden["edges"]
     lanes = [e for e in edges if e["lane"]]
@@ -610,12 +608,12 @@ def test_link_counts_are_drawn_inside_the_shape(fixture_data):
 
 
 def test_jump_counts_are_drawn_on_the_row_below(fixture_data):
-    """The "continues in another flow" badge, which the SVG used to lose.
+    """The "continues in another flow" badge, drawn on the row below.
 
-    It was the only hint that a jump exists at all, so an exported diagram
-    dropped the signal silently. 'audit' carries jumps and no links, so the
-    lower row has to stand on its own; the fixture's keyless incoming jump
-    is aimed at the diagram as a whole and belongs to no card.
+    It is the only hint that a jump exists at all. 'audit' carries jumps and
+    no links, so the lower row has to stand on its own; the fixture's
+    keyless incoming jump is aimed at the diagram as a whole and belongs to
+    no card.
     """
     layout = ds.DiagramLayout(fixture_data)
     assert layout.jump_count == {"audit": 2, "check": 1}
