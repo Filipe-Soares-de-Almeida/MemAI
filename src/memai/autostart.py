@@ -1,42 +1,29 @@
 """Start the admin dashboard alongside the MCP server, at most once.
 
-Opt-in: set MEMAI_ADMIN_AUTOSTART to 1/true/yes/on. Off by default, and
-the default matters -- the dashboard has no authentication (see the
-warning in admin.main), so a memory server that quietly opened a web
-port would be changing the security posture of every machine that
-installed it, uninvited.
+Opt-in: set MEMAI_ADMIN_AUTOSTART to 1/true/yes/on. Off by default -- the
+dashboard has no authentication (see the warning in admin.main).
 
-Three things make this harder than "start a server if one is not
-running", and each one is a decision written into the code below.
+Three constraints shape the code below.
 
-ONE MCP SERVER IS NOT ONE PROCESS. A host spawns several -- three
-concurrent `memai-mcp` processes were measured on this machine, under two
-different parents -- and they start together at handshake. Whatever
-arbitrates has to be atomic across processes. That arbiter is bind(): the
-kernel already guarantees one listener per port, so the losers of the race
-simply exit (see admin._bind). A lock file would be a weaker mutex over a
-stronger one, and a worse one: the host kills MCP servers abruptly at
-session end (README), so an abandoned lock would survive and silently
-disable the dashboard forever, which is the failure nobody would think to
-look for.
+ONE MCP SERVER IS NOT ONE PROCESS. A host spawns several and they start
+together at handshake, so whatever arbitrates has to be atomic across
+processes. That arbiter is bind(): the kernel guarantees one listener per
+port, so the losers of the race exit (see admin._bind). No lock file --
+the host kills MCP servers abruptly at session end (README), and an
+abandoned lock would survive and disable the dashboard silently.
 
-A PORT THAT ANSWERS IS NOT OUR PORT. On the machine this was written for,
-the admin's own default at the time was held by an unrelated MCP server.
-A bare TCP probe would have concluded "already running" and never started
-anything, or, with the timing inverted, taken a port another tool was
-using. Moving the default did not fix that and could not: any number can
-be somebody else's. So the probe asks /api/ping and requires MemAI to
-answer.
+A PORT THAT ANSWERS IS NOT OUR PORT. Any port number can belong to another
+tool, whatever the default is, so the probe asks /api/ping and requires
+MemAI to answer rather than settling for a TCP connect.
 
 THE PORT WE ARE CONFIGURED FOR IS NOT NECESSARILY THE ONE IN USE.
 run-admin.bat sets MEMAI_ADMIN_PORT inside its own process; that never
-reaches an MCP server started from a desktop app's config. Probing only
-our configured port would miss a dashboard the operator started by hand
-and open a second one on the same store. Hence the registry file, which
-the running admin writes and this reads -- an advisory record, never a
-lock, and always confirmed against a live /api/ping before it is
-believed. A stale entry therefore degrades to "start one", not to "never
-start one again".
+reaches an MCP server started from a desktop app's config, so probing only
+the configured port would miss a dashboard started by hand and open a
+second one on the same store. Hence the registry file, which the running
+admin writes and this reads -- an advisory record, never a lock, and
+always confirmed against a live /api/ping before it is believed. A stale
+entry degrades to "start one", not to "never start one again".
 
 Everything here is imported eagerly and on purpose: `socket` pulls in a C
 extension, and embed.py documents that loading one late -- once the stdio

@@ -38,8 +38,8 @@ except Exception:  # pragma: no cover - extension unavailable
     sqlite_vec = None
 
 # Domain-casing policy. Stored in the `meta` table under DOMAIN_CASE_KEY and
-# enforced at every domain write path. 'preserve' keeps free-text casing (the
-# historical behaviour); 'lower'/'upper' coerce every stored domain.
+# enforced at every domain write path. 'preserve' keeps free-text casing;
+# 'lower'/'upper' coerce every stored domain.
 DOMAIN_CASE_KEY = "domain_case"
 DOMAIN_CASE_MODES = ("preserve", "lower", "upper")
 DOMAIN_CASE_DEFAULT = "preserve"
@@ -47,14 +47,11 @@ DOMAIN_CASE_DEFAULT = "preserve"
 # A domain is one string that reads as a PATH: the segments between
 # DOMAIN_SEP nest, outermost first, so 'acme/x100/p200' files a memory
 # under a routine that belongs to a module that belongs to a product.
-# One flat bucket per subject stops being enough as soon as subjects
-# contain subjects -- and the whole point of a scope is that asking about
-# the module includes its routines.
+# Asking about the module includes its routines.
 #
-# The nesting lives in the string on purpose. No domains table, no id to
-# resolve: a store with no separator anywhere is a tree of depth 1, every
-# scoped read keeps working unchanged, and FTS keeps tokenizing the
-# ancestors into searchable words for free.
+# The nesting lives in the string: no domains table, no id to resolve. A
+# store with no separator anywhere is a tree of depth 1, and FTS tokenizes
+# the ancestors into searchable words.
 DOMAIN_SEP = "/"
 
 # A memory is FILED at one path and can additionally BELONG to others. The
@@ -1096,9 +1093,8 @@ def purge_memory(conn: sqlite3.Connection, uid: str) -> bool:
 
     `memory_domains` goes with it for the same reason, and the FK on that
     table means it HAS to: the DELETE below is refused outright while a
-    cross-listing still names this uid, so purging a memory that belonged to
-    a second subject used to fail with a constraint error rather than delete
-    anything. No mirror to rewrite -- the row itself is on its way out.
+    cross-listing still names this uid. No mirror to rewrite -- the row
+    itself is on its way out.
     """
     row = get_memory(conn, uid)
     if row is None:
@@ -2565,10 +2561,9 @@ def resolve_domain_scopes(conn: sqlite3.Connection, domain: str) -> list[str]:
     the other; and both passes then match folded (see _fold), because a
     'preserve' store keeps whatever spelling each write happened to use and
     a caller has no way to know which one that was. Every scope returned is
-    a path as STORED -- resolving to the caller's spelling instead would
-    hand the equality arm a string no row carries, which is the shape of
-    this bug: `LIKE` ignores case and `=` does not, so a filter in the
-    wrong case used to find a path's descendants and miss the path itself.
+    a path as STORED. `LIKE` ignores case and `=` does not, so a scope
+    resolved to the caller's spelling hands the equality arm a string no row
+    carries: the descendants match and the path itself is missed.
     """
     path = normalize_domain(case_domain(get_domain_case(conn), domain))
     if not path:
@@ -2795,14 +2790,9 @@ def search_hybrid(
     Ordering is RRF, but it's a candidate ordering, not a verdict --
     the agent decides relevance, same as FTS-only did.
 
-    Type is not part of the ordering. A diagram used to be lifted above the
-    rest of the candidate set, on the reasoning that a whole documented
-    routine is worth reading before the notes annotating it -- and in a
-    grown store that reliably spent the top slots on flows the query was
-    not about, because promotion had to go LOOK for diagrams (a second
-    retrieval scoped to type='diagram') to have any to promote. A diagram
-    now earns its place the way every other memory does: it comes back when
-    it matches, where its scores put it.
+    Type is not part of the ordering. A diagram earns its place the way
+    every other memory does: it comes back when it matches, where its
+    scores put it.
 
     collapse=True folds near-identical results into the best-ranked one of
     them (see _collapse_near_copies). Off by default: it is a concession to

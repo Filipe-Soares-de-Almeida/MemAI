@@ -560,9 +560,8 @@ def test_node_link_endpoints_are_validated(conn):
 
 # --------------------------------------------------------------------- jumps
 #
-# A jump is one row read from two sides, which is the whole point of it:
-# the flow that hands off and the flow that takes over are both documented
-# by the same statement, and neither has to be told about the other twice.
+# A jump is one row read from two sides: the flow that hands off and the
+# flow that takes over are both documented by the same statement.
 
 
 def _pair(conn):
@@ -719,14 +718,13 @@ def test_a_matching_diagram_comes_back_ranked_like_anything_else(conn):
 
 
 def test_a_diagram_that_lost_the_ranking_is_not_backfilled_in(conn):
-    """What the promotion cost: a second retrieval scoped to diagrams used to
-    inject flows the query never actually hit, spending the top slots on
-    them. Nothing goes looking for a type any more."""
+    """No retrieval goes looking for a type, so a flow the query never hit
+    is not injected into the results."""
     for i in range(12):
         db.insert_memory(conn, type="note",
                          content=f"export window note number {i}: inclusive on both ends")
-    # deliberately shares no word with the query: the promotion used to put a
-    # flow like this one at the top anyway
+    # deliberately shares no word with the query, so this flow can only
+    # reach the results if something lifts a type into them
     _mk(conn, title="Cache warmup flow", summary="How the cache warms up.", nodes=[
         {"key": "start", "shape": "start", "label": "warmup starts"},
         {"key": "done", "shape": "end", "label": "done"}],
@@ -864,7 +862,7 @@ def test_mcp_reports_validation_errors_instead_of_raising(mcp):
     res = mcp.diagram(title="T", nodes=[{"key": "a", "label": "x"}], edges=[])
     assert res["ok"] is False and "no 'start' node" in res["errors"][0]
     assert "not a diagram" in mcp.get_diagram("nope")["errors"][0]
-    # 'svg' used to stand in for "not a format" here; it is one now
+    # 'pdf' is the unknown format here -- 'svg' is a real one
     assert "unknown format" in mcp.get_diagram("nope", format="pdf")["errors"][0]
 
 
@@ -1013,7 +1011,7 @@ def test_api_layout_persists_a_drag(client):
     node = next(n for n in client.get(f"/api/diagrams/{uid}").json()["nodes"] if n["key"] == "load")
     assert (node["x"], node["y"]) == (42.0, 84.0)
 
-    # ...and a reload sees the same thing, which is the whole point
+    # ...and a reload sees the same thing
     again = next(n for n in client.get(f"/api/diagrams/{uid}").json()["nodes"] if n["key"] == "load")
     assert (again["x"], again["y"]) == (42.0, 84.0)
 

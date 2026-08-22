@@ -436,7 +436,7 @@ def test_archiving_a_scope_leaves_a_memory_that_only_belongs(conn):
 
 def test_purging_a_memory_takes_its_memberships(conn):
     """The FK on memory_domains refuses the DELETE while a membership names
-    the row, so this used to raise instead of deleting anything."""
+    the row, so a purge has to clear the memberships first."""
     ids = _crossing(conn)
     assert db.purge_memory(conn, ids["queue"]) is True
     assert conn.execute(

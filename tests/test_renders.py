@@ -148,8 +148,8 @@ def test_get_diagram_writes_a_file_and_returns_a_thin_payload(mcp, fmt, suffix):
     assert written.is_file()
     assert out["bytes"] == len(written.read_text(encoding="utf-8").encode())
 
-    # the markup is NOT in the payload: that is the whole point of writing
-    # it, and a caller that only has to display it should not pay for it
+    # the markup is NOT in the payload -- it went to a file, and a caller
+    # that only has to display it should not pay for it
     flat = repr(out)
     assert "<svg" not in flat and "<path" not in flat
     # ...but enough to talk about what was drawn
