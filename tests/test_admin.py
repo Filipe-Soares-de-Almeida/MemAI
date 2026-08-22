@@ -290,11 +290,11 @@ def test_same_origin_write_is_allowed(client):
 
 
 def test_form_content_type_write_is_refused(client):
-    """The whole point of requiring JSON.
+    """A write that does not declare application/json is refused.
 
-    A cross-origin POST skips the CORS preflight only while it looks like
-    a form. request.json() parses any content type, so text/plain used to
-    be a working way to reach a destructive endpoint from another page.
+    A cross-origin POST skips the CORS preflight only while it looks like a
+    form, and request.json() parses any content type -- so the check is on
+    the declared type, not on whether the body happens to parse.
     """
     for ctype in ("text/plain", "application/x-www-form-urlencoded",
                   "multipart/form-data"):

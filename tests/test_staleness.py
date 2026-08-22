@@ -190,8 +190,9 @@ def test_moving_the_date_is_audited_but_not_re_embedded(conn):
 # --------------------------------------------- setting it after the fact
 
 def test_a_reference_can_be_added_to_a_memory_that_has_none(store):
-    """A memory written before anyone knew where the code lived is the
-    normal case, and it used to leave the dashboard as the only way in."""
+    """`source_ref` is settable on its own, after the fact, with no content
+    edit -- the case of a memory written before anyone knew where the code
+    lived."""
     uid = server.note(content="the export window is inclusive")["uid"]
     res = server.edit_memory(uid, source_ref="src/acme/x100/export.py")
     assert res["ok"] and res["changed"] == ["source_ref"]

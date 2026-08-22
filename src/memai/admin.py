@@ -548,8 +548,8 @@ def create_relation(request, payload) -> dict:
     from_uid = (payload.get("from_uid") or "").strip()
     to_uid = (payload.get("to_uid") or "").strip()
     rel_type = (payload.get("relation_type") or "").strip()
-    # Every rule this endpoint used to spell out now lives in db.add_relation,
-    # so the MCP tool refuses the same edges with the same words.
+    # The rules live in db.add_relation, so this endpoint and the MCP tool
+    # refuse the same edges with the same words.
     with db.connect() as conn:
         rel_id = db.add_relation(conn, from_uid, to_uid, rel_type, note=payload.get("note", ""))
     return {"relation_id": rel_id}
@@ -1075,10 +1075,9 @@ def get_config(request, payload) -> dict:
 def set_config(request, payload) -> dict:
     """Write whichever settings the payload names.
 
-    Partial on purpose: this used to demand domain_case, so a second
-    setting could not be saved without also restating the first -- and a
-    caller that only knew about one of them would clear nothing but would
-    have to send a value it had no business choosing.
+    Partial: only the settings the payload names are written, so a caller
+    that knows about one of them does not have to send a value for the
+    other.
     """
     writers = {"domain_case": db.set_domain_case,
                "svg_retention": db.set_svg_retention}

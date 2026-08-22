@@ -1,28 +1,21 @@
 """The PreToolUse check that stops a write whose text never arrived.
 
 A tool call is written by the model as tagged parameters. A tag opened
-without the `antml:` prefix is dropped by the parser BEFORE the call leaves
-the client: the server never sees the parameter, and the text it held is
-gone -- not truncated, not empty, gone. Nothing downstream can recover it,
-which is why this is a hook and not a validation in `server.py`.
+without the `antml:` prefix is dropped by the parser BEFORE the call reaches
+the server: the parameter never arrives, and the text it held is gone -- not
+truncated, not empty, gone. Nothing downstream can recover it, so the check
+runs on the call rather than inside `server.py`.
 
-What that looks like from inside the session is the reason it costs so much:
-the server names ONE missing field at a time, so each retry reads as a new
-problem, and reusing the text block from the failed attempt carries the typo
-with it. Measured on the transcripts of one host in August 2026: ~50 calls
-blocked across 10 sessions, 32 of them `anti_pattern` and 18 `checkpoint`.
-
-So the guard refuses the call (exit 2) naming the cause, and says what to do
-about it: type the tags again, do not paste the block back. A field the tool
-does not require cannot be refused the same way -- its absence raises nothing
-at all -- so those are reported as a warning the write goes through.
+The guard refuses such a call with exit 2, names that cause, and says what to
+do about it: type the tags again, do not paste the block back. The server
+names one missing field at a time, so a retry that fixes only the field it
+named fails on the next one. A field the tool does not require raises nothing
+at all on its own, so its absence is reported as a warning and the write goes
+through.
 
 `GUARDED` is read from the tool signatures in `memai.server`: a parameter
-with no default is one the call cannot do without. Getting that table wrong
-in either direction is what makes a guard worse than none -- the first
-version of this check, written by hand elsewhere, assumed `content` for
-`anti_pattern` and refused every correct call -- so a tool added here is
-checked against its signature, not against what its siblings take.
+with no default is one the call cannot do without. A tool added here is
+checked against its own signature, not against what its siblings take.
 """
 
 from __future__ import annotations
@@ -50,8 +43,7 @@ WATCHED: dict[str, tuple[str, ...]] = {
 # What a dropped tag leaves behind when it lands inside the NEXT parameter's
 # text instead of vanishing: the tag's own source, written into a memory's
 # body. Warned about, never refused -- a memory documenting this defect
-# quotes these on purpose, and a guard that cannot be written about is a
-# guard that gets removed.
+# quotes these marks on purpose.
 DEBRIS = ("parameter name=", "</", "<parameter")
 
 
