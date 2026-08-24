@@ -1,10 +1,10 @@
 /* The relations graph: a small canvas force layout.
 
-   Repulsion is O(n²) per pass, which is why the server caps how many
-   nodes it will hand over (see admin.graph) and why the initial settle
-   below is a budget rather than a fixed pass count. The layout is
-   computed here and never stored -- unlike the diagram editor, whose
-   coordinates come from the store; see diagram.js for that contrast. */
+   Repulsion runs over a grid of cells one cutoff wide, so a pass costs what
+   the layout's own density costs rather than n²; the pre-paint settle counts
+   that on the seeded layout and spends a budget of pair checks on it. The
+   layout is computed here and never stored -- unlike the diagram editor,
+   whose coordinates come from the store; see diagram.js for that contrast. */
 
 import { $, esc, fmtInt, cssVar, debounce } from '../core/dom.js';
 import { api, query } from '../core/api.js';
@@ -22,36 +22,48 @@ import { t } from '../i18n.js';
 
 /* alpha below which the simulation is considered at rest */
 const SETTLE = 0.02;
-/* Pair-distance checks to spend on the pre-paint settle, total. Worth more
-   than it looks: the budget is what decides how converged the layout is when
-   the view opens, and the whole run stays under ~90ms even at 1000 nodes
-   because the pass floor caps it. */
-const SETTLE_BUDGET = 8e6;
+/* Pair checks to spend on the pre-paint settle, total, and the pass count it
+   may buy. What one pass costs is measured on the seeded layout, so a dense
+   store trades passes for the checks each of them costs. */
+const SETTLE_BUDGET = 3e6;
+const MIN_PASSES = 120;
+const MAX_PASSES = 900;
 /* per-frame alpha decay once the graph is live and a kick has stirred it */
 const COOL = .996;
-/* How far a node may travel in one pass, px. THIS IS THE FIX for the node
-   that opened the view sitting alone hundreds of px outside the cloud, and
-   it is not a cosmetic clamp -- the layout had an escape velocity.
-
-   A memory with no relations has no spring holding it. Born inside the dense
-   middle, it feels repulsion from ~40 neighbours and nothing else, so it
-   accelerates outward, and once it is more than 400px from every other node
-   the `d2 > 160000` cutoff below turns repulsion off -- losing the brake at
-   the same moment as the push. It coasts (one real store: out to r=1845 at
-   ~9.7px per pass), and the only force left to bring it home is gravity,
-   which is scaled by alpha. Alpha is already decaying, so the return trip
-   runs out of passes and the node lands wherever it happens to be.
-
-   Capping the step keeps it inside the range where repulsion still answers,
-   so it settles into the cloud like everything else. Measured over the real
-   store plus 30 synthetic graphs (40..800 nodes, several link densities):
-   49 stranded nodes before, 2 after, and the ratio of the outermost node to
-   the p90 radius drops from 3.4x to ~1.1x. Costs one hypot per node per
-   pass, against an O(n²) repulsion. */
+/* the golden angle, in radians: the spiral seed() packs groups along, and the
+   float phases nodes by */
+const GOLD = 2.399963;
+/* Repulsion: strength, and the distance beyond which it is zero. The cutoff
+   is also the grid cell size the pass buckets nodes into, so a node only ever
+   feels the cell it is in and the eight around it. */
+const REPEL = 900;
+const REPEL_CUT = 250 * 250;
+/* Springs: the length a relation settles at, its stiffness, and how much of
+   its correction each end gives way to -- a node's share is the weight of the
+   OTHER end over the two, so the memory held by seven relations moves least
+   and its leaves swing around it. */
+const LINK_LEN = 85;
+const LINK_K = .012;
+const linkShare = (w, other) => 2 * other / (w + other);
+/* pull toward the origin, per px of distance, and the fraction of velocity a
+   node keeps between passes */
+const GRAVITY = .0006;
+const DAMP = .86;
+/* How far a node may travel in one pass, px. A memory with no relations has
+   no spring holding it, so repulsion is the only force with a brake -- and
+   past REPEL_CUT repulsion is off. Capping the step keeps a node inside the
+   range where it still answers. */
 const MAX_STEP = 4;
+/* Seeding: the ring spacing between one depth of a group and the next, and
+   the side of the square of canvas one node claims in the packing. */
+const SEED_RING = 95;
+const SEED_SPACE = 86;
+/* the four neighbouring cells a bucket looks at: itself plus these covers
+   every near pair exactly once */
+const AHEAD = [[1, 0], [-1, 1], [0, 1], [1, 1]];
 /* The idle float. Purely a drawing offset: `place()` writes px/py and nothing
    ever writes back into x/y, so the layout the reader arranged is the layout
-   that stays -- and the O(n²) physics still stops at rest instead of running
+   that stays -- and the physics still stops at rest instead of running
    forever behind a permanent alpha floor.
 
    The amplitude is in SCREEN px, divided by the zoom on the way in. In world
@@ -190,33 +202,31 @@ class ForceGraph {
   constructor(canvas, nodes, edges) {
     this.cv = canvas;
     this.cx = canvas.getContext('2d');
-    const R = Math.sqrt(nodes.length + 1) * 60;
-    this.nodes = nodes.map((n, i) => {
-      const x = Math.cos(i * 2.399963) * R * Math.sqrt((i + 1) / (nodes.length + 1));
-      const y = Math.sin(i * 2.399963) * R * Math.sqrt((i + 1) / (nodes.length + 1));
-      return {
-        ...n,
-        x, y,
-        /* where it is DRAWN: x/y plus the idle float, see place() */
-        px: x, py: y,
-        vx: 0, vy: 0,
-        r: 5.5 + Math.min(8, n.degree * 1.5),
-        /* float phase and rate, from the index: a cloud that breathed in
-           unison would read as the canvas itself wobbling */
-        fp: i * 2.399963, fq: .7 + (i % 7) * .07,
-        fs: FLOAT_SLACK(n.degree),
-        /* how much of the current alpha this node feels; see heatAround() */
-        heat: 1,
-      };
-    });
+    this.nodes = nodes.map((n, i) => ({
+      ...n,
+      /* seed() writes x/y; px/py are where the node is DRAWN, x/y plus the
+         idle float, see place() */
+      x: 0, y: 0, px: 0, py: 0,
+      vx: 0, vy: 0,
+      r: 5.5 + Math.min(8, n.degree * 1.5),
+      /* what it weighs against the other end of a relation, see linkShare */
+      w: 1 + n.degree,
+      /* float phase and rate, from the index: a cloud that breathed in
+         unison would read as the canvas itself wobbling */
+      fp: i * GOLD, fq: .7 + (i % 7) * .07,
+      fs: FLOAT_SLACK(n.degree),
+      /* how much of the current alpha this node feels; see heatAround() */
+      heat: 1,
+    }));
     this.byUid = Object.fromEntries(this.nodes.map(n => [n.uid, n]));
     this.edges = edges.filter(e => this.byUid[e.from_uid] && this.byUid[e.to_uid]);
-    /* who is one relation away, for heatAround() */
+    /* who is one relation away, for heatAround() and for the seed */
     this.adj = Object.fromEntries(this.nodes.map(n => [n.uid, new Set()]));
     for (const e of this.edges) {
       this.adj[e.from_uid].add(e.to_uid);
       this.adj[e.to_uid].add(e.from_uid);
     }
+    this.seed();
     this.tx = 0; this.ty = 0; this.scale = 1;
     this.fitScale = null;   /* set by fit(); it is the zoom-out floor, see zoomAt */
     this.alpha = 1;
@@ -248,23 +258,13 @@ class ForceGraph {
 
     /* Settle synchronously so the graph is born calm -- and painted at
        least once even where rAF is throttled (headless, hidden tabs).
-       The pass count is a BUDGET, not a constant: each pass is O(n²), so
-       the old fixed 900 was 40M distance checks at 300 nodes and froze
-       the tab before it had drawn anything.
 
-       The cooling rate has to come FROM that budget rather than being the
-       live loop's constant. Decaying at COOL regardless meant the settle ran
-       out of passes long before alpha ran out of heat -- at 138 nodes it
-       stopped at alpha .43 and handed the live loop 13 seconds of visible
-       drift, with the outliers still 76px from where they belonged and fit()
-       framing a layout that was still moving. Deriving it lands alpha on
-       SETTLE exactly as the last pass ends, at any size: the graph opens at
-       rest instead of finishing its arrangement in front of the reader.
-
-       A big graph still settles LOOSER -- fewer passes is less total work, and
-       no rate fixes that -- but loose and still beats tight and crawling. */
-    const pairs = Math.max(1, this.nodes.length * (this.nodes.length - 1) / 2);
-    const passes = Math.max(60, Math.min(900, Math.floor(SETTLE_BUDGET / pairs)));
+       The pass count comes from what a pass actually costs on the seeded
+       layout, and the cooling rate comes from the pass count: alpha lands on
+       SETTLE exactly as the last pass ends, at any size, so the graph opens
+       at rest instead of finishing its arrangement in front of the reader. */
+    const per = Math.max(1, this.cost());
+    const passes = Math.max(MIN_PASSES, Math.min(MAX_PASSES, Math.floor(SETTLE_BUDGET / per)));
     const cool = Math.min(COOL, Math.pow(SETTLE, 1 / passes));
     this.heatAll();     /* the one pass where the whole layout is in play */
     for (let k = 0; k < passes && this.alpha > SETTLE; k++) this.physics(cool);
@@ -292,6 +292,83 @@ class ForceGraph {
     removeEventListener('resize', this._resize);
     removeEventListener('pointerup', this._up);
     removeEventListener('pointercancel', this._up);
+  }
+  /* Starting positions. Each group of memories that relations connect is laid
+     out around its busiest member, and the groups are packed biggest first
+     along a golden-angle spiral: the connected structure lands in the middle,
+     and a memory with no relation at all is a group of one, so the loose ones
+     fill the band around it. A relation therefore starts near its rest length
+     instead of across the canvas, which is what the settle then has passes to
+     polish.
+
+     What sets a group's radius is the area its NODES take, counted from the
+     middle of its own share, not the disc its radius spans. A tree is mostly
+     empty canvas, so claiming the disc pushes every later group outward and
+     leaves the middle of the layout thin. */
+  seed() {
+    const groups = this.groups().map(c => ({ c, rad: this.radial(c) }));
+    groups.sort((a, b) => b.c.length - a.c.length || b.rad - a.rad);
+    let area = 0;
+    groups.forEach(({ c }, i) => {
+      const own = c.length * SEED_SPACE * SEED_SPACE;
+      const r = Math.sqrt((area + own / 2) / Math.PI), a = i * GOLD;
+      area += own;
+      const cx = Math.cos(a) * r, cy = Math.sin(a) * r;
+      for (const uid of c) {
+        const n = this.byUid[uid];
+        n.x = n.px = n.x + cx;
+        n.y = n.py = n.y + cy;
+      }
+    });
+  }
+  /* The uids of each set of memories that relations connect, one array per
+     set. A memory with no relations comes back as an array of one. */
+  groups() {
+    const seen = new Set(), out = [];
+    for (const n of this.nodes) {
+      if (seen.has(n.uid)) continue;
+      const q = [n.uid];
+      seen.add(n.uid);
+      for (let i = 0; i < q.length; i++) {
+        for (const v of this.adj[q[i]]) if (!seen.has(v)) { seen.add(v); q.push(v); }
+      }
+      out.push(q);
+    }
+    return out;
+  }
+  /* One group, as a radial tree around its busiest member: one ring per step
+     out from it, each subtree owning a slice of the circle sized by how many
+     nodes hang off it. Writes coordinates LOCAL to the group -- seed()
+     translates them -- and returns the radius they span. */
+  radial(c) {
+    const root = c.reduce((a, u) => this.byUid[u].degree > this.byUid[a].degree ? u : a, c[0]);
+    const order = [root], depth = { [root]: 0 }, kids = {}, seen = new Set([root]);
+    for (let i = 0; i < order.length; i++) {
+      const u = order[i];
+      kids[u] = [];
+      for (const v of this.adj[u]) if (!seen.has(v)) {
+        seen.add(v); depth[v] = depth[u] + 1; kids[u].push(v); order.push(v);
+      }
+    }
+    /* the node itself plus everything hanging off it, deepest first */
+    const span = {};
+    for (let i = order.length - 1; i >= 0; i--) {
+      span[order[i]] = 1 + kids[order[i]].reduce((s, v) => s + span[v], 0);
+    }
+    let rad = 0;
+    const put = (u, a0, a1) => {
+      const n = this.byUid[u], r = depth[u] * SEED_RING, a = (a0 + a1) / 2;
+      n.x = Math.cos(a) * r; n.y = Math.sin(a) * r;
+      rad = Math.max(rad, r);
+      let at = a0;
+      for (const v of kids[u]) {
+        const slice = (a1 - a0) * span[v] / (span[u] - 1);
+        put(v, at, at + slice);
+        at += slice;
+      }
+    };
+    put(root, 0, Math.PI * 2);
+    return rad;
   }
   /* Resume the simulation, optionally stirring it back up first. Every caller
      that stirs it has to say WHERE, by setting heat first -- alpha alone is a
@@ -591,47 +668,87 @@ class ForceGraph {
      the graph reacting to what the reader just did. */
   physics(cool = COOL) {
     if (this.alpha < SETTLE) return;
-    const N = this.nodes;
     /* Every force below is scaled by the RECEIVING node's heat, not by a
        single global alpha: that is what keeps a drag local. It costs the
        symmetry of the pair -- a warm node pushed by a cold one gives nothing
        back -- which is fine here and is in fact the effect wanted: the cold
        part of the layout is not participating. */
-    for (let i = 0; i < N.length; i++) {
-      const a = N[i];
-      for (let j = i + 1; j < N.length; j++) {
-        const b = N[j];
-        let dx = a.x - b.x, dy = a.y - b.y;
-        let d2 = dx * dx + dy * dy;
-        if (d2 < 1) { dx = (Math.random() - .5); dy = (Math.random() - .5); d2 = 1; }
-        if (d2 > 160000) continue;
-        if (a.heat < SETTLE && b.heat < SETTLE) continue;
-        const f = 900 / d2 * this.alpha;
-        const d = Math.sqrt(d2);
-        dx /= d; dy /= d;
-        a.vx += dx * f * a.heat; a.vy += dy * f * a.heat;
-        b.vx -= dx * f * b.heat; b.vy -= dy * f * b.heat;
+    const cells = this.cells();
+    for (const [key, b] of cells) {
+      for (let i = 0; i < b.length; i++) {
+        for (let j = i + 1; j < b.length; j++) this.repel(b[i], b[j]);
+      }
+      for (const o of this.ahead(cells, key)) {
+        for (const a of b) for (const q of o) this.repel(a, q);
       }
     }
     for (const e of this.edges) {
       const a = this.byUid[e.from_uid], b = this.byUid[e.to_uid];
       const dx = b.x - a.x, dy = b.y - a.y;
       const d = Math.max(1, Math.hypot(dx, dy));
-      const f = (d - 85) * .012 * this.alpha;
-      a.vx += dx / d * f * a.heat; a.vy += dy / d * f * a.heat;
-      b.vx -= dx / d * f * b.heat; b.vy -= dy / d * f * b.heat;
+      const f = (d - LINK_LEN) * LINK_K * this.alpha;
+      const sa = linkShare(a.w, b.w), sb = linkShare(b.w, a.w);
+      a.vx += dx / d * f * sa * a.heat; a.vy += dy / d * f * sa * a.heat;
+      b.vx -= dx / d * f * sb * b.heat; b.vy -= dy / d * f * sb * b.heat;
     }
-    for (const n of N) {
-      n.vx -= n.x * .0016 * this.alpha * n.heat;
-      n.vy -= n.y * .0016 * this.alpha * n.heat;
+    for (const n of this.nodes) {
+      n.vx -= n.x * GRAVITY * this.alpha * n.heat;
+      n.vy -= n.y * GRAVITY * this.alpha * n.heat;
       if (n === this.drag) continue;
-      n.vx *= .86; n.vy *= .86;
+      n.vx *= DAMP; n.vy *= DAMP;
       /* escape velocity, capped -- see MAX_STEP */
       const v = Math.hypot(n.vx, n.vy);
       if (v > MAX_STEP) { n.vx *= MAX_STEP / v; n.vy *= MAX_STEP / v; }
       n.x += n.vx; n.y += n.vy;
     }
     this.alpha *= cool;
+  }
+  /* The nodes bucketed into cells one repulsion cutoff wide, keyed
+     "column,row" -- two nodes in cells further apart than a neighbour cannot
+     be within REPEL_CUT of each other. */
+  cells() {
+    const size = Math.sqrt(REPEL_CUT), out = new Map();
+    for (const n of this.nodes) {
+      const k = Math.floor(n.x / size) + ',' + Math.floor(n.y / size);
+      const b = out.get(k);
+      if (b) b.push(n); else out.set(k, [n]);
+    }
+    return out;
+  }
+  /* The four neighbours of one cell that a scan over every cell has not
+     already paired it with. */
+  ahead(cells, key) {
+    const c = key.indexOf(',');
+    const col = +key.slice(0, c), row = +key.slice(c + 1), out = [];
+    for (const [dc, dr] of AHEAD) {
+      const o = cells.get((col + dc) + ',' + (row + dr));
+      if (o) out.push(o);
+    }
+    return out;
+  }
+  /* How many pairs one repulsion pass visits on the layout as it stands. */
+  cost() {
+    const cells = this.cells();
+    let n = 0;
+    for (const [key, b] of cells) {
+      n += b.length * (b.length - 1) / 2;
+      for (const o of this.ahead(cells, key)) n += b.length * o.length;
+    }
+    return n;
+  }
+  /* Push one pair apart, if they are close enough to feel each other and
+     either of them is warm enough to answer. */
+  repel(a, b) {
+    let dx = a.x - b.x, dy = a.y - b.y;
+    let d2 = dx * dx + dy * dy;
+    if (d2 < 1) { dx = (Math.random() - .5); dy = (Math.random() - .5); d2 = 1; }
+    if (d2 > REPEL_CUT) return;
+    if (a.heat < SETTLE && b.heat < SETTLE) return;
+    const f = REPEL / d2 * this.alpha;
+    const d = Math.sqrt(d2);
+    dx /= d; dy /= d;
+    a.vx += dx * f * a.heat; a.vy += dy * f * a.heat;
+    b.vx -= dx * f * b.heat; b.vy -= dy * f * b.heat;
   }
   /* px/py for every node: the settled position plus the idle float. The node
      under the pointer does not float -- it has to stay under the finger that
