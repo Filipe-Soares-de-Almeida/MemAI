@@ -681,7 +681,6 @@
     "mem.alsoWhy": "Guardada em {domain}; está neste filtro porque foi vinculada a ele",
     "bulk.aria": "Ações para as memórias selecionadas",
     "ov.spark.aria": "Novas memórias por dia nos últimos 30 dias: {n} no total, {peak} no dia mais movimentado e atividade em {days} dos dias.",
-    "ov.spark.barTitle": "{n} em {day}",
     "lookup.aria": "Resultados da busca",
     "dz.phrase.aria": "Frase de confirmação — o botão de excluir só habilita quando ela coincide",
     "op.unknownKind": "Tipo não reconhecido · payload como recebido",
