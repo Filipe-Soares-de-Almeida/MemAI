@@ -447,6 +447,10 @@ def edit_meta(request, payload) -> dict:
             conn.execute(
                 f"UPDATE memories SET {sets}, updated_at = ? WHERE uid = ?",
                 [*changed.values(), db.now_iso(), uid])
+            if "type" in changed:
+                # the body did not move, but which fields it is supposed to
+                # hold just did: re-read it under the type it now has
+                db._write_sections(conn, uid, changed["type"], row["content"])
             note = "meta: " + "; ".join(f"{k} '{row[k]}' → '{v}'" for k, v in changed.items())
             conn.execute(
                 "INSERT INTO edits (memory_uid, edited_at, prev_content, new_content, note) VALUES (?, ?, ?, ?, ?)",
