@@ -1940,6 +1940,28 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
 .sc-detail { font-size: var(--fs-sm); color: var(--warn); }
 .sc-snippet { font-size: var(--fs-sm); color: var(--ink-2); line-height: 1.5; }
 
+/* ── a body read into its fields ──────────────────────────────────────── */
+
+/* The label carries the separation, so the panes stack with no rule between
+   them: four boxed fields read as four things to compare rather than as one
+   memory, which is what the body actually is. */
+.sec-field { margin-bottom: var(--sp-3); }
+.sec-field:last-child { margin-bottom: 0; }
+.sec-label {
+  font: 500 var(--fs-label) var(--font-m);
+  letter-spacing: .06em; text-transform: uppercase;
+  color: var(--ink-3); margin-bottom: var(--sp-1);
+}
+.sec-text { margin: 0; }
+.sec-absent { font-size: var(--fs-sm); color: var(--warn); font-style: italic; }
+.sec-edit { display: grid; gap: var(--sp-1); }
+.sec-problem {
+  font-size: var(--fs-sm); color: var(--warn); line-height: 1.5;
+  background: var(--inset); border-left: 3px solid var(--warn);
+  border-radius: var(--r-sm);
+  padding: var(--sp-2) var(--sp-3); margin-bottom: var(--sp-3);
+}
+
 .dedup-pair {
   border-radius: var(--r-lg);
   background: var(--surface);

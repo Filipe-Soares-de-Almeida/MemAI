@@ -864,6 +864,14 @@ def migrate_sections(conn: sqlite3.Connection) -> dict:
             "rewritten": rewritten, "needs_review": pending}
 
 
+def section_problem(conn: sqlite3.Connection, uid: str) -> str:
+    """What stops this memory's body conforming, or "" when nothing does."""
+    row = conn.execute(
+        "SELECT detail FROM section_migration WHERE memory_uid = ?", (uid,)
+    ).fetchone()
+    return row["detail"] if row else ""
+
+
 def section_queue(conn: sqlite3.Connection) -> list[dict]:
     """The bodies that do not conform, newest first, with what stops each."""
     return [
