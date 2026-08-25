@@ -1,9 +1,9 @@
 """The named fields some memory bodies are made of, and how to read them back.
 
-A checkpoint and an anti-pattern are written field by field and stored as one
-body: the first label opens it, and each field after that opens a line of its
-own. This module owns the spec that says which fields a type has, renders a
-set of values into that body, and reads a body back into values.
+Some types are written field by field and stored as one body: the first label
+opens it, and each field after that opens a line of its own. Which types, and
+which fields, is SECTION_SPEC below. This module owns that spec, renders a set
+of values into a body, and reads a body back into values.
 
 The body is the record. Sections are read out of it on every write, so no
 caller keeps the two in step by hand.

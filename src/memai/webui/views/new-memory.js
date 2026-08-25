@@ -1,9 +1,9 @@
-/* The "+ New memory" dialog. Two types are not written as one body: a
-   diagram is created from a graph, so the modal asks for a title and seeds a
-   start→end skeleton to grow on the canvas; a checkpoint and an anti-pattern
-   are created from the fields their type is made of, and the server renders
-   the body. The fields come from /api/config rather than from a list here,
-   so a label lives in one place. */
+/* The "+ New memory" dialog. Not every type is written as one body: a diagram
+   is created from a graph, so the modal asks for a title and seeds a
+   start→end skeleton to grow on the canvas; a type made of named fields is
+   created from those, and the server renders the body. Which types those are,
+   and what they hold, comes from /api/config rather than from a list here, so
+   a label lives in one place. */
 
 import { esc } from '../core/dom.js';
 import { api } from '../core/api.js';

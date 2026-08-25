@@ -242,11 +242,11 @@ export async function openRecord(uid) {
   const isDiagram = m.type === 'diagram';
   const refs = m.referenced_by_diagrams || [];
 
-  /* A checkpoint and an anti-pattern are written field by field. `spec` is
-     what the type should hold and `sections` what was read out of the body,
-     so a field that never arrived shows as itself rather than as a gap. A
-     body the parser could not read at all keeps its <pre>: the fields would
-     be empty and the text is the only copy of what it says. */
+  /* Some types are written field by field. `spec` is what this one should
+     hold -- empty for a type with none -- and `sections` what was read out of
+     the body, so a field that never arrived shows as itself rather than as a
+     gap. A body the parser could not read at all keeps its <pre>: the fields
+     would be empty and the text is the only copy of what it says. */
   const spec = m.spec || [];
   const isSectioned = spec.length > 0;
   const sectionText = Object.fromEntries((m.sections || []).map(s => [s.key, s.text]));
