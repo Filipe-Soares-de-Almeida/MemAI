@@ -82,6 +82,8 @@
     "dr.dialogAria": "Memory record",
     "uid.copyTitle": "Copy uid",
     "toast.uidCopied": "UID {uid} copied",
+    "rt.copy": "Copy this block",
+    "toast.codeCopied": "Code copied",
     "ov.title": "Overview",
     "ov.model": "Model",
     "ov.tile.active": "Active memories",

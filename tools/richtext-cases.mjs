@@ -34,6 +34,9 @@ const LINKS = {
   '3333333333333333': { uid: '3333333333333333', missing: true },
 };
 
+const NL = String.fromCharCode(10);
+const FENCE = String.fromCharCode(96, 96, 96);
+
 const CASES = {
   paragraphs: 'first line\nstill the same paragraph\n\nsecond paragraph',
   heading: '=== 1. WHAT WAS MEASURED ===\nthe drain rate is flat',
@@ -50,6 +53,16 @@ const CASES = {
   list_then_paragraph: ['- a point', '', 'not a point any more'].join('\n'),
   list_starting_at_three: ['3. third', '4. fourth'].join('\n'),
   spaced_nested: ['- outer', '', '  - inner', '', '- back outside'].join('\n'),
+  fenced: [FENCE + 'powershell', '$pids = Get-NetTCPConnection -LocalPort 8080',
+           'foreach ($p in $pids) { }', FENCE].join(NL),
+  fenced_no_language: [FENCE, 'plain lines', FENCE].join(NL),
+  fenced_holds_its_markup: [FENCE + 'sql',
+                            '-- a `code` span and **bold** and [[1111111111111111]]',
+                            FENCE].join(NL),
+  fenced_keeps_blank_lines: [FENCE + 'bash', 'one', '', 'two', FENCE].join(NL),
+  fenced_unclosed: [FENCE + 'python', 'print(1)', 'print(2)'].join(NL),
+  fenced_escapes: [FENCE + 'xml', '<b>&amp;</b>', FENCE].join(NL),
+  text_after_fence: [FENCE + 'sh', 'ls', FENCE, '', 'back to prose'].join(NL),
   table: '| field | holds |\n|---|---:|\n| `intent` | 800 |\n| `pursuing` | 1500 |',
   table_short_row: '| a | b | c |\n|---|---|---|\n| only one |',
   pipes_without_separator: '| this | is |\n| not | a table |',
