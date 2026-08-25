@@ -102,6 +102,11 @@ def _paths(d: dict) -> dict:
     return d
 
 
+def _section_spec(s: sections.Section) -> dict:
+    """One field of a type, as a form needs it. max_len is 0 for no ceiling."""
+    return {"key": s.key, "label": s.label, "max_len": s.max_len}
+
+
 def _summary(row, limit: int = SNIPPET_LIMIT) -> dict:
     d = _paths(dict(row))
     d["content_len"] = len(d.get("content", ""))
@@ -343,8 +348,7 @@ def memory_detail(request, payload) -> dict:
         # `spec` is what the type is SUPPOSED to hold and `sections` what was
         # read out of the body, so a view can show a field that came out
         # missing instead of leaving a gap where it should be
-        result["spec"] = [{"key": s.key, "label": s.label}
-                          for s in sections.spec_for(row["type"])]
+        result["spec"] = [_section_spec(s) for s in sections.spec_for(row["type"])]
         result["sections"] = db.get_sections(conn, uid)
         result["section_problem"] = db.section_problem(conn, uid)
         rels = []
@@ -1103,7 +1107,7 @@ def get_config(request, payload) -> dict:
     with db.connect() as conn:
         return {"domain_case": db.get_domain_case(conn),
                 "svg_retention": db.get_svg_retention(conn),
-                "sections": {type_: [{"key": s.key, "label": s.label} for s in spec]
+                "sections": {type_: [_section_spec(s) for s in spec]
                              for type_, spec in sections.SECTION_SPEC.items()}}
 
 

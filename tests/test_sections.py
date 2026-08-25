@@ -399,3 +399,37 @@ def test_a_distill_into_a_sectioned_type_is_held_to_the_shape(conn):
                      "new_content": "widening the batch does not help"}}])
     assert result["staged"] == 0
     assert "TEMPTATION, WHY WRONG, INSTEAD" in result["errors"][0]["error"]
+
+
+# ------------------------------------------------------------- field ceilings
+
+def test_a_field_with_a_ceiling_refuses_a_body_that_passes_it(conn):
+    long_intent = "drain the queue " * 60
+    body = CHECKPOINT.replace("INTENT: drain the queue before the nightly export",
+                              f"INTENT: {long_intent}")
+    with pytest.raises(ValueError, match=r"INTENT runs to \d+ characters and holds 800"):
+        db.insert_memory(conn, type="checkpoint", content=body, domain="acme")
+
+
+def test_a_field_with_no_ceiling_takes_whatever_it_is_given(conn):
+    body = CHECKPOINT.replace("ESTABLISHED: the worker retries three times, then parks the row",
+                              "ESTABLISHED: " + "the worker parks a row " * 400)
+    uid = db.insert_memory(conn, type="checkpoint", content=body, domain="acme")
+    assert len(sections_of(conn, uid)["established"]) > 8000
+
+
+def test_every_ceiling_clears_the_bodies_the_store_already_holds():
+    """Set from what the store measured, so no existing memory is refused
+    the day the ceiling arrives. The margins here are those measurements."""
+    ceilings = {s.label: s.max_len for spec in sections.SECTION_SPEC.values() for s in spec}
+    assert ceilings["INTENT"] >= 627
+    assert ceilings["PURSUING"] >= 1291
+    assert ceilings["TEMPTATION"] >= 731
+    assert ceilings["ESTABLISHED"] == 0
+
+
+def test_the_spec_a_form_reads_carries_the_ceiling(conn):
+    uid = db.insert_memory(conn, type="anti_pattern", content=ANTI_PATTERN, domain="acme")
+    assert db.get_memory(conn, uid) is not None
+    assert sections.spec_for("anti_pattern")[0].max_len == 800
+    assert sections.spec_for("anti_pattern")[1].max_len == 0

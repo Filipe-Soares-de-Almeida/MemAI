@@ -9,9 +9,10 @@ The body is the record. Sections are read out of it on every write, so no
 caller keeps the two in step by hand.
 
 A body CONFORMS when it opens with the first label, every label in the spec
-opens exactly one line, the labels appear in spec order, and no field is
-empty. A label that opens two lines is not conforming: the second one reads
-as the start of a field and nothing tells it apart from the one that is.
+opens exactly one line, the labels appear in spec order, no field is empty,
+and no field runs past the ceiling its spec gives it. A label that opens two
+lines is not conforming: the second one reads as the start of a field and
+nothing tells it apart from the one that is.
 
 `read` reports what stops a body conforming instead of raising, so a caller
 can index a body it is not ready to refuse.
@@ -25,22 +26,28 @@ from typing import NamedTuple
 
 
 class Section(NamedTuple):
-    key: str    # the parameter the writing tool takes it as
-    label: str  # how it is spelled at the head of its line
+    key: str          # the parameter the writing tool takes it as
+    label: str        # how it is spelled at the head of its line
+    max_len: int = 0  # characters this field holds; 0 for a field with no ceiling
 
 
 # The order here is the order the labels appear in a body, and the order the
 # writing tool takes them: tests/test_guard.py holds `key` against the tool
 # signature, so a rename here is a rename there.
+#
+# A ceiling belongs on a field that is meant to be read at a glance -- what
+# the work is for, what is being done next, what the mistake was. The fields
+# that carry the substance have none: capping ESTABLISHED would push what it
+# holds out of the memory rather than shorten it.
 SECTION_SPEC: dict[str, tuple[Section, ...]] = {
     "checkpoint": (
-        Section("intent", "INTENT"),
+        Section("intent", "INTENT", 800),
         Section("established", "ESTABLISHED"),
-        Section("pursuing", "PURSUING"),
+        Section("pursuing", "PURSUING", 1500),
         Section("open_questions", "OPEN QUESTIONS"),
     ),
     "anti_pattern": (
-        Section("pattern", "TEMPTATION"),
+        Section("pattern", "TEMPTATION", 800),
         Section("why_wrong", "WHY WRONG"),
         Section("instead", "INSTEAD"),
     ),
@@ -53,9 +60,9 @@ class Reading(NamedTuple):
     `sections` maps Section.key to text. It is empty when the labels
     themselves are wrong -- missing, doubled, out of order, or not opening
     the body -- and filled when they are right, even if a field they
-    delimit came out empty. `problems` says what stops the body
-    conforming, one entry per fault, and is empty when nothing does. Check
-    `conforms`; a filled `sections` does not mean the body is good.
+    delimit came out empty or overlong. `problems` says what stops the
+    body conforming, one entry per fault, and is empty when nothing does.
+    Check `conforms`; a filled `sections` does not mean the body is good.
     """
 
     sections: dict[str, str]
@@ -144,7 +151,7 @@ def read(type: str, content: str) -> Reading:
         spec[i].key: content[bounds[i][1]:bounds[i + 1][0]].strip()
         for i in range(len(spec))
     }
-    empty = [s.label for s in spec if not values[s.key]]
-    if empty:
-        return Reading(values, [f"nothing under {', '.join(empty)}"])
-    return Reading(values, [])
+    faults = [f"nothing under {s.label}" for s in spec if not values[s.key]]
+    faults += [f"{s.label} runs to {len(values[s.key])} characters and holds {s.max_len}"
+               for s in spec if s.max_len and len(values[s.key]) > s.max_len]
+    return Reading(values, faults)

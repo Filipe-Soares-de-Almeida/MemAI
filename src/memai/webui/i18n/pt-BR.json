@@ -491,6 +491,7 @@
     "dr.inDiagrams": "Referenciada por fluxos",
     "dr.sections.problem": "Este corpo não é lido nos campos do seu tipo: {detail}",
     "dr.sections.missing": "não foi lido do corpo",
+    "dr.sections.count": "{n}/{max}",
     "dg.noUid": "Nenhum diagrama selecionado",
     "dg.notDiagram": "Esta memória não é um diagrama",
     "dg.sub": "{n} etapas · {m} conexões · {l} memórias vinculadas · {j} saltos",
