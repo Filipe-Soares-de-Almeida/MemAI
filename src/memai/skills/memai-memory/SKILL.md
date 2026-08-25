@@ -295,9 +295,11 @@ type**. To bring it back, filter on that `type`.
   timeless knowledge (a rule, a long-lived finding, a decision) worth
   recovering in **any** future session. File it as deep as the fact is
   specific; it still comes back when someone asks about the module above it.
-- **`reasoning(content, domain, also, session, review_after, source_ref)`** —
-  analysis worth keeping: hypothesis → what was proved → what to do next time,
-  as running text.
+- **`reasoning(hypothesis, reasoning, result, revised_belief, next_time,
+  domain, also, session, review_after, source_ref)`** — an analysis worth
+  keeping, field by field: what you believed, how you tested it, what came
+  back, what you believe now, and what to do differently next time. The FACT
+  it produced is a `note`; this is the process that produced it.
 - **`anti_pattern(pattern, why_wrong, instead, domain, also, session,
   review_after, source_ref)`** — an approach that **looks** right and is a
   trap (restarting the worker to clear a stuck queue instead of draining it).
@@ -512,7 +514,7 @@ always published, `diagrams` and `curation` only when named (or under the
 | Writing | | group |
 |---|---|---|
 | `note(content, domain, also, tags, session, review_after, source_ref)` | Timeless knowledge → `type='note'` | core |
-| `reasoning(content, domain, also, session, review_after, source_ref)` | A reasoning trace → `type='reasoning'` | core |
+| `reasoning(hypothesis, reasoning, result, revised_belief, next_time, domain, also, session, review_after, source_ref)` | A reasoning trace → `type='reasoning'` | core |
 | `anti_pattern(pattern, why_wrong, instead, domain, also, session, review_after, source_ref)` | A pitfall → `type='anti_pattern'` (surfaced by `pulse`) | core |
 | `checkpoint(intent, established, pursuing, open_questions, session, domain, also)` | Where the work stands → `type='checkpoint'` (summary, not an archive) | core |
 | `handoff(content, domain, also, session)` | A message for the next session → `type='handoff'` (surfaced by `pulse`) | core |

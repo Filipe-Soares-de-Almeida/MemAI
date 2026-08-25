@@ -27,7 +27,7 @@ from contextlib import contextmanager
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
-from memai import embed
+from memai import embed, sections
 
 # Eager import for the same reason as in embed.py: sqlite_vec pulls in
 # numpy, and importing that DLL lazily from inside a tool call deadlocks
@@ -147,6 +147,35 @@ CREATE TABLE IF NOT EXISTS memory_domains (
 );
 
 CREATE INDEX IF NOT EXISTS idx_memory_domains_domain ON memory_domains(domain);
+
+-- The named fields a body is made of, for the types memai.sections gives a
+-- spec (see SECTION_SPEC). One row per field, `seq` in spec order.
+--
+-- Read out of `memories.content`, which stays the record: the only writer
+-- here is _write_sections, and every writer of a body calls it with the
+-- body it just wrote. A query that edits these rows on their own moves the
+-- fields away from the text they were read from.
+CREATE TABLE IF NOT EXISTS memory_sections (
+    memory_uid  TEXT NOT NULL REFERENCES memories(uid),
+    seq         INTEGER NOT NULL,
+    key         TEXT NOT NULL,
+    text        TEXT NOT NULL,
+    PRIMARY KEY (memory_uid, key)
+);
+
+-- One row per body that has a spec and does not meet it. `detail` is what
+-- memai.sections.read said stops it; the dashboard lists these for a human.
+-- A body that conforms has no row, so this table is the queue and its
+-- emptiness is the store being clean.
+CREATE TABLE IF NOT EXISTS section_migration (
+    memory_uid  TEXT PRIMARY KEY REFERENCES memories(uid),
+    verdict     TEXT NOT NULL,          -- 'needs_review'
+    detail      TEXT NOT NULL DEFAULT '',
+    decided_at  TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_section_migration_verdict
+    ON section_migration(verdict);
 
 -- How often a memory was actually READ BACK, which is the only evidence
 -- that writing it was worth anything. A curation pass without this judges
@@ -733,6 +762,226 @@ def _ensure_fts(conn: sqlite3.Connection) -> None:
     conn.execute("INSERT INTO memories_fts(memories_fts) VALUES ('rebuild')")
 
 
+# Whether every body in this store has been read into memory_sections. Set
+# once the migration has run; the writers read it to decide whether a body
+# that does not conform is refused or merely queued.
+SECTIONS_MIGRATED_KEY = "sections_migrated"
+
+
+def _ensure_sections(conn: sqlite3.Connection) -> None:
+    """Mark a store that has nothing to migrate as migrated.
+
+    A store with no memory of a sectioned type -- a new one -- is already
+    in the state the migration produces. One that has them keeps the flag
+    unset until the migration runs.
+    """
+    if _get_meta(conn, SECTIONS_MIGRATED_KEY) is not None:
+        return
+    types = tuple(sections.SECTION_SPEC)
+    row = conn.execute(
+        f"SELECT 1 FROM memories WHERE type IN ({','.join('?' * len(types))}) LIMIT 1",
+        types,
+    ).fetchone()
+    if row is None:
+        _set_meta(conn, SECTIONS_MIGRATED_KEY, "1")
+
+
+def sections_migrated(conn: sqlite3.Connection) -> bool:
+    return _get_meta(conn, SECTIONS_MIGRATED_KEY) == "1"
+
+
+def section_error(conn: sqlite3.Connection, type: str, content: str) -> str | None:
+    """Why this body cannot be written as this type, or None.
+
+    Silent until the store has been read: while the migration is still
+    pending, a body that does not conform is queued rather than refused,
+    because the store is full of them and refusing would lock the rows a
+    human still has to look at.
+    """
+    if not sections.is_sectioned(type) or not sections_migrated(conn):
+        return None
+    problems = sections.read(type, content).problems
+    if not problems:
+        return None
+    return (f"a {type} body is made of {', '.join(s.label for s in sections.spec_for(type))} "
+            f"and this one does not read that way: {'; '.join(problems)}")
+
+
+def _refuse_unreadable(conn: sqlite3.Connection, type: str, content: str) -> None:
+    error = section_error(conn, type, content)
+    if error:
+        raise ValueError(error)
+
+
+def _write_sections(conn: sqlite3.Connection, uid: str, type: str, content: str) -> None:
+    """Read a body into its fields, replacing whatever was stored for it.
+
+    The only writer of memory_sections and section_migration. Every writer
+    of `memories.content` calls it with the body it just wrote, so the rows
+    describe the text that is there now.
+
+    A type with no spec keeps no rows in either table. A body that does not
+    conform leaves a queue row saying what stops it, and whatever fields
+    could still be read.
+    """
+    conn.execute("DELETE FROM memory_sections WHERE memory_uid = ?", (uid,))
+    conn.execute("DELETE FROM section_migration WHERE memory_uid = ?", (uid,))
+    spec = sections.spec_for(type)
+    if not spec:
+        return
+    reading = sections.read(type, content)
+    seq = {s.key: i for i, s in enumerate(spec)}
+    if reading.sections:
+        conn.executemany(
+            "INSERT INTO memory_sections (memory_uid, seq, key, text) VALUES (?, ?, ?, ?)",
+            [(uid, seq[k], k, v) for k, v in reading.sections.items()],
+        )
+    if reading.problems:
+        conn.execute(
+            "INSERT INTO section_migration (memory_uid, verdict, detail, decided_at) "
+            "VALUES (?, 'needs_review', ?, ?)",
+            (uid, "; ".join(reading.problems), now_iso()),
+        )
+
+
+def migrate_sections(conn: sqlite3.Connection) -> dict:
+    """Read every sectioned body in the store into memory_sections, once.
+
+    Returns how many bodies already conformed, how many were rewritten to
+    reach the canonical shape, and how many are left in the queue for a
+    human. Re-running it rewrites nothing: what conformed on the first pass
+    conforms on the second.
+
+    A body whose only fault is text above its first label is rewritten from
+    the fields that text hides -- the preamble goes, the fields are
+    re-emitted in spec order. That rewrite goes through
+    update_memory_content, so it lands in `edits` next to the body it
+    replaced and the row is re-embedded.
+
+    The flag is set whatever the queue holds. A body still in it can only
+    be written through set_sections, which builds the body from fields and
+    so cannot produce another one that does not conform.
+    """
+    types = tuple(sections.SECTION_SPEC)
+    rows = conn.execute(
+        f"SELECT uid, type, content FROM memories WHERE type IN ({','.join('?' * len(types))})",
+        types,
+    ).fetchall()
+    conformed = rewritten = 0
+    for row in rows:
+        uid, type_, content = row["uid"], row["type"], row["content"]
+        if sections.read(type_, content).conforms:
+            _write_sections(conn, uid, type_, content)
+            conformed += 1
+            continue
+        salvaged = sections.salvage(type_, content)
+        if salvaged.conforms:
+            update_memory_content(conn, uid, sections.render(type_, salvaged.sections),
+                                  note="sections: rewritten to the canonical body")
+            rewritten += 1
+            continue
+        _write_sections(conn, uid, type_, content)
+    _set_meta(conn, SECTIONS_MIGRATED_KEY, "1")
+    pending = conn.execute("SELECT COUNT(*) AS n FROM section_migration").fetchone()["n"]
+    return {"total": len(rows), "conformed": conformed,
+            "rewritten": rewritten, "needs_review": pending}
+
+
+_BODY_LINK = re.compile(r"\[\[([0-9a-f]{16})\]\]")
+
+
+def body_links(conn: sqlite3.Connection, uid: str, content: str) -> dict[str, dict]:
+    """What each [[uid]] written in a body points at, keyed by that uid.
+
+    A wikilink is written INSIDE the text, so it says nothing about the
+    relations table: `linked` reports whether an edge exists either way
+    between the two, which is what turns a reference somebody typed into a
+    reference the graph can be queried for. A uid nothing resolves comes
+    back as {"missing": True} rather than being left out, so a reader is
+    told the target is gone instead of being handed a link that fails.
+    """
+    targets = {m.group(1) for m in _BODY_LINK.finditer(content or "")} - {uid}
+    if not targets:
+        return {}
+    edges = {
+        r["other"] for r in conn.execute(
+            "SELECT to_uid AS other FROM relations WHERE from_uid = ? "
+            "UNION SELECT from_uid FROM relations WHERE to_uid = ?", (uid, uid))
+    }
+    found = {}
+    marks = ",".join("?" * len(targets))
+    for row in conn.execute(
+        f"SELECT uid, type, domain, status, content FROM memories WHERE uid IN ({marks})",
+        tuple(targets),
+    ):
+        found[row["uid"]] = {
+            "uid": row["uid"], "type": row["type"], "domain": row["domain"],
+            "status": row["status"], "snippet": (row["content"] or "")[:120],
+            "linked": row["uid"] in edges,
+        }
+    for target in targets - set(found):
+        found[target] = {"uid": target, "missing": True}
+    return found
+
+
+def section_problem(conn: sqlite3.Connection, uid: str) -> str:
+    """What stops this memory's body conforming, or "" when nothing does."""
+    row = conn.execute(
+        "SELECT detail FROM section_migration WHERE memory_uid = ?", (uid,)
+    ).fetchone()
+    return row["detail"] if row else ""
+
+
+def section_queue(conn: sqlite3.Connection) -> list[dict]:
+    """The bodies that do not conform, newest first, with what stops each."""
+    return [
+        {"uid": r["uid"], "type": r["type"], "domain": r["domain"],
+         "status": r["status"], "detail": r["detail"],
+         "snippet": (r["content"] or "")[:160],
+         "created_at": r["created_at"]}
+        for r in conn.execute(
+            """SELECT m.uid, m.type, m.domain, m.status, m.content, m.created_at, s.detail
+                 FROM section_migration s JOIN memories m ON m.uid = s.memory_uid
+                ORDER BY m.created_at DESC"""
+        )
+    ]
+
+
+def set_sections(conn: sqlite3.Connection, uid: str, values: dict, note: str = "") -> bool:
+    """Replace a memory's body with one rendered from its fields.
+
+    The way out of the queue: the body is built from the fields rather than
+    typed, so what it writes conforms as long as no field was left empty.
+    Raises ValueError for a memory whose type has no spec, and for a field
+    the spec does not name.
+    """
+    row = get_memory(conn, uid)
+    if row is None:
+        return False
+    spec = sections.spec_for(row["type"])
+    if not spec:
+        raise ValueError(f"a {row['type']} has no sections to set")
+    unknown = sorted(set(values) - {s.key for s in spec})
+    if unknown:
+        raise ValueError(f"not a section of a {row['type']}: {', '.join(unknown)}")
+    empty = [s.label for s in spec if not str(values.get(s.key, "")).strip()]
+    if empty:
+        raise ValueError(f"nothing under {', '.join(empty)}")
+    return update_memory_content(conn, uid, sections.render(row["type"], values),
+                                 note=note or "sections: set by hand")
+
+
+def get_sections(conn: sqlite3.Connection, uid: str) -> list[dict]:
+    """A memory's fields in spec order; empty for a type with no spec."""
+    return [
+        {"key": r["key"], "text": r["text"]}
+        for r in conn.execute(
+            "SELECT key, text FROM memory_sections WHERE memory_uid = ? ORDER BY seq",
+            (uid,),
+        )
+    ]
+
+
 def _ensure_vec(conn: sqlite3.Connection) -> None:
     """Create/migrate the vector table and backfill missing vectors.
 
@@ -798,6 +1047,7 @@ def connect(db_path: Path | None = None):
     conn.executescript(SCHEMA)
     _ensure_columns(conn)
     _ensure_fts(conn)
+    _ensure_sections(conn)
     if vec_loaded:
         _ensure_vec(conn)
     try:
@@ -821,6 +1071,7 @@ def insert_memory(
     review_after: str = "",
     source_ref: str = "",
 ) -> str:
+    _refuse_unreadable(conn, type, content)
     uid = new_uid()
     ts = created_at or now_iso()
     domain = apply_domain_policy(conn, domain)
@@ -841,6 +1092,7 @@ def insert_memory(
             [(uid, path, ts) for path in links],
         )
     _upsert_vector(conn, cur.lastrowid, content, tags, domain, blob)
+    _write_sections(conn, uid, type, content)
     return uid
 
 
@@ -884,6 +1136,7 @@ def restore_memory(conn: sqlite3.Connection, record: dict) -> str:
             (uid, int(record["recalls"]), record.get("last_recall") or ts))
     _upsert_vector(conn, cur.lastrowid, record.get("content", ""),
                    record.get("tags", ""), domain, ALSO_SEP.join(links))
+    _write_sections(conn, uid, record["type"], record.get("content", ""))
     return uid
 
 
@@ -966,6 +1219,7 @@ def update_memory_content(
         return False
     if append:
         new_content = f"{row['content']}\n{new_content}" if row["content"] else new_content
+    _refuse_unreadable(conn, row["type"], new_content)
     conn.execute(
         "INSERT INTO edits (memory_uid, edited_at, prev_content, new_content, note) VALUES (?, ?, ?, ?, ?)",
         (uid, now_iso(), row["content"], new_content, note),
@@ -976,6 +1230,7 @@ def update_memory_content(
     )
     _upsert_vector(conn, row["rowid_pk"], new_content, row["tags"], row["domain"],
                    row["also_domains"])
+    _write_sections(conn, uid, row["type"], new_content)
     return True
 
 
@@ -1094,12 +1349,15 @@ def purge_memory(conn: sqlite3.Connection, uid: str) -> bool:
     `memory_domains` goes with it for the same reason, and the FK on that
     table means it HAS to: the DELETE below is refused outright while a
     cross-listing still names this uid. No mirror to rewrite -- the row
-    itself is on its way out.
+    itself is on its way out. `memory_sections` and `section_migration`
+    carry the same FK and go the same way.
     """
     row = get_memory(conn, uid)
     if row is None:
         return False
     conn.execute("DELETE FROM memory_domains WHERE memory_uid = ?", (uid,))
+    conn.execute("DELETE FROM memory_sections WHERE memory_uid = ?", (uid,))
+    conn.execute("DELETE FROM section_migration WHERE memory_uid = ?", (uid,))
     conn.execute("DELETE FROM memory_usage WHERE memory_uid = ?", (uid,))
     conn.execute("DELETE FROM edits WHERE memory_uid = ?", (uid,))
     conn.execute("DELETE FROM relations WHERE from_uid = ? OR to_uid = ?", (uid, uid))
@@ -4068,6 +4326,13 @@ def _validate_suggestion(conn: sqlite3.Connection, s: object) -> tuple[dict | No
             return None, err
         if not str(payload.get("new_content", "")).strip():
             return None, "payload.new_content required"
+        # caught here rather than on apply: a rewrite that would not read
+        # back into its type's fields never reaches the queue a human works
+        # through, so nothing in that queue is waiting to fail
+        row = get_memory(conn, target_uid)
+        err = section_error(conn, row["type"], str(payload["new_content"]))
+        if err:
+            return None, err
     elif kind == "retag":
         err = target_err()
         if err:
@@ -4184,6 +4449,11 @@ def _validate_suggestion(conn: sqlite3.Connection, s: object) -> tuple[dict | No
             return None, f"payload.new_type must be one of {DISTILL_TYPES}"
         if not str(payload.get("new_content", "")).strip():
             return None, "payload.new_content required"
+        # anti_pattern is a distill target and is made of fields, so the body
+        # a distill writes has to read back the same way any other one does
+        err = section_error(conn, str(payload["new_type"]), str(payload["new_content"]))
+        if err:
+            return None, err
         if not verified:
             return None, VERIFIED_REQUIRED[kind]
         payload = {**payload, "source_uids": sources}

@@ -12,7 +12,8 @@ from __future__ import annotations
 import pytest
 from starlette.testclient import TestClient
 
-from memai import admin
+from conftest import unmigrated
+from memai import admin, db, sections
 
 
 @pytest.fixture()
@@ -23,10 +24,30 @@ def client(tmp_path, monkeypatch):
 
 
 def _create(client, **kw) -> str:
+    """POST a memory. A type made of fields gets the text spread over them,
+    since the endpoint builds those bodies rather than taking one."""
     body = {"type": "note", "content": "test fact", **kw}
+    spec = sections.spec_for(body["type"])
+    if spec:
+        text = body.pop("content")
+        body["sections"] = {s.key: f"{s.label.lower()}: {text}" for s in spec}
     res = client.post("/api/memories", json=body)
     assert res.status_code == 200, res.text
     return res.json()["uid"]
+
+
+def _unread(type_: str, content: str, domain: str = "acme/x100") -> str:
+    """Put a body in the store the way it stood before anything read it.
+
+    The flag goes first: while it is set, a body that does not conform is
+    refused rather than written, which is the whole point of it.
+    """
+    with db.connect() as conn:
+        unmigrated(conn)
+        uid = db.insert_memory(conn, type=type_, content=content, domain=domain)
+        conn.execute("DELETE FROM memory_sections WHERE memory_uid = ?", (uid,))
+        conn.execute("DELETE FROM section_migration WHERE memory_uid = ?", (uid,))
+    return uid
 
 
 def test_overview_empty(client):
@@ -372,3 +393,176 @@ def test_lookup_reports_more_without_a_count_query(client):
     whole = client.get("/api/lookup?limit=50").json()
     assert len(whole["items"]) == 6
     assert whole["has_more"] is False
+
+
+# ------------------------------------------------------------------ sections
+
+CHECKPOINT_BODY = (
+    "INTENT: drain the queue before the nightly export\n"
+    "ESTABLISHED: the worker retries three times, then parks the row\n"
+    "PURSUING: the parked rows from the last run\n"
+    "OPEN QUESTIONS: whether a parked row should age out"
+)
+
+
+def test_sectionize_reads_the_store_and_keeps_a_backup(client, tmp_path):
+    uid = _unread("checkpoint", "CHECKPOINT @ 2026-01-01\n" + CHECKPOINT_BODY)
+
+    res = client.post("/api/maintenance/sectionize", json={}).json()
+
+    assert res["rewritten"] == 1 and res["needs_review"] == 0
+    assert (tmp_path / "backups").exists()
+    assert client.get(f"/api/memories/{uid}").json()["content"] == CHECKPOINT_BODY
+
+
+def test_the_queue_lists_what_could_not_be_read(client):
+    uid = _unread("anti_pattern", "a refutation over the whole body")
+
+    client.post("/api/maintenance/sectionize", json={})
+    queue = client.get("/api/maintenance/sections-queue").json()
+
+    assert queue["migrated"] is True
+    assert [e["uid"] for e in queue["queue"]] == [uid]
+    assert "no line opens with" in queue["queue"][0]["detail"]
+
+
+def test_a_record_carries_its_fields_and_what_they_should_be(client):
+    uid = _create(client, type="checkpoint", content="the queue drain")
+
+    detail = client.get(f"/api/memories/{uid}").json()
+
+    assert [s["label"] for s in detail["spec"]] == [
+        "INTENT", "ESTABLISHED", "PURSUING", "OPEN QUESTIONS"]
+    assert detail["sections"][0]["key"] == "intent"
+    assert detail["section_problem"] == ""
+
+
+def test_a_record_that_could_not_be_read_says_so(client):
+    uid = _unread("checkpoint", "a body with no labels")
+    client.post("/api/maintenance/sectionize", json={})
+
+    detail = client.get(f"/api/memories/{uid}").json()
+
+    assert detail["sections"] == []
+    assert "no line opens with" in detail["section_problem"]
+
+
+def test_the_config_serves_the_fields_a_form_needs(client):
+    spec = client.get("/api/config").json()["sections"]
+    assert [s["key"] for s in spec["anti_pattern"]] == ["pattern", "why_wrong", "instead"]
+
+
+def test_creating_a_sectioned_memory_refuses_a_plain_body(client):
+    res = client.post("/api/memories", json={"type": "checkpoint", "content": CHECKPOINT_BODY})
+    assert res.status_code == 400
+    assert "created from its sections" in res.text
+
+
+def test_setting_the_fields_empties_the_queue(client):
+    uid = _unread("checkpoint", "a note that lost its shape")
+
+    res = client.post(f"/api/memories/{uid}/sections", json={"sections": {
+        "intent": "drain the queue",
+        "established": "the worker parks a row after three tries",
+        "pursuing": "the parked rows",
+        "open_questions": "whether a parked row should age out"}})
+
+    assert res.status_code == 200, res.text
+    assert client.get("/api/maintenance/sections-queue").json()["queue"] == []
+    assert client.get(f"/api/memories/{uid}").json()["content"].startswith("INTENT: drain")
+
+
+def test_setting_the_fields_refuses_an_empty_one(client):
+    uid = _create(client, type="checkpoint", content="the queue drain")
+
+    res = client.post(f"/api/memories/{uid}/sections", json={"sections": {
+        "intent": "drain the queue", "established": "", "pursuing": "x", "open_questions": "y"}})
+
+    assert res.status_code == 400
+    assert "nothing under ESTABLISHED" in res.text
+
+
+def test_reclassifying_a_stuck_body_empties_the_queue(client):
+    uid = _unread("checkpoint", "a refutation over the whole body")
+    client.post("/api/maintenance/sectionize", json={})
+    assert client.get("/api/maintenance/sections-queue").json()["queue"] != []
+
+    res = client.post(f"/api/memories/{uid}/meta", json={"type": "note"})
+
+    assert res.status_code == 200, res.text
+    assert client.get("/api/maintenance/sections-queue").json()["queue"] == []
+
+
+def test_claiming_a_type_made_of_fields_needs_a_body_that_reads_that_way(client):
+    uid = _create(client, type="note", content="the cache warms on boot")
+
+    res = client.post(f"/api/memories/{uid}/meta", json={"type": "checkpoint"})
+
+    assert res.status_code == 400
+    assert "INTENT, ESTABLISHED, PURSUING, OPEN QUESTIONS" in res.text
+    assert client.get(f"/api/memories/{uid}").json()["type"] == "note"
+
+
+def test_a_body_that_already_reads_that_way_may_claim_the_type(client):
+    uid = _create(client, type="note", content=CHECKPOINT_BODY)
+
+    res = client.post(f"/api/memories/{uid}/meta", json={"type": "checkpoint"})
+
+    assert res.status_code == 200, res.text
+    detail = client.get(f"/api/memories/{uid}").json()
+    assert detail["type"] == "checkpoint"
+    assert detail["sections"][0]["text"] == "drain the queue before the nightly export"
+
+
+def test_leaving_a_type_made_of_fields_drops_the_fields(client):
+    uid = _create(client, type="checkpoint", content="the queue drain")
+    assert client.get(f"/api/memories/{uid}").json()["sections"]
+
+    res = client.post(f"/api/memories/{uid}/meta", json={"type": "note"})
+
+    assert res.status_code == 200, res.text
+    detail = client.get(f"/api/memories/{uid}").json()
+    assert detail["sections"] == [] and detail["spec"] == []
+
+
+# ------------------------------------------------------- links inside a body
+
+def test_a_record_resolves_the_wikilinks_written_in_its_body(client):
+    target = _create(client, content="the cache warms on boot", domain="acme/x100")
+    holder = _create(client, content=f"as established in [[{target}]]")
+
+    links = client.get(f"/api/memories/{holder}").json()["body_links"]
+
+    assert links[target]["type"] == "note"
+    assert links[target]["domain"] == "acme/x100"
+    assert links[target]["snippet"].startswith("the cache warms")
+
+
+def test_a_wikilink_says_whether_the_graph_knows_about_it(client):
+    """The reference is in the text; memai-link is what turns it into an edge,
+    and until it does the record is the only place the gap shows."""
+    target = _create(client, content="the cache warms on boot")
+    holder = _create(client, content=f"as established in [[{target}]]")
+    assert client.get(f"/api/memories/{holder}").json()["body_links"][target]["linked"] is False
+
+    client.post("/api/relations", json={
+        "from_uid": holder, "to_uid": target, "relation_type": "relates_to"})
+
+    assert client.get(f"/api/memories/{holder}").json()["body_links"][target]["linked"] is True
+
+
+def test_a_wikilink_pointing_at_nothing_says_so(client):
+    holder = _create(client, content="as established in [[ffffffffffffffff]]")
+    links = client.get(f"/api/memories/{holder}").json()["body_links"]
+    assert links["ffffffffffffffff"] == {"uid": "ffffffffffffffff", "missing": True}
+
+
+def test_a_body_with_no_wikilinks_resolves_nothing(client):
+    holder = _create(client, content="a fact with no references")
+    assert client.get(f"/api/memories/{holder}").json()["body_links"] == {}
+
+
+def test_a_body_linking_to_itself_is_not_a_link(client):
+    holder = _create(client, content="placeholder")
+    client.post(f"/api/memories/{holder}/content", json={"content": f"see [[{holder}]]"})
+    assert client.get(f"/api/memories/{holder}").json()["body_links"] == {}

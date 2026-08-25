@@ -1323,6 +1323,146 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
   max-width: 68ch;
 }
 
+/* ── a body drawn as what it is ───────────────────────────────────────── */
+
+/* The container borrows its well from .content-pre, so it arrives with
+   `white-space: pre-wrap`. Blocks now carry their own spacing and only the
+   ones where an author's line breaks MEAN something keep it. */
+.rt { white-space: normal; }
+.rt > :first-child { margin-top: 0; }
+.rt > :last-child { margin-bottom: 0; }
+
+.rt-p { white-space: pre-wrap; margin: 0 0 var(--sp-3); }
+
+.rt-h {
+  font: 500 var(--fs-md)/1.4 var(--font-ui);
+  color: var(--ink);
+  margin: var(--sp-4) 0 var(--sp-2);
+}
+
+.rt-list { margin: 0 0 var(--sp-3); padding-left: var(--sp-5); }
+.rt-list li { margin-bottom: var(--sp-1); white-space: pre-wrap; }
+/* items the writer spaced apart keep the air they were given */
+.rt-list-loose > li { margin-bottom: var(--sp-3); }
+.rt-list .rt-list { margin: var(--sp-1) 0 0; }
+
+.rt code {
+  font: 400 .92em var(--font-m);
+  background: var(--chip-fill);
+  border: 1px solid var(--line-soft); border-radius: var(--r-sm);
+  padding: 1px 5px;
+  word-break: break-word;
+}
+
+/* A run of pipes with no separator under it is not a grid, so it keeps the
+   spacing its author lined up by hand. Same for anything else this does not
+   recognise as a block. */
+.rt-raw {
+  font: 400 var(--fs-sm)/1.6 var(--font-m);
+  white-space: pre; overflow-x: auto;
+  margin: 0 0 var(--sp-3);
+}
+
+/* A fenced block: a bar that names the language and copies it, over code that
+   does NOT wrap -- what lines up in code is meant to line up, so it scrolls
+   sideways instead. The bar is a row of its own rather than something drawn
+   over the <pre>: laid on top it covered the first line, and a block wide
+   enough to scroll slid its own text underneath the label. */
+/* The block steps FORWARD out of the reading pane rather than sinking into
+   it: --bg inside the --inset well is five points of luminance, which is no
+   edge at all. --raised is one step up and carries the boundary on its own --
+   no outline, per the rule these tones exist for. An outline on top of an
+   elevation step says the same thing twice, and a block that says it twice
+   stops reading as part of the memory it belongs to.
+
+   The only rule here is the divider under the header, which is a divider. */
+.rt-code-block {
+  background: var(--raised);
+  border-radius: var(--r-md);
+  margin: 0 0 var(--sp-3);
+  overflow: hidden;
+}
+.rt-code-head {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: var(--sp-2);
+  padding: var(--sp-1) var(--sp-2) var(--sp-1) var(--sp-4);
+  border-bottom: 1px solid var(--line-soft);
+  background: none;
+}
+.rt-code-lang {
+  font: 500 var(--fs-label) var(--font-m);
+  letter-spacing: .06em; text-transform: uppercase;
+  color: var(--ink-3);
+}
+.rt-code-copy {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 26px; height: 26px; flex: none;
+  background: none; border: none; border-radius: var(--r-sm);
+  color: var(--ink-3); cursor: pointer;
+}
+.rt-code-copy svg { width: 15px; height: 15px; }
+.rt-code-copy:hover { background: var(--chip-fill); color: var(--ink); }
+
+.rt-code {
+  font: 400 var(--fs-sm)/1.6 var(--font-m);
+  padding: var(--sp-3) var(--sp-4);
+  margin: 0;
+  white-space: pre; overflow-x: auto;
+  background: none; border: none; border-radius: 0;
+}
+.rt-code code {
+  background: none; border: none; padding: 0;
+  font: inherit; color: var(--ink);
+}
+
+/* The token palette is this dashboard's, not a theme shipped with the
+   engine: a code block should read as part of the page. Five roles, which is
+   as many as the eye separates at this size. */
+.rt-code .hljs-comment, .rt-code .hljs-quote { color: var(--ink-3); font-style: italic; }
+.rt-code .hljs-string, .rt-code .hljs-addition, .rt-code .hljs-regexp,
+.rt-code .hljs-doctag { color: var(--ok); }
+.rt-code .hljs-number, .rt-code .hljs-literal, .rt-code .hljs-symbol,
+.rt-code .hljs-bullet { color: var(--warn); }
+.rt-code .hljs-keyword, .rt-code .hljs-built_in, .rt-code .hljs-type,
+.rt-code .hljs-meta, .rt-code .hljs-selector-tag { color: var(--accent); }
+.rt-code .hljs-title, .rt-code .hljs-name, .rt-code .hljs-attr,
+.rt-code .hljs-attribute, .rt-code .hljs-section,
+.rt-code .hljs-variable, .rt-code .hljs-template-variable { color: var(--accent-hi); }
+.rt-code .hljs-deletion { color: var(--bad); }
+.rt-code .hljs-emphasis { font-style: italic; }
+.rt-code .hljs-strong { font-weight: 600; }
+
+.rt-table-wrap { overflow-x: auto; margin: 0 0 var(--sp-3); }
+.rt-table { border-collapse: collapse; font-size: var(--fs-sm); }
+.rt-table th, .rt-table td {
+  border: 1px solid var(--line-soft);
+  padding: var(--sp-1) var(--sp-3);
+  text-align: left; vertical-align: top;
+}
+.rt-table th { background: var(--chip-fill); font-weight: 500; color: var(--ink); }
+
+/* A link to another memory. It is a uid, so it is drawn as one -- monospace,
+   the same shape the chips elsewhere use -- and it opens that record. */
+.rt-link, .rt-link-dead, .rt-link-plain {
+  font: 500 .92em var(--font-m);
+  border-radius: var(--r-sm); padding: 1px 5px;
+}
+.rt-link {
+  color: var(--accent); background: var(--accent-dim);
+  border: 1px solid transparent; cursor: pointer;
+}
+.rt-link:hover { background: var(--accent); color: var(--accent-ink); }
+/* written in the body, absent from the relations table: the reference exists
+   for a reader and not for a query. memai-link is what closes that gap. */
+.rt-link-unlinked { border-style: dashed; border-color: var(--accent); }
+.rt-link-dead {
+  color: var(--ink-3); background: var(--inset);
+  border: 1px dashed var(--line-soft); text-decoration: line-through;
+}
+.rt-link-plain { color: var(--ink-3); background: var(--inset); }
+
+.rt-url { color: var(--accent); word-break: break-word; }
+
 .meta-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: var(--sp-3) var(--sp-5); }
 .mg-label { color: var(--ink-3); }
 .mg-val { font-size: var(--fs-sm); color: var(--ink-2); margin-top: var(--sp-0); word-break: break-word; }
@@ -1920,6 +2060,54 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
 
 .backup-row { display: flex; justify-content: space-between; gap: var(--sp-3); padding: var(--sp-2) var(--sp-0); border-bottom: 1px solid var(--line-soft); font: 400 var(--fs-sm) var(--font-m); color: var(--ink-2); }
 .backup-row:last-child { border-bottom: none; }
+
+/* A body the section parser could not read. The whole row opens the record,
+   which is where its fields are set by hand, so it is a button and the uid
+   is plain text -- a copy chip inside would be a button inside a button. */
+.sc-row {
+  display: grid; gap: var(--sp-1);
+  width: 100%; text-align: left;
+  background: var(--inset);
+  border: 1px solid var(--line-soft); border-radius: var(--r-md);
+  padding: var(--sp-3); margin-bottom: var(--sp-2);
+  cursor: pointer;
+  font: inherit; color: inherit;
+}
+.sc-row:hover { background: var(--raised); }
+.sc-row-head { display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; }
+.sc-row-uid { font: 500 var(--fs-sm) var(--font-m); color: var(--ink-2); }
+.sc-domain { font: 400 var(--fs-sm) var(--font-m); color: var(--ink-2); }
+.sc-detail { font-size: var(--fs-sm); color: var(--warn); }
+.sc-snippet { font-size: var(--fs-sm); color: var(--ink-2); line-height: 1.5; }
+
+/* ── a body read into its fields ──────────────────────────────────────── */
+
+/* The label carries the separation, so the panes stack with no rule between
+   them: four boxed fields read as four things to compare rather than as one
+   memory, which is what the body actually is. */
+.sec-field { margin-bottom: var(--sp-3); }
+.sec-field:last-child { margin-bottom: 0; }
+.sec-label {
+  font: 500 var(--fs-label) var(--font-m);
+  letter-spacing: .06em; text-transform: uppercase;
+  color: var(--ink-3); margin-bottom: var(--sp-1);
+}
+/* the field's name in the reader's language; its title carries the label
+   written in the body, which is English wherever it is stored */
+.sec-label-text { cursor: help; }
+.sec-text { margin: 0; }
+.sec-absent { font-size: var(--fs-sm); color: var(--warn); font-style: italic; }
+.sec-edit { display: grid; gap: var(--sp-1); }
+/* how much of a field's ceiling is used. Quiet until it is passed, because
+   until then it is a fact about the draft and not a problem with it. */
+.sec-count { float: right; text-transform: none; letter-spacing: 0; color: var(--ink-3); }
+.sec-count.over { color: var(--bad); }
+.sec-problem {
+  font-size: var(--fs-sm); color: var(--warn); line-height: 1.5;
+  background: var(--inset); border-left: 3px solid var(--warn);
+  border-radius: var(--r-sm);
+  padding: var(--sp-2) var(--sp-3); margin-bottom: var(--sp-3);
+}
 
 .dedup-pair {
   border-radius: var(--r-lg);
