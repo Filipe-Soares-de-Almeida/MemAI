@@ -821,6 +821,88 @@ def _write_sections(conn: sqlite3.Connection, uid: str, type: str, content: str)
         )
 
 
+def migrate_sections(conn: sqlite3.Connection) -> dict:
+    """Read every sectioned body in the store into memory_sections, once.
+
+    Returns how many bodies already conformed, how many were rewritten to
+    reach the canonical shape, and how many are left in the queue for a
+    human. Re-running it rewrites nothing: what conformed on the first pass
+    conforms on the second.
+
+    A body whose only fault is text above its first label is rewritten from
+    the fields that text hides -- the preamble goes, the fields are
+    re-emitted in spec order. That rewrite goes through
+    update_memory_content, so it lands in `edits` next to the body it
+    replaced and the row is re-embedded.
+
+    The flag is set whatever the queue holds. A body still in it can only
+    be written through set_sections, which builds the body from fields and
+    so cannot produce another one that does not conform.
+    """
+    types = tuple(sections.SECTION_SPEC)
+    rows = conn.execute(
+        f"SELECT uid, type, content FROM memories WHERE type IN ({','.join('?' * len(types))})",
+        types,
+    ).fetchall()
+    conformed = rewritten = 0
+    for row in rows:
+        uid, type_, content = row["uid"], row["type"], row["content"]
+        if sections.read(type_, content).conforms:
+            _write_sections(conn, uid, type_, content)
+            conformed += 1
+            continue
+        salvaged = sections.salvage(type_, content)
+        if salvaged.conforms:
+            update_memory_content(conn, uid, sections.render(type_, salvaged.sections),
+                                  note="sections: rewritten to the canonical body")
+            rewritten += 1
+            continue
+        _write_sections(conn, uid, type_, content)
+    _set_meta(conn, SECTIONS_MIGRATED_KEY, "1")
+    pending = conn.execute("SELECT COUNT(*) AS n FROM section_migration").fetchone()["n"]
+    return {"total": len(rows), "conformed": conformed,
+            "rewritten": rewritten, "needs_review": pending}
+
+
+def section_queue(conn: sqlite3.Connection) -> list[dict]:
+    """The bodies that do not conform, newest first, with what stops each."""
+    return [
+        {"uid": r["uid"], "type": r["type"], "domain": r["domain"],
+         "status": r["status"], "detail": r["detail"],
+         "snippet": (r["content"] or "")[:160],
+         "created_at": r["created_at"]}
+        for r in conn.execute(
+            """SELECT m.uid, m.type, m.domain, m.status, m.content, m.created_at, s.detail
+                 FROM section_migration s JOIN memories m ON m.uid = s.memory_uid
+                ORDER BY m.created_at DESC"""
+        )
+    ]
+
+
+def set_sections(conn: sqlite3.Connection, uid: str, values: dict, note: str = "") -> bool:
+    """Replace a memory's body with one rendered from its fields.
+
+    The way out of the queue: the body is built from the fields rather than
+    typed, so what it writes conforms as long as no field was left empty.
+    Raises ValueError for a memory whose type has no spec, and for a field
+    the spec does not name.
+    """
+    row = get_memory(conn, uid)
+    if row is None:
+        return False
+    spec = sections.spec_for(row["type"])
+    if not spec:
+        raise ValueError(f"a {row['type']} has no sections to set")
+    unknown = sorted(set(values) - {s.key for s in spec})
+    if unknown:
+        raise ValueError(f"not a section of a {row['type']}: {', '.join(unknown)}")
+    empty = [s.label for s in spec if not str(values.get(s.key, "")).strip()]
+    if empty:
+        raise ValueError(f"nothing under {', '.join(empty)}")
+    return update_memory_content(conn, uid, sections.render(row["type"], values),
+                                 note=note or "sections: set by hand")
+
+
 def get_sections(conn: sqlite3.Connection, uid: str) -> list[dict]:
     """A memory's fields in spec order; empty for a type with no spec."""
     return [

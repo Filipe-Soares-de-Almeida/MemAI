@@ -1921,6 +1921,25 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
 .backup-row { display: flex; justify-content: space-between; gap: var(--sp-3); padding: var(--sp-2) var(--sp-0); border-bottom: 1px solid var(--line-soft); font: 400 var(--fs-sm) var(--font-m); color: var(--ink-2); }
 .backup-row:last-child { border-bottom: none; }
 
+/* A body the section parser could not read. The whole row opens the record,
+   which is where its fields are set by hand, so it is a button and the uid
+   is plain text -- a copy chip inside would be a button inside a button. */
+.sc-row {
+  display: grid; gap: var(--sp-1);
+  width: 100%; text-align: left;
+  background: var(--inset);
+  border: 1px solid var(--line-soft); border-radius: var(--r-md);
+  padding: var(--sp-3); margin-bottom: var(--sp-2);
+  cursor: pointer;
+  font: inherit; color: inherit;
+}
+.sc-row:hover { background: var(--raised); }
+.sc-row-head { display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; }
+.sc-row-uid { font: 500 var(--fs-sm) var(--font-m); color: var(--ink-2); }
+.sc-domain { font: 400 var(--fs-sm) var(--font-m); color: var(--ink-2); }
+.sc-detail { font-size: var(--fs-sm); color: var(--warn); }
+.sc-snippet { font-size: var(--fs-sm); color: var(--ink-2); line-height: 1.5; }
+
 .dedup-pair {
   border-radius: var(--r-lg);
   background: var(--surface);

@@ -1286,6 +1286,51 @@ def backup(request, payload) -> dict:
     return {"ok": True, "path": str(dest), "size": _file_size(dest)}
 
 
+def sectionize(request, payload) -> dict:
+    """Read every sectioned body in the store into its fields, once.
+
+    Takes a backup first: the run rewrites the bodies whose fields are
+    buried under a header line, and a backup is the only copy of the store
+    as it stood before that. The per-body previous text is in `edits`
+    either way, so one memory can be put back without the file.
+    """
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+    dest = _backups_dir() / f"sectionize-{stamp}.db"
+    conn = _raw_connect()
+    try:
+        conn.execute("VACUUM INTO ?", (str(dest),))
+    finally:
+        conn.close()
+    with db.connect() as c:
+        result = db.migrate_sections(c)
+    return {"ok": True, "backup": str(dest), **result}
+
+
+def section_queue(request, payload) -> dict:
+    """The bodies that do not conform, and whether the store has been read."""
+    with db.connect() as conn:
+        return {"ok": True, "migrated": db.sections_migrated(conn),
+                "queue": db.section_queue(conn)}
+
+
+def edit_sections(request, payload) -> dict:
+    """Rewrite one memory's body from the fields its type is made of.
+
+    The way out of the queue. `sections` maps each field's key to its text;
+    every field the type names has to carry something.
+    """
+    uid = request.path_params["uid"]
+    values = payload.get("sections")
+    if not isinstance(values, dict):
+        raise ValueError("sections must be an object of key -> text")
+    with db.connect() as conn:
+        if db.get_memory(conn, uid) is None:
+            raise ValueError(f"unknown memory: {uid}")
+        db.set_sections(conn, uid, {k: str(v) for k, v in values.items()},
+                        note=payload.get("note", ""))
+    return {"ok": True}
+
+
 def dedup(request, payload) -> dict:
     threshold = min(max(float(request.query_params.get("threshold", 0.6)), 0.3), 0.99)
     domain = request.query_params.get("domain", "")
@@ -1697,6 +1742,9 @@ routes = [
     Route("/api/maintenance/vacuum", api(vacuum), methods=["POST"]),
     Route("/api/maintenance/backup", api(backup), methods=["POST"]),
     Route("/api/maintenance/dedup", api(dedup)),
+    Route("/api/maintenance/sectionize", api(sectionize), methods=["POST"]),
+    Route("/api/maintenance/sections-queue", api(section_queue)),
+    Route("/api/memories/{uid}/sections", api(edit_sections), methods=["POST"]),
     Route("/api/optimization/runs", api(optimization_runs), methods=["GET"]),
     Route("/api/optimization/runs/{run_id:int}", api(optimization_delete_run), methods=["DELETE"]),
     Route("/api/optimization/suggestions", api(optimization_suggestions), methods=["GET"]),
