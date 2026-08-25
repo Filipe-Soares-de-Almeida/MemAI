@@ -351,6 +351,7 @@ def memory_detail(request, payload) -> dict:
         result["spec"] = [_section_spec(s) for s in sections.spec_for(row["type"])]
         result["sections"] = db.get_sections(conn, uid)
         result["section_problem"] = db.section_problem(conn, uid)
+        result["body_links"] = db.body_links(conn, uid, row["content"])
         rels = []
         for r in db.get_relations(conn, uid):
             other = r["to_uid"] if r["from_uid"] == uid else r["from_uid"]

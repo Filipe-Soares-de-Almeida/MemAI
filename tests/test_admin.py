@@ -523,3 +523,46 @@ def test_leaving_a_type_made_of_fields_drops_the_fields(client):
     assert res.status_code == 200, res.text
     detail = client.get(f"/api/memories/{uid}").json()
     assert detail["sections"] == [] and detail["spec"] == []
+
+
+# ------------------------------------------------------- links inside a body
+
+def test_a_record_resolves_the_wikilinks_written_in_its_body(client):
+    target = _create(client, content="the cache warms on boot", domain="acme/x100")
+    holder = _create(client, content=f"as established in [[{target}]]")
+
+    links = client.get(f"/api/memories/{holder}").json()["body_links"]
+
+    assert links[target]["type"] == "note"
+    assert links[target]["domain"] == "acme/x100"
+    assert links[target]["snippet"].startswith("the cache warms")
+
+
+def test_a_wikilink_says_whether_the_graph_knows_about_it(client):
+    """The reference is in the text; memai-link is what turns it into an edge,
+    and until it does the record is the only place the gap shows."""
+    target = _create(client, content="the cache warms on boot")
+    holder = _create(client, content=f"as established in [[{target}]]")
+    assert client.get(f"/api/memories/{holder}").json()["body_links"][target]["linked"] is False
+
+    client.post("/api/relations", json={
+        "from_uid": holder, "to_uid": target, "relation_type": "relates_to"})
+
+    assert client.get(f"/api/memories/{holder}").json()["body_links"][target]["linked"] is True
+
+
+def test_a_wikilink_pointing_at_nothing_says_so(client):
+    holder = _create(client, content="as established in [[ffffffffffffffff]]")
+    links = client.get(f"/api/memories/{holder}").json()["body_links"]
+    assert links["ffffffffffffffff"] == {"uid": "ffffffffffffffff", "missing": True}
+
+
+def test_a_body_with_no_wikilinks_resolves_nothing(client):
+    holder = _create(client, content="a fact with no references")
+    assert client.get(f"/api/memories/{holder}").json()["body_links"] == {}
+
+
+def test_a_body_linking_to_itself_is_not_a_link(client):
+    holder = _create(client, content="placeholder")
+    client.post(f"/api/memories/{holder}/content", json={"content": f"see [[{holder}]]"})
+    assert client.get(f"/api/memories/{holder}").json()["body_links"] == {}

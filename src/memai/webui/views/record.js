@@ -29,6 +29,7 @@ import { typeTag, typeClass, confPill, uidChip, statusTag, wireCopyChips,
 import { pickerFor, pickerValue, wirePicker, fixedItems } from '../core/pick.js';
 import { pickMemories } from '../core/link-picker.js';
 import { go, refreshBehind } from '../core/router.js';
+import { renderRich, wireRichLinks } from '../core/richtext.js';
 import { t } from '../i18n.js';
 
 /* The record's own scrim while it is open, so a re-render can write into
@@ -254,7 +255,7 @@ export async function openRecord(uid) {
     <div class="sec-field">
       <div class="sec-label">${sectionLabelHTML(m.type, s)}</div>
       ${s.key in sectionText
-        ? `<pre class="content-pre content-prose sec-text">${esc(sectionText[s.key])}</pre>`
+        ? `<div class="content-pre content-prose sec-text rt">${renderRich(sectionText[s.key], m.body_links)}</div>`
         : `<div class="sec-absent">${t('dr.sections.missing')}</div>`}
     </div>`).join('');
   /* A ceiling is shown as a count, never enforced by `maxlength`: the
@@ -340,7 +341,9 @@ export async function openRecord(uid) {
                { detail: esc(m.section_problem) })}</div>`
           : ''}
         ${isSectioned && !m.section_problem ? sectionPanes() : `
-        <pre class="content-pre${isDiagram ? '' : ' content-prose'}" id="dContent">${esc(m.content)}</pre>`}
+        ${isDiagram
+          ? `<pre class="content-pre" id="dContent">${esc(m.content)}</pre>`
+          : `<div class="content-pre content-prose rt" id="dContent">${renderRich(m.content, m.body_links)}</div>`}`}
         ${isDiagram ? `<div class="dg-empty" style="margin-top:8px">${t('dr.generated')}</div>` : `
         <div id="dEditBox" hidden style="display:grid;gap:9px;margin-top:10px">
           <!-- a placeholder is a hint, not a name: it is gone the moment
@@ -453,6 +456,7 @@ export async function openRecord(uid) {
   if (reopening && keepScroll) rec.querySelector('.modal-body').scrollTop = keepScroll;
 
   wireCopyChips(rec);
+  wireRichLinks(rec, openRecord);
   dq('#dClose').addEventListener('click', closeRecord);
   /* Drops the step being left rather than pushing another one, so walking
      three links deep and back leaves the trail where it started instead of
