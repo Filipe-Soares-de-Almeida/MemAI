@@ -40,7 +40,7 @@ import os
 
 from mcp.server.fastmcp import FastMCP
 
-from memai import autostart, brief, db, diagram_svg, hook_install
+from memai import autostart, brief, db, diagram_svg, hook_install, sections
 
 # Sent to the host in the initialize handshake, and injected into the
 # model's context by the hosts that support it. Kept to a paragraph on
@@ -451,10 +451,9 @@ def checkpoint(
     also: other domain paths this belongs to, comma-separated -- the
     cross-cutting subjects beside the one it is filed under. See note().
     """
-    content = (
-        f"INTENT: {intent}\nESTABLISHED: {established}\n"
-        f"PURSUING: {pursuing}\nOPEN QUESTIONS: {open_questions}"
-    )
+    content = sections.render(TYPE_CHECKPOINT, {
+        "intent": intent, "established": established,
+        "pursuing": pursuing, "open_questions": open_questions})
     with db.connect() as conn:
         domain, warning = _coerce_domain(conn, domain)
         uid = db.insert_memory(
@@ -475,7 +474,8 @@ def anti_pattern(
     `also` cross-lists it into further domain paths, `review_after` dates
     when to recheck it and `source_ref` says what it came from -- see note().
     """
-    content = f"TEMPTATION: {pattern}\nWHY WRONG: {why_wrong}\nINSTEAD: {instead}"
+    content = sections.render(TYPE_ANTI_PATTERN, {
+        "pattern": pattern, "why_wrong": why_wrong, "instead": instead})
     with db.connect() as conn:
         domain, warning = _coerce_domain(conn, domain)
         uid = db.insert_memory(
@@ -487,14 +487,36 @@ def anti_pattern(
 
 
 @tool("core")
-def reasoning(content: str, domain: str = "", also: str = "", session: str = "",
-              review_after: str = "", source_ref: str = "") -> dict:
-    """Record a reasoning trace / analysis worth keeping (not a fact, a thought process).
+def reasoning(
+    hypothesis: str,
+    reasoning: str,  # shadows the tool's own name inside the body; nothing here calls it
+    result: str,
+    revised_belief: str,
+    next_time: str,
+    domain: str = "",
+    also: str = "",
+    session: str = "",
+    review_after: str = "",
+    source_ref: str = "",
+) -> dict:
+    """Record an analysis worth keeping: what was thought, and what it settled.
 
-    Stored as type='reasoning' -- filter search/list_* with
-    type='reasoning' to get these back. `also`, `review_after` and
-    `source_ref` behave as in note().
+    For the PROCESS, not the fact it produced -- note() takes the fact.
+    Stored as type='reasoning'; filter search/list_* with type='reasoning'
+    to get these back.
+
+    hypothesis: what you believed going in, as a claim that could be wrong.
+    reasoning: how you tested it -- what you read, ran or compared.
+    result: what came back. The measurement, not the interpretation.
+    revised_belief: what you believe now, and where it differs from the
+    hypothesis. Say plainly when the hypothesis survived unchanged.
+    next_time: what someone hitting this again should do differently.
+
+    `also`, `review_after` and `source_ref` behave as in note().
     """
+    content = sections.render(TYPE_REASONING, {
+        "hypothesis": hypothesis, "reasoning": reasoning, "result": result,
+        "revised_belief": revised_belief, "next_time": next_time})
     with db.connect() as conn:
         domain, warning = _coerce_domain(conn, domain)
         uid = db.insert_memory(conn, type=TYPE_REASONING, content=content, domain=domain,

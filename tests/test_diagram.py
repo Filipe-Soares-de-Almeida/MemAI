@@ -1181,7 +1181,9 @@ def test_api_type_allowlist_is_enforced(client):
     assert client.post("/api/memories", json={"type": "wat", "content": "x"}).status_code == 400
     uid = client.post("/api/memories", json={"type": "note", "content": "x"}).json()["uid"]
     assert client.post(f"/api/memories/{uid}/meta", json={"type": "wat"}).status_code == 400
-    assert client.post(f"/api/memories/{uid}/meta", json={"type": "reasoning"}).status_code == 200
+    # handoff, not reasoning: claiming a type that has fields is a write of
+    # that shape, and this body has none of them
+    assert client.post(f"/api/memories/{uid}/meta", json={"type": "handoff"}).status_code == 200
 
 
 def test_api_refuses_retyping_across_the_diagram_boundary(client):
