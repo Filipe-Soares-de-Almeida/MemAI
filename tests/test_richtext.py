@@ -61,6 +61,40 @@ def test_a_wrapped_line_continues_its_item(drawn):
     assert "<li>a point that runs\nonto a second line</li>" in drawn["continuation"]
 
 
+def test_a_gap_between_items_does_not_start_a_second_list(drawn):
+    """The store's own bodies space long lists out. Closing the run at every
+    gap gave each item a list of its own, so all of them read as `1.`."""
+    assert drawn["spaced_items"].count("<ol") == 1
+    assert drawn["spaced_items"].count("<li>") == 3
+
+
+def test_a_spaced_item_still_takes_the_lines_under_it(drawn):
+    assert "<li>first point\na line under it</li>" in drawn["spaced_items_with_body"]
+
+
+def test_a_gap_before_something_that_is_not_an_item_ends_the_list(drawn):
+    assert drawn["list_then_paragraph"].endswith(
+        "</ul><p class=\"rt-p\">not a point any more</p>")
+
+
+def test_a_spaced_list_is_marked_so_it_keeps_its_air(drawn):
+    assert "rt-list-loose" in drawn["spaced_items"]
+    assert "rt-list-loose" not in drawn["ordered"]
+
+
+def test_a_run_that_opens_at_three_counts_from_three(drawn):
+    assert "<ol class=\"rt-list\" start=\"3\">" in drawn["list_starting_at_three"]
+
+
+def test_a_run_that_opens_at_one_says_nothing_about_where_to_start(drawn):
+    assert "start=" not in drawn["ordered"]
+
+
+def test_a_gap_does_not_break_a_nested_list_out_of_its_item(drawn):
+    assert "<li>outer<ul" in drawn["spaced_nested"]
+    assert "</li><ul" not in drawn["spaced_nested"]
+
+
 # ------------------------------------------------------------------ tables
 
 def test_a_gfm_table_becomes_a_table(drawn):

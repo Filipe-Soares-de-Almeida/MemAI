@@ -108,14 +108,32 @@ function table(rows, links) {
 /* One level of items and everything indented under them. `at` is where the
    run starts; the caller gets back the html and where to carry on from. */
 function list(lines, at, links) {
-  const base = ITEM.exec(lines[at])[1].length;
-  const ordered = /^\d/.test(ITEM.exec(lines[at])[2]);
+  const opener = ITEM.exec(lines[at]);
+  const base = opener[1].length;
+  const ordered = /^\d/.test(opener[2]);
+  /* the writer's own numbering, so a run that opens at 3 is not renumbered
+     from 1 -- the browser counts, but only from where it is told to start */
+  const from = ordered ? parseInt(opener[2], 10) : 1;
+  let loose = false;
   /* an item is kept open until the run moves past it: a deeper list belongs
      INSIDE the <li> above it, and appending to a closed one would make it a
      sibling of the item it is under */
   const items = [];
   let i = at;
   while (i < lines.length) {
+    /* A blank line does not end the run. Items with a gap between them are
+       one list -- the gap is how a writer spaces a long list out, and
+       closing it there restarted the numbering at every item. The run ends
+       where the next thing is not an item of this list. */
+    if (!lines[i].trim()) {
+      let ahead = i;
+      while (ahead < lines.length && !lines[ahead].trim()) ahead += 1;
+      const next = ahead < lines.length ? ITEM.exec(lines[ahead]) : null;
+      if (!next || next[1].length < base) break;
+      loose = true;
+      i = ahead;
+      continue;
+    }
     const m = ITEM.exec(lines[i]);
     if (!m || m[1].length < base) break;
     if (m[1].length > base) {
@@ -137,8 +155,10 @@ function list(lines, at, links) {
     items.push(inline(parts.join('\n'), links));
   }
   const tag = ordered ? 'ol' : 'ul';
+  const attrs = `class="rt-list${loose ? ' rt-list-loose' : ''}"`
+    + (ordered && from !== 1 ? ` start="${from}"` : '');
   return {
-    html: `<${tag} class="rt-list">${items.map(it => `<li>${it}</li>`).join('')}</${tag}>`,
+    html: `<${tag} ${attrs}>${items.map(it => `<li>${it}</li>`).join('')}</${tag}>`,
     next: i,
   };
 }
