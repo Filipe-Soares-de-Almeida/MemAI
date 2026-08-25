@@ -187,3 +187,132 @@ def test_the_writing_tool_composes_a_body_the_parser_reads_back(tool, monkeypatc
     with db.connect(tmp_path / "tool.db") as c:
         assert sections_of(c, result["uid"]) == values
         assert queued(c) == {}
+
+
+# ------------------------------------------------------------ the migration
+
+LEGACY_CHECKPOINT = "CHECKPOINT @ 2026-01-01T09:00:00\n" + CHECKPOINT
+LEGACY_ANTI_PATTERN = "DOMAIN: acme-x100-queue-drain\n" + ANTI_PATTERN
+
+
+def unread(conn, uid, content):
+    """Put a body in the store the way it stood before anything read it."""
+    conn.execute("UPDATE memories SET content = ? WHERE uid = ?", (content, uid))
+    conn.execute("DELETE FROM memory_sections WHERE memory_uid = ?", (uid,))
+    conn.execute("DELETE FROM section_migration WHERE memory_uid = ?", (uid,))
+    conn.execute("DELETE FROM meta WHERE key = ?", (db.SECTIONS_MIGRATED_KEY,))
+
+
+def test_salvage_forgives_a_preamble_and_nothing_else():
+    assert sections.salvage("checkpoint", LEGACY_CHECKPOINT).conforms
+    assert not sections.salvage("checkpoint", "CHECKPOINT @ 2026-01-01\nINTENT: only this").conforms
+
+
+def test_the_migration_rewrites_a_body_hidden_under_a_header(conn):
+    uid = db.insert_memory(conn, type="checkpoint", content=CHECKPOINT, domain="acme/x100")
+    unread(conn, uid, LEGACY_CHECKPOINT)
+
+    result = db.migrate_sections(conn)
+
+    assert result == {"total": 1, "conformed": 0, "rewritten": 1, "needs_review": 0}
+    assert db.get_memory(conn, uid)["content"] == CHECKPOINT
+    assert sections_of(conn, uid)["intent"] == "drain the queue before the nightly export"
+    assert queued(conn) == {}
+
+
+def test_the_rewrite_keeps_the_body_it_replaced(conn):
+    uid = db.insert_memory(conn, type="anti_pattern", content=ANTI_PATTERN, domain="acme")
+    unread(conn, uid, LEGACY_ANTI_PATTERN)
+    db.migrate_sections(conn)
+
+    history = db.get_edit_history(conn, uid)
+    assert history[-1]["prev_content"] == LEGACY_ANTI_PATTERN
+    assert history[-1]["new_content"] == ANTI_PATTERN
+
+
+def test_the_migration_leaves_a_body_it_cannot_read_alone(conn):
+    uid = db.insert_memory(conn, type="checkpoint", content=CHECKPOINT, domain="acme")
+    unread(conn, uid, "a refutation written over the whole thing")
+
+    result = db.migrate_sections(conn)
+
+    assert result["needs_review"] == 1 and result["rewritten"] == 0
+    assert db.get_memory(conn, uid)["content"] == "a refutation written over the whole thing"
+    assert uid in queued(conn)
+
+
+def test_the_migration_rewrites_nothing_on_a_second_run(conn):
+    uid = db.insert_memory(conn, type="checkpoint", content=CHECKPOINT, domain="acme")
+    unread(conn, uid, LEGACY_CHECKPOINT)
+
+    db.migrate_sections(conn)
+    again = db.migrate_sections(conn)
+
+    assert again == {"total": 1, "conformed": 1, "rewritten": 0, "needs_review": 0}
+    assert len(db.get_edit_history(conn, uid)) == 1
+
+
+def test_the_migration_marks_the_store_read(conn):
+    uid = db.insert_memory(conn, type="checkpoint", content=CHECKPOINT, domain="acme")
+    unread(conn, uid, "nothing readable here")
+    assert db.sections_migrated(conn) is False
+
+    db.migrate_sections(conn)
+
+    # the flag says the store was read, not that everything in it came out clean
+    assert db.sections_migrated(conn) is True
+    assert db.section_queue(conn)[0]["uid"] == uid
+
+
+def test_the_queue_says_what_stops_each_body(conn):
+    uid = db.insert_memory(conn, type="checkpoint", content="just prose", domain="acme/x100")
+    entry = next(e for e in db.section_queue(conn) if e["uid"] == uid)
+    assert entry["type"] == "checkpoint" and entry["domain"] == "acme/x100"
+    assert "no line opens with" in entry["detail"]
+
+
+# ----------------------------------------------------- the way out of the queue
+
+def test_setting_the_fields_by_hand_builds_a_body_that_conforms(conn):
+    uid = db.insert_memory(conn, type="checkpoint", content="just prose", domain="acme")
+    assert uid in queued(conn)
+
+    db.set_sections(conn, uid, {
+        "intent": "drain the queue",
+        "established": "the worker parks a row after three tries",
+        "pursuing": "the parked rows",
+        "open_questions": "whether a parked row should age out",
+    })
+
+    assert queued(conn) == {}
+    assert db.get_memory(conn, uid)["content"].startswith("INTENT: drain the queue\n")
+    assert sections_of(conn, uid)["pursuing"] == "the parked rows"
+
+
+@pytest.mark.parametrize("values, complaint", [
+    ({"intent": "a", "established": "b", "pursuing": "c", "open_questions": " "},
+     "nothing under OPEN QUESTIONS"),
+    ({"intent": "a", "established": "b", "pursuing": "c", "open_questions": "d", "extra": "e"},
+     "not a section of a checkpoint: extra"),
+])
+def test_setting_the_fields_refuses_what_would_not_conform(conn, values, complaint):
+    uid = db.insert_memory(conn, type="checkpoint", content=CHECKPOINT, domain="acme")
+    with pytest.raises(ValueError, match=complaint):
+        db.set_sections(conn, uid, values)
+
+
+def test_a_type_with_no_spec_has_no_fields_to_set(conn):
+    uid = db.insert_memory(conn, type="note", content="the cache warms on boot", domain="acme")
+    with pytest.raises(ValueError, match="no sections"):
+        db.set_sections(conn, uid, {"intent": "x"})
+
+
+def test_reclassifying_a_stuck_body_is_the_other_way_out(conn):
+    uid = db.insert_memory(conn, type="checkpoint", content="a refutation", domain="acme")
+    assert uid in queued(conn)
+
+    conn.execute("UPDATE memories SET type = 'note' WHERE uid = ?", (uid,))
+    db._write_sections(conn, uid, "note", "a refutation")
+
+    assert queued(conn) == {}
+    assert db.get_sections(conn, uid) == []

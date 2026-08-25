@@ -94,6 +94,24 @@ def render(type: str, values: dict[str, str]) -> str:
     return "\n".join(f"{s.label}: {str(values.get(s.key, '')).strip()}" for s in spec)
 
 
+def salvage(type: str, content: str) -> Reading:
+    """Read a body that does not conform, ignoring whatever precedes its first label.
+
+    The one fault this forgives is a preamble: a header line written above
+    the fields. Everything else -- a label missing, doubled, out of order,
+    or opening an empty field -- comes back as a problem the way `read`
+    reports it.
+
+    What comes back conforming can be re-rendered into a body `read`
+    accepts, which is what the migration does with it.
+    """
+    spec = spec_for(type)
+    if not spec:
+        return Reading({}, [])
+    opening = _opener(spec[0].label).search(content)
+    return read(type, content[opening.start():] if opening else content)
+
+
 def read(type: str, content: str) -> Reading:
     """Read a body into its fields. A type with no spec reads as conforming."""
     spec = spec_for(type)

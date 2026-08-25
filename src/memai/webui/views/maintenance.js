@@ -30,6 +30,13 @@ const OPS = {
               msg: r => t('mn.msg.vacuum', { a: fmtBytes(r.before), b: fmtBytes(r.after) }) },
   'backup': { path: '/api/maintenance/backup', body: {},
               msg: r => t('mn.msg.backup', { name: r.path.split(/[\\/]/).pop(), size: fmtBytes(r.size) }) },
+  /* Confirm-first like the two above, for a different reason: nothing is
+     deleted, but the bodies whose fields sit under a header line are
+     rewritten. The server backs the store up before it starts. */
+  'sectionize': { path: '/api/maintenance/sectionize', body: {},
+                  confirm: t('mn.confirm.sectionize'),
+                  msg: r => t('mn.msg.sectionize', { t: fmtInt(r.total), n: fmtInt(r.rewritten),
+                                                     q: fmtInt(r.needs_review) }) },
   /* Clearing renders is NOT in the confirm-first group above: a render is a
      cache of a diagram that is still there, so the worst case is that the
      next read redraws it. */
@@ -99,6 +106,13 @@ export async function renderMaintenance(view) {
       <div id="ddBody"><div class="empty">${t('mn.dd.hint')}</div></div>
     </div>
 
+    <div class="panel" style="margin-bottom:14px">
+      <h3 class="panel-title">${t('mn.sc.title')}
+        <span class="panel-aside">${t('mn.sc.aside')}</span>
+        <button class="btn btn-sm" data-op="sectionize">${t('mn.sc.run')}</button></h3>
+      <div id="scBody"><div class="loading"><span class="spin"></span></div></div>
+    </div>
+
     <div class="panel">
       <h3 class="panel-title">${t('mn.au.title')} <span class="panel-aside">${t('mn.au.aside')}</span>
         <button class="btn btn-sm" id="auRefresh">${t('common.refresh')}</button></h3>
@@ -151,6 +165,28 @@ export async function renderMaintenance(view) {
   });
   loadHealth();
 
+  const loadSections = retryable('#scBody', async () => {
+    const s = await api('/api/maintenance/sections-queue');
+    const body = $('#scBody');
+    if (!body) return;
+    /* three states, and they are not the same: a store nobody has read, one
+       that came out clean, and one holding bodies a human has to settle */
+    const head = !s.migrated ? t('mn.sc.notRead')
+      : s.queue.length ? t('mn.sc.pending', { n: fmtInt(s.queue.length) })
+      : t('mn.sc.clean');
+    body.innerHTML = `<div class="hint" style="margin-bottom:8px">${head}</div>`
+      + s.queue.map(e => `<button type="button" class="sc-row" data-uid="${esc(e.uid)}">
+          <span class="sc-row-head">${typeTag(e.type)} ${statusTag(e.status)}
+            <span class="sc-row-uid">${esc(e.uid)}</span>
+            <span class="sc-domain">${esc(e.domain || '')}</span></span>
+          <span class="sc-detail">${esc(e.detail)}</span>
+          <span class="sc-snippet">${esc(e.snippet)}</span>
+        </button>`).join('');
+    body.querySelectorAll('.sc-row').forEach(
+      r => r.addEventListener('click', () => openRecord(r.dataset.uid)));
+  });
+  loadSections();
+
   wirePicker(view, { id: 'rnKeep', items: fixedItems(keepItems), onPick: async mode => {
     try {
       await api('/api/config', { body: { svg_retention: mode } });
@@ -176,6 +212,7 @@ export async function renderMaintenance(view) {
       const r = await api(op.path, { body: op.body });
       toast(op.msg(r), 'ok');
       loadHealth().catch(() => {});
+      loadSections().catch(() => {});
     } catch (err) { failed('err.maintenance', err); }
     b.disabled = false;
     b.removeAttribute('aria-busy');

@@ -372,3 +372,68 @@ def test_lookup_reports_more_without_a_count_query(client):
     whole = client.get("/api/lookup?limit=50").json()
     assert len(whole["items"]) == 6
     assert whole["has_more"] is False
+
+
+# ------------------------------------------------------------------ sections
+
+CHECKPOINT_BODY = (
+    "INTENT: drain the queue before the nightly export\n"
+    "ESTABLISHED: the worker retries three times, then parks the row\n"
+    "PURSUING: the parked rows from the last run\n"
+    "OPEN QUESTIONS: whether a parked row should age out"
+)
+
+
+def test_sectionize_reads_the_store_and_keeps_a_backup(client, tmp_path):
+    uid = _create(client, type="checkpoint", content="CHECKPOINT @ 2026-01-01\n" + CHECKPOINT_BODY)
+
+    res = client.post("/api/maintenance/sectionize", json={}).json()
+
+    assert res["rewritten"] == 1 and res["needs_review"] == 0
+    assert (tmp_path / "backups").exists()
+    assert client.get(f"/api/memories/{uid}").json()["content"] == CHECKPOINT_BODY
+
+
+def test_the_queue_lists_what_could_not_be_read(client):
+    uid = _create(client, type="anti_pattern", content="a refutation over the whole body")
+
+    client.post("/api/maintenance/sectionize", json={})
+    queue = client.get("/api/maintenance/sections-queue").json()
+
+    assert queue["migrated"] is True
+    assert [e["uid"] for e in queue["queue"]] == [uid]
+    assert "no line opens with" in queue["queue"][0]["detail"]
+
+
+def test_setting_the_fields_empties_the_queue(client):
+    uid = _create(client, type="checkpoint", content="a note that lost its shape")
+
+    res = client.post(f"/api/memories/{uid}/sections", json={"sections": {
+        "intent": "drain the queue",
+        "established": "the worker parks a row after three tries",
+        "pursuing": "the parked rows",
+        "open_questions": "whether a parked row should age out"}})
+
+    assert res.status_code == 200, res.text
+    assert client.get("/api/maintenance/sections-queue").json()["queue"] == []
+    assert client.get(f"/api/memories/{uid}").json()["content"].startswith("INTENT: drain")
+
+
+def test_setting_the_fields_refuses_an_empty_one(client):
+    uid = _create(client, type="checkpoint", content=CHECKPOINT_BODY)
+
+    res = client.post(f"/api/memories/{uid}/sections", json={"sections": {
+        "intent": "drain the queue", "established": "", "pursuing": "x", "open_questions": "y"}})
+
+    assert res.status_code == 400
+    assert "nothing under ESTABLISHED" in res.text
+
+
+def test_reclassifying_a_stuck_body_empties_the_queue(client):
+    uid = _create(client, type="checkpoint", content="a refutation over the whole body")
+    assert client.get("/api/maintenance/sections-queue").json()["queue"] != []
+
+    res = client.post(f"/api/memories/{uid}/meta", json={"type": "note"})
+
+    assert res.status_code == 200, res.text
+    assert client.get("/api/maintenance/sections-queue").json()["queue"] == []
