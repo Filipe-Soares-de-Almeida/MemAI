@@ -1368,8 +1368,14 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
    sideways instead. The bar is a row of its own rather than something drawn
    over the <pre>: laid on top it covered the first line, and a block wide
    enough to scroll slid its own text underneath the label. */
+/* The block steps FORWARD out of the reading pane, it does not sink further
+   into it. Sunk was the first try -- --bg inside the --inset well -- and the
+   two tones are 5 points of luminance apart, which is 1.04:1 and reads as no
+   edge at all. --raised is the largest step this scale offers over a well,
+   and at 1.14:1 it still needs the divider spec rather than the soft one to
+   draw the boundary: elevation says which way, --line says where. */
 .rt-code-block {
-  background: var(--bg); border: 1px solid var(--line-soft);
+  background: var(--raised); border: 1px solid var(--line);
   border-radius: var(--r-md);
   margin: 0 0 var(--sp-3);
   overflow: hidden;
@@ -1379,7 +1385,8 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
   gap: var(--sp-2);
   padding: var(--sp-1) var(--sp-2) var(--sp-1) var(--sp-4);
   border-bottom: 1px solid var(--line-soft);
-  background: var(--inset);
+  /* one step above the block, the same way a chip sits on whatever it is on */
+  background: var(--chip-fill);
 }
 .rt-code-lang {
   font: 500 var(--fs-label) var(--font-m);
