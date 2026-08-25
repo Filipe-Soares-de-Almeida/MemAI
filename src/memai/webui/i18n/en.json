@@ -681,7 +681,6 @@
     "mem.alsoWhy": "Filed under {domain}; in this filter because it is cross-listed into it",
     "bulk.aria": "Actions for the selected memories",
     "ov.spark.aria": "New memories per day over the last 30 days: {n} in total, {peak} on the busiest day, and activity on {days} of the days.",
-    "ov.spark.barTitle": "{n} on {day}",
     "lookup.aria": "Lookup results",
     "dz.phrase.aria": "Confirmation phrase — the delete button stays disabled until it matches",
     "op.unknownKind": "Unrecognized kind · payload as received",
