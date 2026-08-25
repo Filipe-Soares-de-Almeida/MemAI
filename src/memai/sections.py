@@ -51,6 +51,25 @@ SECTION_SPEC: dict[str, tuple[Section, ...]] = {
         Section("why_wrong", "WHY WRONG"),
         Section("instead", "INSTEAD"),
     ),
+    "reasoning": (
+        Section("hypothesis", "HYPOTHESIS", 800),
+        Section("reasoning", "REASONING"),
+        Section("result", "RESULT"),
+        Section("revised_belief", "REVISED BELIEF"),
+        Section("next_time", "NEXT TIME", 1500),
+    ),
+}
+
+# Labels an older writer opened blocks with that no spec keeps. salvage()
+# drops the block each one runs, from its own line to the next known label.
+#
+# DOMAIN held a flat slug from before domains were paths, which the memory's
+# own domain column has since replaced. CONFIDENCE held a number between 0
+# and 1, beside a `confidence` column holding one of three words: two
+# different scales under one name, and a reader has no way to tell which
+# answer was meant.
+LEGACY_LABELS: dict[str, tuple[str, ...]] = {
+    "reasoning": ("DOMAIN", "CONFIDENCE"),
 }
 
 
@@ -101,20 +120,43 @@ def render(type: str, values: dict[str, str]) -> str:
     return "\n".join(f"{s.label}: {str(values.get(s.key, '')).strip()}" for s in spec)
 
 
-def salvage(type: str, content: str) -> Reading:
-    """Read a body that does not conform, ignoring whatever precedes its first label.
+def _drop_legacy(type: str, content: str) -> str:
+    """Remove the blocks opened by a label in LEGACY_LABELS for this type.
 
-    The one fault this forgives is a preamble: a header line written above
-    the fields. Everything else -- a label missing, doubled, out of order,
-    or opening an empty field -- comes back as a problem the way `read`
-    reports it.
+    A block runs from its own line to the next line opening with a label
+    this type knows -- one of its own or another legacy one -- or to the end
+    of the body.
+    """
+    legacy = LEGACY_LABELS.get(type, ())
+    if not legacy:
+        return content
+    known = tuple(s.label for s in spec_for(type)) + legacy
+    kept, dropping = [], False
+    for line in content.split("\n"):
+        opened = next((k for k in known if line.startswith(f"{k}:")), None)
+        if opened is not None:
+            dropping = opened in legacy
+        if not dropping:
+            kept.append(line)
+    return "\n".join(kept)
+
+
+def salvage(type: str, content: str) -> Reading:
+    """Read a body that does not conform, forgiving two shapes an older writer left.
+
+    A preamble -- anything written above the first field -- is ignored, and
+    so is a block opened by a label in LEGACY_LABELS. Everything else -- a
+    label missing, doubled, out of order, or opening an empty or overlong
+    field -- comes back as a problem the way `read` reports it.
 
     What comes back conforming can be re-rendered into a body `read`
-    accepts, which is what the migration does with it.
+    accepts, which is what the migration does with it. That re-render DROPS
+    both of those shapes, so a caller keeps the body it replaced.
     """
     spec = spec_for(type)
     if not spec:
         return Reading({}, [])
+    content = _drop_legacy(type, content)
     opening = _opener(spec[0].label).search(content)
     return read(type, content[opening.start():] if opening else content)
 

@@ -433,3 +433,75 @@ def test_the_spec_a_form_reads_carries_the_ceiling(conn):
     assert db.get_memory(conn, uid) is not None
     assert sections.spec_for("anti_pattern")[0].max_len == 800
     assert sections.spec_for("anti_pattern")[1].max_len == 0
+
+
+# ------------------------------------------------- the shapes an older writer left
+
+REASONING = (
+    "HYPOTHESIS: the drain falls behind because the batch is too small\n"
+    "REASONING: compared drain rate against batch width over four runs\n"
+    "RESULT: the rate is flat from 50 rows up; the lock wait is not\n"
+    "REVISED BELIEF: the batch is not the bound, the single cursor is\n"
+    "NEXT TIME: measure lock wait before touching batch width"
+)
+
+LEGACY_REASONING = (
+    "DOMAIN: acme-x100-queue-drain\n"
+    + REASONING
+    + "\nCONFIDENCE: 0.9"
+)
+
+
+def test_the_legacy_blocks_are_dropped_and_the_fields_survive():
+    salvaged = sections.salvage("reasoning", LEGACY_REASONING)
+    assert salvaged.conforms
+    assert sections.render("reasoning", salvaged.sections) == REASONING
+
+
+def test_a_dropped_block_takes_its_continuation_lines_with_it():
+    body = LEGACY_REASONING.replace("CONFIDENCE: 0.9",
+                                    "CONFIDENCE: 0.9\nchecked live on the worker log")
+    salvaged = sections.salvage("reasoning", body)
+    assert salvaged.conforms
+    assert "checked live" not in sections.render("reasoning", salvaged.sections)
+
+
+def test_a_field_is_never_swallowed_by_a_legacy_block():
+    """CONFIDENCE trails the fields, so dropping it must not take NEXT TIME."""
+    salvaged = sections.salvage("reasoning", LEGACY_REASONING)
+    assert salvaged.sections["next_time"] == "measure lock wait before touching batch width"
+
+
+def test_a_type_with_no_legacy_labels_is_left_alone():
+    assert sections._drop_legacy("checkpoint", CHECKPOINT) == CHECKPOINT
+
+
+def test_the_migration_reshapes_a_legacy_reasoning(conn):
+    uid = db.insert_memory(conn, type="reasoning", content=REASONING, domain="acme/x100")
+    unread(conn, uid, LEGACY_REASONING)
+
+    result = db.migrate_sections(conn)
+
+    assert result["rewritten"] == 1 and result["needs_review"] == 0
+    assert db.get_memory(conn, uid)["content"] == REASONING
+    assert sections_of(conn, uid)["hypothesis"].startswith("the drain falls behind")
+
+
+def test_a_reasoning_that_only_has_prose_goes_to_the_queue(conn):
+    """The three in the real store that carry an ACHADO and no fields: the
+    migration must leave every character of them alone."""
+    prose = "DOMAIN: acme-x100-queue-drain\nACHADO: the drain and the cursor are one problem"
+    uid = db.insert_memory(conn, type="reasoning", content=REASONING, domain="acme")
+    unread(conn, uid, prose)
+
+    db.migrate_sections(conn)
+
+    assert db.get_memory(conn, uid)["content"] == prose
+    assert "no line opens with" in queued(conn)[uid]
+
+
+def test_reasoning_ceilings_clear_the_bodies_the_store_already_holds():
+    spec = {s.label: s.max_len for s in sections.SECTION_SPEC["reasoning"]}
+    assert spec["HYPOTHESIS"] >= 318      # the longest one measured
+    assert spec["NEXT TIME"] >= 601
+    assert spec["REASONING"] == spec["RESULT"] == spec["REVISED BELIEF"] == 0

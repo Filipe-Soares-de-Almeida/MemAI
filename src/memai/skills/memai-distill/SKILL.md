@@ -46,6 +46,13 @@ Payload details:
   `checkpoint`/`handoff` are not targets, and neither is **`diagram`**: a
   flow is written by `diagram()` + `diagram_node`/`diagram_edge`, never
   from prose.
+- **`reasoning` and `anti_pattern` are made of FIELDS**, so a `new_content`
+  for either has to read back as those fields — each label opening its own
+  line, in order, none empty:
+  `HYPOTHESIS: … / REASONING: … / RESULT: … / REVISED BELIEF: … / NEXT TIME: …`
+  and `TEMPTATION: … / WHY WRONG: … / INSTEAD: …`. A body that does not is
+  refused **at staging** and comes back in `errors`, naming the field.
+  Distilling into `note` has no such shape.
 - **`domain`** is a **path** (`acme/x100/p200`). The new memory inherits
   nothing from its sources, so state where it is filed — omit it and the
   memory is filed nowhere. A cross-cutting axis does not go here: after
