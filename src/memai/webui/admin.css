@@ -1342,6 +1342,8 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
 
 .rt-list { margin: 0 0 var(--sp-3); padding-left: var(--sp-5); }
 .rt-list li { margin-bottom: var(--sp-1); white-space: pre-wrap; }
+/* items the writer spaced apart keep the air they were given */
+.rt-list-loose > li { margin-bottom: var(--sp-3); }
 .rt-list .rt-list { margin: var(--sp-1) 0 0; }
 
 .rt code {
