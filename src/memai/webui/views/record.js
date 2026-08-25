@@ -22,13 +22,16 @@
 import { esc, fmtDate, fmtInt } from '../core/dom.js';
 import { api, seg } from '../core/api.js';
 import { icon } from '../core/icons.js';
-import { toast, failed, openModal, closeModal, confirmModal, promptModal } from '../core/ui.js';
+import { toast, failed, openModal, closeModal, confirmModal, promptModal,
+         copyCode } from '../core/ui.js';
 import { typeTag, typeClass, confPill, uidChip, statusTag, wireCopyChips,
-         failedHTML, CONF, REL_SUGGEST, typeItems,
+         failedHTML, CONF, REL_SUGGEST, typeItems, sectionLabel, sectionLabelHTML,
          cachedDomains, invalidateDomains, domainDatalist } from '../core/shared.js';
 import { pickerFor, pickerValue, wirePicker, fixedItems } from '../core/pick.js';
 import { pickMemories } from '../core/link-picker.js';
 import { go, refreshBehind } from '../core/router.js';
+import { renderRich, wireRich } from '../core/richtext.js';
+import { highlightIn } from '../core/highlight.js';
 import { t } from '../i18n.js';
 
 /* The record's own scrim while it is open, so a re-render can write into
@@ -242,6 +245,30 @@ export async function openRecord(uid) {
   const isDiagram = m.type === 'diagram';
   const refs = m.referenced_by_diagrams || [];
 
+  /* Some types are written field by field. `spec` is what this one should
+     hold -- empty for a type with none -- and `sections` what was read out of
+     the body, so a field that never arrived shows as itself rather than as a
+     gap. A body the parser could not read at all keeps its <pre>: the fields
+     would be empty and the text is the only copy of what it says. */
+  const spec = m.spec || [];
+  const isSectioned = spec.length > 0;
+  const sectionText = Object.fromEntries((m.sections || []).map(s => [s.key, s.text]));
+  const sectionPanes = () => spec.map(s => `
+    <div class="sec-field">
+      <div class="sec-label">${sectionLabelHTML(m.type, s)}</div>
+      ${s.key in sectionText
+        ? `<div class="content-pre content-prose sec-text rt">${renderRich(sectionText[s.key], m.body_links)}</div>`
+        : `<div class="sec-absent">${t('dr.sections.missing')}</div>`}
+    </div>`).join('');
+  /* A ceiling is shown as a count, never enforced by `maxlength`: the
+     attribute truncates on paste without a word on screen, and the server
+     refuses the same body anyway. */
+  const sectionEditors = () => spec.map(s => `
+    <label class="sec-edit"><span class="sec-label">${sectionLabelHTML(m.type, s)}
+      ${s.max_len ? `<span class="sec-count" data-count="${esc(s.key)}"></span>` : ''}</span>
+      <textarea id="dSec-${esc(s.key)}" rows="4"
+                aria-label="${esc(sectionLabel(m.type, s))}"></textarea></label>`).join('');
+
   const rels = m.relations.map(r => `
     <div class="rel-row">
       <span class="rel-dir" title="${r.direction === 'out' ? t('dr.rel.out.title') : t('dr.rel.in.title')}">${icon(r.direction === 'out' ? 'arrow-right' : 'arrow-left')}</span>
@@ -311,12 +338,20 @@ export async function openRecord(uid) {
             ? `<button class="btn btn-sm btn-solid" id="dOpenEditor">${t('dr.openEditor')}</button>`
             : `<button type="button" class="btn btn-sm" id="dEdit" aria-expanded="false" aria-controls="dEditBox">${t('common.edit')}</button>`}
         </div>
-        <pre class="content-pre${isDiagram ? '' : ' content-prose'}" id="dContent">${esc(m.content)}</pre>
+        ${m.section_problem
+          ? `<div class="sec-problem">${t('dr.sections.problem',
+               { detail: esc(m.section_problem) })}</div>`
+          : ''}
+        ${isSectioned && !m.section_problem ? sectionPanes() : `
+        ${isDiagram
+          ? `<pre class="content-pre" id="dContent">${esc(m.content)}</pre>`
+          : `<div class="content-pre content-prose rt" id="dContent">${renderRich(m.content, m.body_links)}</div>`}`}
         ${isDiagram ? `<div class="dg-empty" style="margin-top:8px">${t('dr.generated')}</div>` : `
         <div id="dEditBox" hidden style="display:grid;gap:9px;margin-top:10px">
           <!-- a placeholder is a hint, not a name: it is gone the moment
                anything is typed, and it is never announced as a label -->
-          <textarea id="dEditText" rows="10" aria-label="${t('dr.content')}"></textarea>
+          ${isSectioned ? sectionEditors() : `
+          <textarea id="dEditText" rows="10" aria-label="${t('dr.content')}"></textarea>`}
           <input type="text" id="dEditNote" placeholder="${t('dr.editNote.placeholder')}"
                  aria-label="${t('dr.editNote.placeholder')}">
           <div class="act-row">
@@ -423,6 +458,9 @@ export async function openRecord(uid) {
   if (reopening && keepScroll) rec.querySelector('.modal-body').scrollTop = keepScroll;
 
   wireCopyChips(rec);
+  wireRich(rec, { open: openRecord, copy: copyCode });
+  /* the text is on screen already; colour arrives when the grammar does */
+  highlightIn(rec).catch(() => {});
   dq('#dClose').addEventListener('click', closeRecord);
   /* Drops the step being left rather than pushing another one, so walking
      three links deep and back leaves the trail where it started instead of
@@ -453,13 +491,40 @@ export async function openRecord(uid) {
     editBtn.addEventListener('click', () => {
       const opening = dq('#dEditBox').hidden;
       syncEdit(opening);
-      if (opening) { dq('#dEditText').value = m.content; dq('#dEditText').focus(); }
+      if (!opening) return;
+      if (isSectioned) {
+        /* seeded from what was read, which for a body the parser could not
+           read is nothing -- the <pre> above is still on screen to copy from */
+        spec.forEach(s => {
+          const box = dq(`#dSec-${s.key}`);
+          box.value = sectionText[s.key] || '';
+          if (!s.max_len) return;
+          const out = dq(`[data-count="${s.key}"]`);
+          const tick = () => {
+            out.textContent = t('dr.sections.count', { n: box.value.length, max: s.max_len });
+            out.classList.toggle('over', box.value.length > s.max_len);
+          };
+          box.addEventListener('input', tick);
+          tick();
+        });
+        dq(`#dSec-${spec[0].key}`).focus();
+      } else {
+        dq('#dEditText').value = m.content;
+        dq('#dEditText').focus();
+      }
     });
     dq('#dEditCancel').addEventListener('click', () => { syncEdit(false); editBtn.focus(); });
     dq('#dEditSave').addEventListener('click', async () => {
+      /* a sectioned body is built from its fields rather than typed, so the
+         server can hold it to the shape its type is supposed to have */
+      const [path, body] = isSectioned
+        ? [`/api/memories/${seg(uid)}/sections`,
+           { sections: Object.fromEntries(spec.map(s => [s.key, dq(`#dSec-${s.key}`).value])),
+             note: dq('#dEditNote').value }]
+        : [`/api/memories/${seg(uid)}/content`,
+           { content: dq('#dEditText').value, note: dq('#dEditNote').value }];
       try {
-        await api(`/api/memories/${seg(uid)}/content`, {
-          body: { content: dq('#dEditText').value, note: dq('#dEditNote').value } });
+        await api(path, { body });
         toast(t('dr.contentUpdated'), 'ok');
         openRecord(uid); refreshBehind();
       } catch (err) { failed('err.save', err); }

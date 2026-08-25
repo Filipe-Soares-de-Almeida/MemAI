@@ -15,6 +15,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
+from conftest import shaped
 from memai import brief, db, hook, server
 
 
@@ -36,13 +37,13 @@ def _seed(conn, *, created_at: str | None = None) -> dict:
                                  content="cache warmup runs before the first request",
                                  created_at=created_at),
         "pitfall": db.insert_memory(conn, type="anti_pattern", domain="acme/x100",
-                                    content="TEMPTATION: retry without backoff",
+                                    content=shaped("anti_pattern", "retry without backoff"),
                                     created_at=created_at),
         "hand": db.insert_memory(conn, type="handoff", domain="omni/x900",
                                  content="pick up at the token refresh path",
                                  created_at=created_at),
         "cp": db.insert_memory(conn, type="checkpoint", domain="acme/x100",
-                               content="INTENT: ship the retry path",
+                               content=shaped("checkpoint", "ship the retry path"),
                                created_at=created_at),
     }
 
@@ -104,7 +105,8 @@ def test_a_long_section_cannot_starve_the_ones_after_it(conn):
     the warm-up and the recent notes fell off the end entirely."""
     for i in range(4):
         db.insert_memory(conn, type="anti_pattern", domain="acme/x100",
-                         content=f"TEMPTATION: pitfall {i} " + "spelled out at length " * 12)
+                         content=shaped("anti_pattern",
+                                        f"pitfall {i} " + "spelled out at length " * 12))
     note = db.insert_memory(conn, type="note", domain="acme/x100",
                             content="the export window is inclusive on both ends")
     text = brief.session_brief(conn)
@@ -117,7 +119,8 @@ def test_a_trimmed_section_still_reports_its_total(conn):
     many there really were."""
     for i in range(4):
         db.insert_memory(conn, type="anti_pattern", domain="acme/x100",
-                         content=f"TEMPTATION: pitfall {i} " + "spelled out at length " * 12)
+                         content=shaped("anti_pattern",
+                                        f"pitfall {i} " + "spelled out at length " * 12))
     text = brief.session_brief(conn, budget=1400)
     section = next(b for b in text.split("\n\n") if "Pitfalls on record" in b)
     shown = sum(1 for line in section.splitlines() if line.startswith("  - "))

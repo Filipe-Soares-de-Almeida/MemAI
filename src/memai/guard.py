@@ -16,17 +16,22 @@ through.
 `GUARDED` is read from the tool signatures in `memai.server`: a parameter
 with no default is one the call cannot do without. A tool added here is
 checked against its own signature, not against what its siblings take.
+For a tool that writes a sectioned body, that list is the section spec, so
+the fields the guard requires and the fields the store validates cannot
+drift; `memai.sections` is imported for the spec alone and pulls in no
+database.
 """
 
 from __future__ import annotations
+
+from memai import sections
 
 # tool -> the parameters it has no default for.
 GUARDED: dict[str, tuple[str, ...]] = {
     "note": ("content",),
     "reasoning": ("content",),
     "handoff": ("content",),
-    "checkpoint": ("intent", "established", "pursuing", "open_questions"),
-    "anti_pattern": ("pattern", "why_wrong", "instead"),
+    **{tool: tuple(s.key for s in spec) for tool, spec in sections.SECTION_SPEC.items()},
 }
 
 # tool -> the optional parameters worth missing. Absence here is not an

@@ -47,7 +47,7 @@ from starlette.responses import FileResponse, JSONResponse, Response
 from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 
-from memai import __version__, autostart, db, embed
+from memai import __version__, autostart, db, embed, sections
 
 # Windows' registry-derived mimetypes map serves .js as text/plain, which
 # browsers refuse to execute as an ES module. Force the correct types.
@@ -100,6 +100,11 @@ def _paths(d: dict) -> dict:
     if blob:
         d["also"] = db.parse_domains(blob)
     return d
+
+
+def _section_spec(s: sections.Section) -> dict:
+    """One field of a type, as a form needs it. max_len is 0 for no ceiling."""
+    return {"key": s.key, "label": s.label, "max_len": s.max_len}
 
 
 def _summary(row, limit: int = SNIPPET_LIMIT) -> dict:
@@ -340,6 +345,13 @@ def memory_detail(request, payload) -> dict:
         result["recalls"] = usage["recalls"] if usage else 0
         result["last_recall"] = usage["last_recall"] if usage else None
         result["edit_history"] = [dict(e) for e in db.get_edit_history(conn, uid)]
+        # `spec` is what the type is SUPPOSED to hold and `sections` what was
+        # read out of the body, so a view can show a field that came out
+        # missing instead of leaving a gap where it should be
+        result["spec"] = [_section_spec(s) for s in sections.spec_for(row["type"])]
+        result["sections"] = db.get_sections(conn, uid)
+        result["section_problem"] = db.section_problem(conn, uid)
+        result["body_links"] = db.body_links(conn, uid, row["content"])
         rels = []
         for r in db.get_relations(conn, uid):
             other = r["to_uid"] if r["from_uid"] == uid else r["from_uid"]
@@ -372,6 +384,16 @@ def create_memory(request, payload) -> dict:
         # a diagram row with no graph behind it is a broken half-state: its
         # content is generated, so there would be nothing to generate from
         raise ValueError("create a diagram through POST /api/diagrams -- it needs a graph")
+    if sections.is_sectioned(type_):
+        # built from the fields rather than typed, so what lands conforms
+        given = payload.get("sections")
+        if not isinstance(given, dict):
+            raise ValueError(f"a {type_} is created from its sections, not from content")
+        empty = [s.label for s in sections.spec_for(type_)
+                 if not str(given.get(s.key, "")).strip()]
+        if empty:
+            raise ValueError(f"nothing under {', '.join(empty)}")
+        content = sections.render(type_, {k: str(v) for k, v in given.items()})
     if not content:
         raise ValueError("content is required")
     if confidence not in CONFIDENCES:
@@ -439,6 +461,12 @@ def edit_meta(request, payload) -> dict:
             # retyping away from 'diagram' orphans the graph; retyping into
             # it claims a generated content field with nothing generating it
             raise ValueError("a diagram's type cannot be changed")
+        if "type" in updates:
+            # only on the way IN: leaving a type that has fields just drops
+            # a cache, but claiming one means the body has to read that way
+            error = db.section_error(conn, updates["type"], row["content"])
+            if error:
+                raise ValueError(error)
         if "domain" in updates:
             updates["domain"] = db.apply_domain_policy(conn, updates["domain"])
         changed = {k: v for k, v in updates.items() if v != row[k]}
@@ -447,6 +475,10 @@ def edit_meta(request, payload) -> dict:
             conn.execute(
                 f"UPDATE memories SET {sets}, updated_at = ? WHERE uid = ?",
                 [*changed.values(), db.now_iso(), uid])
+            if "type" in changed:
+                # the body did not move, but which fields it is supposed to
+                # hold just did: re-read it under the type it now has
+                db._write_sections(conn, uid, changed["type"], row["content"])
             note = "meta: " + "; ".join(f"{k} '{row[k]}' → '{v}'" for k, v in changed.items())
             conn.execute(
                 "INSERT INTO edits (memory_uid, edited_at, prev_content, new_content, note) VALUES (?, ?, ?, ?, ?)",
@@ -1067,9 +1099,17 @@ def normalize_domains(request, payload) -> dict:
 # ------------------------------------------------------------------ config
 
 def get_config(request, payload) -> dict:
+    """Settings, plus the section spec the forms build their fields from.
+
+    The spec is served rather than spelled in the UI: a label written in
+    both places is a body the store would read into fields the form never
+    offered.
+    """
     with db.connect() as conn:
         return {"domain_case": db.get_domain_case(conn),
-                "svg_retention": db.get_svg_retention(conn)}
+                "svg_retention": db.get_svg_retention(conn),
+                "sections": {type_: [_section_spec(s) for s in spec]
+                             for type_, spec in sections.SECTION_SPEC.items()}}
 
 
 def set_config(request, payload) -> dict:
@@ -1280,6 +1320,51 @@ def backup(request, payload) -> dict:
     finally:
         conn.close()
     return {"ok": True, "path": str(dest), "size": _file_size(dest)}
+
+
+def sectionize(request, payload) -> dict:
+    """Read every sectioned body in the store into its fields, once.
+
+    Takes a backup first: the run rewrites the bodies whose fields are
+    buried under a header line, and a backup is the only copy of the store
+    as it stood before that. The per-body previous text is in `edits`
+    either way, so one memory can be put back without the file.
+    """
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+    dest = _backups_dir() / f"sectionize-{stamp}.db"
+    conn = _raw_connect()
+    try:
+        conn.execute("VACUUM INTO ?", (str(dest),))
+    finally:
+        conn.close()
+    with db.connect() as c:
+        result = db.migrate_sections(c)
+    return {"ok": True, "backup": str(dest), **result}
+
+
+def section_queue(request, payload) -> dict:
+    """The bodies that do not conform, and whether the store has been read."""
+    with db.connect() as conn:
+        return {"ok": True, "migrated": db.sections_migrated(conn),
+                "queue": db.section_queue(conn)}
+
+
+def edit_sections(request, payload) -> dict:
+    """Rewrite one memory's body from the fields its type is made of.
+
+    The way out of the queue. `sections` maps each field's key to its text;
+    every field the type names has to carry something.
+    """
+    uid = request.path_params["uid"]
+    values = payload.get("sections")
+    if not isinstance(values, dict):
+        raise ValueError("sections must be an object of key -> text")
+    with db.connect() as conn:
+        if db.get_memory(conn, uid) is None:
+            raise ValueError(f"unknown memory: {uid}")
+        db.set_sections(conn, uid, {k: str(v) for k, v in values.items()},
+                        note=payload.get("note", ""))
+    return {"ok": True}
 
 
 def dedup(request, payload) -> dict:
@@ -1693,6 +1778,9 @@ routes = [
     Route("/api/maintenance/vacuum", api(vacuum), methods=["POST"]),
     Route("/api/maintenance/backup", api(backup), methods=["POST"]),
     Route("/api/maintenance/dedup", api(dedup)),
+    Route("/api/maintenance/sectionize", api(sectionize), methods=["POST"]),
+    Route("/api/maintenance/sections-queue", api(section_queue)),
+    Route("/api/memories/{uid}/sections", api(edit_sections), methods=["POST"]),
     Route("/api/optimization/runs", api(optimization_runs), methods=["GET"]),
     Route("/api/optimization/runs/{run_id:int}", api(optimization_delete_run), methods=["DELETE"]),
     Route("/api/optimization/suggestions", api(optimization_suggestions), methods=["GET"]),

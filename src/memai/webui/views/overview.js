@@ -47,17 +47,15 @@ export async function renderOverview(view, params, ctx) {
   const maxDay = Math.max(1, ...days.map(d => d.count));
   const total30 = days.reduce((a, d) => a + d.count, 0);
   const activeDays = days.filter(d => d.count > 0).length;
-  /* `title`, not aria-label: an aria-label on a plain div carries no role and
-     is dropped by every screen reader, and a native tooltip is at least
-     reachable by a long press. What AT actually reads is the summary on the
-     chart container below, plus the three figures beneath it.
-
-     A different key from the hover tip, too: that one is innerHTML and marks
-     the number up, and an attribute renders the tags as text. */
+  /* No `title` on a bar. The hover tip below already names the day and the
+     count, and a native tooltip on the same element draws a second one over
+     it a moment later. It bought nothing for assistive tech either: the
+     chart container is role="img", which makes everything inside it
+     presentational, so a per-bar attribute is never read. What AT gets is
+     the summary on that container, plus the three figures beneath it. */
   const sparkBars = days.map(d => `
     <div class="spark-bar${d.today ? ' today' : ''}" data-day="${d.key}" data-n="${d.count}"
-         style="height:${Math.max(3, d.count / maxDay * 100)}%"
-         title="${esc(t('ov.spark.barTitle', { n: d.count, day: d.key }))}"></div>`).join('');
+         style="height:${Math.max(3, d.count / maxDay * 100)}%"></div>`).join('');
   const sparkAria = t('ov.spark.aria', {
     n: fmtInt(total30), peak: fmtInt(maxDay), days: activeDays,
   });
