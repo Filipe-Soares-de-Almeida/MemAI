@@ -1955,6 +1955,10 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
 .sec-text { margin: 0; }
 .sec-absent { font-size: var(--fs-sm); color: var(--warn); font-style: italic; }
 .sec-edit { display: grid; gap: var(--sp-1); }
+/* how much of a field's ceiling is used. Quiet until it is passed, because
+   until then it is a fact about the draft and not a problem with it. */
+.sec-count { float: right; text-transform: none; letter-spacing: 0; color: var(--ink-3); }
+.sec-count.over { color: var(--bad); }
 .sec-problem {
   font-size: var(--fs-sm); color: var(--warn); line-height: 1.5;
   background: var(--inset); border-left: 3px solid var(--warn);

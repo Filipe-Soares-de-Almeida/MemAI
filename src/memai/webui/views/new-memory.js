@@ -56,8 +56,21 @@ export async function openNewMemory() {
     mq('#nmTitleField').hidden = !isDiagram();
     mq('#nmSectionFields').hidden = fields.length === 0;
     mq('#nmSectionFields').innerHTML = fields.map(f => `
-      <div class="field"><label for="nmSec-${esc(f.key)}">${esc(f.label)}</label>
+      <div class="field"><label for="nmSec-${esc(f.key)}">${esc(f.label)}
+        ${f.max_len ? `<span class="sec-count" data-count="${esc(f.key)}"></span>` : ''}</label>
         <textarea id="nmSec-${esc(f.key)}" rows="4"></textarea></div>`).join('');
+    /* the count is shown, never enforced by `maxlength`, which truncates a
+       paste silently -- the server refuses the same body either way */
+    fields.filter(f => f.max_len).forEach(f => {
+      const box = mq(`#nmSec-${f.key}`);
+      const out = mq(`[data-count="${f.key}"]`);
+      const tick = () => {
+        out.textContent = t('dr.sections.count', { n: box.value.length, max: f.max_len });
+        out.classList.toggle('over', box.value.length > f.max_len);
+      };
+      box.addEventListener('input', tick);
+      tick();
+    });
     /* a diagram's content is its graph, so it is created unverified and the
        control says so by being unreachable rather than by being ignored */
     mq('#nmConf').disabled = isDiagram();

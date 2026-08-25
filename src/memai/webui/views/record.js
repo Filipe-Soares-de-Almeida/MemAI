@@ -257,8 +257,12 @@ export async function openRecord(uid) {
         ? `<pre class="content-pre content-prose sec-text">${esc(sectionText[s.key])}</pre>`
         : `<div class="sec-absent">${t('dr.sections.missing')}</div>`}
     </div>`).join('');
+  /* A ceiling is shown as a count, never enforced by `maxlength`: the
+     attribute truncates on paste without a word on screen, and the server
+     refuses the same body anyway. */
   const sectionEditors = () => spec.map(s => `
-    <label class="sec-edit"><span class="sec-label">${esc(s.label)}</span>
+    <label class="sec-edit"><span class="sec-label">${esc(s.label)}
+      ${s.max_len ? `<span class="sec-count" data-count="${esc(s.key)}"></span>` : ''}</span>
       <textarea id="dSec-${esc(s.key)}" rows="4" aria-label="${esc(s.label)}"></textarea></label>`).join('');
 
   const rels = m.relations.map(r => `
@@ -482,7 +486,18 @@ export async function openRecord(uid) {
       if (isSectioned) {
         /* seeded from what was read, which for a body the parser could not
            read is nothing -- the <pre> above is still on screen to copy from */
-        spec.forEach(s => { dq(`#dSec-${s.key}`).value = sectionText[s.key] || ''; });
+        spec.forEach(s => {
+          const box = dq(`#dSec-${s.key}`);
+          box.value = sectionText[s.key] || '';
+          if (!s.max_len) return;
+          const out = dq(`[data-count="${s.key}"]`);
+          const tick = () => {
+            out.textContent = t('dr.sections.count', { n: box.value.length, max: s.max_len });
+            out.classList.toggle('over', box.value.length > s.max_len);
+          };
+          box.addEventListener('input', tick);
+          tick();
+        });
         dq(`#dSec-${spec[0].key}`).focus();
       } else {
         dq('#dEditText').value = m.content;
