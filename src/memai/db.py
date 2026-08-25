@@ -887,6 +887,43 @@ def migrate_sections(conn: sqlite3.Connection) -> dict:
             "rewritten": rewritten, "needs_review": pending}
 
 
+_BODY_LINK = re.compile(r"\[\[([0-9a-f]{16})\]\]")
+
+
+def body_links(conn: sqlite3.Connection, uid: str, content: str) -> dict[str, dict]:
+    """What each [[uid]] written in a body points at, keyed by that uid.
+
+    A wikilink is written INSIDE the text, so it says nothing about the
+    relations table: `linked` reports whether an edge exists either way
+    between the two, which is what turns a reference somebody typed into a
+    reference the graph can be queried for. A uid nothing resolves comes
+    back as {"missing": True} rather than being left out, so a reader is
+    told the target is gone instead of being handed a link that fails.
+    """
+    targets = {m.group(1) for m in _BODY_LINK.finditer(content or "")} - {uid}
+    if not targets:
+        return {}
+    edges = {
+        r["other"] for r in conn.execute(
+            "SELECT to_uid AS other FROM relations WHERE from_uid = ? "
+            "UNION SELECT from_uid FROM relations WHERE to_uid = ?", (uid, uid))
+    }
+    found = {}
+    marks = ",".join("?" * len(targets))
+    for row in conn.execute(
+        f"SELECT uid, type, domain, status, content FROM memories WHERE uid IN ({marks})",
+        tuple(targets),
+    ):
+        found[row["uid"]] = {
+            "uid": row["uid"], "type": row["type"], "domain": row["domain"],
+            "status": row["status"], "snippet": (row["content"] or "")[:120],
+            "linked": row["uid"] in edges,
+        }
+    for target in targets - set(found):
+        found[target] = {"uid": target, "missing": True}
+    return found
+
+
 def section_problem(conn: sqlite3.Connection, uid: str) -> str:
     """What stops this memory's body conforming, or "" when nothing does."""
     row = conn.execute(
