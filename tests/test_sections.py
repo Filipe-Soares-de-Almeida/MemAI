@@ -505,3 +505,40 @@ def test_reasoning_ceilings_clear_the_bodies_the_store_already_holds():
     assert spec["HYPOTHESIS"] >= 318      # the longest one measured
     assert spec["NEXT TIME"] >= 601
     assert spec["REASONING"] == spec["RESULT"] == spec["REVISED BELIEF"] == 0
+
+
+# ----------------------------------------------- the field names on screen
+
+def _catalogs() -> tuple[dict, dict]:
+    import json
+    from pathlib import Path
+
+    from memai import admin
+    i18n = Path(admin.WEBUI_DIR) / "i18n"
+    return (json.loads((i18n / "en.json").read_text(encoding="utf-8"))["strings"],
+            json.loads((i18n / "pt-BR.json").read_text(encoding="utf-8"))["strings"])
+
+
+def test_every_field_has_a_name_in_every_catalog():
+    """A field with no entry falls back to the label stored in the body, which
+    is English -- so it reads as a lapse rather than as a decision."""
+    en, pt = _catalogs()
+    for type_, spec in sections.SECTION_SPEC.items():
+        for s in spec:
+            key = f"sec.{type_}.{s.key}"
+            assert en.get(key), f"{key} missing from en"
+            assert pt.get(key), f"{key} missing from pt-BR"
+
+
+def test_the_english_name_is_the_label_written_in_the_body():
+    en, _ = _catalogs()
+    for type_, spec in sections.SECTION_SPEC.items():
+        for s in spec:
+            assert en[f"sec.{type_}.{s.key}"] == s.label
+
+
+def test_a_translated_name_does_not_change_what_is_stored():
+    _, pt = _catalogs()
+    assert pt["sec.checkpoint.intent"] != "INTENT"
+    body = sections.render("checkpoint", sections.read("checkpoint", CHECKPOINT).sections)
+    assert body.startswith("INTENT:")

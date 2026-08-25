@@ -24,7 +24,7 @@ import { api, seg } from '../core/api.js';
 import { icon } from '../core/icons.js';
 import { toast, failed, openModal, closeModal, confirmModal, promptModal } from '../core/ui.js';
 import { typeTag, typeClass, confPill, uidChip, statusTag, wireCopyChips,
-         failedHTML, CONF, REL_SUGGEST, typeItems,
+         failedHTML, CONF, REL_SUGGEST, typeItems, sectionLabel, sectionLabelHTML,
          cachedDomains, invalidateDomains, domainDatalist } from '../core/shared.js';
 import { pickerFor, pickerValue, wirePicker, fixedItems } from '../core/pick.js';
 import { pickMemories } from '../core/link-picker.js';
@@ -252,7 +252,7 @@ export async function openRecord(uid) {
   const sectionText = Object.fromEntries((m.sections || []).map(s => [s.key, s.text]));
   const sectionPanes = () => spec.map(s => `
     <div class="sec-field">
-      <div class="sec-label">${esc(s.label)}</div>
+      <div class="sec-label">${sectionLabelHTML(m.type, s)}</div>
       ${s.key in sectionText
         ? `<pre class="content-pre content-prose sec-text">${esc(sectionText[s.key])}</pre>`
         : `<div class="sec-absent">${t('dr.sections.missing')}</div>`}
@@ -261,9 +261,10 @@ export async function openRecord(uid) {
      attribute truncates on paste without a word on screen, and the server
      refuses the same body anyway. */
   const sectionEditors = () => spec.map(s => `
-    <label class="sec-edit"><span class="sec-label">${esc(s.label)}
+    <label class="sec-edit"><span class="sec-label">${sectionLabelHTML(m.type, s)}
       ${s.max_len ? `<span class="sec-count" data-count="${esc(s.key)}"></span>` : ''}</span>
-      <textarea id="dSec-${esc(s.key)}" rows="4" aria-label="${esc(s.label)}"></textarea></label>`).join('');
+      <textarea id="dSec-${esc(s.key)}" rows="4"
+                aria-label="${esc(sectionLabel(m.type, s))}"></textarea></label>`).join('');
 
   const rels = m.relations.map(r => `
     <div class="rel-row">

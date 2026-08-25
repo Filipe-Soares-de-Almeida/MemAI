@@ -9,7 +9,7 @@ import { esc } from '../core/dom.js';
 import { api } from '../core/api.js';
 import { toast, failed, openModal, closeModal } from '../core/ui.js';
 import { typeItems, confItems, getDomains, invalidateDomains,
-         domainDatalist } from '../core/shared.js';
+         domainDatalist, sectionLabelHTML } from '../core/shared.js';
 import { pickerFor, pickerValue, wirePicker, fixedItems } from '../core/pick.js';
 import { go, refreshBehind } from '../core/router.js';
 import { openRecord } from './record.js';
@@ -51,12 +51,13 @@ export async function openNewMemory() {
   const isDiagram = () => pickerValue(modal, 'nmType') === 'diagram';
   const fieldsFor = () => spec[pickerValue(modal, 'nmType')] || [];
   const sync = () => {
+    const type = pickerValue(modal, 'nmType');
     const fields = fieldsFor();
     mq('#nmContentField').hidden = isDiagram() || fields.length > 0;
     mq('#nmTitleField').hidden = !isDiagram();
     mq('#nmSectionFields').hidden = fields.length === 0;
     mq('#nmSectionFields').innerHTML = fields.map(f => `
-      <div class="field"><label for="nmSec-${esc(f.key)}">${esc(f.label)}
+      <div class="field"><label for="nmSec-${esc(f.key)}">${sectionLabelHTML(type, f)}
         ${f.max_len ? `<span class="sec-count" data-count="${esc(f.key)}"></span>` : ''}</label>
         <textarea id="nmSec-${esc(f.key)}" rows="4"></textarea></div>`).join('');
     /* the count is shown, never enforced by `maxlength`, which truncates a

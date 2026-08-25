@@ -1952,6 +1952,9 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
   letter-spacing: .06em; text-transform: uppercase;
   color: var(--ink-3); margin-bottom: var(--sp-1);
 }
+/* the field's name in the reader's language; its title carries the label
+   written in the body, which is English wherever it is stored */
+.sec-label-text { cursor: help; }
 .sec-text { margin: 0; }
 .sec-absent { font-size: var(--fs-sm); color: var(--warn); font-style: italic; }
 .sec-edit { display: grid; gap: var(--sp-1); }
