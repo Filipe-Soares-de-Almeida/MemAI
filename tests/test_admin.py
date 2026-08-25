@@ -12,6 +12,7 @@ from __future__ import annotations
 import pytest
 from starlette.testclient import TestClient
 
+from conftest import unmigrated
 from memai import admin, db, sections
 
 
@@ -36,12 +37,16 @@ def _create(client, **kw) -> str:
 
 
 def _unread(type_: str, content: str, domain: str = "acme/x100") -> str:
-    """Put a body in the store the way it stood before anything read it."""
+    """Put a body in the store the way it stood before anything read it.
+
+    The flag goes first: while it is set, a body that does not conform is
+    refused rather than written, which is the whole point of it.
+    """
     with db.connect() as conn:
+        unmigrated(conn)
         uid = db.insert_memory(conn, type=type_, content=content, domain=domain)
         conn.execute("DELETE FROM memory_sections WHERE memory_uid = ?", (uid,))
         conn.execute("DELETE FROM section_migration WHERE memory_uid = ?", (uid,))
-        conn.execute("DELETE FROM meta WHERE key = ?", (db.SECTIONS_MIGRATED_KEY,))
     return uid
 
 
@@ -486,3 +491,35 @@ def test_reclassifying_a_stuck_body_empties_the_queue(client):
 
     assert res.status_code == 200, res.text
     assert client.get("/api/maintenance/sections-queue").json()["queue"] == []
+
+
+def test_claiming_a_type_made_of_fields_needs_a_body_that_reads_that_way(client):
+    uid = _create(client, type="note", content="the cache warms on boot")
+
+    res = client.post(f"/api/memories/{uid}/meta", json={"type": "checkpoint"})
+
+    assert res.status_code == 400
+    assert "INTENT, ESTABLISHED, PURSUING, OPEN QUESTIONS" in res.text
+    assert client.get(f"/api/memories/{uid}").json()["type"] == "note"
+
+
+def test_a_body_that_already_reads_that_way_may_claim_the_type(client):
+    uid = _create(client, type="note", content=CHECKPOINT_BODY)
+
+    res = client.post(f"/api/memories/{uid}/meta", json={"type": "checkpoint"})
+
+    assert res.status_code == 200, res.text
+    detail = client.get(f"/api/memories/{uid}").json()
+    assert detail["type"] == "checkpoint"
+    assert detail["sections"][0]["text"] == "drain the queue before the nightly export"
+
+
+def test_leaving_a_type_made_of_fields_drops_the_fields(client):
+    uid = _create(client, type="checkpoint", content="the queue drain")
+    assert client.get(f"/api/memories/{uid}").json()["sections"]
+
+    res = client.post(f"/api/memories/{uid}/meta", json={"type": "note"})
+
+    assert res.status_code == 200, res.text
+    detail = client.get(f"/api/memories/{uid}").json()
+    assert detail["sections"] == [] and detail["spec"] == []

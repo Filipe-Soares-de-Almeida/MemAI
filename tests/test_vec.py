@@ -4,6 +4,7 @@ from conftest (real model never loads in tests).
 
 import pytest
 
+from conftest import shaped
 from memai import db, embed
 from tests.conftest import make_fake_embed
 
@@ -127,9 +128,12 @@ def test_dedup_uses_vectors_when_available(tmp_path, fake_embedder):
 
 def test_dedup_drops_same_effort_checkpoint_pairs(tmp_path, fake_embedder):
     with db.connect(tmp_path / "t.db") as conn:
-        db.insert_memory(conn, type="checkpoint", content="car maintenance schedule", domain="proj-1")
-        db.insert_memory(conn, type="checkpoint", content="vehicle maintenance schedule", domain="proj-1")
-        db.insert_memory(conn, type="checkpoint", content="automobile maintenance schedule", domain="proj-2")
+        db.insert_memory(conn, type="checkpoint", domain="proj-1",
+                         content=shaped("checkpoint", "car maintenance schedule"))
+        db.insert_memory(conn, type="checkpoint", domain="proj-1",
+                         content=shaped("checkpoint", "vehicle maintenance schedule"))
+        db.insert_memory(conn, type="checkpoint", domain="proj-2",
+                         content=shaped("checkpoint", "automobile maintenance schedule"))
         pairs = db.dedup_candidates(conn, threshold=0.5)
     # the two proj-1 checkpoints are a timeline, never a candidate pair
     for a, b, _score, _method in pairs:

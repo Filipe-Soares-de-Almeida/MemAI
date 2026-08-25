@@ -13,6 +13,7 @@ import json
 import pytest
 from starlette.testclient import TestClient
 
+from conftest import shaped
 from memai import admin, db
 
 
@@ -32,7 +33,9 @@ def client(tmp_path, monkeypatch):
 # ------------------------------------------------------------------ db layer
 
 def _mk(conn, content="a fact", **kw):
-    return db.insert_memory(conn, type=kw.pop("type", "note"), content=content, **kw)
+    """A memory of any type, with `content` shaped to what that type holds."""
+    type_ = kw.pop("type", "note")
+    return db.insert_memory(conn, type=type_, content=shaped(type_, content), **kw)
 
 
 def _mk_diagram(conn):

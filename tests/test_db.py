@@ -2,6 +2,7 @@ import sqlite3
 
 import pytest
 
+from conftest import shaped
 from memai import db
 
 
@@ -64,8 +65,12 @@ def test_forget_is_soft_delete(conn):
 
 
 def test_pulse_picks_latest_checkpoint_by_recency_not_similarity(conn):
-    old_uid = db.insert_memory(conn, type="checkpoint", content="old checkpoint about widgets", domain="dom")
-    new_uid = db.insert_memory(conn, type="checkpoint", content="totally different topic", domain="dom")
+    old_uid = db.insert_memory(conn, type="checkpoint",
+                               content=shaped("checkpoint", "old checkpoint about widgets"),
+                               domain="dom")
+    new_uid = db.insert_memory(conn, type="checkpoint",
+                               content=shaped("checkpoint", "totally different topic"),
+                               domain="dom")
     # force distinguishable created_at ordering
     conn.execute("UPDATE memories SET created_at = '2020-01-01' WHERE uid = ?", (old_uid,))
     conn.execute("UPDATE memories SET created_at = '2030-01-01' WHERE uid = ?", (new_uid,))
