@@ -110,6 +110,22 @@ export const uidChip = uid =>
            title="${t('uid.copyTitle')}"
            aria-label="${esc(t('a11y.copyUid', { uid }))}">${esc(uid)}</button>`;
 
+/* A field's name in the reader's language. The label the server sends is the
+   one WRITTEN IN THE BODY -- the parser's anchor, what FTS indexes, what the
+   tool composes -- so it stays English wherever it is stored, and only its
+   name on screen is translated. A field with no entry yet falls back to that
+   label rather than to a bare key, and the stored spelling rides along in the
+   title so the pane and the raw body stay recognisably the same field. */
+export const sectionLabel = (type, section) => {
+  const key = `sec.${type}.${section.key}`;
+  const named = t(key);
+  return named === key ? section.label : named;
+};
+
+export const sectionLabelHTML = (type, section) =>
+  `<span class="sec-label-text" title="${esc(section.label)}">`
+  + `${esc(sectionLabel(type, section))}</span>`;
+
 /* ─── the two closed vocabularies, as picker rows ────────────────────────
    A type and a confidence are identified everywhere else in this UI by a
    mark -- a coloured dot, a ringed glyph -- and a native <option> could
