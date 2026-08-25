@@ -21,6 +21,8 @@
    button that fails when pressed. */
 
 import { esc } from './dom.js';
+import { icon } from './icons.js';
+import { t } from '../i18n.js';
 
 const UID = /^[0-9a-f]{16}$/;
 
@@ -31,6 +33,7 @@ const isPipeRow = ln => {
   const t = ln.trim();
   return t.startsWith('|') && t.endsWith('|') && t.length > 2;
 };
+const FENCE = /^\s*```([A-Za-z0-9_+#-]*)\s*$/;
 const SEPARATOR = /^\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?$/;
 const HEADING = /^\s*={2,}\s+(.+?)\s+={2,}\s*$/;
 const ITEM = /^(\s*)([-*]|\d+[.)])\s+(.*)$/;
@@ -178,6 +181,33 @@ export function renderRich(body, links) {
   while (i < lines.length) {
     const line = lines[i];
 
+    /* A fenced block is verbatim: nothing inside it is markup, which is the
+       point of fencing it. An opening fence with no closing one runs to the
+       end of the body rather than showing its own backticks -- what the
+       writer meant is plain either way. */
+    const fence = FENCE.exec(line);
+    if (fence) {
+      flush();
+      const body = [];
+      i += 1;
+      while (i < lines.length && !FENCE.test(lines[i])) { body.push(lines[i]); i += 1; }
+      i += 1;   // past the closing fence, or past the end
+      const lang = fence[1].toLowerCase();
+      /* The language sits in a bar of its own rather than over the code: as
+         generated content on the <pre> it overlapped the first line, and a
+         block wide enough to scroll slid under it. The bar earns its height
+         anyway -- it is where the copy button goes. */
+      out.push(`<div class="rt-code-block">`
+        + `<div class="rt-code-head">`
+        + `<span class="rt-code-lang">${esc(lang)}</span>`
+        + `<button type="button" class="rt-code-copy" data-copy-code`
+        + ` title="${esc(t('rt.copy'))}" aria-label="${esc(t('rt.copy'))}">`
+        + `${icon('copy')}</button></div>`
+        + `<pre class="rt-code"><code${lang ? ` data-lang="${esc(lang)}"` : ''}>`
+        + `${esc(body.join('\n'))}</code></pre></div>`);
+      continue;
+    }
+
     if (!line.trim()) { flush(); i += 1; continue; }
 
     const heading = HEADING.exec(line);
@@ -214,8 +244,14 @@ export function renderRich(body, links) {
   return out.join('');
 }
 
-/* Wire every [[uid]] button inside `root` to whatever opens a record. */
-export function wireRichLinks(root, open) {
+/* Make what was drawn work: every [[uid]] opens its record, every code block
+   copies. `copy` takes the block's text -- core/ui.js owns the clipboard and
+   what to say when there is none. */
+export function wireRich(root, { open, copy }) {
   root.querySelectorAll('.rt-link').forEach(
     b => b.addEventListener('click', e => { e.stopPropagation(); open(b.dataset.uid); }));
+  root.querySelectorAll('[data-copy-code]').forEach(b => b.addEventListener('click', e => {
+    e.stopPropagation();
+    copy(b.closest('.rt-code-block').querySelector('code').textContent);
+  }));
 }

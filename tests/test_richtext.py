@@ -179,3 +179,96 @@ def test_nothing_from_a_body_reaches_the_page_as_markup(drawn, case):
 
 def test_an_empty_body_draws_nothing(drawn):
     assert drawn["empty"] == ""
+
+
+# ------------------------------------------------------------ fenced blocks
+
+def test_a_fence_becomes_a_code_block_naming_its_language(drawn):
+    assert '<span class="rt-code-lang">powershell</span>' in drawn["fenced"]
+    assert '<code data-lang="powershell">' in drawn["fenced"]
+
+
+def test_the_language_sits_in_a_bar_of_its_own(drawn):
+    """Drawn over the <pre> it covered the first line, and a block wide
+    enough to scroll slid its own text under the label."""
+    head = drawn["fenced"].index('rt-code-head')
+    assert head < drawn["fenced"].index('<pre class="rt-code">')
+
+
+def test_every_code_block_offers_to_copy_itself(drawn):
+    for case in ("fenced", "fenced_no_language", "fenced_unclosed"):
+        assert "data-copy-code" in drawn[case]
+
+
+def test_a_fence_with_no_language_is_still_a_code_block(drawn):
+    assert '<pre class="rt-code">' in drawn["fenced_no_language"]
+    assert "data-lang" not in drawn["fenced_no_language"]
+
+
+def test_nothing_inside_a_fence_is_markup(drawn):
+    """Fencing it is how a writer says the contents are not prose."""
+    out = drawn["fenced_holds_its_markup"]
+    assert "<strong>" not in out and "rt-link" not in out
+    assert "`code` span and **bold** and [[1111111111111111]]" in out
+
+
+def test_a_fence_keeps_its_blank_lines(drawn):
+    assert "one\n\ntwo" in drawn["fenced_keeps_blank_lines"]
+
+
+def test_a_fence_nobody_closed_runs_to_the_end(drawn):
+    assert "print(1)\nprint(2)" in drawn["fenced_unclosed"]
+    assert "```" not in drawn["fenced_unclosed"]
+
+
+def test_a_fence_escapes_what_is_inside_it(drawn):
+    assert "&lt;b&gt;&amp;amp;&lt;/b&gt;" in drawn["fenced_escapes"]
+
+
+def test_prose_after_a_fence_is_prose_again(drawn):
+    assert drawn["text_after_fence"].endswith('<p class="rt-p">back to prose</p>')
+
+
+# ------------------------------------------------- the vendored highlighter
+
+CSS = ROOT / "src" / "memai" / "webui" / "admin.css"
+HIGHLIGHT_CASES = ROOT / "tools" / "highlight-cases.mjs"
+
+# Scopes left to inherit the block's colour on purpose: containers that wrap
+# the parts that ARE coloured, and punctuation, which reads as noise in five
+# colours and as code in one.
+INHERITS = {"hljs-function", "hljs-params", "hljs-punctuation", "hljs-operator",
+            "hljs-property", "hljs-tag"}
+
+
+@pytest.fixture(scope="module")
+def coloured() -> dict:
+    out = subprocess.run(["node", str(HIGHLIGHT_CASES)], cwd=ROOT, capture_output=True,
+                         text=True, encoding="utf-8", timeout=60)
+    assert out.returncode == 0, out.stderr
+    return json.loads(out.stdout)
+
+
+def test_every_vendored_grammar_loads_and_colours(coloured):
+    assert coloured["failed"] == []
+    assert set(coloured["coloured"]) == set(coloured["shipped"])
+
+
+def test_colouring_a_snippet_changes_no_character_of_it(coloured):
+    """The block is already on screen when the grammar arrives; a highlighter
+    that edited the text would be rewriting a memory to look at it."""
+    for language, result in coloured["coloured"].items():
+        assert result["intact"], f"{language} altered its snippet"
+
+
+def test_the_dashboard_styles_every_scope_the_grammars_emit(coloured):
+    css = CSS.read_text(encoding="utf-8")
+    emitted = {scope for r in coloured["coloured"].values() for scope in r["scopes"]}
+    unstyled = {s for s in emitted - INHERITS if f".{s}" not in css}
+    assert not unstyled, f"no colour for {sorted(unstyled)} -- style it or list it in INHERITS"
+
+
+def test_the_vendored_tree_carries_its_licence():
+    vendor = ROOT / "src" / "memai" / "webui" / "vendor" / "highlight"
+    assert (vendor / "LICENSE").read_text(encoding="utf-8").startswith("BSD 3-Clause")
+    assert (vendor / "core.min.js").exists()

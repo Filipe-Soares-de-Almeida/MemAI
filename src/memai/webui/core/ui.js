@@ -218,14 +218,18 @@ export function tipHide() {
   tipBox = null;
 }
 
-export function copyUid(uid) {
+export function copyText(text, message) {
   /* no clipboard access (a non-secure origin other than loopback, or a
      browser that withholds it) has to say so rather than do nothing */
   if (!navigator.clipboard) { toast(t('toast.copyUnavailable'), 'bad'); return; }
-  navigator.clipboard.writeText(uid)
-    .then(() => toast(t('toast.uidCopied', { uid }), 'ok'))
+  navigator.clipboard.writeText(text)
+    .then(() => toast(message, 'ok'))
     .catch(() => toast(t('toast.copyUnavailable'), 'bad'));
 }
+
+export const copyUid = uid => copyText(uid, t('toast.uidCopied', { uid }));
+
+export const copyCode = text => copyText(text, t('toast.codeCopied'));
 
 /* ─── toggle state ────────────────────────────────────────────────────
    A control that stays pressed says so in the accessibility tree too. The

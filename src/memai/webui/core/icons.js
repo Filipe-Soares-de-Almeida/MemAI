@@ -175,6 +175,19 @@ const ICONS = {
   },
 
   /* paging, where a full arrow reads as heavier than the step it takes */
+  /* two sheets, the front one offset -- the shape everything uses for copy */
+  copy: {
+    viewBox: '0 0 16 16',
+    body: `<rect x="5.5" y="5.5" width="8" height="8" rx="1.5" fill="none"
+                 stroke="currentColor" stroke-width="1.3"/>
+           <path d="M10.5 3.2A1.7 1.7 0 0 0 8.8 2H4.2A2.2 2.2 0 0 0 2 4.2v4.6A1.7 1.7 0 0 0 3.2 10.5"
+                 fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>`,
+  },
+  check: {
+    viewBox: '0 0 16 16',
+    body: `<path d="M3 8.4l3.2 3.2L13 4.8" fill="none" stroke="currentColor"
+                 stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>`,
+  },
   'chevron-left': {
     viewBox: '0 0 16 16',
     body: `<path d="M10 3.2L5.2 8l4.8 4.8"/>`,

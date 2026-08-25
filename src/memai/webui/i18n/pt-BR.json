@@ -82,6 +82,8 @@
     "dr.dialogAria": "Registro da memória",
     "uid.copyTitle": "Copiar uid",
     "toast.uidCopied": "UID {uid} copiado",
+    "rt.copy": "Copiar este bloco",
+    "toast.codeCopied": "Código copiado",
     "ov.title": "Visão geral",
     "ov.model": "Modelo",
     "ov.tile.active": "Memórias ativas",

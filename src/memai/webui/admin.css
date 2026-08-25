@@ -1363,6 +1363,67 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
   margin: 0 0 var(--sp-3);
 }
 
+/* A fenced block: a bar that names the language and copies it, over code that
+   does NOT wrap -- what lines up in code is meant to line up, so it scrolls
+   sideways instead. The bar is a row of its own rather than something drawn
+   over the <pre>: laid on top it covered the first line, and a block wide
+   enough to scroll slid its own text underneath the label. */
+.rt-code-block {
+  background: var(--bg); border: 1px solid var(--line-soft);
+  border-radius: var(--r-md);
+  margin: 0 0 var(--sp-3);
+  overflow: hidden;
+}
+.rt-code-head {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: var(--sp-2);
+  padding: var(--sp-1) var(--sp-2) var(--sp-1) var(--sp-4);
+  border-bottom: 1px solid var(--line-soft);
+  background: var(--inset);
+}
+.rt-code-lang {
+  font: 500 var(--fs-label) var(--font-m);
+  letter-spacing: .06em; text-transform: uppercase;
+  color: var(--ink-3);
+}
+.rt-code-copy {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 26px; height: 26px; flex: none;
+  background: none; border: none; border-radius: var(--r-sm);
+  color: var(--ink-3); cursor: pointer;
+}
+.rt-code-copy svg { width: 15px; height: 15px; }
+.rt-code-copy:hover { background: var(--chip-fill); color: var(--ink); }
+
+.rt-code {
+  font: 400 var(--fs-sm)/1.6 var(--font-m);
+  padding: var(--sp-3) var(--sp-4);
+  margin: 0;
+  white-space: pre; overflow-x: auto;
+  background: none; border: none; border-radius: 0;
+}
+.rt-code code {
+  background: none; border: none; padding: 0;
+  font: inherit; color: var(--ink);
+}
+
+/* The token palette is this dashboard's, not a theme shipped with the
+   engine: a code block should read as part of the page. Five roles, which is
+   as many as the eye separates at this size. */
+.rt-code .hljs-comment, .rt-code .hljs-quote { color: var(--ink-3); font-style: italic; }
+.rt-code .hljs-string, .rt-code .hljs-addition, .rt-code .hljs-regexp,
+.rt-code .hljs-doctag { color: var(--ok); }
+.rt-code .hljs-number, .rt-code .hljs-literal, .rt-code .hljs-symbol,
+.rt-code .hljs-bullet { color: var(--warn); }
+.rt-code .hljs-keyword, .rt-code .hljs-built_in, .rt-code .hljs-type,
+.rt-code .hljs-meta, .rt-code .hljs-selector-tag { color: var(--accent); }
+.rt-code .hljs-title, .rt-code .hljs-name, .rt-code .hljs-attr,
+.rt-code .hljs-attribute, .rt-code .hljs-section,
+.rt-code .hljs-variable, .rt-code .hljs-template-variable { color: var(--accent-hi); }
+.rt-code .hljs-deletion { color: var(--bad); }
+.rt-code .hljs-emphasis { font-style: italic; }
+.rt-code .hljs-strong { font-weight: 600; }
+
 .rt-table-wrap { overflow-x: auto; margin: 0 0 var(--sp-3); }
 .rt-table { border-collapse: collapse; font-size: var(--fs-sm); }
 .rt-table th, .rt-table td {

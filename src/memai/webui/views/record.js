@@ -22,14 +22,16 @@
 import { esc, fmtDate, fmtInt } from '../core/dom.js';
 import { api, seg } from '../core/api.js';
 import { icon } from '../core/icons.js';
-import { toast, failed, openModal, closeModal, confirmModal, promptModal } from '../core/ui.js';
+import { toast, failed, openModal, closeModal, confirmModal, promptModal,
+         copyCode } from '../core/ui.js';
 import { typeTag, typeClass, confPill, uidChip, statusTag, wireCopyChips,
          failedHTML, CONF, REL_SUGGEST, typeItems, sectionLabel, sectionLabelHTML,
          cachedDomains, invalidateDomains, domainDatalist } from '../core/shared.js';
 import { pickerFor, pickerValue, wirePicker, fixedItems } from '../core/pick.js';
 import { pickMemories } from '../core/link-picker.js';
 import { go, refreshBehind } from '../core/router.js';
-import { renderRich, wireRichLinks } from '../core/richtext.js';
+import { renderRich, wireRich } from '../core/richtext.js';
+import { highlightIn } from '../core/highlight.js';
 import { t } from '../i18n.js';
 
 /* The record's own scrim while it is open, so a re-render can write into
@@ -456,7 +458,9 @@ export async function openRecord(uid) {
   if (reopening && keepScroll) rec.querySelector('.modal-body').scrollTop = keepScroll;
 
   wireCopyChips(rec);
-  wireRichLinks(rec, openRecord);
+  wireRich(rec, { open: openRecord, copy: copyCode });
+  /* the text is on screen already; colour arrives when the grammar does */
+  highlightIn(rec).catch(() => {});
   dq('#dClose').addEventListener('click', closeRecord);
   /* Drops the step being left rather than pushing another one, so walking
      three links deep and back leaves the trail where it started instead of
