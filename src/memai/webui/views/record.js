@@ -242,6 +242,25 @@ export async function openRecord(uid) {
   const isDiagram = m.type === 'diagram';
   const refs = m.referenced_by_diagrams || [];
 
+  /* A checkpoint and an anti-pattern are written field by field. `spec` is
+     what the type should hold and `sections` what was read out of the body,
+     so a field that never arrived shows as itself rather than as a gap. A
+     body the parser could not read at all keeps its <pre>: the fields would
+     be empty and the text is the only copy of what it says. */
+  const spec = m.spec || [];
+  const isSectioned = spec.length > 0;
+  const sectionText = Object.fromEntries((m.sections || []).map(s => [s.key, s.text]));
+  const sectionPanes = () => spec.map(s => `
+    <div class="sec-field">
+      <div class="sec-label">${esc(s.label)}</div>
+      ${s.key in sectionText
+        ? `<pre class="content-pre content-prose sec-text">${esc(sectionText[s.key])}</pre>`
+        : `<div class="sec-absent">${t('dr.sections.missing')}</div>`}
+    </div>`).join('');
+  const sectionEditors = () => spec.map(s => `
+    <label class="sec-edit"><span class="sec-label">${esc(s.label)}</span>
+      <textarea id="dSec-${esc(s.key)}" rows="4" aria-label="${esc(s.label)}"></textarea></label>`).join('');
+
   const rels = m.relations.map(r => `
     <div class="rel-row">
       <span class="rel-dir" title="${r.direction === 'out' ? t('dr.rel.out.title') : t('dr.rel.in.title')}">${icon(r.direction === 'out' ? 'arrow-right' : 'arrow-left')}</span>
@@ -311,12 +330,18 @@ export async function openRecord(uid) {
             ? `<button class="btn btn-sm btn-solid" id="dOpenEditor">${t('dr.openEditor')}</button>`
             : `<button type="button" class="btn btn-sm" id="dEdit" aria-expanded="false" aria-controls="dEditBox">${t('common.edit')}</button>`}
         </div>
-        <pre class="content-pre${isDiagram ? '' : ' content-prose'}" id="dContent">${esc(m.content)}</pre>
+        ${m.section_problem
+          ? `<div class="sec-problem">${t('dr.sections.problem',
+               { detail: esc(m.section_problem) })}</div>`
+          : ''}
+        ${isSectioned && !m.section_problem ? sectionPanes() : `
+        <pre class="content-pre${isDiagram ? '' : ' content-prose'}" id="dContent">${esc(m.content)}</pre>`}
         ${isDiagram ? `<div class="dg-empty" style="margin-top:8px">${t('dr.generated')}</div>` : `
         <div id="dEditBox" hidden style="display:grid;gap:9px;margin-top:10px">
           <!-- a placeholder is a hint, not a name: it is gone the moment
                anything is typed, and it is never announced as a label -->
-          <textarea id="dEditText" rows="10" aria-label="${t('dr.content')}"></textarea>
+          ${isSectioned ? sectionEditors() : `
+          <textarea id="dEditText" rows="10" aria-label="${t('dr.content')}"></textarea>`}
           <input type="text" id="dEditNote" placeholder="${t('dr.editNote.placeholder')}"
                  aria-label="${t('dr.editNote.placeholder')}">
           <div class="act-row">
@@ -453,13 +478,29 @@ export async function openRecord(uid) {
     editBtn.addEventListener('click', () => {
       const opening = dq('#dEditBox').hidden;
       syncEdit(opening);
-      if (opening) { dq('#dEditText').value = m.content; dq('#dEditText').focus(); }
+      if (!opening) return;
+      if (isSectioned) {
+        /* seeded from what was read, which for a body the parser could not
+           read is nothing -- the <pre> above is still on screen to copy from */
+        spec.forEach(s => { dq(`#dSec-${s.key}`).value = sectionText[s.key] || ''; });
+        dq(`#dSec-${spec[0].key}`).focus();
+      } else {
+        dq('#dEditText').value = m.content;
+        dq('#dEditText').focus();
+      }
     });
     dq('#dEditCancel').addEventListener('click', () => { syncEdit(false); editBtn.focus(); });
     dq('#dEditSave').addEventListener('click', async () => {
+      /* a sectioned body is built from its fields rather than typed, so the
+         server can hold it to the shape its type is supposed to have */
+      const [path, body] = isSectioned
+        ? [`/api/memories/${seg(uid)}/sections`,
+           { sections: Object.fromEntries(spec.map(s => [s.key, dq(`#dSec-${s.key}`).value])),
+             note: dq('#dEditNote').value }]
+        : [`/api/memories/${seg(uid)}/content`,
+           { content: dq('#dEditText').value, note: dq('#dEditNote').value }];
       try {
-        await api(`/api/memories/${seg(uid)}/content`, {
-          body: { content: dq('#dEditText').value, note: dq('#dEditNote').value } });
+        await api(path, { body });
         toast(t('dr.contentUpdated'), 'ok');
         openRecord(uid); refreshBehind();
       } catch (err) { failed('err.save', err); }

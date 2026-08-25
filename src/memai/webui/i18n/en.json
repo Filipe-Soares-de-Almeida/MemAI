@@ -489,6 +489,8 @@
     "dr.openEditor": "Open editor",
     "dr.generated": "Generated from the graph — edit the flow on the canvas, not this text.",
     "dr.inDiagrams": "Referenced by flows",
+    "dr.sections.problem": "This body does not read into the fields its type is made of: {detail}",
+    "dr.sections.missing": "not read from the body",
     "dg.noUid": "No diagram selected",
     "dg.notDiagram": "This memory is not a diagram",
     "dg.sub": "{n} steps · {m} connections · {l} linked memories · {j} jumps",

@@ -1,6 +1,9 @@
-/* The "+ New memory" dialog. A diagram is the odd one out: it is created
-   from a graph rather than from content, so the modal asks for a title and
-   seeds a start→end skeleton to grow on the canvas. */
+/* The "+ New memory" dialog. Two types are not written as one body: a
+   diagram is created from a graph, so the modal asks for a title and seeds a
+   start→end skeleton to grow on the canvas; a checkpoint and an anti-pattern
+   are created from the fields their type is made of, and the server renders
+   the body. The fields come from /api/config rather than from a list here,
+   so a label lives in one place. */
 
 import { esc } from '../core/dom.js';
 import { api } from '../core/api.js';
@@ -15,6 +18,7 @@ import { t } from '../i18n.js';
 
 export async function openNewMemory() {
   const domains = await getDomains().catch(() => []);
+  const spec = await api('/api/config').then(c => c.sections || {}).catch(() => ({}));
   const types = typeItems();
   const confs = confItems();
   const modal = openModal({
@@ -36,6 +40,7 @@ export async function openNewMemory() {
         <input type="text" id="nmTags" placeholder="${t('nm.tagsPh')}"></div>
       <div class="field" id="nmContentField"><label for="nmContent">${t('nm.content')}</label>
         <textarea id="nmContent" rows="7" placeholder="${t('nm.contentPh')}"></textarea></div>
+      <div id="nmSectionFields" hidden></div>
       <div class="field" id="nmTitleField" hidden><label for="nmTitle">${t('dg.meta.name')}</label>
         <input type="text" id="nmTitle" placeholder="${t('nm.titlePh')}">
         <div class="dg-empty" style="margin-top:7px">${t('nm.diagramHint')}</div></div>`,
@@ -44,9 +49,15 @@ export async function openNewMemory() {
   const mq = s => modal.querySelector(s);
 
   const isDiagram = () => pickerValue(modal, 'nmType') === 'diagram';
+  const fieldsFor = () => spec[pickerValue(modal, 'nmType')] || [];
   const sync = () => {
-    mq('#nmContentField').hidden = isDiagram();
+    const fields = fieldsFor();
+    mq('#nmContentField').hidden = isDiagram() || fields.length > 0;
     mq('#nmTitleField').hidden = !isDiagram();
+    mq('#nmSectionFields').hidden = fields.length === 0;
+    mq('#nmSectionFields').innerHTML = fields.map(f => `
+      <div class="field"><label for="nmSec-${esc(f.key)}">${esc(f.label)}</label>
+        <textarea id="nmSec-${esc(f.key)}" rows="4"></textarea></div>`).join('');
     /* a diagram's content is its graph, so it is created unverified and the
        control says so by being unreachable rather than by being ignored */
     mq('#nmConf').disabled = isDiagram();
@@ -70,10 +81,15 @@ export async function openNewMemory() {
         go('diagram', { uid: r.uid });
         return;
       }
+      const fields = fieldsFor();
       const r = await api('/api/memories', { body: {
         type: pickerValue(modal, 'nmType'), confidence: pickerValue(modal, 'nmConf'),
         domain: mq('#nmDomain').value, also: mq('#nmAlso').value,
-        tags: mq('#nmTags').value, content: mq('#nmContent').value } });
+        tags: mq('#nmTags').value,
+        ...(fields.length
+          ? { sections: Object.fromEntries(
+                fields.map(f => [f.key, mq(`#nmSec-${f.key}`).value])) }
+          : { content: mq('#nmContent').value }) } });
       closeModal();
       toast(t('nm.created', { uid: r.uid }), 'ok');
       invalidateDomains();

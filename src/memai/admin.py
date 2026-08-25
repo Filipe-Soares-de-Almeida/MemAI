@@ -47,7 +47,7 @@ from starlette.responses import FileResponse, JSONResponse, Response
 from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 
-from memai import __version__, autostart, db, embed
+from memai import __version__, autostart, db, embed, sections
 
 # Windows' registry-derived mimetypes map serves .js as text/plain, which
 # browsers refuse to execute as an ES module. Force the correct types.
@@ -340,6 +340,13 @@ def memory_detail(request, payload) -> dict:
         result["recalls"] = usage["recalls"] if usage else 0
         result["last_recall"] = usage["last_recall"] if usage else None
         result["edit_history"] = [dict(e) for e in db.get_edit_history(conn, uid)]
+        # `spec` is what the type is SUPPOSED to hold and `sections` what was
+        # read out of the body, so a view can show a field that came out
+        # missing instead of leaving a gap where it should be
+        result["spec"] = [{"key": s.key, "label": s.label}
+                          for s in sections.spec_for(row["type"])]
+        result["sections"] = db.get_sections(conn, uid)
+        result["section_problem"] = db.section_problem(conn, uid)
         rels = []
         for r in db.get_relations(conn, uid):
             other = r["to_uid"] if r["from_uid"] == uid else r["from_uid"]
@@ -372,6 +379,16 @@ def create_memory(request, payload) -> dict:
         # a diagram row with no graph behind it is a broken half-state: its
         # content is generated, so there would be nothing to generate from
         raise ValueError("create a diagram through POST /api/diagrams -- it needs a graph")
+    if sections.is_sectioned(type_):
+        # built from the fields rather than typed, so what lands conforms
+        given = payload.get("sections")
+        if not isinstance(given, dict):
+            raise ValueError(f"a {type_} is created from its sections, not from content")
+        empty = [s.label for s in sections.spec_for(type_)
+                 if not str(given.get(s.key, "")).strip()]
+        if empty:
+            raise ValueError(f"nothing under {', '.join(empty)}")
+        content = sections.render(type_, {k: str(v) for k, v in given.items()})
     if not content:
         raise ValueError("content is required")
     if confidence not in CONFIDENCES:
@@ -1071,9 +1088,17 @@ def normalize_domains(request, payload) -> dict:
 # ------------------------------------------------------------------ config
 
 def get_config(request, payload) -> dict:
+    """Settings, plus the section spec the forms build their fields from.
+
+    The spec is served rather than spelled in the UI: a label written in
+    both places is a body the store would read into fields the form never
+    offered.
+    """
     with db.connect() as conn:
         return {"domain_case": db.get_domain_case(conn),
-                "svg_retention": db.get_svg_retention(conn)}
+                "svg_retention": db.get_svg_retention(conn),
+                "sections": {type_: [{"key": s.key, "label": s.label} for s in spec]
+                             for type_, spec in sections.SECTION_SPEC.items()}}
 
 
 def set_config(request, payload) -> dict:
