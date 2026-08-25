@@ -790,6 +790,29 @@ def sections_migrated(conn: sqlite3.Connection) -> bool:
     return _get_meta(conn, SECTIONS_MIGRATED_KEY) == "1"
 
 
+def section_error(conn: sqlite3.Connection, type: str, content: str) -> str | None:
+    """Why this body cannot be written as this type, or None.
+
+    Silent until the store has been read: while the migration is still
+    pending, a body that does not conform is queued rather than refused,
+    because the store is full of them and refusing would lock the rows a
+    human still has to look at.
+    """
+    if not sections.is_sectioned(type) or not sections_migrated(conn):
+        return None
+    problems = sections.read(type, content).problems
+    if not problems:
+        return None
+    return (f"a {type} body is made of {', '.join(s.label for s in sections.spec_for(type))} "
+            f"and this one does not read that way: {'; '.join(problems)}")
+
+
+def _refuse_unreadable(conn: sqlite3.Connection, type: str, content: str) -> None:
+    error = section_error(conn, type, content)
+    if error:
+        raise ValueError(error)
+
+
 def _write_sections(conn: sqlite3.Connection, uid: str, type: str, content: str) -> None:
     """Read a body into its fields, replacing whatever was stored for it.
 
@@ -1011,6 +1034,7 @@ def insert_memory(
     review_after: str = "",
     source_ref: str = "",
 ) -> str:
+    _refuse_unreadable(conn, type, content)
     uid = new_uid()
     ts = created_at or now_iso()
     domain = apply_domain_policy(conn, domain)
@@ -1158,6 +1182,7 @@ def update_memory_content(
         return False
     if append:
         new_content = f"{row['content']}\n{new_content}" if row["content"] else new_content
+    _refuse_unreadable(conn, row["type"], new_content)
     conn.execute(
         "INSERT INTO edits (memory_uid, edited_at, prev_content, new_content, note) VALUES (?, ?, ?, ?, ?)",
         (uid, now_iso(), row["content"], new_content, note),
@@ -4264,6 +4289,13 @@ def _validate_suggestion(conn: sqlite3.Connection, s: object) -> tuple[dict | No
             return None, err
         if not str(payload.get("new_content", "")).strip():
             return None, "payload.new_content required"
+        # caught here rather than on apply: a rewrite that would not read
+        # back into its type's fields never reaches the queue a human works
+        # through, so nothing in that queue is waiting to fail
+        row = get_memory(conn, target_uid)
+        err = section_error(conn, row["type"], str(payload["new_content"]))
+        if err:
+            return None, err
     elif kind == "retag":
         err = target_err()
         if err:
@@ -4380,6 +4412,11 @@ def _validate_suggestion(conn: sqlite3.Connection, s: object) -> tuple[dict | No
             return None, f"payload.new_type must be one of {DISTILL_TYPES}"
         if not str(payload.get("new_content", "")).strip():
             return None, "payload.new_content required"
+        # anti_pattern is a distill target and is made of fields, so the body
+        # a distill writes has to read back the same way any other one does
+        err = section_error(conn, str(payload["new_type"]), str(payload["new_content"]))
+        if err:
+            return None, err
         if not verified:
             return None, VERIFIED_REQUIRED[kind]
         payload = {**payload, "source_uids": sources}

@@ -456,6 +456,12 @@ def edit_meta(request, payload) -> dict:
             # retyping away from 'diagram' orphans the graph; retyping into
             # it claims a generated content field with nothing generating it
             raise ValueError("a diagram's type cannot be changed")
+        if "type" in updates:
+            # only on the way IN: leaving a type that has fields just drops
+            # a cache, but claiming one means the body has to read that way
+            error = db.section_error(conn, updates["type"], row["content"])
+            if error:
+                raise ValueError(error)
         if "domain" in updates:
             updates["domain"] = db.apply_domain_policy(conn, updates["domain"])
         changed = {k: v for k, v in updates.items() if v != row[k]}

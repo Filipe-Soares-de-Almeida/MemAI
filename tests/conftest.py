@@ -12,7 +12,7 @@ import struct
 
 import pytest
 
-from memai import embed
+from memai import db, embed, sections
 
 # Controlled vocabulary -> vector index. No hashing, no collisions:
 # each known word gets its own dimension, unknown words are ignored.
@@ -53,3 +53,28 @@ def fake_embedder(monkeypatch):
     monkeypatch.setattr(embed, "embed_texts", make_fake_embed(FAKE_DIM))
     monkeypatch.setattr(embed, "model_name", lambda: f"fake-model-{FAKE_DIM}d")
     return FAKE_DIM
+
+
+def shaped(type_: str, text: str) -> str:
+    """A body of `type_` that reads back into its fields, carrying `text`.
+
+    For a test that needs a memory of some type and does not care what it
+    says. `text` goes under the first field; the rest carry the same filler
+    everywhere, so it is present in every document and distinguishes none of
+    them -- no lexical weight, and none of its words are in the fake
+    embedder's vocabulary either.
+    """
+    spec = sections.spec_for(type_)
+    if not spec:
+        return text
+    return sections.render(
+        type_, {s.key: text if i == 0 else "nothing to add" for i, s in enumerate(spec)})
+
+
+def unmigrated(conn) -> None:
+    """Put the store back in the state it is in before it has been read.
+
+    Writes are queued rather than refused while this holds, which is how a
+    body that predates the spec gets into a store at all.
+    """
+    conn.execute("DELETE FROM meta WHERE key = ?", (db.SECTIONS_MIGRATED_KEY,))

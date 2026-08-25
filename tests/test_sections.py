@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import pytest
 
+from conftest import unmigrated
 from memai import db, guard, sections, server
 
 CHECKPOINT = (
@@ -118,7 +119,8 @@ def test_rewriting_the_body_rewrites_the_rows(conn):
     assert sections_of(conn, uid)["pursuing"] == "nothing, the queue is empty"
 
 
-def test_a_body_that_stops_conforming_is_queued_not_refused(conn):
+def test_a_body_that_stops_conforming_is_queued_while_the_store_is_unread(conn):
+    unmigrated(conn)
     uid = db.insert_memory(conn, type="checkpoint", content=CHECKPOINT, domain="acme/x100")
     assert db.update_memory_content(conn, uid, "just prose now") is True
     assert db.get_memory(conn, uid)["content"] == "just prose now"
@@ -127,6 +129,7 @@ def test_a_body_that_stops_conforming_is_queued_not_refused(conn):
 
 
 def test_a_body_that_starts_conforming_leaves_the_queue(conn):
+    unmigrated(conn)
     uid = db.insert_memory(conn, type="checkpoint", content="just prose", domain="acme")
     assert uid in queued(conn)
     db.update_memory_content(conn, uid, CHECKPOINT)
@@ -135,6 +138,7 @@ def test_a_body_that_starts_conforming_leaves_the_queue(conn):
 
 
 def test_an_empty_field_is_queued_and_the_others_still_read(conn):
+    unmigrated(conn)
     uid = db.insert_memory(
         conn, type="anti_pattern", domain="acme/x100",
         content=ANTI_PATTERN.replace(
@@ -150,7 +154,7 @@ def test_restoring_a_memory_fills_its_sections(conn):
 
 
 def test_purging_a_memory_takes_its_sections_with_it(conn):
-    uid = db.insert_memory(conn, type="checkpoint", content="just prose", domain="acme")
+    uid = db.insert_memory(conn, type="checkpoint", content=CHECKPOINT, domain="acme")
     assert db.purge_memory(conn, uid) is True
     assert db.get_sections(conn, uid) == []
     assert queued(conn) == {}
@@ -197,10 +201,10 @@ LEGACY_ANTI_PATTERN = "DOMAIN: acme-x100-queue-drain\n" + ANTI_PATTERN
 
 def unread(conn, uid, content):
     """Put a body in the store the way it stood before anything read it."""
+    unmigrated(conn)
     conn.execute("UPDATE memories SET content = ? WHERE uid = ?", (content, uid))
     conn.execute("DELETE FROM memory_sections WHERE memory_uid = ?", (uid,))
     conn.execute("DELETE FROM section_migration WHERE memory_uid = ?", (uid,))
-    conn.execute("DELETE FROM meta WHERE key = ?", (db.SECTIONS_MIGRATED_KEY,))
 
 
 def test_salvage_forgives_a_preamble_and_nothing_else():
@@ -265,6 +269,7 @@ def test_the_migration_marks_the_store_read(conn):
 
 
 def test_the_queue_says_what_stops_each_body(conn):
+    unmigrated(conn)
     uid = db.insert_memory(conn, type="checkpoint", content="just prose", domain="acme/x100")
     entry = next(e for e in db.section_queue(conn) if e["uid"] == uid)
     assert entry["type"] == "checkpoint" and entry["domain"] == "acme/x100"
@@ -274,6 +279,7 @@ def test_the_queue_says_what_stops_each_body(conn):
 # ----------------------------------------------------- the way out of the queue
 
 def test_setting_the_fields_by_hand_builds_a_body_that_conforms(conn):
+    unmigrated(conn)
     uid = db.insert_memory(conn, type="checkpoint", content="just prose", domain="acme")
     assert uid in queued(conn)
 
@@ -308,6 +314,7 @@ def test_a_type_with_no_spec_has_no_fields_to_set(conn):
 
 
 def test_reclassifying_a_stuck_body_is_the_other_way_out(conn):
+    unmigrated(conn)
     uid = db.insert_memory(conn, type="checkpoint", content="a refutation", domain="acme")
     assert uid in queued(conn)
 
@@ -316,3 +323,79 @@ def test_reclassifying_a_stuck_body_is_the_other_way_out(conn):
 
     assert queued(conn) == {}
     assert db.get_sections(conn, uid) == []
+
+
+# ---------------------------------------------------- refusing what cannot be read
+
+def test_a_read_store_refuses_a_body_that_does_not_conform(conn):
+    with pytest.raises(ValueError, match="does not read that way"):
+        db.insert_memory(conn, type="checkpoint", content="just prose", domain="acme")
+
+
+def test_the_refusal_names_the_fields_the_type_holds(conn):
+    with pytest.raises(ValueError, match="INTENT, ESTABLISHED, PURSUING, OPEN QUESTIONS"):
+        db.insert_memory(conn, type="checkpoint", content="just prose", domain="acme")
+
+
+def test_a_rewrite_that_would_break_the_shape_is_refused(conn):
+    uid = db.insert_memory(conn, type="checkpoint", content=CHECKPOINT, domain="acme")
+    with pytest.raises(ValueError, match="nothing under PURSUING"):
+        db.update_memory_content(
+            conn, uid, CHECKPOINT.replace("PURSUING: the parked rows from the last run",
+                                          "PURSUING:"))
+    assert db.get_memory(conn, uid)["content"] == CHECKPOINT
+
+
+def test_a_type_with_no_spec_takes_any_body(conn):
+    uid = db.insert_memory(conn, type="note", content="the cache warms on boot", domain="acme")
+    assert db.update_memory_content(conn, uid, "anything at all") is True
+
+
+def test_an_unread_store_queues_instead_of_refusing(conn):
+    unmigrated(conn)
+    uid = db.insert_memory(conn, type="checkpoint", content="just prose", domain="acme")
+    assert uid in queued(conn)
+
+
+def test_a_restore_is_never_refused(conn):
+    """An import reproduces a store, legacy bodies and all; the migration is
+    what settles them afterwards."""
+    db.restore_memory(conn, {"uid": "b2c3d4e5f6071829", "type": "checkpoint",
+                             "content": "a body from before the spec", "domain": "acme"})
+    assert db.get_memory(conn, "b2c3d4e5f6071829") is not None
+    assert "b2c3d4e5f6071829" in queued(conn)
+
+
+# ---------------------------------------------------- the optimize suggestions
+
+def test_a_reword_that_would_break_the_shape_is_refused_at_staging(conn):
+    uid = db.insert_memory(conn, type="checkpoint", content=CHECKPOINT, domain="acme")
+    result = db.stage_optimization(conn, "tighten it", [
+        {"kind": "reword", "target_uid": uid,
+         "payload": {"new_content": "a much tighter body"}, "rationale": "shorter"}])
+    assert result["staged"] == 0 and result["run_id"] is None
+    assert "does not read that way" in result["errors"][0]["error"]
+
+
+def test_a_reword_that_keeps_the_shape_still_stages(conn):
+    uid = db.insert_memory(conn, type="checkpoint", content=CHECKPOINT, domain="acme")
+    tighter = sections.render("checkpoint", {
+        "intent": "drain the queue", "established": "the worker parks a row",
+        "pursuing": "the parked rows", "open_questions": "none"})
+    result = db.stage_optimization(conn, "tighten it", [
+        {"kind": "reword", "target_uid": uid,
+         "payload": {"new_content": tighter}, "rationale": "shorter"}])
+    assert result["staged"] == 1
+    db.apply_suggestion(conn, db.get_optimization_suggestions(conn, result["run_id"])[0]["id"])
+    assert sections_of(conn, uid)["open_questions"] == "none"
+
+
+def test_a_distill_into_a_sectioned_type_is_held_to_the_shape(conn):
+    src = db.insert_memory(conn, type="note", content="the drain stalls on a wide batch",
+                           domain="acme")
+    result = db.stage_optimization(conn, "distill it", [
+        {"kind": "distill", "verified": "checked against the worker log",
+         "payload": {"source_uids": [src], "new_type": "anti_pattern",
+                     "new_content": "widening the batch does not help"}}])
+    assert result["staged"] == 0
+    assert "TEMPTATION, WHY WRONG, INSTEAD" in result["errors"][0]["error"]
