@@ -27,7 +27,7 @@ from contextlib import contextmanager
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
-from memai import embed
+from memai import embed, sections
 
 # Eager import for the same reason as in embed.py: sqlite_vec pulls in
 # numpy, and importing that DLL lazily from inside a tool call deadlocks
@@ -147,6 +147,35 @@ CREATE TABLE IF NOT EXISTS memory_domains (
 );
 
 CREATE INDEX IF NOT EXISTS idx_memory_domains_domain ON memory_domains(domain);
+
+-- The named fields a body is made of, for the types memai.sections gives a
+-- spec (see SECTION_SPEC). One row per field, `seq` in spec order.
+--
+-- Read out of `memories.content`, which stays the record: the only writer
+-- here is _write_sections, and every writer of a body calls it with the
+-- body it just wrote. A query that edits these rows on their own moves the
+-- fields away from the text they were read from.
+CREATE TABLE IF NOT EXISTS memory_sections (
+    memory_uid  TEXT NOT NULL REFERENCES memories(uid),
+    seq         INTEGER NOT NULL,
+    key         TEXT NOT NULL,
+    text        TEXT NOT NULL,
+    PRIMARY KEY (memory_uid, key)
+);
+
+-- One row per body that has a spec and does not meet it. `detail` is what
+-- memai.sections.read said stops it; the dashboard lists these for a human.
+-- A body that conforms has no row, so this table is the queue and its
+-- emptiness is the store being clean.
+CREATE TABLE IF NOT EXISTS section_migration (
+    memory_uid  TEXT PRIMARY KEY REFERENCES memories(uid),
+    verdict     TEXT NOT NULL,          -- 'needs_review'
+    detail      TEXT NOT NULL DEFAULT '',
+    decided_at  TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_section_migration_verdict
+    ON section_migration(verdict);
 
 -- How often a memory was actually READ BACK, which is the only evidence
 -- that writing it was worth anything. A curation pass without this judges
@@ -733,6 +762,76 @@ def _ensure_fts(conn: sqlite3.Connection) -> None:
     conn.execute("INSERT INTO memories_fts(memories_fts) VALUES ('rebuild')")
 
 
+# Whether every body in this store has been read into memory_sections. Set
+# once the migration has run; the writers read it to decide whether a body
+# that does not conform is refused or merely queued.
+SECTIONS_MIGRATED_KEY = "sections_migrated"
+
+
+def _ensure_sections(conn: sqlite3.Connection) -> None:
+    """Mark a store that has nothing to migrate as migrated.
+
+    A store with no memory of a sectioned type -- a new one -- is already
+    in the state the migration produces. One that has them keeps the flag
+    unset until the migration runs.
+    """
+    if _get_meta(conn, SECTIONS_MIGRATED_KEY) is not None:
+        return
+    types = tuple(sections.SECTION_SPEC)
+    row = conn.execute(
+        f"SELECT 1 FROM memories WHERE type IN ({','.join('?' * len(types))}) LIMIT 1",
+        types,
+    ).fetchone()
+    if row is None:
+        _set_meta(conn, SECTIONS_MIGRATED_KEY, "1")
+
+
+def sections_migrated(conn: sqlite3.Connection) -> bool:
+    return _get_meta(conn, SECTIONS_MIGRATED_KEY) == "1"
+
+
+def _write_sections(conn: sqlite3.Connection, uid: str, type: str, content: str) -> None:
+    """Read a body into its fields, replacing whatever was stored for it.
+
+    The only writer of memory_sections and section_migration. Every writer
+    of `memories.content` calls it with the body it just wrote, so the rows
+    describe the text that is there now.
+
+    A type with no spec keeps no rows in either table. A body that does not
+    conform leaves a queue row saying what stops it, and whatever fields
+    could still be read.
+    """
+    conn.execute("DELETE FROM memory_sections WHERE memory_uid = ?", (uid,))
+    conn.execute("DELETE FROM section_migration WHERE memory_uid = ?", (uid,))
+    spec = sections.spec_for(type)
+    if not spec:
+        return
+    reading = sections.read(type, content)
+    seq = {s.key: i for i, s in enumerate(spec)}
+    if reading.sections:
+        conn.executemany(
+            "INSERT INTO memory_sections (memory_uid, seq, key, text) VALUES (?, ?, ?, ?)",
+            [(uid, seq[k], k, v) for k, v in reading.sections.items()],
+        )
+    if reading.problems:
+        conn.execute(
+            "INSERT INTO section_migration (memory_uid, verdict, detail, decided_at) "
+            "VALUES (?, 'needs_review', ?, ?)",
+            (uid, "; ".join(reading.problems), now_iso()),
+        )
+
+
+def get_sections(conn: sqlite3.Connection, uid: str) -> list[dict]:
+    """A memory's fields in spec order; empty for a type with no spec."""
+    return [
+        {"key": r["key"], "text": r["text"]}
+        for r in conn.execute(
+            "SELECT key, text FROM memory_sections WHERE memory_uid = ? ORDER BY seq",
+            (uid,),
+        )
+    ]
+
+
 def _ensure_vec(conn: sqlite3.Connection) -> None:
     """Create/migrate the vector table and backfill missing vectors.
 
@@ -798,6 +897,7 @@ def connect(db_path: Path | None = None):
     conn.executescript(SCHEMA)
     _ensure_columns(conn)
     _ensure_fts(conn)
+    _ensure_sections(conn)
     if vec_loaded:
         _ensure_vec(conn)
     try:
@@ -841,6 +941,7 @@ def insert_memory(
             [(uid, path, ts) for path in links],
         )
     _upsert_vector(conn, cur.lastrowid, content, tags, domain, blob)
+    _write_sections(conn, uid, type, content)
     return uid
 
 
@@ -884,6 +985,7 @@ def restore_memory(conn: sqlite3.Connection, record: dict) -> str:
             (uid, int(record["recalls"]), record.get("last_recall") or ts))
     _upsert_vector(conn, cur.lastrowid, record.get("content", ""),
                    record.get("tags", ""), domain, ALSO_SEP.join(links))
+    _write_sections(conn, uid, record["type"], record.get("content", ""))
     return uid
 
 
@@ -976,6 +1078,7 @@ def update_memory_content(
     )
     _upsert_vector(conn, row["rowid_pk"], new_content, row["tags"], row["domain"],
                    row["also_domains"])
+    _write_sections(conn, uid, row["type"], new_content)
     return True
 
 
@@ -1094,12 +1197,15 @@ def purge_memory(conn: sqlite3.Connection, uid: str) -> bool:
     `memory_domains` goes with it for the same reason, and the FK on that
     table means it HAS to: the DELETE below is refused outright while a
     cross-listing still names this uid. No mirror to rewrite -- the row
-    itself is on its way out.
+    itself is on its way out. `memory_sections` and `section_migration`
+    carry the same FK and go the same way.
     """
     row = get_memory(conn, uid)
     if row is None:
         return False
     conn.execute("DELETE FROM memory_domains WHERE memory_uid = ?", (uid,))
+    conn.execute("DELETE FROM memory_sections WHERE memory_uid = ?", (uid,))
+    conn.execute("DELETE FROM section_migration WHERE memory_uid = ?", (uid,))
     conn.execute("DELETE FROM memory_usage WHERE memory_uid = ?", (uid,))
     conn.execute("DELETE FROM edits WHERE memory_uid = ?", (uid,))
     conn.execute("DELETE FROM relations WHERE from_uid = ? OR to_uid = ?", (uid, uid))
