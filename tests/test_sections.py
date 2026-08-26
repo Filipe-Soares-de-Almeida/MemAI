@@ -160,19 +160,49 @@ def test_purging_a_memory_takes_its_sections_with_it(conn):
     assert queued(conn) == {}
 
 
-# ------------------------------------------------------------ the migrated flag
+# ------------------------------------------------------- whether it has been read
 
-def test_a_store_with_nothing_sectioned_counts_as_migrated(conn):
-    assert db.sections_migrated(conn) is True
+def test_a_store_with_nothing_sectioned_is_read(conn):
+    assert db.sections_read(conn) is True
+    assert db.unread_sections(conn) == 0
 
 
-def test_a_store_holding_a_sectioned_body_does_not(tmp_path):
+def test_a_body_nothing_has_read_leaves_the_store_unread(tmp_path):
     path = tmp_path / "legacy.db"
     with db.connect(path) as c:
-        db.insert_memory(c, type="checkpoint", content=CHECKPOINT, domain="acme")
-        c.execute("DELETE FROM meta WHERE key = ?", (db.SECTIONS_MIGRATED_KEY,))
+        uid = db.insert_memory(c, type="checkpoint", content=CHECKPOINT, domain="acme")
+        c.execute("DELETE FROM memory_sections WHERE memory_uid = ?", (uid,))
     with db.connect(path) as c:
-        assert db.sections_migrated(c) is False
+        assert db.sections_read(c) is False
+        assert db.unread_sections(c) == 1
+
+
+def test_a_body_in_the_queue_counts_as_read(conn):
+    """It was read. What it says is that reading it did not work out."""
+    unmigrated(conn)
+    db.insert_memory(conn, type="checkpoint", content="just prose", domain="acme")
+    db.migrate_sections(conn)
+    assert db.section_queue(conn)
+    assert db.sections_read(conn) is True
+
+
+def test_a_type_joining_the_spec_makes_a_read_store_unread(conn, monkeypatch):
+    """The defect this replaced: a stored flag recorded THAT the migration
+    ran and not under which spec, so a type added afterwards left the flag
+    claiming a clean store while its bodies were never read -- and the
+    strict refusal, keyed on that flag, froze them."""
+    db.insert_memory(conn, type="checkpoint", content=CHECKPOINT, domain="acme")
+    conn.execute("INSERT INTO memories (uid, type, content, created_at, updated_at) "
+                 "VALUES ('c3d4e5f60718293a', 'handoff', 'pick it up here', '2026-01-01', '2026-01-01')")
+    assert db.sections_read(conn) is True
+
+    monkeypatch.setitem(sections.SECTION_SPEC, "handoff",
+                        (sections.Section("content", "CONTENT"),))
+
+    assert db.sections_read(conn) is False
+    assert db.unread_sections(conn) == 1
+    # and the refusal steps back off until the store is read again
+    assert db.section_error(conn, "checkpoint", "not a checkpoint body") is None
 
 
 # ----------------------------------------------------------------- the guard
@@ -200,8 +230,11 @@ LEGACY_ANTI_PATTERN = "DOMAIN: acme-x100-queue-drain\n" + ANTI_PATTERN
 
 
 def unread(conn, uid, content):
-    """Put a body in the store the way it stood before anything read it."""
-    unmigrated(conn)
+    """Put a body in the store the way it stood before anything read it.
+
+    Taking its rows away is all it takes: readiness is derived, so a body
+    with neither fields nor a queue row leaves the whole store unread.
+    """
     conn.execute("UPDATE memories SET content = ? WHERE uid = ?", (content, uid))
     conn.execute("DELETE FROM memory_sections WHERE memory_uid = ?", (uid,))
     conn.execute("DELETE FROM section_migration WHERE memory_uid = ?", (uid,))
@@ -256,16 +289,16 @@ def test_the_migration_rewrites_nothing_on_a_second_run(conn):
     assert len(db.get_edit_history(conn, uid)) == 1
 
 
-def test_the_migration_marks_the_store_read(conn):
+def test_the_migration_leaves_the_store_read(conn):
     uid = db.insert_memory(conn, type="checkpoint", content=CHECKPOINT, domain="acme")
     unread(conn, uid, "nothing readable here")
-    assert db.sections_migrated(conn) is False
+    assert db.sections_read(conn) is False
 
     db.migrate_sections(conn)
 
-    # the flag says the store was read, not that everything in it came out clean
-    assert db.sections_migrated(conn) is True
-    assert db.section_queue(conn)[0]["uid"] == uid
+    # read is not the same as clean: this one came out in the queue
+    assert db.sections_read(conn) is True
+    assert uid in {e["uid"] for e in db.section_queue(conn)}
 
 
 def test_the_queue_says_what_stops_each_body(conn):
