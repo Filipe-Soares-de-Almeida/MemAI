@@ -39,8 +39,9 @@ def _create(client, **kw) -> str:
 def _unread(type_: str, content: str, domain: str = "acme/x100") -> str:
     """Put a body in the store the way it stood before anything read it.
 
-    The flag goes first: while it is set, a body that does not conform is
-    refused rather than written, which is the whole point of it.
+    Something unread has to be there BEFORE the insert: a store where every
+    sectioned body has been read refuses one that does not conform, which
+    is the whole point of it.
     """
     with db.connect() as conn:
         unmigrated(conn)
@@ -566,3 +567,50 @@ def test_a_body_linking_to_itself_is_not_a_link(client):
     holder = _create(client, content="placeholder")
     client.post(f"/api/memories/{holder}/content", json={"content": f"see [[{holder}]]"})
     assert client.get(f"/api/memories/{holder}").json()["body_links"] == {}
+
+
+# --------------------------------------------------------- searching by uid
+
+def test_searching_a_uid_puts_that_memory_first(client):
+    target = _create(client, content="the cache warms on boot", domain="acme/x100")
+    _create(client, content=f"as established in [[{target}]]")
+
+    hits = client.get(f"/api/memories?q={target}").json()
+
+    assert hits["items"][0]["uid"] == target
+
+
+def test_searching_a_uid_still_shows_what_points_at_it(client):
+    """Both questions are worth an answer: the row, and its referrers."""
+    target = _create(client, content="the cache warms on boot")
+    holder = _create(client, content=f"as established in [[{target}]]")
+
+    uids = [i["uid"] for i in client.get(f"/api/memories?q={target}").json()["items"]]
+
+    assert uids[0] == target and holder in uids
+
+
+def test_a_uid_answers_past_the_filters(client):
+    """The operator named the row; there is nothing left to narrow."""
+    target = _create(client, content="the cache warms on boot", domain="acme/x100")
+    client.post(f"/api/memories/{target}/status", json={"status": "archived"})
+
+    hits = client.get(f"/api/memories?q={target}&status=active&domain=zeta").json()
+
+    assert hits["items"][0]["uid"] == target
+
+
+def test_a_uid_appears_once_even_when_the_search_also_found_it(client):
+    target = _create(client, content=f"a body naming its own uid")
+    client.post(f"/api/memories/{target}/content",
+                json={"content": f"this body contains [[{target}]] itself"})
+
+    uids = [i["uid"] for i in client.get(f"/api/memories?q={target}").json()["items"]]
+
+    assert uids.count(target) == 1
+
+
+def test_a_query_that_is_not_a_uid_is_unchanged(client):
+    _create(client, content="database tuning guide")
+    hits = client.get("/api/memories?q=database tuning").json()
+    assert hits["searched"] is True and hits["total"] >= 1
