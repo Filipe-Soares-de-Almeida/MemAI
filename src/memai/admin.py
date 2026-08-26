@@ -306,6 +306,14 @@ def list_memories(request, payload) -> dict:
                 hits = [h for h in hits if h["confidence"] == confidence]
             if session:
                 hits = [h for h in hits if h["session"] == session]
+            # A pasted uid names one row, and nothing in the hybrid index
+            # matches on it: a uid appears in OTHER bodies as [[uid]], so the
+            # search answers "what points at this" and never "this". Both are
+            # worth having, so the named row is pinned above its referrers --
+            # past every filter, the way the link picker treats one.
+            exact = db.get_memory(conn, q)
+            if exact is not None:
+                hits = [dict(exact)] + [h for h in hits if h["uid"] != q]
             total = len(hits)
             items = _with_usage(conn, [_summary(h) for h in hits[offset:offset + limit]])
             return {"total": total, "items": items, "searched": True, **scope}
@@ -1345,7 +1353,8 @@ def sectionize(request, payload) -> dict:
 def section_queue(request, payload) -> dict:
     """The bodies that do not conform, and whether the store has been read."""
     with db.connect() as conn:
-        return {"ok": True, "migrated": db.sections_migrated(conn),
+        return {"ok": True, "migrated": db.sections_read(conn),
+                "unread": db.unread_sections(conn),
                 "queue": db.section_queue(conn)}
 
 

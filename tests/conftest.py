@@ -72,9 +72,18 @@ def shaped(type_: str, text: str) -> str:
 
 
 def unmigrated(conn) -> None:
-    """Put the store back in the state it is in before it has been read.
+    """Put the store in the state it is in before it has been read.
 
     Writes are queued rather than refused while this holds, which is how a
     body that predates the spec gets into a store at all.
+
+    Readiness is derived from the rows, so this plants what an unread store
+    has in it: one body of a sectioned type that nothing has read. A store
+    holding none at all is vacuously read, which is right for a new one and
+    useless for a test that needs the other state.
     """
-    conn.execute("DELETE FROM meta WHERE key = ?", (db.SECTIONS_MIGRATED_KEY,))
+    type_ = next(iter(sections.SECTION_SPEC))
+    uid = db.insert_memory(conn, type=type_, domain="acme",
+                           content=shaped(type_, "a body from before the spec"))
+    conn.execute("DELETE FROM memory_sections WHERE memory_uid = ?", (uid,))
+    conn.execute("DELETE FROM section_migration WHERE memory_uid = ?", (uid,))

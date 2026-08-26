@@ -763,42 +763,48 @@ def _ensure_fts(conn: sqlite3.Connection) -> None:
 
 
 # Whether every body in this store has been read into memory_sections. Set
-# once the migration has run; the writers read it to decide whether a body
-# that does not conform is refused or merely queued.
-SECTIONS_MIGRATED_KEY = "sections_migrated"
+def unread_sections(conn: sqlite3.Connection) -> int:
+    """How many bodies of a sectioned type nobody has read yet.
 
+    A body that has been read leaves something behind either way: the
+    fields it was read into, or a queue row saying what stopped it. One
+    with neither predates the spec its type now has.
 
-def _ensure_sections(conn: sqlite3.Connection) -> None:
-    """Mark a store that has nothing to migrate as migrated.
-
-    A store with no memory of a sectioned type -- a new one -- is already
-    in the state the migration produces. One that has them keeps the flag
-    unset until the migration runs.
+    This is DERIVED rather than recorded, and that is the point. A stored
+    "the migration ran" flag says nothing about which spec it ran under, so
+    the day a type joins SECTION_SPEC the flag is a false claim nobody
+    notices: the panel reports a clean store, the strict refusal stays on,
+    and the bodies of the new type are frozen -- unreadable and unwritable
+    at once. Counting them instead makes a store unread again the moment
+    its spec grows, which is the state it is actually in.
     """
-    if _get_meta(conn, SECTIONS_MIGRATED_KEY) is not None:
-        return
     types = tuple(sections.SECTION_SPEC)
-    row = conn.execute(
-        f"SELECT 1 FROM memories WHERE type IN ({','.join('?' * len(types))}) LIMIT 1",
+    if not types:
+        return 0
+    marks = ",".join("?" * len(types))
+    return conn.execute(
+        f"""SELECT COUNT(*) FROM memories m
+             WHERE m.type IN ({marks})
+               AND NOT EXISTS (SELECT 1 FROM memory_sections s WHERE s.memory_uid = m.uid)
+               AND NOT EXISTS (SELECT 1 FROM section_migration q WHERE q.memory_uid = m.uid)""",
         types,
-    ).fetchone()
-    if row is None:
-        _set_meta(conn, SECTIONS_MIGRATED_KEY, "1")
+    ).fetchone()[0]
 
 
-def sections_migrated(conn: sqlite3.Connection) -> bool:
-    return _get_meta(conn, SECTIONS_MIGRATED_KEY) == "1"
+def sections_read(conn: sqlite3.Connection) -> bool:
+    """Whether every body whose type has fields has been read into them."""
+    return unread_sections(conn) == 0
 
 
 def section_error(conn: sqlite3.Connection, type: str, content: str) -> str | None:
     """Why this body cannot be written as this type, or None.
 
-    Silent until the store has been read: while the migration is still
-    pending, a body that does not conform is queued rather than refused,
-    because the store is full of them and refusing would lock the rows a
-    human still has to look at.
+    Silent while any body of a sectioned type is still unread: refusing
+    then would lock the very rows a human has to work through, and a store
+    whose spec just grew is in exactly that state. Reading the store is
+    what turns the refusal on.
     """
-    if not sections.is_sectioned(type) or not sections_migrated(conn):
+    if not sections.is_sectioned(type) or not sections_read(conn):
         return None
     problems = sections.read(type, content).problems
     if not problems:
@@ -858,9 +864,9 @@ def migrate_sections(conn: sqlite3.Connection) -> dict:
     update_memory_content, so it lands in `edits` next to the body it
     replaced and the row is re-embedded.
 
-    The flag is set whatever the queue holds. A body still in it can only
-    be written through set_sections, which builds the body from fields and
-    so cannot produce another one that does not conform.
+    A body left in the queue can only be written through set_sections,
+    which builds the body from its fields and so cannot produce another one
+    that does not conform.
     """
     types = tuple(sections.SECTION_SPEC)
     rows = conn.execute(
@@ -881,7 +887,6 @@ def migrate_sections(conn: sqlite3.Connection) -> dict:
             rewritten += 1
             continue
         _write_sections(conn, uid, type_, content)
-    _set_meta(conn, SECTIONS_MIGRATED_KEY, "1")
     pending = conn.execute("SELECT COUNT(*) AS n FROM section_migration").fetchone()["n"]
     return {"total": len(rows), "conformed": conformed,
             "rewritten": rewritten, "needs_review": pending}
@@ -1047,7 +1052,6 @@ def connect(db_path: Path | None = None):
     conn.executescript(SCHEMA)
     _ensure_columns(conn)
     _ensure_fts(conn)
-    _ensure_sections(conn)
     if vec_loaded:
         _ensure_vec(conn)
     try:
