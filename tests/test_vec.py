@@ -155,3 +155,66 @@ def test_dedup_since_probes_new_against_whole_store(tmp_path, fake_embedder):
     a, b, _score, method = pairs[0]
     assert method == "vector"
     assert {a["uid"], b["uid"]} == {new, old}     # new probes, old still matchable
+
+
+@pytest.mark.parametrize("query, opaque", [
+    ("ead8bb288c070256", True),                 # a uid, exactly what gets pasted
+    ("EAD8BB288C070256", True),                 # same, uppercase
+    ("  ead8bb288c070256  ", True),             # trimmed before matching
+    ("deadbeefcafe", True),                     # 12 chars, the floor
+    ("a1b2c3", False),                          # too short to be opaque
+    ("facade", False),                          # a hex-looking word stays a word
+    ("decade", False),
+    ("ead8bb288c070256 e o embedder", False),   # a uid among words leaves words
+    ("lancamento contabil", False),
+    ("", False),
+])
+def test_is_opaque_query(query, opaque):
+    assert db.is_opaque_query(query) is opaque
+
+
+def test_opaque_query_skips_the_vector_arm(tmp_path, fake_embedder):
+    """A pasted uid has no semantic neighborhood; the arm must not invent one."""
+    with db.connect(tmp_path / "t.db") as conn:
+        db.insert_memory(conn, type="note", content="vehicle maintenance schedule")
+        db.insert_memory(conn, type="note", content="database tuning note")
+        assert db.search_semantic(conn, "ead8bb288c070256", max_distance=2.0) == []
+        # the same store still answers a real question through that arm
+        assert db.search_semantic(conn, "automobile", max_distance=2.0)
+
+
+def test_opaque_query_leaves_the_keyword_arm_alone(tmp_path, fake_embedder):
+    """Only the vector arm is skipped: a uid written in a body is findable."""
+    with db.connect(tmp_path / "t.db") as conn:
+        uid = db.insert_memory(
+            conn, type="note", content="supersedes [[ead8bb288c070256]] on the cache warmup")
+        hits = db.search_hybrid(conn, "ead8bb288c070256")
+        assert [h["uid"] for h in hits] == [uid]
+        assert hits[0]["match_source"] == "fts"
+
+
+def test_pasted_uid_pins_the_row_it_names(tmp_path, fake_embedder):
+    """The uid names one row; the rows that LINK to it come after, not instead."""
+    with db.connect(tmp_path / "t.db") as conn:
+        named = db.insert_memory(conn, type="note", content="the cache warmup runs at start")
+        referrer = db.insert_memory(
+            conn, type="note", content=f"supersedes [[{named}]] on the cache warmup")
+        hits = db.search_hybrid(conn, named)
+        assert hits[0]["uid"] == named
+        assert hits[0]["match_source"] == "uid"
+        assert referrer in [h["uid"] for h in hits[1:]]
+
+
+def test_unknown_uid_returns_nothing_rather_than_noise(tmp_path, fake_embedder):
+    with db.connect(tmp_path / "t.db") as conn:
+        db.insert_memory(conn, type="note", content="vehicle maintenance schedule")
+        db.insert_memory(conn, type="note", content="database tuning note")
+        assert db.search_hybrid(conn, "ead8bb288c070256") == []
+
+
+def test_pinned_uid_respects_the_status_filter(tmp_path, fake_embedder):
+    with db.connect(tmp_path / "t.db") as conn:
+        uid = db.insert_memory(conn, type="note", content="the cache warmup runs at start")
+        db.set_status(conn, uid, "archived")
+        assert db.search_hybrid(conn, uid, status="active") == []
+        assert [h["uid"] for h in db.search_hybrid(conn, uid, status="archived")] == [uid]
