@@ -2959,6 +2959,29 @@ _KNN_MAX_K = 10000  # upper bound on the "fetch (nearly) all, then filter" KNN p
 # trusting the number.
 VEC_MAX_DISTANCE = 0.60
 
+# A query that is nothing but an opaque token -- a uid, a sha, a hex blob --
+# has no semantic neighborhood to find. The tokenizer still splits it into
+# subword pieces, those pieces DO have vectors, and the KNN dutifully answers
+# with whatever they land near.
+#
+# Measured on a 386-vector store: a random 16-char hex reaches a nearest
+# neighbor at cosine +0.644, against +0.656 for a real question. The arm
+# cannot tell one from the other, and VEC_MAX_DISTANCE cannot be placed
+# between them. Twelve characters is the floor because a uid is sixteen and
+# a shortened sha is seven to twelve; below that the pattern starts matching
+# words like 'facade' and 'decade'.
+_OPAQUE_QUERY = re.compile(r"[0-9a-f]{12,}", re.IGNORECASE)
+
+
+def is_opaque_query(raw: str) -> bool:
+    """True when the whole query is one opaque identifier, nothing else.
+
+    Only the whole query counts: a uid inside a sentence leaves the rest of
+    the words to search on, and that search is worth running.
+    """
+    q = raw.strip()
+    return bool(q) and _OPAQUE_QUERY.fullmatch(q) is not None
+
 
 def search_semantic(
     conn: sqlite3.Connection,
@@ -2982,7 +3005,8 @@ def search_semantic(
     evaluated once at import, so naming the constant here would freeze the
     cut at its import-time value and put a runtime change out of reach.
 
-    Returns [] when vectors are unavailable, so callers can always call
+    Returns [] when vectors are unavailable, and for a query that is one
+    opaque identifier (see is_opaque_query) -- so callers can always call
     this unconditionally. domain/type/tag/status filters apply *after* the
     nearest-neighbor pass, so a fixed limit*4 over-fetch can starve a
     small, selective domain: if every one of the limit*4 global nearest
@@ -2995,6 +3019,8 @@ def search_semantic(
     """
     if max_distance is None:
         max_distance = VEC_MAX_DISTANCE
+    if is_opaque_query(query):
+        return []
     if not _vec_ready(conn):
         return []
     blobs = embed.embed_texts([query])
@@ -3062,6 +3088,18 @@ def search_hybrid(
     the opposite case -- a human curating the store needs to SEE that the
     same fact was written five times, which is what the dedup queue is for.
     """
+    # A query that IS a uid names one row, and the hybrid index cannot match
+    # on it: a uid occurs in OTHER bodies as [[uid]], so the search answers
+    # "what points at this" and never "this". The named row is pinned above
+    # its referrers -- the same treatment admin.py gives a pasted uid, here so
+    # every caller inherits it rather than the dashboard alone.
+    pinned: dict | None = None
+    if is_opaque_query(query):
+        row = get_memory(conn, query.strip())
+        if row is not None and (not status or row["status"] == status):
+            pinned = dict(row)
+            pinned["match_source"] = "uid"
+
     K = 60  # standard RRF damping constant
     merged: dict[str, dict] = {}
 
@@ -3100,9 +3138,12 @@ def search_hybrid(
         key=lambda d: (d.get("confidence") == CONFIDENCE_CONTRADICTED, -d["_rrf"]),
     )
     results = (_collapse_near_copies(ranked) if collapse else ranked)[:limit]
-    _attach_succession(conn, results)
     for d in results:
         del d["_rrf"]
+    if pinned is not None:
+        results = [pinned] + [r for r in results if r["uid"] != pinned["uid"]]
+        results = results[:limit]
+    _attach_succession(conn, results)
     return results
 
 
