@@ -7,6 +7,8 @@ description: >
   contradict, a fact it is about to rediscover. Launched by the session
   itself when the Stop hook says the warden is owed a run. Reports nothing
   when nothing in the store applies, which is the common case.
+model: sonnet
+effort: medium
 tools: [Read, Bash, Grep, mcp__MemAI__search, mcp__MemAI__recall, mcp__MemAI__get_memory, mcp__MemAI__list_domains]
 ---
 
