@@ -126,6 +126,10 @@ def _stale_note(command: str) -> str:
         findings.append("  - an update is waiting for these skills, and what is "
                         f"installed is untouched: {', '.join(stale['skills'])}.")
         commands.append(f"  {command} install --skills")
+    if stale["agents"]:
+        findings.append("  - an update is waiting for these subagents, and what is "
+                        f"installed is untouched: {', '.join(stale['agents'])}.")
+        commands.append(f"  {command} install --agents")
     if not findings:
         return ""
     return INSTALL_STALE.format(findings="\n".join(findings),

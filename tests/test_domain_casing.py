@@ -184,7 +184,9 @@ def test_config_writes_one_setting_without_restating_the_other(client):
     """A partial POST must not disturb the settings it does not name."""
     client.post("/api/config", json={"domain_case": "upper"})
     body = client.post("/api/config", json={"svg_retention": "30d"}).json()
-    assert body == {"domain_case": "upper", "svg_retention": "30d"}
+    assert body == {"domain_case": "upper", "svg_retention": "30d",
+                    "warden_enabled": db.WARDEN_ENABLED_DEFAULT,
+                    "warden_minutes": db.WARDEN_MINUTES_DEFAULT}
 
 
 def test_config_rejects_an_empty_payload(client):
