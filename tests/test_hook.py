@@ -303,6 +303,22 @@ def test_the_warden_is_not_asked_for_twice_in_one_interval(store, capsysbinary,
     assert _run("stop", {"session_id": "session-1"}, capsysbinary, argv=argv) is None
 
 
+def test_a_second_session_is_asked_while_the_first_is_in_its_interval(
+        store, capsysbinary, tmp_path):
+    """Two sessions at once each get their own run: the interval is kept per
+    session, and each request names the transcript of the session it is for."""
+    argv = _with_agent(tmp_path)
+    warden.began("session-2")
+    with db.connect() as conn:
+        _seed(conn)
+    assert _run("stop", {"session_id": "session-1"}, capsysbinary, argv=argv)
+    assert _run("stop", {"session_id": "session-1"}, capsysbinary, argv=argv) is None
+    out = _run("stop", {"session_id": "session-2", "transcript_path": "/tmp/two.jsonl"},
+               capsysbinary, argv=argv)
+    assert warden.AGENT in _context(out)
+    assert "/tmp/two.jsonl" in _context(out)
+
+
 def test_a_session_without_an_id_is_never_asked(store, capsysbinary, tmp_path):
     """Nothing can record the ask, so making it would repeat it every turn."""
     with db.connect() as conn:
