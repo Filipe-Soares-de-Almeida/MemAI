@@ -19,7 +19,10 @@ pytest
 
 On Windows, `install.bat` does the venv + install steps and `run-admin.bat`
 starts the dashboard (both activate `.venv` themselves; extra arguments pass
-through, e.g. `run-admin.bat --port 8890`).
+through, e.g. `run-admin.bat --port 8890`). `stop-mcp.bat` and
+`stop-admin.bat` stop what is running: Windows locks an .exe while a
+process is running it, so an update cannot rewrite `.venv\Scripts` until
+every MCP server and the dashboard are down.
 
 Register it as an MCP server (e.g. in a Claude Desktop / Claude Code MCP
 config) pointing at the installed console script:

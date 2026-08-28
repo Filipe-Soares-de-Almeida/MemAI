@@ -64,6 +64,23 @@ def test_a_second_mark_merges_rather_than_replaces(store):
     assert warden.read("session-1")["transcript"] == "/tmp/a.jsonl"
 
 
+def test_one_session_s_ask_leaves_another_owed_a_run(store):
+    """The interval is per session: an ask in one does not satisfy the next."""
+    warden.mark("session-1")
+    assert warden.due("session-1") is False
+    assert warden.due("session-2") is True
+
+
+def test_two_sessions_keep_their_state_apart(store):
+    """Each session's ask records its own transcript, in a file of its own."""
+    warden.mark("session-1", transcript="/tmp/one.jsonl")
+    warden.mark("session-2", transcript="/tmp/two.jsonl")
+    assert warden.read("session-1")["transcript"] == "/tmp/one.jsonl"
+    assert warden.read("session-2")["transcript"] == "/tmp/two.jsonl"
+    assert {p.name for p in warden.state_dir().glob("*.json")} == {
+        "session-1.json", "session-2.json"}
+
+
 @pytest.mark.parametrize("bad", ["", "..", ".", "a/b", "a\\b", "../evil", "x" * 129])
 def test_an_id_that_could_leave_the_directory_is_refused(store, bad):
     """A session id comes from the host and reaches a path."""
