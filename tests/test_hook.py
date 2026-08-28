@@ -16,7 +16,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from conftest import shaped
-from memai import brief, db, hook, server
+from memai import brief, db, hook, hook_install, server, warden
 
 
 @pytest.fixture
@@ -199,6 +199,143 @@ def test_stop_does_not_answer_its_own_nudge(store, capsysbinary):
     assert _run("stop", {"stop_hook_active": True}, capsysbinary) is None
 
 
+# -------------------------------------------------------- asking the warden
+
+def _with_agent(tmp_path, session_id="session-1"):
+    """A host that has the warden installed and started up afterwards.
+
+    Returns the argv pointing the hook at it, so a test drives the same
+    lookup the installed hook does rather than the real ~/.claude. The
+    session is started AFTER the install, which is the order that makes the
+    agent launchable.
+    """
+    settings = tmp_path / "host" / "settings.json"
+    settings.parent.mkdir(parents=True, exist_ok=True)
+    hook_install.install_agents(hook_install.agents_dir(settings))
+    warden.began(session_id)
+    return ("--settings", str(settings))
+
+
+def _context(out) -> str:
+    return out["hookSpecificOutput"]["additionalContext"]
+
+
+def test_stop_does_not_ask_for_an_agent_the_host_does_not_have(store, capsysbinary,
+                                                               tmp_path):
+    """An uninstalled warden would spend the next turn on a launch error."""
+    settings = tmp_path / "host" / "settings.json"
+    with db.connect() as conn:
+        _seed(conn)
+    out = _run("stop", {"session_id": "session-1"}, capsysbinary,
+               argv=("--settings", str(settings)))
+    assert out is None
+
+
+def test_an_agent_installed_after_the_session_started_is_not_asked_for(
+        store, capsysbinary, tmp_path):
+    """A host reads its agent definitions once, when it starts.
+
+    Installing one into a session already running puts it on disk without
+    making it launchable, and asking for it would spend the turn on an error.
+    """
+    settings = tmp_path / "host" / "settings.json"
+    settings.parent.mkdir(parents=True, exist_ok=True)
+    warden.began("session-1")
+    # A session already running when the install lands: minutes, not the
+    # microseconds GRACE is there to absorb.
+    earlier = (datetime.now(timezone.utc) - timedelta(minutes=10)).isoformat()
+    warden.state_path("session-1").write_text(
+        json.dumps({"started_at": earlier}), encoding="utf-8")
+    hook_install.install_agents(hook_install.agents_dir(settings))
+
+    with db.connect() as conn:
+        _seed(conn)
+    assert _run("stop", {"session_id": "session-1"}, capsysbinary,
+                argv=("--settings", str(settings))) is None
+
+
+def test_a_session_that_never_reported_starting_is_not_asked(store, capsysbinary,
+                                                             tmp_path):
+    """Without a start there is nothing to compare the install against, and a
+    skipped session costs less than a launch error."""
+    settings = tmp_path / "host" / "settings.json"
+    settings.parent.mkdir(parents=True, exist_ok=True)
+    hook_install.install_agents(hook_install.agents_dir(settings))
+    with db.connect() as conn:
+        _seed(conn)
+    assert _run("stop", {"session_id": "session-1"}, capsysbinary,
+                argv=("--settings", str(settings))) is None
+
+
+def test_session_start_records_that_the_session_began(store, capsysbinary):
+    """It is what a later Stop compares the agent's install time against."""
+    with db.connect() as conn:
+        _seed(conn)
+    _run("session-start", {"session_id": "session-1"}, capsysbinary)
+    assert warden.read("session-1")["started_at"]
+
+
+def test_recording_the_start_does_not_count_as_asking(store, capsysbinary):
+    """A session that just began is still owed its first warden run."""
+    with db.connect() as conn:
+        _seed(conn)
+    _run("session-start", {"session_id": "session-1"}, capsysbinary)
+    assert warden.due("session-1") is True
+
+
+def test_stop_asks_for_the_warden_once_it_is_installed(store, capsysbinary, tmp_path):
+    with db.connect() as conn:
+        _seed(conn)
+    out = _run("stop", {"session_id": "session-1",
+                        "transcript_path": "/tmp/a.jsonl"},
+               capsysbinary, argv=_with_agent(tmp_path))
+    assert warden.AGENT in _context(out)
+    assert "/tmp/a.jsonl" in _context(out)
+
+
+def test_the_warden_is_not_asked_for_twice_in_one_interval(store, capsysbinary,
+                                                            tmp_path):
+    """The ask is recorded when it is made, so the next turn is silent."""
+    argv = _with_agent(tmp_path)
+    with db.connect() as conn:
+        _seed(conn)
+    assert _run("stop", {"session_id": "session-1"}, capsysbinary, argv=argv)
+    assert _run("stop", {"session_id": "session-1"}, capsysbinary, argv=argv) is None
+
+
+def test_a_session_without_an_id_is_never_asked(store, capsysbinary, tmp_path):
+    """Nothing can record the ask, so making it would repeat it every turn."""
+    with db.connect() as conn:
+        _seed(conn)
+    assert _run("stop", {}, capsysbinary, argv=_with_agent(tmp_path)) is None
+
+
+def test_both_notes_travel_in_one_result(store, capsysbinary, tmp_path):
+    """A turn that owes a checkpoint and a warden run emits one object."""
+    old = (datetime.now(timezone.utc) - timedelta(days=3)).isoformat()
+    with db.connect() as conn:
+        _seed(conn, created_at=old)
+    out = _run("stop", {"session_id": "session-1"}, capsysbinary,
+               argv=_with_agent(tmp_path))
+    assert "note()" in _context(out)
+    assert warden.AGENT in _context(out)
+    assert "nothing recorded" in out["systemMessage"]
+    assert "warden" in out["systemMessage"]
+
+
+def test_the_second_ask_tells_the_warden_where_it_stopped(store, capsysbinary,
+                                                           tmp_path):
+    """The stamp of the previous ask is what bounds the turns to read."""
+    argv = _with_agent(tmp_path)
+    with db.connect() as conn:
+        _seed(conn)
+    _run("stop", {"session_id": "session-1"}, capsysbinary, argv=argv)
+    first = warden.read("session-1")["asked_at"]
+    out = _run("stop", {"session_id": "session-1"}, capsysbinary,
+               argv=(*argv, "--warden-minutes", "0"))
+    assert first in _context(out)
+
+
 # ---------------------------------------------------------------- statusline
 
 def test_the_statusline_carries_the_count_the_domain_and_the_checkpoint_age(
@@ -346,3 +483,54 @@ def test_writes_carry_a_session_without_being_told(store):
 def test_an_explicit_session_still_wins(store):
     uid = server.note(content="cache warmup runs nightly", session="proj-1042")["uid"]
     assert server.get_memory(uid)["session"] == "proj-1042"
+
+
+def test_the_switch_silences_the_ask(store, capsysbinary, tmp_path):
+    """Off means the Stop hook never asks, which is what makes it cost nothing."""
+    argv = _with_agent(tmp_path)
+    with db.connect() as conn:
+        _seed(conn)
+        db.set_warden_enabled(conn, False)
+    assert _run("stop", {"session_id": "session-1"}, capsysbinary, argv=argv) is None
+
+
+def test_the_switch_does_not_silence_the_checkpoint_nudge(store, capsysbinary, tmp_path):
+    """It turns off one note, not the hook."""
+    old = (datetime.now(timezone.utc) - timedelta(days=3)).isoformat()
+    with db.connect() as conn:
+        _seed(conn, created_at=old)
+        db.set_warden_enabled(conn, False)
+    out = _run("stop", {"session_id": "session-1"}, capsysbinary,
+               argv=_with_agent(tmp_path))
+    assert "note()" in _context(out)
+    assert warden.AGENT not in _context(out)
+
+
+def test_the_stored_interval_is_what_the_hook_uses(store, capsysbinary, tmp_path):
+    """The dashboard writes it; the hook reads it without a flag."""
+    argv = _with_agent(tmp_path)
+    with db.connect() as conn:
+        _seed(conn)
+        db.set_warden_minutes(conn, 60)
+    assert _run("stop", {"session_id": "session-1"}, capsysbinary, argv=argv)
+    # 30 minutes on, the stored 60 has not elapsed, so nothing is asked
+    later = (datetime.now(timezone.utc) - timedelta(minutes=30)).isoformat()
+    warden.state_path("session-1").write_text(
+        json.dumps({**warden.read("session-1"), "asked_at": later}), encoding="utf-8")
+    assert _run("stop", {"session_id": "session-1"}, capsysbinary, argv=argv) is None
+
+
+def test_the_flag_overrides_the_stored_interval(store, capsysbinary, tmp_path):
+    """`--warden-minutes` is for one run, the store holds the standing answer."""
+    argv = _with_agent(tmp_path)
+    with db.connect() as conn:
+        _seed(conn)
+        db.set_warden_minutes(conn, 480)
+    assert _run("stop", {"session_id": "session-1"}, capsysbinary, argv=argv)
+    assert _run("stop", {"session_id": "session-1"}, capsysbinary,
+                argv=(*argv, "--warden-minutes", "1")) is None
+    hours = (datetime.now(timezone.utc) - timedelta(minutes=5)).isoformat()
+    warden.state_path("session-1").write_text(
+        json.dumps({**warden.read("session-1"), "asked_at": hours}), encoding="utf-8")
+    assert _run("stop", {"session_id": "session-1"}, capsysbinary,
+                argv=(*argv, "--warden-minutes", "1"))

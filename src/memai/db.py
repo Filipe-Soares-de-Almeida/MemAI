@@ -383,6 +383,64 @@ def set_svg_retention(conn: sqlite3.Connection, mode: str) -> str:
     return mode
 
 
+WARDEN_ENABLED_KEY = "warden_enabled"
+WARDEN_ENABLED_DEFAULT = True
+WARDEN_MINUTES_KEY = "warden_minutes"
+WARDEN_MINUTES_DEFAULT = 20
+# A session is one conversation, so an interval longer than a working day
+# would only ever fire once; below a minute the ask lands on every turn.
+WARDEN_MINUTES_RANGE = (1, 480)
+
+
+def get_warden_enabled(conn: sqlite3.Connection) -> bool:
+    """Whether the Stop hook may ask a session to launch the warden.
+
+    This setting is store-wide, and one store serves every project on the
+    machine: turning it off here turns it off everywhere. That is the scope
+    the question deserves -- it is a standing preference about what an agent
+    costs, not a fact about one repository.
+    """
+    value = _get_meta(conn, WARDEN_ENABLED_KEY)
+    return WARDEN_ENABLED_DEFAULT if value is None else value == "1"
+
+
+def set_warden_enabled(conn: sqlite3.Connection, enabled: object) -> bool:
+    """Persist the warden switch. Accepts a bool or the strings a form sends."""
+    if isinstance(enabled, str):
+        enabled = enabled.strip().lower() not in ("", "0", "false", "off", "no")
+    _set_meta(conn, WARDEN_ENABLED_KEY, "1" if enabled else "0")
+    return bool(enabled)
+
+
+def get_warden_minutes(conn: sqlite3.Connection) -> int:
+    """How long a session goes before the warden is asked for again.
+
+    A floor on the cost, not a schedule: the warden reads whole turns and
+    costs a subagent run, and the ask lands on the first Stop after the
+    interval, never between turns.
+    """
+    try:
+        value = int(_get_meta(conn, WARDEN_MINUTES_KEY) or "")
+    except ValueError:
+        return WARDEN_MINUTES_DEFAULT
+    low, high = WARDEN_MINUTES_RANGE
+    return value if low <= value <= high else WARDEN_MINUTES_DEFAULT
+
+
+def set_warden_minutes(conn: sqlite3.Connection, minutes: object) -> int:
+    """Persist the warden interval, in minutes."""
+    low, high = WARDEN_MINUTES_RANGE
+    try:
+        value = int(str(minutes).strip())
+    except (TypeError, ValueError):
+        raise ValueError(f"warden_minutes must be a whole number of minutes "
+                         f"between {low} and {high}")
+    if not low <= value <= high:
+        raise ValueError(f"warden_minutes must be between {low} and {high}")
+    _set_meta(conn, WARDEN_MINUTES_KEY, str(value))
+    return value
+
+
 def renders_usage() -> dict:
     """What the render folder currently costs, for the maintenance view."""
     files = [p for p in renders_dir().iterdir()

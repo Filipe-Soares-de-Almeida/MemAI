@@ -1,4 +1,4 @@
-"""Registering memai's hooks, and installing the skills it ships.
+"""Registering memai's hooks, and installing the skills and agents it ships.
 
 `memai-hook install` merges the four hook entries into the user's settings,
 `~/.claude/settings.json`. Hooks on the same event that memai did not write are
@@ -18,6 +18,12 @@ copied to `<name>.bak-<stamp>` first. Each run leaves a `RECEIPT` there
 holding the sha256 of every file it installed, which is what tells an update
 waiting to be copied from a copy somebody edited.
 
+`memai-hook install --agents` copies the subagent definitions bundled under
+`memai/agents/` into the `agents/` directory beside that settings file, one
+`.md` per agent, with the same overwrite rule and its own `AGENT_RECEIPT`
+holding one sha256 per file -- which is what separates an update waiting from
+a copy somebody edited.
+
 `stale()` reports what an installation holds out of date: a host event it does
 not register, a registration whose command is gone from disk, one that fires
 this command through an entry `install` would rewrite, a bundled skill whose
@@ -34,6 +40,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import shutil
 import sys
 from datetime import datetime
@@ -58,6 +65,11 @@ MATCHERS = {"PreToolUse": guard.matcher()}
 # update waiting to be copied from a copy somebody edited. A leading dot keeps
 # it out of the skills a host reads from that directory.
 RECEIPT = ".memai-skills.json"
+
+# The same, for the agents directory. One hash per file rather than per
+# directory, because an agent IS one file. A leading dot keeps it out of the
+# definitions a host reads from there.
+AGENT_RECEIPT = ".memai-agents.json"
 
 # Seconds. A cold first run pays for the interpreter, the store and the
 # embedder behind it.
@@ -404,6 +416,194 @@ def install_skills(target: Path, *, write: bool = True) -> str:
     return "\n".join(lines)
 
 
+# ---------------------------------------------------------------- the agents
+
+def agents_source() -> Path:
+    """The agent definitions this package ships."""
+    return Path(__file__).parent / "agents"
+
+
+def agents_dir(settings: Path) -> Path:
+    """Where the agents belonging to `settings` go: `agents/` beside the file.
+
+    A host reads its subagents from `.claude/agents`, the sibling of the
+    `skills/` directory the bundled skills land in.
+    """
+    return settings.parent / "agents"
+
+
+def bundled_agents() -> list[Path]:
+    """The bundled agent definition files, by name. Empty when none ship.
+
+    One `.md` file per agent, its frontmatter naming the agent. A file whose
+    name starts with `.` or `_` is not one.
+    """
+    try:
+        found = [p for p in agents_source().iterdir()
+                 if p.is_file() and p.suffix == ".md"
+                 and not p.name.startswith((".", "_"))]
+    except OSError:
+        return []
+    return sorted(found, key=lambda p: p.name)
+
+
+def read_agent_receipt(target: Path) -> dict:
+    """`target`'s agent install receipt: {'memai': version, 'agents': {name:
+    sha256}}.
+
+    {} when it is absent, unreadable or not an object.
+    """
+    try:
+        data = json.loads((target / AGENT_RECEIPT).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _agents_recorded(target: Path) -> dict[str, str]:
+    """The file hash per agent name in `target`'s receipt."""
+    agents = read_agent_receipt(target).get("agents")
+    if not isinstance(agents, dict):
+        return {}
+    return {name: digest for name, digest in agents.items()
+            if isinstance(name, str) and isinstance(digest, str)}
+
+
+def write_agent_receipt(target: Path) -> Path:
+    """Record the hash of every bundled agent `target` now holds, and return
+    the receipt.
+
+    Read from `target`, not from the bundle: the receipt says what is on disk
+    there, so a file a copy could not replace is recorded as it stands.
+    """
+    agents = hashes(target, [a.name for a in bundled_agents()])
+    path = target / AGENT_RECEIPT
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"memai": __version__, "agents": agents}, indent=2) + "\n",
+                    encoding="utf-8")
+    return path
+
+
+def agent_state(target: Path) -> dict[str, str]:
+    """Each bundled agent name mapped to how `target` holds it.
+
+    `installed` when the bundled bytes are there; `outdated` when what is
+    there is the copy the receipt recorded and the bundle has moved since --
+    an update waiting to be copied; `edited` when it is neither; `missing`
+    when the file is not there.
+
+    Without a receipt a file whose bytes differ reads as `outdated`, which is
+    the verdict that OFFERS the update. Reading it as `edited` instead would
+    be silent for good: `edited` is the state that never warns.
+    """
+    recorded = _agents_recorded(target)
+    state: dict[str, str] = {}
+    for agent in bundled_agents():
+        dest = target / agent.name
+        if not dest.is_file():
+            state[agent.name] = "missing"
+            continue
+        if _same(dest, agent):
+            state[agent.name] = "installed"
+            continue
+        was = recorded.get(agent.name)
+        if was is None or hashes(target, [agent.name]).get(agent.name) == was:
+            state[agent.name] = "outdated"
+        else:
+            state[agent.name] = "edited"
+    return state
+
+
+def agent_behind(target: Path) -> set[str]:
+    """The bundled agents whose receipt in `target` records a hash other than
+    the one this version ships.
+
+    True of an `outdated` agent by definition, and of an `edited` one whose
+    local change is not the only difference.
+    """
+    recorded = _agents_recorded(target)
+    bundled = hashes(agents_source(), [a.name for a in bundled_agents()])
+    return {name for name, digest in recorded.items()
+            if name in bundled and bundled[name] != digest}
+
+
+def retired_agents(target: Path) -> dict[str, bool]:
+    """Definitions `target`'s receipt records that this version no longer
+    ships, mapped to whether they still hold the bytes that were installed.
+
+    A host loads every definition in the directory, so one memai stopped
+    shipping -- renamed, dropped -- keeps being loaded with nothing left to
+    report it. True means the copy is untouched and safe to remove; False
+    means somebody changed it, and it is theirs.
+    """
+    shipped = {a.name for a in bundled_agents()}
+    recorded = _agents_recorded(target)
+    gone = {name: digest for name, digest in recorded.items() if name not in shipped}
+    on_disk = hashes(target, sorted(gone))
+    return {name: on_disk.get(name) == digest
+            for name, digest in gone.items() if name in on_disk}
+
+
+def install_agents(target: Path, *, write: bool = True) -> str:
+    """Copy the bundled agent definitions into `target`, and return a report
+    to print.
+
+    With write=False nothing is copied and the report names the files it
+    would write. A destination already holding the bundled bytes is left
+    alone; any other file in the way is backed up before it is replaced.
+
+    A definition this version no longer ships is removed when it still holds
+    the bytes the receipt recorded, and reported when it does not.
+    """
+    agents = bundled_agents()
+    if not agents:
+        return f"{agents_source()}: no agents bundled -- nothing installed."
+    if not write:
+        return "\n".join(f"would install {target / a.name}" for a in agents)
+
+    lines: list[str] = []
+    installed: list[str] = []
+    for agent in agents:
+        out = target / agent.name
+        if out.is_file() and _same(out, agent):
+            continue
+        out.parent.mkdir(parents=True, exist_ok=True)
+        if out.is_file():
+            lines.append(f"backed up {backup(out)}")
+        shutil.copy2(agent, out)
+        # copy2 carries the bundle's mtime across, and this file's mtime is
+        # read as WHEN THE HOST COULD FIRST SEE IT -- a definition shipped
+        # last month would otherwise look like it predates every session.
+        os.utime(out, None)
+        installed.append(agent.name)
+
+    removed: list[str] = []
+    for name, untouched in sorted(retired_agents(target).items()):
+        if not untouched:
+            lines.append(f"{name} is no longer shipped, and the copy in {target} "
+                         f"was edited -- left in place, remove it by hand")
+            continue
+        try:
+            (target / name).unlink()
+            removed.append(name)
+        except OSError:
+            lines.append(f"{name} is no longer shipped and could not be removed")
+    if removed:
+        lines.append(f"removed {', '.join(removed)} -- no longer shipped")
+
+    # A run that copies nothing still refreshes the receipt, so a directory
+    # holding the bundled bytes without one gets its hashes recorded with no
+    # file touched. After the removals, so a retired name leaves the receipt too.
+    write_agent_receipt(target)
+    if not installed and not removed:
+        names = ", ".join(a.name for a in agents)
+        lines.append(f"{target}: already holds {names} -- nothing to do.")
+        return "\n".join(lines)
+    if installed:
+        lines.append(f"installed {', '.join(installed)} in {target}")
+    return "\n".join(lines)
+
+
 # ------------------------------------------- what an installation is missing
 
 def _exe(command: str, event: str) -> str:
@@ -447,17 +647,20 @@ def stale(path: Path | None = None, *, command: str | None = None) -> dict[str, 
     `events` are the host events it does not register, `broken` the events
     whose registered command is gone from disk, `outdated` the events
     registered through an entry an install would rewrite, `skills` the
-    bundled skills the directory beside it holds with an update waiting.
+    bundled skills the directory beside it holds with an update waiting, and
+    `agents` the same for the bundled subagent definitions.
 
-    A skill that is not installed is absent from `skills`, and so is one
-    somebody edited: only an untouched copy with an update waiting is reported.
+    A skill or agent that is not installed is absent, and so is one somebody
+    edited: only an untouched copy with an update waiting is reported.
     """
     path = path if path is not None else user_settings_path()
     events = event_state(path, command=command or hook_command())
     skills = skill_state(skills_dir(path))
+    agents = agent_state(agents_dir(path))
     return {
         "events": [e for e, how in events.items() if how == "missing"],
         "broken": [e for e, how in events.items() if how == "broken"],
         "outdated": [e for e, how in events.items() if how == "outdated"],
         "skills": sorted(name for name, how in skills.items() if how == "outdated"),
+        "agents": sorted(name for name, how in agents.items() if how == "outdated"),
     }
