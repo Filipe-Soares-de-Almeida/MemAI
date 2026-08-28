@@ -1116,6 +1116,8 @@ def get_config(request, payload) -> dict:
     with db.connect() as conn:
         return {"domain_case": db.get_domain_case(conn),
                 "svg_retention": db.get_svg_retention(conn),
+                "warden_enabled": db.get_warden_enabled(conn),
+                "warden_minutes": db.get_warden_minutes(conn),
                 "sections": {type_: [_section_spec(s) for s in spec]
                              for type_, spec in sections.SECTION_SPEC.items()}}
 
@@ -1128,7 +1130,9 @@ def set_config(request, payload) -> dict:
     other.
     """
     writers = {"domain_case": db.set_domain_case,
-               "svg_retention": db.set_svg_retention}
+               "svg_retention": db.set_svg_retention,
+               "warden_enabled": db.set_warden_enabled,
+               "warden_minutes": db.set_warden_minutes}
     given = {k: payload[k] for k in writers if payload.get(k) is not None}
     if not given:
         raise ValueError(f"expected one of {', '.join(writers)}")
@@ -1136,7 +1140,9 @@ def set_config(request, payload) -> dict:
         for key, value in given.items():
             writers[key](conn, value)
         return {"domain_case": db.get_domain_case(conn),
-                "svg_retention": db.get_svg_retention(conn)}
+                "svg_retention": db.get_svg_retention(conn),
+                "warden_enabled": db.get_warden_enabled(conn),
+                "warden_minutes": db.get_warden_minutes(conn)}
 
 
 # ------------------------------------------------------------- maintenance

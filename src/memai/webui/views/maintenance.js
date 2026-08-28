@@ -48,9 +48,16 @@ const OPS = {
 
 /* Must match db.SVG_RETENTION_MODES; the server rejects anything else. */
 const RETENTION = ['1d', '7d', '30d', 'never'];
+/* The intervals worth a click. `memai-hook stop --warden-minutes` takes any
+   value the store accepts; these are the ones a person actually picks. */
+const WARDEN_MINUTES = [5, 10, 20, 30, 60];
 
 export async function renderMaintenance(view) {
   const keepItems = RETENTION.map(m => ({ value: m, label: t('mn.rn.mode.' + m) }));
+  const onOffItems = [{ value: 'on', label: t('mn.wd.on') },
+                      { value: 'off', label: t('mn.wd.off') }];
+  const everyItems = WARDEN_MINUTES.map(
+    n => ({ value: String(n), label: t('mn.wd.mins', { n }) }));
   const types = typeItems({ any: t('common.allTypes') });
   view.innerHTML = `<div class="anim">
     <div class="view-head">
@@ -87,6 +94,19 @@ export async function renderMaintenance(view) {
           <button class="btn btn-sm" data-op="prune-renders-all">${t('mn.rn.all')}</button>
         </div>
         <div id="rnBody" class="hint">—</div>
+
+        <!-- The warden is the one thing here that spends TOKENS rather than
+             disk, and it spends them whether or not it finds anything, so the
+             switch belongs where the other running costs are read. -->
+        <h3 class="panel-title" style="margin-top:20px">${t('mn.wd.title')}
+          <span class="panel-aside">${t('mn.wd.aside')}</span></h3>
+        <div class="list-toolbar toolbar-sm" style="margin-bottom:6px">
+          <label class="inline-label">${t('mn.wd.state')}
+            ${pickerFor({ id: 'wdOn', items: onOffItems, ariaLabel: t('mn.wd.state') })}</label>
+          <label class="inline-label">${t('mn.wd.every')}
+            ${pickerFor({ id: 'wdEvery', items: everyItems, ariaLabel: t('mn.wd.every') })}</label>
+        </div>
+        <div class="hint">${t('mn.wd.body')}</div>
       </div>
     </div>
 
@@ -191,6 +211,34 @@ export async function renderMaintenance(view) {
     try {
       await api('/api/config', { body: { svg_retention: mode } });
       toast(t('mn.msg.retention', { mode: t('mn.rn.mode.' + mode) }), 'ok');
+    } catch (err) { failed('err.maintenance', err); }
+  } });
+
+  /* Both controls reflect the stored value; only a pick writes one. The
+     interval stays on file while the warden is off, so turning it back on
+     does not lose the choice. */
+  api('/api/config').then(cfg => {
+    const on = $('#wdOn');
+    const every = $('#wdEvery');
+    const state = onOffItems.find(it => it.value === (cfg.warden_enabled ? 'on' : 'off'));
+    const mins = everyItems.find(it => it.value === String(cfg.warden_minutes));
+    if (on && state) setPickerValue(on, state);
+    if (every && mins) setPickerValue(every, mins);
+  }).catch(() => {});
+
+  wirePicker(view, { id: 'wdOn', items: fixedItems(onOffItems), onPick: async value => {
+    const enabled = value === 'on';
+    try {
+      const cfg = await api('/api/config', { body: { warden_enabled: enabled } });
+      toast(enabled ? t('mn.msg.wardenOn', { n: cfg.warden_minutes })
+                    : t('mn.msg.wardenOff'), 'ok');
+    } catch (err) { failed('err.maintenance', err); }
+  } });
+
+  wirePicker(view, { id: 'wdEvery', items: fixedItems(everyItems), onPick: async value => {
+    try {
+      await api('/api/config', { body: { warden_minutes: Number(value) } });
+      toast(t('mn.msg.wardenEvery', { n: value }), 'ok');
     } catch (err) { failed('err.maintenance', err); }
   } });
   wirePicker(view, { id: 'ddType', items: fixedItems(types), onPick: () => {} });

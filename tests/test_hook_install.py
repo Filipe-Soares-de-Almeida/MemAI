@@ -408,7 +408,7 @@ def test_a_command_that_is_not_ours_but_exists_is_not_stale(installed, bundled):
     user, command = installed
     hook_install.install(user, command=command.replace("memai-hook", "./memai-hook"))
     assert hook_install.stale() == {
-        "events": [], "broken": [], "outdated": [], "skills": []}
+        "events": [], "broken": [], "outdated": [], "skills": [], "agents": []}
 
 
 def test_a_registration_in_another_file_is_not_read_back(installed, bundled, tmp_path):
@@ -557,3 +557,216 @@ def test_the_server_stays_quiet_about_a_skill_somebody_edited(installed, bundled
     (target / "zeta-queue-drain" / "SKILL.md").write_text("edited since\n", encoding="utf-8")
     assert hook_install.stale()["skills"] == []
     assert server._instructions() == server.INSTRUCTIONS
+
+
+# ----------------------------------------------------------------- the agents
+
+@pytest.fixture
+def agents(tmp_path, monkeypatch):
+    """Two synthetic agent definitions standing in for whatever ships.
+
+    The real `memai/agents/` is not read: what these guarantee is the copy
+    and its safety, not the contents of any shipped definition.
+    """
+    source = tmp_path / "bundled-agents"
+    source.mkdir(parents=True)
+    for name in ("acme-cache-warden", "zeta-queue-warden"):
+        (source / f"{name}.md").write_text(
+            f"---\nname: {name}\ndescription: watches\n---\n\nRead, then report.\n",
+            encoding="utf-8")
+    (source / "notes.txt").write_text("not an agent\n", encoding="utf-8")
+    (source / "_draft.md").write_text("not an agent either\n", encoding="utf-8")
+    monkeypatch.setattr(hook_install, "agents_source", lambda: source)
+    return source
+
+
+def test_only_md_files_that_are_not_drafts_count_as_agents(agents):
+    assert [p.name for p in hook_install.bundled_agents()] == [
+        "acme-cache-warden.md", "zeta-queue-warden.md"]
+
+
+def test_install_agents_copies_every_bundled_definition(agents, settings, capsys):
+    assert _run("--agents", "--settings", str(settings)) == 0
+    target = hook_install.agents_dir(settings)
+    assert (target / "acme-cache-warden.md").is_file()
+    assert (target / "zeta-queue-warden.md").is_file()
+    assert not (target / "notes.txt").exists()
+    assert "installed" in capsys.readouterr().out
+
+
+def test_the_hooks_are_not_registered_by_an_agents_install(agents, settings):
+    _run("--agents", "--settings", str(settings))
+    assert not settings.exists()
+
+
+def test_a_second_agents_install_copies_nothing(agents, settings, capsys):
+    _run("--agents", "--settings", str(settings))
+    capsys.readouterr()
+    _run("--agents", "--settings", str(settings))
+    assert "nothing to do" in capsys.readouterr().out
+
+
+def test_an_edited_agent_is_backed_up_before_it_is_replaced(agents, settings, capsys):
+    _run("--agents", "--settings", str(settings))
+    target = hook_install.agents_dir(settings)
+    (target / "acme-cache-warden.md").write_text("mine\n", encoding="utf-8")
+    capsys.readouterr()
+    _run("--agents", "--settings", str(settings))
+    out = capsys.readouterr().out
+    assert "backed up" in out
+    assert any(p.name.startswith("acme-cache-warden.md.bak-") for p in target.iterdir())
+
+
+def test_print_only_writes_nothing(agents, settings, capsys):
+    assert _run("--agents", "--print", "--settings", str(settings)) == 0
+    assert "would install" in capsys.readouterr().out
+    assert not hook_install.agents_dir(settings).exists()
+
+
+def test_bundling_no_agents_is_not_an_error(settings, tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(hook_install, "agents_source", lambda: tmp_path / "gone")
+    assert _run("--agents", "--settings", str(settings)) == 0
+    assert "no agents bundled" in capsys.readouterr().out
+
+
+def test_agent_state_tells_installed_from_edited_from_missing(agents, settings):
+    target = hook_install.agents_dir(settings)
+    assert hook_install.agent_state(target) == {
+        "acme-cache-warden.md": "missing", "zeta-queue-warden.md": "missing"}
+    _run("--agents", "--settings", str(settings))
+    assert set(hook_install.agent_state(target).values()) == {"installed"}
+    (target / "acme-cache-warden.md").write_text("mine\n", encoding="utf-8")
+    assert hook_install.agent_state(target)["acme-cache-warden.md"] == "edited"
+
+
+def test_check_agents_fails_until_they_are_installed(agents, settings, capsys):
+    assert _run("--check", "--agents", "--settings", str(settings)) == 1
+    capsys.readouterr()
+    _run("--agents", "--settings", str(settings))
+    assert _run("--check", "--agents", "--settings", str(settings)) == 0
+
+
+def test_check_reports_the_agents_even_when_it_gates_the_hooks(agents, settings, capsys):
+    _run("--check", "--settings", str(settings))
+    assert "acme-cache-warden.md: missing" in capsys.readouterr().out
+
+
+def test_an_agents_flag_on_its_own_means_install(agents, settings):
+    assert hook.main(["--agents", "--settings", str(settings)]) == 0
+    assert (hook_install.agents_dir(settings) / "acme-cache-warden.md").is_file()
+
+
+def test_an_agents_install_leaves_a_receipt(agents, settings):
+    _run("--agents", "--settings", str(settings))
+    target = hook_install.agents_dir(settings)
+    receipt = hook_install.read_agent_receipt(target)
+    assert receipt["memai"] == memai.__version__
+    assert set(receipt["agents"]) == {"acme-cache-warden.md", "zeta-queue-warden.md"}
+
+
+def test_the_receipt_is_not_read_as_an_agent(agents, settings):
+    """A leading dot keeps it out of what the host loads."""
+    _run("--agents", "--settings", str(settings))
+    assert hook_install.AGENT_RECEIPT not in hook_install.agent_state(
+        hook_install.agents_dir(settings))
+
+
+def test_an_untouched_copy_the_bundle_moved_past_is_outdated(agents, settings):
+    """`outdated` is the state that offers the update; `edited` never warns."""
+    _run("--agents", "--settings", str(settings))
+    (agents / "acme-cache-warden.md").write_text("---\nname: acme-cache-warden\n"
+                                                 "description: watches harder\n---\n",
+                                                 encoding="utf-8")
+    state = hook_install.agent_state(hook_install.agents_dir(settings))
+    assert state["acme-cache-warden.md"] == "outdated"
+    assert state["zeta-queue-warden.md"] == "installed"
+
+
+def test_a_copy_changed_after_it_was_installed_is_edited(agents, settings):
+    """The owner's own change, which is theirs to keep -- so it does not warn."""
+    _run("--agents", "--settings", str(settings))
+    target = hook_install.agents_dir(settings)
+    (target / "acme-cache-warden.md").write_text("mine\n", encoding="utf-8")
+    assert hook_install.agent_state(target)["acme-cache-warden.md"] == "edited"
+
+
+def test_without_a_receipt_a_differing_copy_offers_the_update(agents, settings):
+    """Reading it as `edited` would be silent for good."""
+    target = hook_install.agents_dir(settings)
+    _run("--agents", "--settings", str(settings))
+    (target / hook_install.AGENT_RECEIPT).unlink()
+    (target / "acme-cache-warden.md").write_text("older\n", encoding="utf-8")
+    assert hook_install.agent_state(target)["acme-cache-warden.md"] == "outdated"
+
+
+def test_a_run_that_copies_nothing_still_records_the_hashes(agents, settings):
+    """An install by a version that wrote no receipt gets one, untouched."""
+    target = hook_install.agents_dir(settings)
+    _run("--agents", "--settings", str(settings))
+    (target / hook_install.AGENT_RECEIPT).unlink()
+    _run("--agents", "--settings", str(settings))
+    assert hook_install.read_agent_receipt(target)["agents"]
+
+
+def test_agent_behind_tells_an_edited_copy_that_is_also_out_of_date(agents, settings):
+    _run("--agents", "--settings", str(settings))
+    target = hook_install.agents_dir(settings)
+    (target / "acme-cache-warden.md").write_text("mine\n", encoding="utf-8")
+    assert hook_install.agent_behind(target) == set()
+    (agents / "acme-cache-warden.md").write_text("newer\n", encoding="utf-8")
+    assert hook_install.agent_behind(target) == {"acme-cache-warden.md"}
+
+
+def test_an_outdated_agent_reaches_stale(agents, installed):
+    """It is what puts the update in front of a session that never asks."""
+    user, _ = installed
+    hook_install.install_agents(hook_install.agents_dir(user))
+    assert hook_install.stale()["agents"] == []
+    (agents / "acme-cache-warden.md").write_text("newer\n", encoding="utf-8")
+    assert hook_install.stale()["agents"] == ["acme-cache-warden.md"]
+
+
+def test_an_edited_agent_does_not_reach_stale(agents, installed):
+    """Warning would be asking the owner to overwrite their own change."""
+    user, _ = installed
+    target = hook_install.agents_dir(user)
+    hook_install.install_agents(target)
+    (target / "acme-cache-warden.md").write_text("mine\n", encoding="utf-8")
+    assert hook_install.stale()["agents"] == []
+
+
+def test_a_definition_no_longer_shipped_is_removed(agents, settings, capsys):
+    """A host loads every file in the directory, so one memai stopped shipping
+    keeps being loaded with nothing left to report it."""
+    target = hook_install.agents_dir(settings)
+    _run("--agents", "--settings", str(settings))
+    (agents / "zeta-queue-warden.md").unlink()
+    capsys.readouterr()
+
+    _run("--agents", "--settings", str(settings))
+    assert not (target / "zeta-queue-warden.md").exists()
+    assert "no longer shipped" in capsys.readouterr().out
+    assert "zeta-queue-warden.md" not in hook_install.read_agent_receipt(target)["agents"]
+
+
+def test_a_retired_definition_somebody_edited_is_left_alone(agents, settings, capsys):
+    """Removing it would throw away work that is not ours to throw away."""
+    target = hook_install.agents_dir(settings)
+    _run("--agents", "--settings", str(settings))
+    (target / "zeta-queue-warden.md").write_text("mine\n", encoding="utf-8")
+    (agents / "zeta-queue-warden.md").unlink()
+    capsys.readouterr()
+
+    _run("--agents", "--settings", str(settings))
+    assert (target / "zeta-queue-warden.md").read_text(encoding="utf-8") == "mine\n"
+    assert "remove it by hand" in capsys.readouterr().out
+
+
+def test_a_definition_memai_never_installed_is_not_touched(agents, settings):
+    """The receipt is the only list of what is ours to remove."""
+    target = hook_install.agents_dir(settings)
+    _run("--agents", "--settings", str(settings))
+    (target / "someone-elses.md").write_text("theirs\n", encoding="utf-8")
+    _run("--agents", "--settings", str(settings))
+    assert (target / "someone-elses.md").exists()
+    assert hook_install.retired_agents(target) == {}

@@ -5,7 +5,8 @@ JSON object on stdout:
 
   session-start   the store's state, and the instruction to open the subject
   pre-compact     a reminder to checkpoint before the context is summarised
-  stop            a nudge to checkpoint, only when nothing was written
+  stop            a nudge to checkpoint when nothing was written, and a
+                  request for the warden subagent when one is owed
 
 A fourth reads the call the host is about to make instead of the store, and
 is the one exception to everything the last paragraph of this docstring says:
@@ -18,8 +19,9 @@ instead:
   statusline      the store in a single line, for a host's status line
 
 `memai-hook install` registers the four events in the user's settings, and
-`install --skills` copies the bundled skills into place, rather than emitting
-anything -- see memai.hook_install.
+`install --skills` / `install --agents` copy the bundled skills and subagent
+definitions into place, rather than emitting anything -- see
+memai.hook_install.
 
 No MCP: the SQLite store is opened directly, so a hook needs no server to be
 running and no tool to have been loaded.
@@ -40,7 +42,7 @@ import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from memai import brief, db, guard, hook_install
+from memai import brief, db, guard, hook_install, warden
 
 # How long after the last write a Stop hook assumes the session already
 # recorded what it learned. Long enough to cover a stretch of reading and
@@ -86,6 +88,14 @@ def _emit(event: str, context: str, *, system: str = "") -> None:
 
 
 def _session_start(args, payload) -> None:
+    # Both before the brief and never at its expense. `began` is what later
+    # tells an agent the host loaded from one installed behind its back, and
+    # a warden state left by a session that ended is nobody else's to clean up.
+    try:
+        warden.began(payload.get("session_id", ""))
+        warden.prune()
+    except Exception:
+        pass
     with db.connect() as conn:
         _emit("SessionStart", brief.session_brief(conn, domain=args.domain, budget=args.budget))
 
@@ -105,26 +115,88 @@ def _wrote_recently(conn, minutes: int) -> bool:
     return row is not None
 
 
-def _stop(args, payload) -> None:
+def _checkpoint_nudge(args) -> str:
     """Ask for a checkpoint, but only from a session that recorded nothing.
 
     A timer-based nudge fires whether or not there is anything to record,
     which teaches the agent to skip it. This one reads the store: if
     something was written in the last stretch, the session already did the
-    thing being asked for, and it stays quiet.
+    thing being asked for, and it returns "".
     """
-    if payload.get("stop_hook_active"):
-        return
     with db.connect() as conn:
         if _wrote_recently(conn, args.quiet_minutes):
-            return
+            return ""
         empty = not conn.execute("SELECT 1 FROM memories LIMIT 1").fetchone()
-    note = ("Nothing has been written to the memai store" +
+    return ("Nothing has been written to the memai store" +
             ("" if empty else f" in the last {args.quiet_minutes} minutes") +
             ". If this session established anything worth having next time -- a "
             "decision, a pitfall, where the work stands -- write it now with "
             "note() / anti_pattern() / checkpoint(). If it did not, ignore this.")
-    _emit("Stop", note, system="MemAI: nothing recorded this session.")
+
+
+def _agent_path(args) -> Path:
+    """Where the warden definition belonging to this install lives."""
+    settings = Path(args.settings) if args.settings else hook_install.user_settings_path()
+    return hook_install.agents_dir(settings) / warden.AGENT_FILE
+
+
+def _warden_launchable(args, session_id: str) -> bool:
+    """Whether this session's host can actually launch the warden.
+
+    Two conditions, and the second is not implied by the first: the
+    definition has to be on disk, AND it has to have been there when the host
+    read its agents, which it does once at startup. A definition somebody
+    edited still counts -- the prompt is theirs to change.
+    """
+    agent = _agent_path(args)
+    state = hook_install.agent_state(agent.parent)
+    if state.get(warden.AGENT_FILE) not in ("installed", "edited"):
+        return False
+    return warden.loaded(session_id, agent)
+
+
+def _warden_ask(args, payload) -> str:
+    """Ask the session to launch the warden, or "" when it is not owed one.
+
+    The ask is recorded BEFORE it is returned, and a state that could not be
+    written cancels it: a request the interval cannot see is a request that
+    repeats every turn, which is the noise this whole mechanism dies of.
+    """
+    session_id = payload.get("session_id", "")
+    with db.connect() as conn:
+        if not db.get_warden_enabled(conn):
+            return ""
+        # The flag is an override for one run; the store holds the standing
+        # answer, which is what the dashboard writes.
+        minutes = (args.warden_minutes if args.warden_minutes is not None
+                   else db.get_warden_minutes(conn))
+    if not warden.due(session_id, minutes):
+        return ""
+    if not _warden_launchable(args, session_id):
+        return ""
+    since = warden.read(session_id).get("asked_at", "")
+    transcript = str(payload.get("transcript_path", "") or "")
+    if not warden.mark(session_id, transcript=transcript):
+        return ""
+    return warden.request(session_id, transcript=transcript, since=since)
+
+
+def _stop(args, payload) -> None:
+    """Whatever the store has to say at the end of a turn, as one result.
+
+    Both notes read state before they speak, and either can be silent, so a
+    turn with nothing to say emits nothing at all.
+    """
+    if payload.get("stop_hook_active"):
+        return
+    notes, systems = [], []
+    for note, system in ((_checkpoint_nudge(args), "nothing recorded this session"),
+                         (_warden_ask(args, payload), "warden is owed a run")):
+        if note:
+            notes.append(note)
+            systems.append(system)
+    if notes:
+        _emit("Stop", "\n\n".join(notes), system="MemAI: " + "; ".join(systems) + ".")
 
 
 def _line(text: str) -> None:
@@ -236,22 +308,22 @@ _EVENTS = {
 }
 
 
-def _check(path, *, skills: bool = False) -> int:
-    """Report the hooks registered in `path` and the skills installed beside
-    it, and exit non-zero for what `skills` selects: the skills when it is
-    set, the hooks when it is not.
+def _check(path, *, skills: bool = False, agents: bool = False) -> int:
+    """Report the hooks registered in `path` and the skills and agents
+    installed beside it, and exit non-zero for what the flags select: the
+    skills and agents they name, or the hooks when they name neither.
 
-    Both are always reported; only the exit code narrows. A hook that is
+    All three are always reported; only the exit code narrows. A hook that is
     missing breaks the store's own reachability, while an uninstalled skill
-    is a choice, so the two cannot share one gate.
+    or agent is a choice, so they cannot share one gate.
 
     A registration that is neither missing nor the current entry is reported
     as the command it fires: this version's through an older entry, another
     one, or another one whose file is gone.
 
-    A skill is reported against the install receipt beside it -- installed,
-    outdated, edited or missing -- and anything but `installed` fails the
-    `skills` gate, an edited copy included.
+    A skill and an agent are each reported against the install receipt beside
+    them -- installed, outdated, edited or missing. Anything but `installed`
+    fails the gate, an edited copy included.
     """
     found = hook_install.registered(path)
     events = hook_install.event_state(path)
@@ -281,24 +353,44 @@ def _check(path, *, skills: bool = False) -> int:
         also = " -- and an update shipped since" if how == "edited" and name in behind else ""
         print(f"  {name}: {how}{also}")
 
-    if skills:
-        return 1 if any(how != "installed" for how in state.values()) else 0
+    agent_target = hook_install.agents_dir(path)
+    agents_state = hook_install.agent_state(agent_target)
+    agents_by = hook_install.read_agent_receipt(agent_target).get("memai")
+    agents_behind = hook_install.agent_behind(agent_target)
+    print(f"{agent_target}:" if not agents_by
+          else f"{agent_target}: installed by memai {agents_by}")
+    if not agents_state:
+        print("  no agents bundled")
+    for name, how in sorted(agents_state.items()):
+        also = (" -- and an update shipped since"
+                if how == "edited" and name in agents_behind else "")
+        print(f"  {name}: {how}{also}")
+
+    if skills or agents:
+        gated = (list(state.values()) if skills else []) + \
+                (list(agents_state.values()) if agents else [])
+        return 1 if any(how != "installed" for how in gated) else 0
     return 1 if any(how != "current" for how in events.values()) else 0
 
 
 def _install(args) -> int:
-    """Register the hooks, or install the skills, and print the report.
+    """Register the hooks, or install the skills or the agents, and print the
+    report.
 
     Unlike the hook events, this writes to stdout for a person and lets an
-    error surface. --check reports the hooks and the skills, and exits 1 for
-    whichever --skills selects.
+    error surface. --check reports all three, and exits 1 for whichever
+    --skills or --agents selects.
     """
     path = Path(args.settings) if args.settings else hook_install.user_settings_path()
     if args.check:
-        return _check(path, skills=args.skills)
+        return _check(path, skills=args.skills, agents=args.agents)
     if args.skills:
         print(hook_install.install_skills(hook_install.skills_dir(path),
                                           write=not args.print_only))
+    if args.agents:
+        print(hook_install.install_agents(hook_install.agents_dir(path),
+                                          write=not args.print_only))
+    if args.skills or args.agents:
         return 0
     print(hook_install.install(path, write=not args.print_only))
     return 0
@@ -324,6 +416,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--quiet-minutes", type=int, default=QUIET_MINUTES,
                         help=f"a write this recent counts as recorded (stop only, "
                              f"default {QUIET_MINUTES})")
+    parser.add_argument("--warden-minutes", type=int, default=None,
+                        help="how long a session goes before the warden subagent "
+                             "is asked for again (stop only); overrides the "
+                             "interval the dashboard writes, which defaults to "
+                             f"{db.WARDEN_MINUTES_DEFAULT}")
     parser.add_argument("--settings", default="",
                         help="install into this settings file instead of the user's; "
                              "memai maintains the user's settings and checks nothing "
@@ -332,10 +429,15 @@ def main(argv: list[str] | None = None) -> int:
                         help="install: copy the bundled skills into the `skills/` "
                              "directory beside the settings file, instead of "
                              "registering the hooks")
+    parser.add_argument("--agents", action="store_true",
+                        help="install: copy the bundled subagent definitions into "
+                             "the `agents/` directory beside the settings file, "
+                             "instead of registering the hooks")
     parser.add_argument("--check", action="store_true",
                         help="install: report the hooks registered and the skills "
-                             "installed; exit non-zero if a hook is missing, or a "
-                             "skill is when --skills is given too")
+                             "and agents installed; exit non-zero if a hook is "
+                             "missing, or a skill or agent is when --skills or "
+                             "--agents is given too")
     parser.add_argument("--print", dest="print_only", action="store_true",
                         help="install: print what it would write, write nothing")
     args = parser.parse_args(argv)
@@ -344,7 +446,8 @@ def main(argv: list[str] | None = None) -> int:
     # the flags are visible in --help before the positional is, and reaching
     # for them without it is the obvious reading.
     if args.event is None:
-        if not (args.check or args.print_only or args.settings or args.skills):
+        if not (args.check or args.print_only or args.settings or args.skills
+                or args.agents):
             parser.error("an event is required (or an install flag)")
         args.event = "install"
     if args.event == "install":
