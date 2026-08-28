@@ -9,7 +9,7 @@ ONE MCP SERVER IS NOT ONE PROCESS. A host spawns several and they start
 together at handshake, so whatever arbitrates has to be atomic across
 processes. That arbiter is bind(): the kernel guarantees one listener per
 port, so the losers of the race exit (see admin._bind). No lock file --
-the host kills MCP servers abruptly at session end (README), and an
+the host kills MCP servers abruptly at session end, and an
 abandoned lock would survive and disable the dashboard silently.
 
 A PORT THAT ANSWERS IS NOT OUR PORT. Any port number can belong to another
