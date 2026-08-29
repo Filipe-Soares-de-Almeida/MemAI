@@ -30,7 +30,7 @@ On Windows, `install.bat` does the venv + install steps and `run-admin.bat`
 starts the dashboard (both activate `.venv` themselves; extra arguments pass
 through, e.g. `run-admin.bat --port 8890`). `stop-mcp.bat` and
 `stop-admin.bat` stop what is running: Windows locks an .exe while a
-process is running it, so an update cannot rewrite `.venv\Scripts` until
+process is running it, so a `pip install` cannot rewrite `.venv\Scripts` until
 every MCP server and the dashboard are down.
 
 Register it as an MCP server. **Two hosts, two different files.** Neither reads
