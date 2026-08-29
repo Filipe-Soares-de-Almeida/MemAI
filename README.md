@@ -1,9 +1,13 @@
 # MemAI
 
-A long-term memory MCP server for AI agents. Agents call its tools to write
-memories — facts, decisions, checkpoints, pitfalls, documented flows — during a
-session and read them back in later ones, which is the state an MCP server's
-own process does not keep between conversations.
+Long-term memory for agentic coding, built for Claude Code. Agents call its MCP
+tools to write memories — facts, decisions, checkpoints, pitfalls, documented
+flows — during a session and read them back in later ones, which is the state an
+MCP server's own process does not keep between conversations.
+
+The tools answer any MCP host. What surrounds them targets Claude Code: the hook
+events that put the store in front of a session, the bundled skills, and the
+warden subagent that consults it on a session's behalf.
 
 One SQLite file holds all of it: rows, keyword index, vectors, edit history,
 relations, diagrams. A local admin dashboard serves the same store as the human
