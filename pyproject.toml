@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "memai"
 version = "0.1.0"
-description = "Custom long-term memory MCP server (SQLite + FTS5 + sqlite-vec hybrid retrieval, local model2vec embeddings)"
+description = "Long-term memory MCP server for agentic coding with Claude (SQLite + FTS5 + sqlite-vec hybrid retrieval, local model2vec embeddings)"
 license = "MIT"
 requires-python = ">=3.12"
 dependencies = [
