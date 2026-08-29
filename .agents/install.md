@@ -78,6 +78,11 @@ Register in whichever the user actually uses; register in both if they use
 both. Do not report the install as done after writing only one, and do not
 infer from one file's contents what the other holds — open the file.
 
+**Name the server `memai`.** A host builds its tool names out of it —
+`mcp__memai__search` — and the bundled warden's tool list matches those names
+literally, so a server registered under another name leaves the warden running
+with no store to search.
+
 For Claude Code, the CLI writes the entry:
 
 ```sh

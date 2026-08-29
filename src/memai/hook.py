@@ -283,16 +283,17 @@ def _guard(payload: dict) -> int:
     through.
     """
     try:
-        tool = guard.tool_of(payload.get("tool_name", ""))
+        call = str(payload.get("tool_name", ""))
+        tool = guard.tool_of(call)
         params = payload.get("tool_input")
         if not tool or not isinstance(params, dict):
             return 0
 
         missing, warn, debris = guard.check(tool, params)
         if missing:
-            sys.stderr.write(guard.refusal(tool, missing) + "\n")
+            sys.stderr.write(guard.refusal(tool, missing, call) + "\n")
             return 2
-        text = guard.warning(tool, warn, debris)
+        text = guard.warning(tool, warn, debris, call)
         if text:
             sys.stdout.write(json.dumps({"systemMessage": text}, ensure_ascii=True))
     except Exception:

@@ -9,7 +9,9 @@ description: >
   when nothing in the store applies, which is the common case.
 model: sonnet
 effort: medium
-tools: [Read, Bash, Grep, mcp__MemAI__search, mcp__MemAI__recall, mcp__MemAI__get_memory, mcp__MemAI__list_domains]
+tools: [Read, Bash, Grep,
+  mcp__memai__search, mcp__memai__recall, mcp__memai__get_memory, mcp__memai__list_domains,
+  mcp__MemAI__search, mcp__MemAI__recall, mcp__MemAI__get_memory, mcp__MemAI__list_domains]
 ---
 
 You read a conversation that is already in progress and answer one question
