@@ -104,10 +104,15 @@ def _table() -> str:
     return " | ".join(f"{tool}={','.join(fields)}" for tool, fields in GUARDED.items())
 
 
-def refusal(tool: str, missing: list[str]) -> str:
-    """What to tell a caller whose required text never arrived."""
+def refusal(tool: str, missing: list[str], call: str = "") -> str:
+    """What to tell a caller whose required text never arrived.
+
+    `call` is the tool name the host used, which carries the server's
+    registered name. Without one the message falls back to the name the
+    documentation registers.
+    """
     return (
-        f"BLOCKED (mcp__MemAI__{tool}): required parameter(s) missing: "
+        f"BLOCKED ({call or f'mcp__memai__{tool}'}): required parameter(s) missing: "
         f"{', '.join(missing)}. MOST LIKELY CAUSE: a parameter tag opened "
         f"without the antml: prefix -- the parser drops the parameter and the "
         f"text is LOST before the call leaves the client, so nothing here can "
@@ -119,8 +124,11 @@ def refusal(tool: str, missing: list[str]) -> str:
     )
 
 
-def warning(tool: str, warn: list[str], debris: list[str]) -> str:
-    """What to tell a caller whose write goes through with something off."""
+def warning(tool: str, warn: list[str], debris: list[str], call: str = "") -> str:
+    """What to tell a caller whose write goes through with something off.
+
+    `call` names the tool the way the host does, as in `refusal`.
+    """
     parts = []
     if warn:
         parts.append(f"optional parameter(s) missing ({', '.join(warn)}) -- if that "
@@ -131,5 +139,5 @@ def warning(tool: str, warn: list[str], debris: list[str]) -> str:
                      f"of the parameter after it")
     if not parts:
         return ""
-    return (f"MemAI mcp__MemAI__{tool}: " + "; ".join(parts)
+    return (f"MemAI {call or f'mcp__memai__{tool}'}: " + "; ".join(parts)
             + ". The write goes through; fix it afterwards with edit_memory.")

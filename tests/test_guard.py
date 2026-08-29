@@ -89,6 +89,16 @@ def test_the_refusal_names_every_missing_field_at_once(monkeypatch, capsys):
     assert "why_wrong, instead" in err
 
 
+def test_the_refusal_names_the_tool_the_way_the_host_did(monkeypatch, capsys):
+    """The middle segment is the server's registered name, which is the
+    user's to choose. A message that spells another one sends the reader
+    looking for a tool their host does not publish."""
+    payload = {"tool_name": "mcp__memai__note", "tool_input": {}}
+    code, _, err = _run(payload, monkeypatch, capsys)
+    assert code == 2
+    assert "BLOCKED (mcp__memai__note)" in err
+
+
 def test_a_field_that_arrived_empty_counts_as_missing(monkeypatch, capsys):
     code, _, err = _run(_call("note", content="   "), monkeypatch, capsys)
     assert code == 2

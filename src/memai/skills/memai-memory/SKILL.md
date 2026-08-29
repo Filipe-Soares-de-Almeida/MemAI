@@ -21,7 +21,8 @@ description: >
 # memai-memory — using the MemAI MCP server
 
 **MemAI** is a long-term memory store with **hybrid BM25 + vector** retrieval,
-exposed over MCP (`mcp__MemAI__*`). It matches an **exact identifier**
+exposed over MCP under the name the host registered the server with —
+`mcp__memai__*` for the documented one. It matches an **exact identifier**
 (`F100_TOTAL`, `USE_NEW_PARSER`, `proj-1042`) **and** a paraphrase of the same
 thing, so a store full of codes stays findable either way.
 
