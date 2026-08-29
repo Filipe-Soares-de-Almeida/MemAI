@@ -11,6 +11,11 @@ curation surface.
 
 ## Setup
 
+An agent installing MemAI on a new machine follows
+[.agents/install.md](.agents/install.md): requirements, the order that keeps a
+running server from breaking the install, both MCP config files, and the checks
+that confirm the result. What follows here is the short version.
+
 ```sh
 python -m venv .venv
 .venv/Scripts/pip install -e ".[dev]"   # or .venv/bin/pip on non-Windows
