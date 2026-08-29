@@ -18,3 +18,6 @@ dist/
 # design-review snapshots written by the impeccable skill — a local record of
 # what was found and when, not repo content
 /.impeccable/
+
+# private working rules -- the documented spot for uncommitted project instructions
+/CLAUDE.local.md
