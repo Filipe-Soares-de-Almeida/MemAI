@@ -16,7 +16,7 @@ version and whose files are another. Every host that starts a server after that
 fails to start one, and the store is unreachable until the environment is
 repaired with everything stopped.
 
-Before any install, update or reinstall:
+Before any `pip install` into that environment:
 
 ```bat
 stop-mcp.bat
@@ -152,13 +152,27 @@ line in a config file.
 
 ## 7. Updating an existing install
 
-Same rule, same order, every time:
+The install is editable: the checkout is what runs, so a `git pull` already
+changes what the next server process imports. Which of the two updates below
+it is depends on whether the environment moved with it.
+
+**Source only** — the common case, and no `pip install` in it. A pull that
+leaves `pyproject.toml` alone is this one:
+
+1. `git pull`
+2. `memai-hook install --check`, and reinstall the skills or agents it reports
+   as outdated — file copies into `~/.claude`, which no server holds open
+3. restart the hosts: a running server keeps the code it imported at startup,
+   and a host reads its agents and skills once, when it starts
+
+**The environment moved** — a dependency added, removed or repinned, a new
+entry under `[project.scripts]`, or a different Python under the venv. This is
+what `pip install` is for, and the rule at the top of this file applies to it:
 
 1. `stop-mcp.bat` and `stop-admin.bat`; close the hosts
 2. `git pull`
 3. `install.bat` (or the pip line for the platform)
-4. `memai-hook install --check`, and reinstall the skills or agents it reports
-   as outdated
+4. `memai-hook install --check`, and reinstall what it reports as outdated
 5. reopen the hosts
 
 ## Failure modes
@@ -168,4 +182,5 @@ Same rule, same order, every time:
 | pip errors on `memai-mcp.exe`, "access is denied" or "used by another process" | a host is running a server from this venv | stop the servers and hosts, run the install again |
 | the server fails to start after an install that reported success | the launcher was rewritten while locked, leaving the environment half-updated | stop everything, reinstall into the same venv, restart the hosts |
 | host lists no MCP servers although the config has one | wrong file for that host, or the host was not restarted after the edit | check the file that host actually reads, then restart it |
+| a pulled change does not show up in a session | the server that session runs was started before the pull | restart the host; the checkout is editable, so nothing else is needed |
 | server starts but the store is empty or in the wrong place | `MEMAI_HOME` set in a shell instead of the entry's `env` block | move it into the config entry |
