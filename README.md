@@ -1,15 +1,24 @@
 # MemAI
 
-A long-term memory MCP server for AI agents. Agents call its tools to write
-memories — facts, decisions, checkpoints, pitfalls, documented flows — during a
-session and read them back in later ones, which is the state an MCP server's
-own process does not keep between conversations.
+Long-term memory for agentic coding, built for Claude Code. Agents call its MCP
+tools to write memories — facts, decisions, checkpoints, pitfalls, documented
+flows — during a session and read them back in later ones, which is the state an
+MCP server's own process does not keep between conversations.
+
+The tools answer any MCP host. What surrounds them targets Claude Code: the hook
+events that put the store in front of a session, the bundled skills, and the
+warden subagent that consults it on a session's behalf.
 
 One SQLite file holds all of it: rows, keyword index, vectors, edit history,
 relations, diagrams. A local admin dashboard serves the same store as the human
 curation surface.
 
 ## Setup
+
+An agent installing MemAI on a new machine follows
+[.agents/install.md](.agents/install.md): requirements, the order that keeps a
+running server from breaking the install, both MCP config files, and the checks
+that confirm the result. What follows here is the short version.
 
 ```sh
 python -m venv .venv
@@ -24,8 +33,17 @@ through, e.g. `run-admin.bat --port 8890`). `stop-mcp.bat` and
 process is running it, so an update cannot rewrite `.venv\Scripts` until
 every MCP server and the dashboard are down.
 
-Register it as an MCP server (e.g. in a Claude Desktop / Claude Code MCP
-config) pointing at the installed console script:
+Register it as an MCP server. **Two hosts, two different files.** Neither reads
+the other's, so a server registered in one is invisible to the other, and an
+empty list in one says nothing about the other:
+
+| host | the file it reads | how to write it |
+|---|---|---|
+| Claude Code — CLI and desktop UI alike | `~/.claude.json`, top-level `mcpServers` | `claude mcp add --scope user memai <command>` |
+| Claude Desktop — the chat app | Windows: `%APPDATA%\Claude\claude_desktop_config.json`<br>macOS: `~/Library/Application Support/Claude/claude_desktop_config.json` | edit the file, or Settings → Developer → Edit configuration |
+
+Both take the same block, pointing at the console script the install put in the
+environment:
 
 ```json
 {
@@ -36,6 +54,25 @@ config) pointing at the installed console script:
   }
 }
 ```
+
+A bare `memai-mcp` resolves only if that environment's `Scripts\` (`bin/` off
+Windows) is on the PATH of the process that launches the server — and a GUI app
+inherits the desktop session's PATH, not your shell's. Unless you know it is
+there, give the absolute path instead:
+
+```json
+{
+  "mcpServers": {
+    "memai": {
+      "command": "C:\\path\\to\\MemAI\\.venv\\Scripts\\memai-mcp.exe"
+    }
+  }
+}
+```
+
+`claude mcp list` reports what Claude Code loaded; the desktop app lists what it
+loaded under Settings → Developer → local MCP servers. A host reads its config
+once, at startup, so restart it after an edit.
 
 Then let it reach a session by itself — the hooks put the store in front of an
 agent that did not ask for it, and the bundled skills and subagent teach it what
