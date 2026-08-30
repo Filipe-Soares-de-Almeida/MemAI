@@ -782,6 +782,10 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
 }
 .status-tag.archived { color: var(--warn); border-color: rgba(255, 213, 79, .35); }
 
+/* the one chip that reports an absence, so it wears the same warning colour
+   as an archived tag rather than reading as a tag named "no tags" */
+.chip.untagged { color: var(--warn); border-color: rgba(255, 213, 79, .35); }
+
 .match-badge {
   color: var(--secondary);
   border: 1px solid rgba(3, 218, 198, .3);

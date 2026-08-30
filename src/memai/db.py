@@ -2054,7 +2054,7 @@ def insert_diagram(
     summary = str(summary).strip()
     uid = insert_memory(
         conn, type=DIAGRAM_TYPE, content=_render_text(title, summary, kind, n, e),
-        domain=domain, also=also, session=session, tags=tags or DIAGRAM_TYPE,
+        domain=domain, also=also, session=session, tags=tags,
         review_after=review_after, source_ref=source_ref,
     )
     conn.execute(
@@ -4128,6 +4128,11 @@ def optimization_corpus(
         # Whatever a writer dated for a recheck and nobody rechecked. The
         # rows here are not suspect because they are old -- they are suspect
         # because somebody who knew the subject said when to look again.
+        # Tags empty, or nothing but the type every read already filters
+        # on: no synonym either way, and `retag` is the kind that fixes it.
+        "untagged": conn.execute(
+            f"SELECT COUNT(*) FROM memories WHERE {where_sql} "
+            "AND (TRIM(tags) = '' OR TRIM(tags) = type)", params).fetchone()[0],
         "due_for_review": conn.execute(
             f"SELECT COUNT(*) FROM memories WHERE {where_sql} AND {_due_clause(today)[0]}",
             [*params, today]).fetchone()[0],

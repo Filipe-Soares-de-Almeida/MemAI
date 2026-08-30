@@ -71,7 +71,12 @@ sub-skill. Read each source once; nothing below is read twice.
    **only the delta** (a full scan on the first pass, or on request). The
    fields that drive the pass:
    - `stats` — over the whole filtered corpus, independent of `limit`,
-     including `due_for_review` and `never_recalled`;
+     including `due_for_review`, `never_recalled` and **`untagged`**;
+   - **`untagged`** — memories whose `tags` are empty, or are nothing but the
+     type every read already filters on. Retrieval is BM25 over content, tags
+     and domain, so those rows answer only queries that quote their own
+     wording. They are the work list for `retag`: give each the identifier,
+     the symbol and the plain-language phrasing someone will type;
    - **`due: true`** per memory, with its `review_after` and `source_ref` — the
      store saying a writer dated this claim for a recheck and the date has
      passed. This is the decay work list; `recalls` is **not** (a low count

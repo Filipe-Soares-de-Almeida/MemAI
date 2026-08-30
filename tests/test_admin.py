@@ -189,6 +189,16 @@ def test_the_disk_row_names_what_freed_its_pages(client):
     assert h["file"]["compact_reason"] == ""
 
 
+def test_health_counts_the_memories_no_tag_can_reach(client):
+    """The store-wide number the per-row marker cannot give."""
+    _create(client, content="a tagged row", tags="queue,drain")
+    _create(client, content="a row with nothing in its tags")
+
+    tags = client.get("/api/maintenance/health").json()["tags"]
+
+    assert tags == {"untagged": 1, "active": 2}
+
+
 def test_maintenance_suite(client):
     uid = _create(client, content="maintenance row content", domain="mnt")
     _create(client, content="maintenance row content nearly equal", domain="mnt")

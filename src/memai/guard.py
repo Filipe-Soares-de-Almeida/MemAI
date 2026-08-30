@@ -39,10 +39,10 @@ GUARDED: dict[str, tuple[str, ...]] = {
 # a memory nobody can file or check, with nothing on screen to say so.
 WATCHED: dict[str, tuple[str, ...]] = {
     "note": ("domain", "tags", "source_ref"),
-    "reasoning": ("domain", "source_ref"),
-    "handoff": ("domain",),
-    "checkpoint": ("domain",),
-    "anti_pattern": ("domain", "source_ref"),
+    "reasoning": ("domain", "tags", "source_ref"),
+    "handoff": ("domain", "tags"),
+    "checkpoint": ("domain", "tags"),
+    "anti_pattern": ("domain", "tags", "source_ref"),
 }
 
 # What a dropped tag leaves behind when it lands inside the NEXT parameter's
