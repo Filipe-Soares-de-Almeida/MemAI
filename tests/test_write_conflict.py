@@ -31,40 +31,40 @@ _FACT = "the nightly database tuning schedule runs at midnight"
 # ------------------------------------------------------------------- lexical
 
 def test_a_restatement_comes_back_on_the_write(store):
-    first = server.note(content=_FACT, domain="acme/x100")["uid"]
-    res = server.note(content=_FACT + " sharp", domain="acme/x100")
+    first = server.note("fixture title", content=_FACT, domain="acme/x100")["uid"]
+    res = server.note("fixture title", content=_FACT + " sharp", domain="acme/x100")
     assert [s["uid"] for s in res["similar"]] == [first]
     assert res["similar_hint"]
 
 
 def test_the_write_still_happened(store):
-    server.note(content=_FACT, domain="acme/x100")
-    res = server.note(content=_FACT + " sharp", domain="acme/x100")
+    server.note("fixture title", content=_FACT, domain="acme/x100")
+    res = server.note("fixture title", content=_FACT + " sharp", domain="acme/x100")
     assert server.get_memory(res["uid"])["content"].endswith("sharp")
 
 
 def test_an_unrelated_fact_says_nothing(store):
-    server.note(content=_FACT, domain="acme/x100")
-    res = server.note(content="an empty part is rejected on upload", domain="acme/x100")
+    server.note("fixture title", content=_FACT, domain="acme/x100")
+    res = server.note("fixture title", content="an empty part is rejected on upload", domain="acme/x100")
     assert "similar" not in res and "similar_hint" not in res
 
 
 def test_the_first_memory_of_a_store_says_nothing(store):
-    assert "similar" not in server.note(content=_FACT)
+    assert "similar" not in server.note("fixture title", content=_FACT)
 
 
 def test_an_archived_twin_is_not_a_collision(store):
-    old = server.note(content=_FACT, domain="acme/x100")["uid"]
+    old = server.note("fixture title", content=_FACT, domain="acme/x100")["uid"]
     server.forget(old, reason="superseded")
-    assert "similar" not in server.note(content=_FACT + " sharp", domain="acme/x100")
+    assert "similar" not in server.note("fixture title", content=_FACT + " sharp", domain="acme/x100")
 
 
 def test_consecutive_checkpoints_are_a_timeline_not_a_copy(store):
     """They share a skeleton by design; firing on every one would train the
     field to be ignored."""
-    server.checkpoint(intent="ship the retry path", established="a", pursuing="b",
+    server.checkpoint("fixture title", intent="ship the retry path", established="a", pursuing="b",
                       open_questions="c", domain="acme/x100")
-    res = server.checkpoint(intent="ship the retry path", established="a2", pursuing="b",
+    res = server.checkpoint("fixture title", intent="ship the retry path", established="a2", pursuing="b",
                             open_questions="c", domain="acme/x100")
     assert "similar" not in res
 
@@ -86,11 +86,11 @@ def test_a_diagram_is_never_a_collision(store):
         {"key": "start", "shape": "start", "label": _FACT},
         {"key": "done", "shape": "end", "label": "done"}],
         edges=[{"from": "start", "to": "done"}])
-    assert "similar" not in server.note(content=_FACT, domain="acme/x100")
+    assert "similar" not in server.note("fixture title", content=_FACT, domain="acme/x100")
 
 
 def test_writing_a_diagram_never_probes(store):
-    server.note(content=_FACT, domain="acme/x100")
+    server.note("fixture title", content=_FACT, domain="acme/x100")
     res = server.diagram(title="Nightly tuning", domain="acme/x100", nodes=[
         {"key": "start", "shape": "start", "label": _FACT},
         {"key": "done", "shape": "end", "label": "done"}],

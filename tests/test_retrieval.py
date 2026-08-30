@@ -89,15 +89,21 @@ def test_every_hit_says_the_keyword_index_found_it(conn):
 
 # every writer that takes tags, with the fields it cannot do without
 _TAGGED_WRITERS = (
-    ("note", {"content": "the loader skips a blank part"}),
-    ("checkpoint", {"intent": "finish the loader", "established": "parts stream",
+    ("note", {"title": "blank parts in the loader",
+              "content": "the loader skips a blank part"}),
+    ("checkpoint", {"title": "loader work", "intent": "finish the loader",
+                    "established": "parts stream",
                     "pursuing": "the blank case", "open_questions": "none"}),
-    ("anti_pattern", {"pattern": "retrying the whole batch", "why_wrong": "it doubles writes",
+    ("anti_pattern", {"title": "batch retry after one bad part",
+                      "pattern": "retrying the whole batch",
+                      "why_wrong": "it doubles writes",
                       "instead": "retry the failed part"}),
-    ("reasoning", {"hypothesis": "the loader stalls on blanks", "reasoning": "read the trace",
+    ("reasoning", {"title": "why the loader stalls",
+                   "hypothesis": "the loader stalls on blanks", "reasoning": "read the trace",
                    "result": "it skips them", "revised_belief": "blanks are handled",
                    "next_time": "read the trace first"}),
-    ("handoff", {"content": "pick up at the drain step"}),
+    ("handoff", {"title": "where the drain step stands",
+                 "content": "pick up at the drain step"}),
 )
 
 
@@ -127,7 +133,7 @@ def test_an_untagged_write_says_so_while_the_writer_can_still_fix_it(store, tool
 
 
 def test_a_tagged_write_reports_what_it_indexed(store):
-    result = server.note(content="the drain retries twice", tags="queue, drain, retry")
+    result = server.note("fixture title", content="the drain retries twice", tags="queue, drain, retry")
     assert result["tags_indexed"] == 3
     assert "tags_hint" not in result
 
@@ -208,14 +214,14 @@ def test_search_defaults_to_a_handful(store):
     """Thirty results at 400 chars each is twelve thousand characters of
     context for one call. The caller can still ask for more."""
     for content in _FINDINGS:
-        server.note(content=content, tags="finding")
+        server.note("fixture title", content=content, tags="finding")
     assert len(server.search("finding")["results"]) == 10
     assert len(server.search("finding", limit=12)["results"]) == 12
 
 
 def test_recall_defaults_the_same_way(store):
     for content in _FINDINGS:
-        server.note(content=content, tags="finding")
+        server.note("fixture title", content=content, tags="finding")
     assert len(server.recall("finding")["results"]) == 10
 
 

@@ -377,10 +377,13 @@ def memory_detail(request, payload) -> dict:
 
 def create_memory(request, payload) -> dict:
     type_ = (payload.get("type") or "").strip()
+    title = (payload.get("title") or "").strip()
     content = (payload.get("content") or "").strip()
     confidence = payload.get("confidence") or "unverified"
     if not type_:
         raise ValueError("type is required")
+    if not title:
+        raise ValueError("title is required")
     if type_ not in KNOWN_TYPES:
         raise ValueError(f"type must be one of {KNOWN_TYPES}")
     if type_ == db.DIAGRAM_TYPE:
@@ -403,7 +406,7 @@ def create_memory(request, payload) -> dict:
         raise ValueError(f"confidence must be one of {CONFIDENCES}")
     with db.connect() as conn:
         uid = db.insert_memory(
-            conn, type=type_, content=content,
+            conn, type=type_, content=content, title=title,
             domain=(payload.get("domain") or "").strip(),
             also=payload.get("also") or "",
             session=(payload.get("session") or "").strip(),
@@ -440,7 +443,7 @@ def edit_meta(request, payload) -> dict:
     domain change in the same request, because the policy that drops a
     redundant cross-listing reads the domain the memory ends up with."""
     uid = request.path_params["uid"]
-    allowed = ("domain", "tags", "session", "type", "review_after", "source_ref")
+    allowed = ("title", "domain", "tags", "session", "type", "review_after", "source_ref")
     updates = {k: str(payload[k]).strip() for k in allowed if k in payload}
     if not updates and "also" not in payload:
         raise ValueError(f"nothing to update (fields: {(*allowed, 'also')})")
@@ -451,6 +454,8 @@ def edit_meta(request, payload) -> dict:
         updates["review_after"] = db.normalize_review_after(updates["review_after"])
     if "type" in updates and not updates["type"]:
         raise ValueError("type cannot be empty")
+    if "title" in updates and not updates["title"]:
+        raise ValueError("title cannot be empty")
     if "type" in updates and updates["type"] not in KNOWN_TYPES:
         raise ValueError(f"type must be one of {KNOWN_TYPES}")
     with db.connect() as conn:

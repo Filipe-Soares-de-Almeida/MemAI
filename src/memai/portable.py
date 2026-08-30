@@ -36,8 +36,8 @@ FORMAT_VERSION = 1
 
 def _memory_record(conn, row, usage: dict) -> dict:
     out = {"record": "memory"}
-    for col in ("uid", "type", "domain", "session", "tags", "content", "status",
-                "confidence", "superseded_by", "created_at", "updated_at",
+    for col in ("uid", "type", "domain", "session", "tags", "title", "content",
+                "status", "confidence", "superseded_by", "created_at", "updated_at",
                 "review_after", "source_ref"):
         value = row[col]
         if value:

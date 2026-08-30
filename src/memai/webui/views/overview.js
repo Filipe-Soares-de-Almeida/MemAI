@@ -89,7 +89,8 @@ export async function renderOverview(view, params, ctx) {
     <div class="rel-row clickable" data-uid="${esc(m.uid)}">
       <span class="type-tag ${typeClass(m.type)}" style="flex:none;width:118px"><span class="dot"></span>${esc(m.type)}</span>
       <button type="button" class="row-open rel-peer"
-              aria-label="${esc(t('a11y.openRecord', { uid: m.uid }))}"><span class="snippet">${esc(m.content)}</span></button>
+              aria-label="${esc(t('a11y.openRecord', { uid: m.uid }))}"><!--
+           --><span class="snippet" title="${esc(m.content)}">${esc(m.title || m.content)}</span></button>
       <span class="hint-sm">${fmtAgo(m.created_at)}</span>
     </div>`).join('') || `<div class="empty">${t('ov.recent.empty')}</div>`;
 

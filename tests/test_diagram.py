@@ -757,7 +757,8 @@ def test_api_lookup_ranks_by_relevance(client):
     """The picker is choosing any memory to attach, and now so is everything
     else: the better match leads."""
     client.post("/api/memories", json={
-        "type": "note", "content": "The export window is inclusive on both ends."})
+        "title": "Export window bounds", "type": "note",
+        "content": "The export window is inclusive on both ends."})
     _create(client, summary="Reads the export window.")
     items = client.get("/api/lookup?q=export+window").json()["items"]
     assert items and items[0]["type"] == "note"
@@ -861,7 +862,8 @@ def test_mcp_refuses_a_hand_written_diagram_content(mcp):
 
 def test_mcp_get_memory_shows_the_link_from_both_ends(mcp):
     uid = mcp.diagram(title="Nightly export routine", nodes=NODES, edges=EDGES)["uid"]
-    note = mcp.note(content="Export window is inclusive on both ends.")["uid"]
+    note = mcp.note(title="Export window bounds",
+                    content="Export window is inclusive on both ends.")["uid"]
     assert mcp.diagram_link(uid, "load", note) == {"ok": True}
 
     diagram_view = mcp.get_memory(uid)
@@ -1056,7 +1058,7 @@ def test_api_meta_update(client):
 
 def test_api_link_carries_a_peer_card(client):
     uid = _create(client)
-    note = client.post("/api/memories", json={"type": "note", "content": "a fact"}).json()["uid"]
+    note = client.post("/api/memories", json={"title": "fixture title", "type": "note", "content": "a fact"}).json()["uid"]
     assert client.post(f"/api/diagrams/{uid}/link", json={
         "node_key": "load", "target_uid": note}).status_code == 200
 
@@ -1146,27 +1148,27 @@ def test_api_refuses_a_hand_written_diagram_content(client):
 
 def test_api_refuses_creating_a_diagram_as_a_plain_memory(client):
     """It would leave a memory whose content nothing regenerates."""
-    res = client.post("/api/memories", json={"type": "diagram", "content": "x"})
+    res = client.post("/api/memories", json={"title": "fixture title", "type": "diagram", "content": "x"})
     assert res.status_code == 400
     assert "POST /api/diagrams" in res.json()["error"]
 
 
 def test_api_type_allowlist_is_enforced(client):
-    assert client.post("/api/memories", json={"type": "wat", "content": "x"}).status_code == 400
-    uid = client.post("/api/memories", json={"type": "note", "content": "x"}).json()["uid"]
-    assert client.post(f"/api/memories/{uid}/meta", json={"type": "wat"}).status_code == 400
+    assert client.post("/api/memories", json={"title": "fixture title", "type": "wat", "content": "x"}).status_code == 400
+    uid = client.post("/api/memories", json={"title": "fixture title", "type": "note", "content": "x"}).json()["uid"]
+    assert client.post(f"/api/memories/{uid}/meta", json={"title": "fixture title", "type": "wat"}).status_code == 400
     # handoff, not reasoning: claiming a type that has fields is a write of
     # that shape, and this body has none of them
-    assert client.post(f"/api/memories/{uid}/meta", json={"type": "handoff"}).status_code == 200
+    assert client.post(f"/api/memories/{uid}/meta", json={"title": "fixture title", "type": "handoff"}).status_code == 200
 
 
 def test_api_refuses_retyping_across_the_diagram_boundary(client):
     uid = _create(client)
-    res = client.post(f"/api/memories/{uid}/meta", json={"type": "note"})
+    res = client.post(f"/api/memories/{uid}/meta", json={"title": "fixture title", "type": "note"})
     assert res.status_code == 400 and "cannot be changed" in res.json()["error"]
 
-    note = client.post("/api/memories", json={"type": "note", "content": "x"}).json()["uid"]
-    assert client.post(f"/api/memories/{note}/meta", json={"type": "diagram"}).status_code == 400
+    note = client.post("/api/memories", json={"title": "fixture title", "type": "note", "content": "x"}).json()["uid"]
+    assert client.post(f"/api/memories/{note}/meta", json={"title": "fixture title", "type": "diagram"}).status_code == 400
 
 
 def test_api_purge_clears_the_graph(client):
@@ -1178,7 +1180,7 @@ def test_api_purge_clears_the_graph(client):
 
 def test_api_clean_orphans_drops_a_link_to_a_missing_node(client):
     uid = _create(client)
-    note = client.post("/api/memories", json={"type": "note", "content": "a fact"}).json()["uid"]
+    note = client.post("/api/memories", json={"title": "fixture title", "type": "note", "content": "a fact"}).json()["uid"]
     client.post(f"/api/diagrams/{uid}/link", json={"node_key": "load", "target_uid": note})
 
     # forge the desync a crash mid-delete could leave behind

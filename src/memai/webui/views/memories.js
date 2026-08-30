@@ -384,8 +384,13 @@ function renderRows(items, scope = '') {
            an agent wrote, the vetting was the faintest thing in the row. -->
       <div class="mem-col-type" role="gridcell">${confPill(m.confidence, true)}${typeTag(m.type)}</div>
       <div class="mem-main" role="gridcell">
-        <button type="button" class="row-open mem-snippet" tabindex="-1"
-                aria-label="${esc(t('a11y.openRecord', { uid: m.uid }))}">${esc(m.content)}</button>
+        <!-- A titled row shows its title alone, with the body on hover.
+             A row with no title is the body: it is what names the memory
+             when nothing else does. -->
+        <button type="button" class="row-open mem-snippet${m.title ? ' mem-named' : ''}"
+                tabindex="-1"${m.title ? ` title="${esc(m.content)}"` : ''}
+                aria-label="${esc(t('a11y.openRecord', { uid: m.uid }))}"
+                >${esc(m.title || m.content)}</button>
       </div>
       <div class="mem-right" role="gridcell">
         ${match}

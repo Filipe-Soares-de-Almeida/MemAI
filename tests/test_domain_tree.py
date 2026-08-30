@@ -99,7 +99,7 @@ def test_write_normalization_survives_the_casing_policy(conn):
 
 def test_mcp_writer_reports_the_path_adjustment(monkeypatch, tmp_path):
     monkeypatch.setenv("MEMAI_HOME", str(tmp_path))
-    res = server.note(content="x", domain="acme / x100")
+    res = server.note("fixture title", content="x", domain="acme / x100")
     assert res["domain_adjusted"] == {"from": "acme / x100", "to": "acme/x100",
                                       "policy": "preserve"}
 
@@ -180,15 +180,15 @@ def test_list_domains_orders_parents_with_their_liveliest_child(conn):
 
 def test_mcp_list_domains_returns_the_tree(monkeypatch, tmp_path):
     monkeypatch.setenv("MEMAI_HOME", str(tmp_path))
-    server.note(content="x", domain="acme/x100/p200")
+    server.note("fixture title", content="x", domain="acme/x100/p200")
     by_path = {d["domain"]: d for d in server.list_domains()}
     assert by_path["acme"]["subtree"] == 1 and by_path["acme"]["implicit"] is True
 
 
 def test_mcp_reads_take_the_scope(monkeypatch, tmp_path):
     monkeypatch.setenv("MEMAI_HOME", str(tmp_path))
-    server.note(content="module wide", domain="acme/x100")
-    server.note(content="routine detail", domain="acme/x100/p200")
+    server.note("fixture title", content="module wide", domain="acme/x100")
+    server.note("fixture title", content="routine detail", domain="acme/x100/p200")
     assert len(server.list_by_domain(domain="acme")["results"]) == 2
     assert len(server.list_by_domain(domain="acme", subtree=False)["results"]) == 0
     assert len(server.list_recent(domain="acme/x100", subtree=False)["results"]) == 1
@@ -258,7 +258,7 @@ def test_search_and_dedup_take_the_resolved_scope(conn):
 
 def test_pulse_reports_where_it_read(monkeypatch, tmp_path):
     monkeypatch.setenv("MEMAI_HOME", str(tmp_path))
-    server.note(content="routine detail", domain="acme/x100/p200")
+    server.note("fixture title", content="routine detail", domain="acme/x100/p200")
     resolved = server.pulse(domain="p200")
     assert resolved["scope"]["paths"] == ["acme/x100/p200"]
     assert len(resolved["recent_notes"]) == 1
@@ -323,10 +323,10 @@ def test_pulse_says_what_the_caps_left_behind(monkeypatch, tmp_path):
     """The failure this exists for: a busy child fills the newest-five and
     the parent's own note never appears, with nothing saying so."""
     monkeypatch.setenv("MEMAI_HOME", str(tmp_path))
-    server.note(content="parent convention", domain="acme")
+    server.note("fixture title", content="parent convention", domain="acme")
     for i in range(12):
-        server.note(content=f"child detail {i}", domain="acme/x100")
-    server.handoff(content="one handoff", domain="acme/x100")
+        server.note("fixture title", content=f"child detail {i}", domain="acme/x100")
+    server.handoff("fixture title", content="one handoff", domain="acme/x100")
 
     p = server.pulse(domain="acme")
     assert len(p["recent_notes"]) == server.PULSE_NOTES
@@ -337,7 +337,7 @@ def test_pulse_says_what_the_caps_left_behind(monkeypatch, tmp_path):
 
 def test_pulse_stays_quiet_when_it_showed_everything(monkeypatch, tmp_path):
     monkeypatch.setenv("MEMAI_HOME", str(tmp_path))
-    server.note(content="the only note", domain="acme")
+    server.note("fixture title", content="the only note", domain="acme")
     p = server.pulse(domain="acme")
     assert p["scope"]["not_shown"] == {}
     assert p["scope"]["subdomains"] == []
@@ -346,7 +346,7 @@ def test_pulse_stays_quiet_when_it_showed_everything(monkeypatch, tmp_path):
 def test_pulse_counts_the_checkpoints_it_did_not_return(monkeypatch, tmp_path):
     monkeypatch.setenv("MEMAI_HOME", str(tmp_path))
     for i in range(3):
-        server.checkpoint(intent=f"i{i}", established="e", pursuing="p",
+        server.checkpoint("fixture title", intent=f"i{i}", established="e", pursuing="p",
                           open_questions="q", domain="acme/x100")
     p = server.pulse(domain="acme")
     assert p["latest_checkpoint"]["domain"] == "acme/x100"
@@ -515,7 +515,7 @@ def test_redomain_suggestion_is_staged_as_a_normalized_path(conn):
 # --------------------------------------------------------- admin endpoints
 
 def _create(client, **body) -> str:
-    return client.post("/api/memories", json={"type": "note", "content": "x", **body}).json()["uid"]
+    return client.post("/api/memories", json={"title": "fixture title", "type": "note", "content": "x", **body}).json()["uid"]
 
 
 def test_domains_endpoint_returns_the_tree(client):
