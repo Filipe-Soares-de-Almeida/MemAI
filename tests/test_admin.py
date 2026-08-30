@@ -7,6 +7,8 @@ endpoint opens its own db.connect() against default_db_path().
 
 from __future__ import annotations
 
+import re
+
 import pytest
 from starlette.testclient import TestClient
 
@@ -238,20 +240,37 @@ def test_maintenance_suite(client):
     assert entries[0]["content_changed"] == 1
 
 
+@pytest.mark.skipif(not (admin.WEBUI_DIR / "index.html").is_file(),
+                    reason="dashboard not built (npm run build)")
 def test_static_ui_served(client):
+    """The built page, and every asset it names, come back over /static.
+
+    Asset filenames carry a content hash, so they are read off the page
+    rather than spelled here.
+    """
     res = client.get("/")
     assert res.status_code == 200
     assert "MemAI" in res.text
-    assert client.get("/static/app.js").status_code == 200
-    assert client.get("/static/admin.css").status_code == 200
+
+    assets = re.findall(r'(?:src|href)="(/static/[^"]+)"', res.text)
+    assert assets, "the page names no /static asset"
+    for url in assets:
+        assert client.get(url).status_code == 200, url
+
+
+def test_the_index_says_what_to_run_when_there_is_no_build(client, tmp_path, monkeypatch):
+    """An install that skipped the build answers with the command, not a
+    stack trace from FileResponse on a path that is not there."""
+    monkeypatch.setattr(admin, "WEBUI_DIR", tmp_path / "dist")
+    res = client.get("/")
+    assert res.status_code == 503
+    assert "npm run build" in res.text
 
 
 def test_fonts_css_never_names_a_missing_file(client):
-    """webui/fonts/ is untracked and normally absent.
-
-    A url() in a stylesheet is a request whether the file is there or not,
-    so naming an unfetched face means a 404 in the console for something
-    working exactly as designed. Every face still gets a local() src.
+    """A url() in a stylesheet is a request whether the file is there or
+    not, so a face missing from the build is named by local() alone rather
+    than by a url() that would 404.
     """
     res = client.get("/fonts.css")
     assert res.status_code == 200

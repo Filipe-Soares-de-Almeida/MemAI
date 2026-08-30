@@ -8,6 +8,7 @@
 <p align="center">
   <a href="LICENSE"><img alt="Licence: MIT" src="https://img.shields.io/badge/licence-MIT-blue.svg"></a>
   <img alt="Python 3.12+" src="https://img.shields.io/badge/python-3.12%2B-blue.svg">
+  <img alt="Node 20.19+" src="https://img.shields.io/badge/node-20.19%2B-5fa04e.svg">
   <img alt="MCP server" src="https://img.shields.io/badge/MCP-server-6f4ff2.svg">
   <img alt="Storage: SQLite + FTS5" src="https://img.shields.io/badge/storage-SQLite%20%2B%20FTS5-003b57.svg">
 </p>
@@ -73,6 +74,7 @@ of what the scope holds that the warm-up did not show.
 ```sh
 python -m venv .venv
 .venv/Scripts/pip install -e ".[dev]"   # .venv/bin/pip off Windows
+npm ci && npm run build                 # the admin dashboard
 .venv/Scripts/python -m pytest
 ```
 
@@ -137,10 +139,10 @@ there, give the absolute path instead:
 loaded under Settings → Developer → local MCP servers. A host reads its config
 once, at startup, so restart it after an edit.
 
-On Windows, `install.bat` does the venv + install steps and `run-admin.bat`
-starts the dashboard (both activate `.venv` themselves; extra arguments pass
-through, e.g. `run-admin.bat --port 8890`). `stop-mcp.bat` and `stop-admin.bat`
-stop what is running.
+On Windows, `install.bat` does the venv, install and dashboard-build steps, and
+`run-admin.bat` starts the dashboard (both activate `.venv` themselves; extra
+arguments pass through, e.g. `run-admin.bat --port 8890`). `stop-mcp.bat` and
+`stop-admin.bat` stop what is running.
 
 > [!IMPORTANT]
 > Windows locks an .exe while a process is running it, so a `pip install` cannot

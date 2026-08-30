@@ -41,7 +41,7 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-FONT_DIR = ROOT / "src" / "memai" / "webui" / "fonts"
+FONT_DIR = ROOT / "src" / "memai" / "webui" / "public" / "fonts"
 OUT = ROOT / "src" / "memai" / "roboto_metrics.json"
 
 # role -> (file, the family name the canvas passes to ctx.font)

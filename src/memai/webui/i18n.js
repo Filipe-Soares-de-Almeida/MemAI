@@ -1,6 +1,7 @@
-/* MemAI admin i18n runtime (ES module, no build step).
-   String catalogs live in i18n/<locale>.json — one file per language.
-   Adding a language = drop i18n/<code>.json + add one LOCALES entry.
+/* MemAI admin i18n runtime.
+   String catalogs live in public/i18n/<locale>.json — one file per language,
+   copied verbatim into the build and fetched from /static/i18n at runtime.
+   Adding a language = drop public/i18n/<code>.json + add one LOCALES entry.
    Only English (the fallback) and the active locale are fetched.
    The user's choice persists in localStorage and a switch reloads the
    page, so module-level constants in app.js can bake translations at
@@ -21,7 +22,7 @@ try { stored = localStorage.getItem(STORAGE_KEY); } catch { /* storage may be bl
 const locale = LOCALES[stored] ? stored : 'en';   /* default is English — no auto-detect */
 
 const loadCatalog = async code => {
-  const res = await fetch(new URL(`./i18n/${code}.json`, import.meta.url));
+  const res = await fetch(`/static/i18n/${code}.json`);
   if (!res.ok) throw new Error(`i18n: HTTP ${res.status} for ${code}`);
   return res.json();
 };
