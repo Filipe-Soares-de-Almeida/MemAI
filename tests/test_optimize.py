@@ -442,6 +442,17 @@ def test_corpus_truncated_flag_and_stats_ignore_limit(conn):
     assert all_of_it["truncated"] is False
 
 
+def test_corpus_counts_what_a_retag_would_reach(conn):
+    """A tags column holding nothing -- or holding nothing but the type every
+    read already filters on -- leaves a memory findable only by its own words."""
+    _mk(conn, content="the drain retries twice", tags="queue, drain")
+    _mk(conn, content="the loader skips a blank part")
+    _mk(conn, content="a temptation and its cure", type="anti_pattern",
+        tags="anti_pattern")
+
+    assert db.optimization_corpus(conn)["stats"]["untagged"] == 2
+
+
 def test_corpus_extracts_anchors(conn):
     uid = _mk(conn, content=(
         "fix lives in src/core/parser.py, field F100_TOTAL of table X100; "
