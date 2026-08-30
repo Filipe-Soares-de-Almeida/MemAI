@@ -99,11 +99,8 @@ PATH, not the shell's.
 **Every environment variable MemAI reads goes in the `env` block of that
 entry.** A server the host launches sees that environment and no other — not
 the shell's, not the user's. The variables are `MEMAI_HOME`,
-`MEMAI_ADMIN_AUTOSTART`, `MEMAI_ADMIN_HOST`, `MEMAI_ADMIN_PORT`,
-`MEMAI_EMBED_MODEL` and `MEMAI_TOOLS`; all have defaults, so set only what the
-user wants to differ, and leave `MEMAI_EMBED_MODEL` unset unless they are
-replacing the bundled model — pinning it hardcodes a path inside the venv that
-the next reinstall invalidates.
+`MEMAI_ADMIN_AUTOSTART`, `MEMAI_ADMIN_HOST`, `MEMAI_ADMIN_PORT` and
+`MEMAI_TOOLS`; all have defaults, so set only what the user wants to differ.
 
 ```json
 {
@@ -162,8 +159,15 @@ leaves `pyproject.toml` alone is this one:
 1. `git pull`
 2. `memai-hook install --check`, and reinstall the skills or agents it reports
    as outdated — file copies into `~/.claude`, which no server holds open
-3. restart the hosts: a running server keeps the code it imported at startup,
-   and a host reads its agents and skills once, when it starts
+3. `stop-admin.bat`, then restart the hosts
+
+A process keeps the code it imported at startup, and there are two kinds of
+them. Restarting a host replaces its server; the dashboard is its own process
+and outlives that, so it has to be stopped by name. Leaving it up is not just a
+stale screen — it opens the store and WRITES it with the code it holds, so a
+schema change the newer code applies is undone by the older one. The next
+server autostarts a fresh dashboard from the checkout. A host also reads its
+agents and skills once, when it starts.
 
 **The environment moved** — a dependency added, removed or repinned, a new
 entry under `[project.scripts]`, or a different Python under the venv. This is
@@ -183,4 +187,5 @@ what `pip install` is for, and the rule at the top of this file applies to it:
 | the server fails to start after an install that reported success | the launcher was rewritten while locked, leaving the environment half-updated | stop everything, reinstall into the same venv, restart the hosts |
 | host lists no MCP servers although the config has one | wrong file for that host, or the host was not restarted after the edit | check the file that host actually reads, then restart it |
 | a pulled change does not show up in a session | the server that session runs was started before the pull | restart the host; the checkout is editable, so nothing else is needed |
+| a schema change reappears in the store after the servers were restarted | the dashboard is older than the servers and rebuilds what they removed | `stop-admin.bat`; the next server autostarts one from the checkout |
 | server starts but the store is empty or in the wrong place | `MEMAI_HOME` set in a shell instead of the entry's `env` block | move it into the config entry |
