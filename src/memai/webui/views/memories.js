@@ -349,15 +349,20 @@ function renderRows(items, scope = '') {
   return items.map(m => {
     const away = Boolean(scope) && !inDomainPath(m.domain, scope)
       && (m.also || []).some(p => inDomainPath(p, scope));
-    const match = m.match_source
-      ? `<span class="match-badge" title="${m.fts_rank !== undefined ? `bm25 ${Number(m.fts_rank).toFixed(2)}` : ''}">${esc(m.match_source)}</span>` : '';
+    /* A badge only for the row a pasted uid pinned: every other row is a
+       BM25 hit, and a label all of them carry says nothing. */
+    const match = m.match_source === 'uid'
+      ? `<span class="match-badge" title="${esc(t('badge.uidMatchWhy'))}">${t('badge.uidMatch')}</span>` : '';
+    /* bm25 on the row, not in a column of its own: a per-row diagnostic,
+       read on hover when a result looks out of place. */
+    const rank = m.fts_rank != null ? ` title="bm25 ${Number(m.fts_rank).toFixed(2)}"` : '';
     /* The row keeps its click for the mouse, but the thing that OPENS the
        record is a real button around the snippet -- the row itself cannot be
        one, because it already contains a checkbox and a copy button and a
        control inside a control is a control neither the keyboard nor a
        screen reader can make sense of. Enter on the button bubbles a click
        to the row, so there is still exactly one handler. */
-    return `<div class="mem-row" role="row" aria-selected="false" tabindex="-1" data-uid="${esc(m.uid)}">
+    return `<div class="mem-row" role="row" aria-selected="false" tabindex="-1" data-uid="${esc(m.uid)}"${rank}>
       <!-- The two controls in the row are reachable by pointer and by the
            row's own keys (Space ticks, Enter opens), and they are OUT of the
            tab order: fifty rows of them is a hundred stops to cross one page,
