@@ -302,7 +302,7 @@ export async function openRecord(uid) {
 
   /* what a back button one step further in would call this record */
   const here = trailTop();
-  if (here?.uid === uid) here.label = m.content.split('\n', 1)[0].slice(0, 70);
+  if (here?.uid === uid) here.label = (m.title || m.content.split('\n', 1)[0]).slice(0, 70);
   const behind = trail.length > 1 ? trail[trail.length - 2] : null;
   /* A re-render of the same memory keeps the slot it was walking; landing on a
      different one starts from that memory's own place in the list, or from no
@@ -324,7 +324,10 @@ export async function openRecord(uid) {
       ${stepperHTML()}
       <button type="button" class="icon-btn" id="dClose" title="${t('dr.close.title')}"
               aria-label="${t('dr.close.title')}" style="--ico:17px">${icon('close')}</button>
-    </div>`, `
+    </div>
+    <!-- The record's own name, above everything done to it. A memory with
+         no title is headed by the opening line of its body. -->
+    <h2 class="record-title">${esc(m.title || m.content.split('\n', 1)[0].slice(0, 110))}</h2>`, `
     <!-- The memory on the left, everything ABOUT it on the right. One
          column put five panels of metadata under a wall of prose, so
          curating a record meant scrolling past the record to reach the
@@ -684,6 +687,8 @@ function openMetaModal(m) {
     bodyHTML: `
       <div class="field"><label for="mmType">${t('mm.type')}</label>
         ${pickerFor({ id: 'mmType', value: m.type, items: types, ariaLabel: t('mm.type') })}</div>
+      <div class="field"><label for="mmName">${t('mm.name.label')}</label>
+        <input type="text" id="mmName" value="${esc(m.title || '')}"></div>
       <div class="field"><label for="mmDomain">${t('dr.meta.domain')}</label>
         <input type="text" id="mmDomain" value="${esc(m.domain)}" list="mmDomainsDL"><datalist id="mmDomainsDL">${dl}</datalist></div>
       <div class="field"><label for="mmAlso">${t('dr.meta.also')}</label>
@@ -702,7 +707,8 @@ function openMetaModal(m) {
   mq('[data-ok]').onclick = async () => {
     try {
       const r = await api(`/api/memories/${seg(m.uid)}/meta`, { body: {
-        type: pickerValue(modal, 'mmType'), domain: mq('#mmDomain').value,
+        type: pickerValue(modal, 'mmType'), title: mq('#mmName').value,
+        domain: mq('#mmDomain').value,
         also: mq('#mmAlso').value,
         tags: mq('#mmTags').value, session: mq('#mmSession').value } });
       closeModal();

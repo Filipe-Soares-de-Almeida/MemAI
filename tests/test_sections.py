@@ -209,7 +209,9 @@ def test_a_type_joining_the_spec_makes_a_read_store_unread(conn, monkeypatch):
 
 @pytest.mark.parametrize("tool", sorted(sections.SECTION_SPEC))
 def test_the_guard_requires_exactly_the_fields_the_spec_names(tool):
-    assert guard.GUARDED[tool] == tuple(s.key for s in sections.SECTION_SPEC[tool])
+    # `title` is required of every writer and belongs to no spec; the fields
+    # after it are the spec's, in its order.
+    assert guard.GUARDED[tool] == ("title", *(s.key for s in sections.SECTION_SPEC[tool]))
 
 
 @pytest.mark.parametrize("tool", sorted(sections.SECTION_SPEC))
@@ -217,7 +219,8 @@ def test_the_writing_tool_composes_a_body_the_parser_reads_back(tool, monkeypatc
     monkeypatch.setattr(db, "default_db_path", lambda: tmp_path / "tool.db")
     values = {s.key: f"what goes under {s.label.lower()}"
               for s in sections.SECTION_SPEC[tool]}
-    result = getattr(server, tool)(domain="acme/x100/p200", **values)
+    result = getattr(server, tool)(
+        title="a name for it", domain="acme/x100/p200", **values)
     with db.connect(tmp_path / "tool.db") as c:
         assert sections_of(c, result["uid"]) == values
         assert queued(c) == {}

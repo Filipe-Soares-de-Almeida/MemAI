@@ -407,13 +407,18 @@ def _write_result(conn, uid: str, warning: dict | None, also: str,
 
 
 @tool("core")
-def note(content: str, domain: str = "", also: str = "", tags: str = "", session: str = "",
-         review_after: str = "", source_ref: str = "") -> dict:
+def note(title: str, content: str, domain: str = "", also: str = "", tags: str = "",
+         session: str = "", review_after: str = "", source_ref: str = "") -> dict:
     """Save a general long-term memory (fact, decision, finding). Stored as type='note'.
 
     Timeless knowledge -- retrieved by relevance, not recency. Bring it
     back with recall() (or search(type='note')); pulse() also shows the
     few most recent ones as warm-up breadcrumbs.
+
+    title: one line naming what this memory is about, in the words someone
+    would look for it by. It is what a list shows instead of the opening of
+    the body, and it outweighs every other field in search, so a title that
+    repeats the type ("note about the parser") names nothing.
 
     domain: the subject this belongs to, as a path from the outermost
     scope in ('acme/x100/p200'). File it as deep as the fact is specific
@@ -447,14 +452,16 @@ def note(content: str, domain: str = "", also: str = "", tags: str = "", session
     """
     with db.connect() as conn:
         domain, warning = _coerce_domain(conn, domain)
-        uid = db.insert_memory(conn, type=TYPE_NOTE, content=content, domain=domain,
-                               also=also, session=session or SESSION, tags=tags,
-                               review_after=review_after, source_ref=source_ref)
+        uid = db.insert_memory(conn, type=TYPE_NOTE, content=content, title=title,
+                               domain=domain, also=also, session=session or SESSION,
+                               tags=tags, review_after=review_after,
+                               source_ref=source_ref)
         return _write_result(conn, uid, warning, also, tags)
 
 
 @tool("core")
 def checkpoint(
+    title: str,
     intent: str,
     established: str,
     pursuing: str,
@@ -472,6 +479,11 @@ def checkpoint(
     checkpoints are read for bearing, not as an archive. Stored as
     type='checkpoint'.
 
+    title: one line naming what this memory is about, in the words someone
+    would look for it by. It is what a list shows instead of the opening of
+    the body, and it outweighs every other field in search, so a title that
+    repeats the type ("note about the parser") names nothing.
+
     also: other domain paths this belongs to, comma-separated -- the
     cross-cutting subjects beside the one it is filed under. See note().
 
@@ -485,22 +497,28 @@ def checkpoint(
     with db.connect() as conn:
         domain, warning = _coerce_domain(conn, domain)
         uid = db.insert_memory(
-            conn, type=TYPE_CHECKPOINT, content=content, domain=domain, also=also,
-            session=session or SESSION, tags=tags,
+            conn, type=TYPE_CHECKPOINT, content=content, title=title,
+            domain=domain, also=also, session=session or SESSION, tags=tags,
         )
         return _write_result(conn, uid, warning, also, tags)
 
 
 @tool("core")
 def anti_pattern(
-    pattern: str, why_wrong: str, instead: str, domain: str = "", also: str = "",
-    tags: str = "", session: str = "", review_after: str = "", source_ref: str = "",
+    title: str, pattern: str, why_wrong: str, instead: str, domain: str = "",
+    also: str = "", tags: str = "", session: str = "", review_after: str = "",
+    source_ref: str = "",
 ) -> dict:
     """Record a mistake/temptation to avoid repeating, and the correct approach.
 
     Stored as type='anti_pattern'; open ones for a domain are surfaced by pulse().
     `also` cross-lists it into further domain paths, `review_after` dates
     when to recheck it and `source_ref` says what it came from -- see note().
+
+    title: one line naming what this memory is about, in the words someone
+    would look for it by. It is what a list shows instead of the opening of
+    the body, and it outweighs every other field in search, so a title that
+    repeats the type ("note about the parser") names nothing.
 
     `tags` carries the synonyms the body never uses: retrieval is BM25 over
     content and tags, so a memory with none is reachable only by quoting
@@ -511,8 +529,8 @@ def anti_pattern(
     with db.connect() as conn:
         domain, warning = _coerce_domain(conn, domain)
         uid = db.insert_memory(
-            conn, type=TYPE_ANTI_PATTERN, content=content, domain=domain, also=also,
-            session=session or SESSION, tags=tags,
+            conn, type=TYPE_ANTI_PATTERN, content=content, title=title,
+            domain=domain, also=also, session=session or SESSION, tags=tags,
             review_after=review_after, source_ref=source_ref,
         )
         return _write_result(conn, uid, warning, also, tags)
@@ -520,6 +538,7 @@ def anti_pattern(
 
 @tool("core")
 def reasoning(
+    title: str,
     hypothesis: str,
     reasoning: str,  # shadows the tool's own name inside the body; nothing here calls it
     result: str,
@@ -537,6 +556,11 @@ def reasoning(
     For the PROCESS, not the fact it produced -- note() takes the fact.
     Stored as type='reasoning'; filter search/list_* with type='reasoning'
     to get these back.
+
+    title: one line naming what this memory is about, in the words someone
+    would look for it by. It is what a list shows instead of the opening of
+    the body, and it outweighs every other field in search, so a title that
+    repeats the type ("note about the parser") names nothing.
 
     hypothesis: what you believed going in, as a claim that could be wrong.
     reasoning: how you tested it -- what you read, ran or compared.
@@ -556,19 +580,25 @@ def reasoning(
         "revised_belief": revised_belief, "next_time": next_time})
     with db.connect() as conn:
         domain, warning = _coerce_domain(conn, domain)
-        uid = db.insert_memory(conn, type=TYPE_REASONING, content=content, domain=domain,
-                               also=also, session=session or SESSION, tags=tags,
+        uid = db.insert_memory(conn, type=TYPE_REASONING, content=content, title=title,
+                               domain=domain, also=also, session=session or SESSION,
+                               tags=tags,
                                review_after=review_after, source_ref=source_ref)
         return _write_result(conn, uid, warning, also, tags)
 
 
 @tool("core")
-def handoff(content: str, domain: str = "", also: str = "", tags: str = "",
-            session: str = "") -> dict:
+def handoff(title: str, content: str, domain: str = "", also: str = "",
+            tags: str = "", session: str = "") -> dict:
     """Leave a note for another agent/session picking up this work.
 
     Stored as type='handoff'; open ones for a domain are surfaced by pulse().
     `also` cross-lists it into further domain paths -- see note().
+
+    title: one line naming what this memory is about, in the words someone
+    would look for it by. It is what a list shows instead of the opening of
+    the body, and it outweighs every other field in search, so a title that
+    repeats the type ("note about the parser") names nothing.
 
     `tags` carries the synonyms the body never uses: retrieval is BM25 over
     content and tags, so a memory with none is reachable only by quoting
@@ -576,8 +606,9 @@ def handoff(content: str, domain: str = "", also: str = "", tags: str = "",
     """
     with db.connect() as conn:
         domain, warning = _coerce_domain(conn, domain)
-        uid = db.insert_memory(conn, type=TYPE_HANDOFF, content=content, domain=domain,
-                               also=also, session=session or SESSION, tags=tags)
+        uid = db.insert_memory(conn, type=TYPE_HANDOFF, content=content, title=title,
+                               domain=domain, also=also, session=session or SESSION,
+                               tags=tags)
         return _write_result(conn, uid, warning, also, tags)
 
 
@@ -1333,7 +1364,7 @@ def get_memory(uid: str) -> dict:
 
 @tool("core")
 def edit_memory(uid: str, new_content: str = "", note: str = "", mode: str = "replace",
-                source_ref: str = "") -> dict:
+                source_ref: str = "", title: str = "") -> dict:
     """Correct a memory's content or its source reference, keeping the previous version.
 
     Corrections are common in append-only memory stores that only
@@ -1354,6 +1385,12 @@ def edit_memory(uid: str, new_content: str = "", note: str = "", mode: str = "re
     clearing one is a dashboard edit. Passing neither is an error rather
     than a silent no-op.
 
+    title renames the memory: the one line a list shows it by, and the
+    field weighing most in search. Settable on its own, like source_ref. A
+    diagram is renamed through its graph instead -- its title is part of
+    what generates the body, so a rename here would be overwritten by the
+    next structural change.
+
     Refuses to rewrite a diagram's content: that is generated from the
     graph, so a hand-written replacement would be silently overwritten by
     the next structural change -- edit the flow through
@@ -1362,8 +1399,8 @@ def edit_memory(uid: str, new_content: str = "", note: str = "", mode: str = "re
     """
     if mode not in ("replace", "append"):
         return _errors([f"mode must be 'replace' or 'append'; got {mode!r}"])
-    if not new_content.strip() and not source_ref.strip():
-        return _errors(["nothing to change: pass new_content, source_ref, or both"])
+    if not new_content.strip() and not source_ref.strip() and not title.strip():
+        return _errors(["nothing to change: pass new_content, source_ref or title"])
     changed = []
     with db.connect() as conn:
         if new_content.strip():
@@ -1380,6 +1417,16 @@ def edit_memory(uid: str, new_content: str = "", note: str = "", mode: str = "re
             if not db.set_source_ref(conn, uid, source_ref, note=note):
                 return _errors([f"no memory {uid}"])
             changed.append("source_ref")
+        if title.strip():
+            if db.is_diagram(conn, uid):
+                return _errors([
+                    f"{uid} is a diagram: its title is part of what generates its "
+                    "body, so a rename here would be overwritten by the next "
+                    "structural change. Rename it in the dashboard."
+                ])
+            if not db.set_title(conn, uid, title, note=note):
+                return _errors([f"no memory {uid}"])
+            changed.append("title")
     return {"ok": True, "changed": changed}
 
 

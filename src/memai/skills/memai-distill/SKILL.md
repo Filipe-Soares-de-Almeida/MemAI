@@ -100,7 +100,7 @@ separately.
 checkpoint on a still-paused piece of work is the bearing the next session
 reads — do not distill. Instead:
 
-1. **`note(content, domain, also, tags, session, review_after,
+1. **`note(title, content, domain, also, tags, session, review_after,
    source_ref)`** — writes the durable memory directly, applied on the spot
    rather than staged.
 2. **`link_memories(from_uid=<the note>, to_uid=<the source>,

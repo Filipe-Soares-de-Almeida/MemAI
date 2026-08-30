@@ -41,6 +41,7 @@ EDGES = [{"from": "start", "to": "check"},
 def _populate(conn) -> dict:
     ids = {
         "note": db.insert_memory(conn, type="note", domain="acme/x100", tags="cache,warmup",
+                                 title="When the cache warmup runs",
                                  content="cache warmup runs before the first request",
                                  also="omni/x900", review_after="2027-01-01",
                                  source_ref="src/acme/x100/warmup.py"),
@@ -109,8 +110,8 @@ def test_a_memory_comes_back_whole(source, target):
     ids = _populate(source)
     _roundtrip(source, target)
     before, after = db.get_memory(source, ids["note"]), db.get_memory(target, ids["note"])
-    for col in ("uid", "type", "domain", "tags", "content", "status", "confidence",
-                "created_at", "review_after", "source_ref", "also_domains"):
+    for col in ("uid", "type", "domain", "tags", "title", "content", "status",
+                "confidence", "created_at", "review_after", "source_ref", "also_domains"):
         assert after[col] == before[col], col
 
 

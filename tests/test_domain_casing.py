@@ -132,7 +132,7 @@ def test_writer_reports_domain_adjustment(monkeypatch, tmp_path):
     monkeypatch.setenv("MEMAI_HOME", str(tmp_path))
     with db.connect() as c:
         db.set_domain_case(c, "upper")
-    res = server.note(content="x", domain="Proj-A")
+    res = server.note("fixture title", content="x", domain="Proj-A")
     assert res["domain_adjusted"] == {"from": "Proj-A", "to": "PROJ-A", "policy": "upper"}
 
 
@@ -140,7 +140,7 @@ def test_writer_silent_when_conforming(monkeypatch, tmp_path):
     monkeypatch.setenv("MEMAI_HOME", str(tmp_path))
     with db.connect() as c:
         db.set_domain_case(c, "upper")
-    assert "domain_adjusted" not in server.note(content="x", domain="PROJ-A")
+    assert "domain_adjusted" not in server.note("fixture title", content="x", domain="PROJ-A")
 
 
 def test_get_set_domain_case_tools(monkeypatch, tmp_path):
@@ -197,8 +197,8 @@ def test_config_rejects_bad_value(client):
 
 
 def test_normalize_dry_run_then_apply(client):
-    client.post("/api/memories", json={"type": "note", "content": "a", "domain": "Proj-A"})
-    client.post("/api/memories", json={"type": "note", "content": "b", "domain": "other"})
+    client.post("/api/memories", json={"title": "fixture title", "type": "note", "content": "a", "domain": "Proj-A"})
+    client.post("/api/memories", json={"title": "fixture title", "type": "note", "content": "b", "domain": "other"})
     client.post("/api/config", json={"domain_case": "upper"})
 
     dry = client.post("/api/domains/normalize", json={"dry_run": True}).json()
@@ -214,6 +214,6 @@ def test_normalize_dry_run_then_apply(client):
 
 def test_create_memory_coerced_via_admin(client):
     client.post("/api/config", json={"domain_case": "lower"})
-    res = client.post("/api/memories", json={"type": "note", "content": "x", "domain": "MixedCase"})
+    res = client.post("/api/memories", json={"title": "fixture title", "type": "note", "content": "x", "domain": "MixedCase"})
     uid = res.json()["uid"]
     assert client.get(f"/api/memories/{uid}").json()["domain"] == "mixedcase"

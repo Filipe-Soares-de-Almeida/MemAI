@@ -114,7 +114,8 @@ def test_a_complete_write_goes_through_in_silence(monkeypatch, capsys):
 # ----------------------------------------------------------- what it warns of
 
 def test_an_optional_field_is_warned_about_not_refused(monkeypatch, capsys):
-    code, out, err = _run(_call("note", content="a fact"), monkeypatch, capsys)
+    code, out, err = _run(
+        _call("note", title="a name for it", content="a fact"), monkeypatch, capsys)
     assert (code, err) == (0, "")
     message = json.loads(out)["systemMessage"]
     assert "domain, tags, source_ref" in message
