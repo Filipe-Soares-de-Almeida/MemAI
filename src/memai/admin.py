@@ -305,7 +305,10 @@ def list_memories(request, payload) -> dict:
             # past every filter, the way the link picker treats one.
             exact = db.get_memory(conn, q)
             if exact is not None:
-                hits = [dict(exact)] + [h for h in hits if h["uid"] != q]
+                pinned = dict(exact)
+                # the one row in the list that did not match a word
+                pinned["match_source"] = "uid"
+                hits = [pinned] + [h for h in hits if h["uid"] != q]
             total = len(hits)
             items = _with_usage(conn, [_summary(h) for h in hits[offset:offset + limit]])
             return {"total": total, "items": items, "searched": True, **scope}
@@ -1395,7 +1398,8 @@ def lookup(request, payload) -> dict:
             # answers past every filter including status -- the operator
             # named the row, there is nothing left to narrow.
             exact = db.get_memory(conn, q)
-            rows = [dict(exact)] if exact is not None else \
+            # the one row in the list that did not match a word
+            rows = [{**dict(exact), "match_source": "uid"}] if exact is not None else \
                 db.search_ranked(conn, q, type=type_, domain=domain, tag=tag,
                                  status=status, limit=fetch)
     rows = [r for r in rows if r["uid"] != exclude]
