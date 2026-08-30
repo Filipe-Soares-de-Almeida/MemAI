@@ -1,7 +1,5 @@
 """Domain-casing policy: db enforcement + MCP coerce-and-warn + admin
-config/normalize. Hermetic FTS-only path like the rest of the suite
-(autouse fixture in conftest keeps the real embedder out); every example
-domain is synthetic.
+config/normalize. Every example domain is synthetic.
 """
 
 from __future__ import annotations

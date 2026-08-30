@@ -56,22 +56,10 @@ def test_set_status_without_reason_leaves_no_edit(conn):
     assert db.get_edit_history(conn, uid) == []
 
 
-def test_search_hybrid_type_filter_scopes_to_notes(conn):
+def test_search_ranked_type_filter_scopes_to_notes(conn):
     # recall() is search(type='note'); the filter must exclude other types
     note = db.insert_memory(conn, type="note", content="x100 rule detail")
     db.insert_memory(conn, type="checkpoint", content=shaped("checkpoint", "x100 checkpoint state"))
-    results = db.search_hybrid(conn, "x100", type="note")
+    results = db.search_ranked(conn, "x100", type="note")
     assert [r["uid"] for r in results] == [note]
 
-
-def test_semantic_search_not_starved_by_other_domains(tmp_path, fake_embedder):
-    with db.connect(tmp_path / "t.db") as conn:
-        # 55 near-identical vectors in one domain fill the naive top-k
-        # window (k = max(limit*4, 50) = 50)...
-        for _ in range(55):
-            db.insert_memory(conn, type="note", content="car maintenance schedule", domain="big")
-        # ...and one relevant-but-farther vector sits just outside it.
-        small = db.insert_memory(conn, type="note", content="car", domain="small")
-        # With the domain filter, KNN must widen k to see the small domain.
-        results = db.search_semantic(conn, "car maintenance schedule", domain="small", limit=5)
-        assert [r["uid"] for r in results] == [small]

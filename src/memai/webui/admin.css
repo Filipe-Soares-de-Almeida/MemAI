@@ -422,7 +422,7 @@ kbd {
   :root { --rise-y: 0px; }
   .opt-run-card:hover { transform: none; }
   .opt-group-caret { transition: none; }
-  .rh-fill, .bar-fill, .ratio-fill { transition: none; }
+  .bar-fill, .ratio-fill { transition: none; }
   .spin { animation: breathe 1.5s ease-in-out infinite; }
 }
 @keyframes breathe { 50% { opacity: .25; } }
@@ -481,17 +481,6 @@ kbd {
 .rail-health { display: flex; flex-direction: column; gap: var(--sp-2); font-size: var(--fs-label); color: var(--ink-3); }
 .rh-row { display: flex; justify-content: space-between; align-items: baseline; gap: var(--sp-2); }
 .rh-row b { color: var(--ink-2); font-weight: 500; font-family: var(--font-m); }
-.rh-meter { height: 3px; border-radius: var(--r-sm); background: var(--raised); overflow: hidden; }
-/* scaleX rather than width: animating width is a layout animation, and it
-   is the track that clips to the rounded shape, so the fill needs no radius
-   of its own. --v is the fraction, written by updateRail(). */
-.rh-fill {
-  height: 100%; width: 100%;
-  background: var(--accent);
-  transform-origin: left center; transform: scaleX(var(--v, 0));
-  transition: transform .6s ease;
-}
-
 /* ── topbar ──────────────────────────────────────────────────────────── */
 
 .topbar {
@@ -899,9 +888,11 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
 .bars { display: flex; flex-direction: column; gap: var(--sp-2); }
 .bar-row { display: grid; grid-template-columns: 128px 1fr 48px; align-items: center; gap: var(--sp-3); }
 .bar-track { height: 10px; background: var(--inset); border-radius: 0 var(--r-md) var(--r-md) 0; position: relative; overflow: hidden; }
-/* the same scaleX as .rh-fill, for the same reason. A share too small to
-   see is floored by the caller, not by a min-width -- an element already
-   stretched across the track has no width left for one to raise. */
+/* scaleX rather than width: animating width is a layout animation, and the
+   track is what clips to the rounded shape, so the fill needs no radius of
+   its own. A share too small to see is floored by the caller, not by a
+   min-width -- an element already stretched across the track has no width
+   left for one to raise. */
 .bar-fill {
   position: absolute; inset: 0;
   background: var(--c, var(--ink-3));
@@ -2049,7 +2040,13 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
   font-size: var(--fs-sm);
 }
 .check-row:last-child { border-bottom: none; }
-.check-dot { width: 9px; height: 9px; border-radius: 50%; flex: none; align-self: center; }
+/* A dot has no baseline of its own, so it is placed against the first line
+   rather than left to the row: a detail wrapping to four lines pulls a
+   centred dot halfway down the row, away from the name it marks. */
+.check-dot {
+  width: 9px; height: 9px; border-radius: 50%; flex: none;
+  align-self: start; margin-top: .4em;
+}
 .check-dot.ok { background: var(--ok); }
 .check-dot.warn { background: var(--warn); }
 .check-dot.bad { background: var(--bad); }

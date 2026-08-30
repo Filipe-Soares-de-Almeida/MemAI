@@ -60,9 +60,6 @@ export async function renderOverview(view, params, ctx) {
     n: fmtInt(total30), peak: fmtInt(maxDay), days: activeDays,
   });
 
-  const vecCov = tot.active + tot.archived > 0 && o.db.vec_ready
-    ? Math.round(o.db.vec_rows / tot.memories * 100) : 0;
-
   /* The row stays clickable for the mouse; the cell holds a real button so
      the same jump exists for the keyboard. Its click bubbles to the row, so
      there is still one handler and not two. */
@@ -99,7 +96,7 @@ export async function renderOverview(view, params, ctx) {
   view.innerHTML = `<div class="anim">
     <div class="view-head">
       <h2 class="view-title">${t('ov.title')}</h2>
-      <div class="view-sub">${esc(o.db.path)} · ${fmtBytes(o.db.size)}${o.db.wal_size ? ` (+${fmtBytes(o.db.wal_size)} WAL)` : ''} · ${t('ov.model')} ${esc(o.db.embed_model.split(/[\\/]/).pop() || '—')} · ${esc(o.db.embed_dim || '?')}d</div>
+      <div class="view-sub">${esc(o.db.path)} · ${fmtBytes(o.db.size)}${o.db.wal_size ? ` (+${fmtBytes(o.db.wal_size)} WAL)` : ''}</div>
     </div>
 
     <div class="tiles">
@@ -110,8 +107,6 @@ export async function renderOverview(view, params, ctx) {
       <div class="tile"><div class="tile-label">${t('ov.tile.relations')}</div><div class="tile-value">${fmtInt(tot.relations)}</div></div>
       <div class="tile"><div class="tile-label">${t('ov.tile.edits')}</div><div class="tile-value">${fmtInt(tot.edits)}</div></div>
       <div class="tile"><div class="tile-label">${t('ov.tile.sessions')}</div><div class="tile-value">${fmtInt(tot.sessions)}</div></div>
-      <div class="tile"><div class="tile-label">${t('ov.tile.vectors')}</div><div class="tile-value">${vecCov}%</div>
-        <div class="tile-sub">${t('ov.tile.ofTotal', { a: fmtInt(o.db.vec_rows), b: fmtInt(tot.memories) })}</div></div>
     </div>
 
     <div class="grid grid-2" style="margin-bottom:14px">

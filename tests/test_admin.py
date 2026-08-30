@@ -1,10 +1,8 @@
 """API tests for the admin dashboard server (memai/admin.py).
 
-Same hermetic setup as the rest of the suite: the autouse fixture in
-conftest.py keeps the real embedding model out, so everything runs on
-the FTS-only degradation path. MEMAI_HOME is pointed at a tmp dir per
-test, which is all the isolation the app needs -- every endpoint opens
-its own db.connect() against default_db_path().
+Same hermetic setup as the rest of the suite. MEMAI_HOME is pointed at a
+tmp dir per test, which is all the isolation the app needs -- every
+endpoint opens its own db.connect() against default_db_path().
 """
 
 from __future__ import annotations
@@ -177,6 +175,20 @@ def test_domains_rename_and_collision(client):
     assert missing.status_code == 400
 
 
+def test_the_disk_row_names_what_freed_its_pages(client):
+    """A removal leaves free pages behind without shrinking the file, so
+    health carries what freed them and a compaction spends it."""
+    _create(client, content="a row to leave pages behind")
+    with db.connect() as conn:
+        db._set_meta(conn, db.COMPACT_REASON_KEY, db.COMPACT_REASON_VECTORS)
+    h = client.get("/api/maintenance/health").json()
+    assert h["file"]["compact_reason"] == db.COMPACT_REASON_VECTORS
+
+    assert client.post("/api/maintenance/vacuum", json={}).json()["ok"]
+    h = client.get("/api/maintenance/health").json()
+    assert h["file"]["compact_reason"] == ""
+
+
 def test_maintenance_suite(client):
     uid = _create(client, content="maintenance row content", domain="mnt")
     _create(client, content="maintenance row content nearly equal", domain="mnt")
@@ -193,6 +205,8 @@ def test_maintenance_suite(client):
     bk = client.post("/api/maintenance/backup", json={}).json()
     assert bk["ok"] and bk["size"] > 0
     assert client.get("/api/maintenance/health").json()["backups"]
+
+    assert h["file"]["compact_reason"] == ""
 
     pairs = client.get("/api/maintenance/dedup?threshold=0.5").json()["pairs"]
     assert pairs and pairs[0]["ratio"] >= 0.5

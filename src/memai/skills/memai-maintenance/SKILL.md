@@ -183,7 +183,7 @@ filed and belonging decides what to stage:
 
 A diagram's body is **not hand-written prose**: the graph (nodes, edges, notes,
 links) is the source of truth and `content` is the **generated projection** of
-it — which is what FTS indexes and the embedder vectorizes.
+it — which is what FTS indexes.
 
 > **Never stage a `reword`/`compact` against a diagram.** `edit_memory` and the
 > dashboard refuse it, and so do staging and apply — the suggestion comes back
@@ -210,8 +210,8 @@ Typical diagram maintenance: a step that names a memory and has no
 `diagram_link`; a flow that ends where another begins and has no
 `diagram_jump`; a title or domain that no longer matches the routine.
 
-> **Database and index health** (integrity, FTS rebuild, re-embed, orphaned
-> relations or vectors, pruning SVG renders, vacuum, backup) is the dashboard's
+> **Database and index health** (integrity, FTS rebuild, orphaned relations,
+> pruning SVG renders, vacuum, backup) is the dashboard's
 > **Maintenance** tab — **not** this pass's job. If `health` flags something,
 > **report it as pending** instead of reaching for a tool.
 

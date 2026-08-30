@@ -1,19 +1,19 @@
 """SQLite-backed store for memai.
 
-Single WAL-mode file holds memory rows, an FTS5 index, a sqlite-vec
-vector table, edit history, a relations graph, and the node/edge tables
-behind type='diagram' memories together under one set of ACID
-transactions -- vectors live INSIDE the transactional store, not beside
-it, so there is nothing that can desync from the metadata on a
-hard-kill.
+Single WAL-mode file holds memory rows, an FTS5 index, edit history, a
+relations graph, and the node/edge tables behind type='diagram' memories
+together under one set of ACID transactions, so there is nothing that can
+desync from the metadata on a hard-kill.
 
-Retrieval is hybrid: FTS5 BM25 keyword search plus brute-force KNN over
-model2vec embeddings, merged by reciprocal rank fusion. Both sides only
-widen the candidate set -- semantic judgment is still left to the
-calling agent, which reads the candidates back and decides relevance
-itself. If the embedding model or the sqlite-vec extension is
-unavailable, everything degrades to FTS-only and vectors are backfilled
-on a later connect.
+Retrieval is FTS5 BM25 keyword search. It only widens the candidate set --
+semantic judgment is left to the calling agent, which reads the candidates
+back and decides relevance itself.
+
+A store can carry a sqlite-vec virtual table, meta keys naming an embedding
+model, and two usage counters beside via_fts. Nothing here reads them and
+nothing registers the vec0 module, so _drop_vector_store removes all three
+at connect time -- which is also what sanitizes a `VACUUM INTO` backup
+carrying them, since a restore is a copy into place and nothing else.
 """
 
 from __future__ import annotations
@@ -27,15 +27,7 @@ from contextlib import contextmanager
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
-from memai import embed, sections
-
-# Eager import for the same reason as in embed.py: sqlite_vec pulls in
-# numpy, and importing that DLL lazily from inside a tool call deadlocks
-# on Windows once the MCP stdio server is running.
-try:
-    import sqlite_vec
-except Exception:  # pragma: no cover - extension unavailable
-    sqlite_vec = None
+from memai import sections
 
 # Domain-casing policy. Stored in the `meta` table under DOMAIN_CASE_KEY and
 # enforced at every domain write path. 'preserve' keeps free-text casing;
@@ -62,16 +54,16 @@ DOMAIN_SEP = "/"
 # ancestor. `memory_domains` holds those extra memberships, one row per
 # path, and every domain filter reads it (see domain_clause).
 #
-# `memories.also_domains` carries the same paths as one text field, for
-# exactly the two readers that cannot join: the FTS index and the embedder.
-# Nothing filters on it -- see _write_domain_links, its only writer.
+# `memories.also_domains` carries the same paths as one text field, for the
+# one reader that cannot join: the FTS index. Nothing filters on it -- see
+# _write_domain_links, its only writer.
 ALSO_SEP = "\n"
 
 # How much a memory is trusted, on its own axis: `status` says whether a row
 # is in play at all, this says whether what it claims still holds. Up here
 # rather than beside the curation code because retrieval reads it too --
 # a contradicted memory sorts behind everything that still holds, and a
-# warm-up leaves it out (see search_hybrid, _sound_clause).
+# warm-up leaves it out (see search_ranked, _sound_clause).
 CONFIDENCE_CONTRADICTED = "contradicted"
 
 # The FTS index and its triggers, kept separate because they are also what a
@@ -198,17 +190,15 @@ CREATE INDEX IF NOT EXISTS idx_section_migration_verdict
 -- does not answer "is this the answer", which is the query's job.
 -- test_usage.py holds that line.
 --
--- via_* attribute a read to the retriever that surfaced it, so the store can
--- say whether the vector arm earns its keep without anyone parsing session
--- transcripts. A read with no search behind it (pulse, a list, get_memory)
--- counts in recall_count and in none of them.
+-- via_fts counts the reads a search produced, so "was this found, or only
+-- listed" stays answerable without parsing session transcripts. A read with
+-- no search behind it (pulse, a list, get_memory) counts in recall_count and
+-- not here.
 CREATE TABLE IF NOT EXISTS memory_usage (
     memory_uid        TEXT PRIMARY KEY REFERENCES memories(uid),
     recall_count      INTEGER NOT NULL DEFAULT 0,
     last_recalled_at  TEXT NOT NULL,
-    via_fts           INTEGER NOT NULL DEFAULT 0,
-    via_vec           INTEGER NOT NULL DEFAULT 0,
-    via_both          INTEGER NOT NULL DEFAULT 0
+    via_fts           INTEGER NOT NULL DEFAULT 0
 );
 """ + _FTS_SCHEMA + """
 CREATE TABLE IF NOT EXISTS edits (
@@ -235,7 +225,7 @@ CREATE INDEX IF NOT EXISTS idx_relations_to ON relations(to_uid);
 -- A type='diagram' memory keeps its structure here instead of in
 -- `content`: one row per step, so a step can carry its own note and its
 -- own links. `memories.content` still holds a generated prose rendering
--- of the same graph, which is what FTS and the embedder see.
+-- of the same graph, which is what FTS sees.
 CREATE TABLE IF NOT EXISTS diagrams (
     memory_uid  TEXT PRIMARY KEY REFERENCES memories(uid),
     kind        TEXT NOT NULL DEFAULT 'flowchart',
@@ -587,32 +577,6 @@ def est_tokens(chars: int) -> int:
     return (max(chars, 0) + CHARS_PER_TOKEN - 1) // CHARS_PER_TOKEN
 
 
-def _load_vec_extension(conn: sqlite3.Connection) -> bool:
-    if sqlite_vec is None:
-        return False
-    try:
-        conn.enable_load_extension(True)
-        sqlite_vec.load(conn)
-        conn.enable_load_extension(False)
-        return True
-    except Exception:
-        return False
-
-
-def _vec_ready(conn: sqlite3.Connection) -> bool:
-    """True when the memories_vec table exists (extension loaded + model seen at least once)."""
-    row = conn.execute(
-        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'memories_vec'"
-    ).fetchone()
-    if row is None:
-        return False
-    try:
-        conn.execute("SELECT vec_version()")
-        return True
-    except sqlite3.OperationalError:
-        return False
-
-
 def _get_meta(conn: sqlite3.Connection, key: str) -> str | None:
     row = conn.execute("SELECT value FROM meta WHERE key = ?", (key,)).fetchone()
     return row["value"] if row else None
@@ -762,11 +726,6 @@ def apply_link_policy(
     return sorted(out)
 
 
-def _embed_source(content: str, tags: str, domain: str, also: str = "") -> str:
-    """The text a memory's vector is computed from -- same fields FTS indexes."""
-    return "\n".join(p for p in (content, tags, domain, also) if p)
-
-
 # Columns added to a table that already exists in someone's store.
 # `CREATE TABLE IF NOT EXISTS` -- how everything else here migrates -- is
 # free for a new TABLE and does nothing at all for a new COLUMN, so a
@@ -781,8 +740,6 @@ _ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
     ("memories", "review_after", "TEXT NOT NULL DEFAULT ''"),
     ("memories", "source_ref", "TEXT NOT NULL DEFAULT ''"),
     ("memory_usage", "via_fts", "INTEGER NOT NULL DEFAULT 0"),
-    ("memory_usage", "via_vec", "INTEGER NOT NULL DEFAULT 0"),
-    ("memory_usage", "via_both", "INTEGER NOT NULL DEFAULT 0"),
 )
 
 
@@ -920,7 +877,7 @@ def migrate_sections(conn: sqlite3.Connection) -> dict:
     the fields that text hides -- the preamble goes, the fields are
     re-emitted in spec order. That rewrite goes through
     update_memory_content, so it lands in `edits` next to the body it
-    replaced and the row is re-embedded.
+    replaced and the row is reindexed.
 
     A body left in the queue can only be written through set_sections,
     which builds the body from its fields and so cannot produce another one
@@ -1045,57 +1002,78 @@ def get_sections(conn: sqlite3.Connection, uid: str) -> list[dict]:
     ]
 
 
-def _ensure_vec(conn: sqlite3.Connection) -> None:
-    """Create/migrate the vector table and backfill missing vectors.
+# Why the file is holding free pages. A removal inside the store frees pages
+# without shrinking the file -- only VACUUM does that -- and a size that does
+# not match what the store holds is otherwise unexplained. The dashboard's
+# health reads this so its disk row can name the space, and its VACUUM clears
+# it.
+COMPACT_REASON_KEY = "compact_reason"
+COMPACT_REASON_VECTORS = "vector_store"
 
-    Runs inside the connection's transaction, so a hard-kill mid-backfill
-    rolls back cleanly. A model swap (name or dim change vs. the meta
-    table) drops and rebuilds every vector -- stored vectors from one
-    model are meaningless in another model's space.
+
+def get_compact_reason(conn: sqlite3.Connection) -> str:
+    """What freed the pages VACUUM would give back, empty when nothing did."""
+    return _get_meta(conn, COMPACT_REASON_KEY) or ""
+
+
+def clear_compact_reason(conn: sqlite3.Connection) -> None:
+    """Called after a VACUUM: the pages are back, so the reason is spent."""
+    conn.execute("DELETE FROM meta WHERE key = ?", (COMPACT_REASON_KEY,))
+
+
+# What a store can carry that nothing here reads: the sqlite-vec virtual
+# table, the shadow tables vec0 keeps its data in, the meta keys naming an
+# embedding model, and two usage counters beside via_fts.
+_VEC_TABLE = "memories_vec"
+_VEC_META_KEYS = ("embed_model", "embed_dim")
+_VEC_USAGE_COLUMNS = ("via_vec", "via_both")
+
+
+def _drop_vector_store(conn: sqlite3.Connection) -> bool:
+    """Remove the sqlite-vec table, its shadow tables and its counters.
+
+    Returns True when it removed something. Runs on every connect, so a
+    store carrying them is sanitized by being opened -- there is no separate
+    restore path anyone has to remember.
+
+    `DROP TABLE memories_vec` needs the vec0 module registered and nothing
+    registers it, so the virtual table's declaration is deleted from the
+    schema directly and the schema cookie bumped, which is what tells every
+    other connection to re-read it. The shadow tables are ordinary tables
+    and go the ordinary way once the declaration is gone.
+
+    ALTER TABLE ... DROP COLUMN is SQLite 3.35 and later.
     """
-    dim = embed.embedding_dim()
-    if dim is None:
-        return  # model unavailable; stay FTS-only, backfill next time
-    stored_model = _get_meta(conn, "embed_model")
-    stored_dim = _get_meta(conn, "embed_dim")
-    table_exists = conn.execute(
-        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'memories_vec'"
-    ).fetchone() is not None
-    if table_exists and (stored_model != embed.model_name() or stored_dim != str(dim)):
-        conn.execute("DROP TABLE memories_vec")
-        table_exists = False
-    if not table_exists:
-        conn.execute(
-            f"CREATE VIRTUAL TABLE memories_vec USING vec0(embedding float[{dim}] distance_metric=cosine)"
-        )
-        _set_meta(conn, "embed_model", embed.model_name())
-        _set_meta(conn, "embed_dim", str(dim))
-    missing = conn.execute(
-        """SELECT rowid_pk, content, tags, domain, also_domains FROM memories
-           WHERE rowid_pk NOT IN (SELECT rowid FROM memories_vec)"""
-    ).fetchall()
-    if missing:
-        blobs = embed.embed_texts([
-            _embed_source(r["content"], r["tags"], r["domain"], r["also_domains"])
-            for r in missing])
-        if blobs:
-            conn.executemany(
-                "INSERT INTO memories_vec (rowid, embedding) VALUES (?, ?)",
-                [(r["rowid_pk"], b) for r, b in zip(missing, blobs)],
-            )
+    names = [r[0] for r in conn.execute(
+        "SELECT name FROM sqlite_master WHERE type = 'table'")]
+    tables = [n for n in names if n == _VEC_TABLE or n.startswith(_VEC_TABLE + "_")]
+    usage = {r["name"] for r in conn.execute("PRAGMA table_info(memory_usage)")}
+    columns = [c for c in _VEC_USAGE_COLUMNS if c in usage]
+    keys = [k for k in _VEC_META_KEYS if _get_meta(conn, k) is not None]
+    if not tables and not columns and not keys:
+        return False
 
+    if _VEC_TABLE in tables:
+        version = conn.execute("PRAGMA schema_version").fetchone()[0]
+        conn.execute("PRAGMA writable_schema = ON")
+        conn.execute("DELETE FROM sqlite_master WHERE type = 'table' AND name = ?",
+                     (_VEC_TABLE,))
+        conn.execute(f"PRAGMA schema_version = {version + 1}")
+        conn.execute("PRAGMA writable_schema = OFF")
+        conn.commit()
+    for name in tables:
+        if name != _VEC_TABLE:
+            conn.execute(f'DROP TABLE IF EXISTS "{name}"')
+    for column in columns:
+        conn.execute(f"ALTER TABLE memory_usage DROP COLUMN {column}")
+    if keys:
+        conn.executemany("DELETE FROM meta WHERE key = ?", [(k,) for k in keys])
+    if _VEC_TABLE in tables:
+        # the columns and the meta keys free almost nothing; the table is
+        # what leaves a file full of pages nobody has claimed back
+        _set_meta(conn, COMPACT_REASON_KEY, COMPACT_REASON_VECTORS)
+    return True
 
-def _upsert_vector(
-    conn: sqlite3.Connection, rowid_pk: int, content: str, tags: str, domain: str,
-    also: str = "",
-) -> None:
-    if not _vec_ready(conn):
-        return
-    blobs = embed.embed_texts([_embed_source(content, tags, domain, also)])
-    if not blobs:
-        return
-    conn.execute("DELETE FROM memories_vec WHERE rowid = ?", (rowid_pk,))
-    conn.execute("INSERT INTO memories_vec (rowid, embedding) VALUES (?, ?)", (rowid_pk, blobs[0]))
 
 
 @contextmanager
@@ -1103,15 +1081,13 @@ def connect(db_path: Path | None = None):
     path = db_path or default_db_path()
     conn = sqlite3.connect(str(path), timeout=30.0)
     conn.row_factory = sqlite3.Row
-    vec_loaded = _load_vec_extension(conn)
     conn.execute("PRAGMA journal_mode=WAL;")
     conn.execute("PRAGMA synchronous=NORMAL;")
     conn.execute("PRAGMA foreign_keys=ON;")
     conn.executescript(SCHEMA)
     _ensure_columns(conn)
+    _drop_vector_store(conn)
     _ensure_fts(conn)
-    if vec_loaded:
-        _ensure_vec(conn)
     try:
         yield conn
         conn.commit()
@@ -1140,7 +1116,7 @@ def insert_memory(
     links = apply_link_policy(conn, also, domain)
     blob = ALSO_SEP.join(links)
     review_after = normalize_review_after(review_after, today=(created_at or ts)[:10])
-    cur = conn.execute(
+    conn.execute(
         """INSERT INTO memories
            (uid, type, domain, also_domains, session, tags, content, status,
             confidence, created_at, updated_at, review_after, source_ref)
@@ -1153,7 +1129,6 @@ def insert_memory(
             "INSERT INTO memory_domains (memory_uid, domain, created_at) VALUES (?, ?, ?)",
             [(uid, path, ts) for path in links],
         )
-    _upsert_vector(conn, cur.lastrowid, content, tags, domain, blob)
     _write_sections(conn, uid, type, content)
     return uid
 
@@ -1176,7 +1151,7 @@ def restore_memory(conn: sqlite3.Connection, record: dict) -> str:
     domain = normalize_domain(record.get("domain", ""))
     links = [normalize_domain(p) for p in parse_domains(record.get("also") or [])]
     links = [p for p in links if p and not in_domain(domain, p)]
-    cur = conn.execute(
+    conn.execute(
         """INSERT INTO memories
            (uid, type, domain, also_domains, session, tags, content, status,
             confidence, superseded_by, created_at, updated_at, review_after, source_ref)
@@ -1196,8 +1171,6 @@ def restore_memory(conn: sqlite3.Connection, record: dict) -> str:
             "INSERT INTO memory_usage (memory_uid, recall_count, last_recalled_at) "
             "VALUES (?, ?, ?)",
             (uid, int(record["recalls"]), record.get("last_recall") or ts))
-    _upsert_vector(conn, cur.lastrowid, record.get("content", ""),
-                   record.get("tags", ""), domain, ALSO_SEP.join(links))
     _write_sections(conn, uid, record["type"], record.get("content", ""))
     return uid
 
@@ -1290,8 +1263,6 @@ def update_memory_content(
         "UPDATE memories SET content = ?, updated_at = ? WHERE uid = ?",
         (new_content, now_iso(), uid),
     )
-    _upsert_vector(conn, row["rowid_pk"], new_content, row["tags"], row["domain"],
-                   row["also_domains"])
     _write_sections(conn, uid, row["type"], new_content)
     return True
 
@@ -1313,10 +1284,8 @@ def set_status(
 
     When `note` is given it is stored as a status-change audit entry in
     `edits` (prev_content == new_content, since the content itself is not
-    touched) -- deliberately without recomputing the embedding, which
-    archiving does not affect. This replaces the old forget-with-reason
-    path that round-tripped through update_memory_content and needlessly
-    re-embedded unchanged content.
+    touched). Archiving does not change what the memory says, so nothing
+    here goes through update_memory_content.
     """
     row = get_memory(conn, uid)
     if row is None:
@@ -1347,8 +1316,8 @@ def set_confidence(conn: sqlite3.Connection, uid: str, confidence: str) -> bool:
 def set_review_after(conn: sqlite3.Connection, uid: str, value: str) -> bool:
     """Move (or clear) a memory's recheck date, and audit the move.
 
-    No re-embedding: the vector is computed over content, tags and domains,
-    and a date is none of those. Audited, because "this was rechecked and
+    Nothing is reindexed: the index covers content, tags and domains, and a
+    date is none of those. Audited, because "this was rechecked and
     pushed out six months" is exactly the kind of decision a later pass
     needs to be able to see it did not invent.
     """
@@ -1372,8 +1341,8 @@ def set_review_after(conn: sqlite3.Connection, uid: str, value: str) -> bool:
 def set_source_ref(conn: sqlite3.Connection, uid: str, value: str, note: str = "") -> bool:
     """Point (or repoint) a memory at what it came from, and audit the move.
 
-    No re-embedding, for the same reason as the date: the vector is computed
-    over content, tags and domains. Audited, because the reference is what a
+    Nothing is reindexed, for the same reason as the date: the index covers
+    content, tags and domains. Audited, because the reference is what a
     later pass checks the claim against, and "this was pointed at that file
     on purpose" is not something it should have to infer.
     """
@@ -1431,16 +1400,11 @@ def purge_memory(conn: sqlite3.Connection, uid: str) -> bool:
     conn.execute("DELETE FROM diagram_nodes WHERE memory_uid = ?", (uid,))
     conn.execute("DELETE FROM diagram_edges WHERE memory_uid = ?", (uid,))
     conn.execute("DELETE FROM diagrams WHERE memory_uid = ?", (uid,))
-    if _vec_ready(conn):
-        conn.execute("DELETE FROM memories_vec WHERE rowid = ?", (row["rowid_pk"],))
     conn.execute("DELETE FROM memories WHERE uid = ?", (uid,))
     return True
 
 
 # ----------------------------------------------------------------- usage
-
-MATCH_SOURCES = ("fts", "vec", "both")
-
 
 def record_recall(
     conn: sqlite3.Connection, uids, *, at: str | None = None,
@@ -1455,8 +1419,9 @@ def record_recall(
     curation pass has into a record of who browsed what.
 
     `sources` maps uid -> match_source for reads that came out of a search,
-    so the store can later say which retriever is worth its keep. A read
-    with no search behind it passes none, and counts only in recall_count.
+    so the store can later say how much of what it holds is ever found
+    rather than merely listed. A read with no search behind it passes none,
+    and counts only in recall_count.
 
     None of this may ever reach a ranking -- see the schema comment on
     memory_usage for why, and test_usage.py for the test that says so.
@@ -1474,15 +1439,14 @@ def record_recall(
     for u in seen:
         if u not in live:
             continue
-        arm = (sources or {}).get(u)
-        rows.append((u, ts, int(arm == "fts"), int(arm == "vec"), int(arm == "both")))
+        found_by = (sources or {}).get(u)
+        rows.append((u, ts, int(found_by == "fts")))
     conn.executemany(
         "INSERT INTO memory_usage "
-        "(memory_uid, recall_count, last_recalled_at, via_fts, via_vec, via_both) "
-        "VALUES (?, 1, ?, ?, ?, ?) ON CONFLICT(memory_uid) DO UPDATE SET "
+        "(memory_uid, recall_count, last_recalled_at, via_fts) "
+        "VALUES (?, 1, ?, ?) ON CONFLICT(memory_uid) DO UPDATE SET "
         "recall_count = recall_count + 1, last_recalled_at = excluded.last_recalled_at, "
-        "via_fts = via_fts + excluded.via_fts, via_vec = via_vec + excluded.via_vec, "
-        "via_both = via_both + excluded.via_both",
+        "via_fts = via_fts + excluded.via_fts",
         rows,
     )
     return len(rows)
@@ -1500,23 +1464,18 @@ def usage_for(conn: sqlite3.Connection, uids) -> dict[str, dict]:
                               "last_recall": r["last_recalled_at"]} for r in rows}
 
 
-def arm_effectiveness(conn: sqlite3.Connection) -> dict:
-    """How much of what got read came from each retriever.
+def search_share(conn: sqlite3.Connection) -> dict:
+    """How much of what got read a search found, against everything read.
 
-    The question "does the vector arm earn its keep" answered by the store
-    itself, over real use, instead of by a benchmark's guess at what a query
-    looks like. Read it as a ratio between the arms and not as an absolute:
-    a memory can be acted on from its snippet without ever being opened, so
-    every arm is undercounted by the same unknown amount.
+    Answered by the store itself, over real use, instead of by a benchmark's
+    guess at what a query looks like. Read it as a ratio and not as an
+    absolute: a memory can be acted on from its snippet without ever being
+    opened, so the found count is short by an unknown amount.
     """
     row = conn.execute(
-        "SELECT COALESCE(SUM(via_fts), 0) AS fts, COALESCE(SUM(via_vec), 0) AS vec, "
-        "COALESCE(SUM(via_both), 0) AS both, COALESCE(SUM(recall_count), 0) AS reads "
-        "FROM memory_usage").fetchone()
-    out = {arm: row[arm] for arm in MATCH_SOURCES}
-    out["reads"] = row["reads"]
-    out["from_search"] = sum(out[arm] for arm in MATCH_SOURCES)
-    return out
+        "SELECT COALESCE(SUM(via_fts), 0) AS fts, "
+        "COALESCE(SUM(recall_count), 0) AS reads FROM memory_usage").fetchone()
+    return {"fts": row["fts"], "reads": row["reads"], "from_search": row["fts"]}
 
 
 def add_relation(
@@ -1562,7 +1521,7 @@ def get_relations(conn: sqlite3.Connection, uid: str) -> list[sqlite3.Row]:
 # row per step so a step can carry its own note and its own links to
 # other memories. The graph is the source of truth; memories.content
 # holds a generated prose rendering of it (see _render_text), which is
-# what FTS indexes and the embedder vectorizes. Nothing hand-writes that
+# what FTS indexes. Nothing hand-writes that
 # content -- the free-text editors refuse a diagram for exactly that
 # reason (see is_diagram).
 
@@ -1904,9 +1863,9 @@ def _flow_order(nodes: list[dict], edges: list[dict]) -> list[str]:
 def _render_text(title: str, summary: str, kind: str, nodes: list[dict], edges: list[dict]) -> str:
     """The prose projection stored in memories.content.
 
-    Generated, never hand-written: this is what FTS indexes and the
-    embedder vectorizes, so a diagram is findable by what the routine
-    actually does rather than by its title alone. One line per node in
+    Generated, never hand-written: this is what FTS indexes, so a diagram
+    is findable by what the routine actually does rather than by its title
+    alone. One line per node in
     flow order keeps the edit-history diff readable.
     """
     by_key = {n["key"]: n for n in nodes}
@@ -2047,7 +2006,7 @@ def _refresh_diagram_content(conn: sqlite3.Connection, uid: str, note: str = "")
     """Re-generate memories.content after a structural change.
 
     Routed through update_memory_content so the change lands in the audit
-    log and the vector is refreshed -- the same path a hand edit of any
+    log and the index is refreshed -- the same path a hand edit of any
     other type takes. A change that leaves the projection identical (an
     edge label rewritten to itself, say) writes nothing.
     """
@@ -2325,7 +2284,7 @@ def set_node_positions(conn: sqlite3.Connection, uid: str, positions: object) ->
     """Persist a dragged or resized box. Geometry is not content.
 
     Deliberately touches nothing else: no content re-render, no `edits`
-    row, no re-embed, not even memories.updated_at -- moving a box on a
+    row, not even memories.updated_at -- moving a box on a
     canvas must not read as an edit or reorder list_recent().
 
     Accepts {key: (x, y)} or {key: {"x": .., "y": .., "w": .., "h": ..}}.
@@ -3004,29 +2963,10 @@ def search_memories(
     return conn.execute(" ".join(sql), params).fetchall()
 
 
-_KNN_MAX_K = 10000  # upper bound on the "fetch (nearly) all, then filter" KNN path
-
-# How far a neighbor may be and still count as one. A KNN has no notion of
-# "nothing here is close": ask it for 200 rows and it returns the 200 nearest
-# however far away they are, so without a cut a query for a word the store
-# does not hold sweeps in the whole store, every row past the keyword matches
-# labelled `match_source: vec`.
-#
-# Calibrated against ONE corpus and ONE embedding model. A different model has
-# a different distance scale; re-measure with tools/bench-retrieval.py before
-# trusting the number.
-VEC_MAX_DISTANCE = 0.60
-
 # A query that is nothing but an opaque token -- a uid, a sha, a hex blob --
-# has no semantic neighborhood to find. The tokenizer still splits it into
-# subword pieces, those pieces DO have vectors, and the KNN dutifully answers
-# with whatever they land near.
-#
-# Measured on a 386-vector store: a random 16-char hex reaches a nearest
-# neighbor at cosine +0.644, against +0.656 for a real question. The arm
-# cannot tell one from the other, and VEC_MAX_DISTANCE cannot be placed
-# between them. Twelve characters is the floor because a uid is sixteen and
-# a shortened sha is seven to twelve; below that the pattern starts matching
+# names one row rather than describing a subject, and the index cannot match
+# on it. Twelve characters is the floor because a uid is sixteen and a
+# shortened sha is seven to twelve; below that the pattern starts matching
 # words like 'facade' and 'decade'.
 _OPAQUE_QUERY = re.compile(r"[0-9a-f]{12,}", re.IGNORECASE)
 
@@ -3041,82 +2981,7 @@ def is_opaque_query(raw: str) -> bool:
     return bool(q) and _OPAQUE_QUERY.fullmatch(q) is not None
 
 
-def search_semantic(
-    conn: sqlite3.Connection,
-    query: str,
-    *,
-    domain: str = "",
-    type: str = "",
-    tag: str = "",
-    status: str = "active",
-    limit: int = 30,
-    subtree: bool = True,
-    max_distance: float | None = None,
-) -> list[sqlite3.Row]:
-    """Brute-force KNN over the vector table, filtered post-KNN.
-
-    Bounded by distance as well as by count (see VEC_MAX_DISTANCE): a KNN
-    asked for more rows than it has close neighbors returns far ones, and a
-    far one is not a match. Pass max_distance=2 to see the raw ordering.
-
-    None rather than VEC_MAX_DISTANCE as the default: a default argument is
-    evaluated once at import, so naming the constant here would freeze the
-    cut at its import-time value and put a runtime change out of reach.
-
-    Returns [] when vectors are unavailable, and for a query that is one
-    opaque identifier (see is_opaque_query) -- so callers can always call
-    this unconditionally. domain/type/tag/status filters apply *after* the
-    nearest-neighbor pass, so a fixed limit*4 over-fetch can starve a
-    small, selective domain: if every one of the limit*4 global nearest
-    neighbors belongs to another domain, the filter leaves nothing even
-    when relevant in-domain vectors exist just outside that window. When a
-    domain/type/tag filter narrows the result we therefore widen k to the
-    whole vector set (capped at _KNN_MAX_K) so the post-KNN filter keeps the
-    right rows in correct distance order; unfiltered searches keep the cheap
-    fixed over-fetch.
-    """
-    if max_distance is None:
-        max_distance = VEC_MAX_DISTANCE
-    if is_opaque_query(query):
-        return []
-    if not _vec_ready(conn):
-        return []
-    blobs = embed.embed_texts([query])
-    if not blobs:
-        return []
-    if domain or type or tag:
-        total = conn.execute("SELECT COUNT(*) FROM memories_vec").fetchone()[0]
-        k = min(max(total, 1), _KNN_MAX_K)
-    else:
-        k = max(limit * 4, 50)
-    sql = [
-        """SELECT m.*, v.distance AS vec_distance
-           FROM (SELECT rowid, distance FROM memories_vec
-                 WHERE embedding MATCH ? AND k = ?) v
-           JOIN memories m ON m.rowid_pk = v.rowid
-           WHERE v.distance <= ?"""
-    ]
-    params: list = [blobs[0], k, max_distance]
-    if domain:
-        clause, values, _ = domain_scope_clause(conn, domain, subtree=subtree)
-        sql.append(clause)
-        params.extend(values)
-    if type:
-        sql.append("AND m.type = ?")
-        params.append(type)
-    if tag:
-        clause, needle = _tag_clause(tag)
-        sql.append(clause)
-        params.append(needle)
-    if status:
-        sql.append("AND m.status = ?")
-        params.append(status)
-    sql.append("ORDER BY v.distance LIMIT ?")
-    params.append(limit)
-    return conn.execute(" ".join(sql), params).fetchall()
-
-
-def search_hybrid(
+def search_ranked(
     conn: sqlite3.Connection,
     query: str,
     *,
@@ -3128,17 +2993,16 @@ def search_hybrid(
     subtree: bool = True,
     collapse: bool = False,
 ) -> list[dict]:
-    """FTS BM25 + vector KNN, merged by reciprocal rank fusion.
+    """FTS5 BM25 over content, tags and domain paths, ranked.
 
-    Each result dict carries `match_source` ("fts" | "vec" | "both"),
-    plus `fts_rank` (bm25, lower = better) and/or `vec_distance`
-    (cosine, lower = closer) so the agent can judge each candidate.
-    Ordering is RRF, but it's a candidate ordering, not a verdict --
-    the agent decides relevance, same as FTS-only did.
+    Each result dict carries `match_source` ("fts", or "uid" for the row a
+    pasted identifier names) and `fts_rank` (bm25, lower = better) so the
+    agent can judge each candidate. The order is a candidate ordering, not a
+    verdict -- the agent decides relevance.
 
     Type is not part of the ordering. A diagram earns its place the way
-    every other memory does: it comes back when it matches, where its
-    scores put it.
+    every other memory does: it comes back when it matches, where its score
+    puts it.
 
     collapse=True folds near-identical results into the best-ranked one of
     them (see _collapse_near_copies). Off by default: it is a concession to
@@ -3146,10 +3010,10 @@ def search_hybrid(
     the opposite case -- a human curating the store needs to SEE that the
     same fact was written five times, which is what the dedup queue is for.
     """
-    # A query that IS a uid names one row, and the hybrid index cannot match
-    # on it: a uid occurs in OTHER bodies as [[uid]], so the search answers
-    # "what points at this" and never "this". The named row is pinned above
-    # its referrers -- the same treatment admin.py gives a pasted uid, here so
+    # A query that IS a uid names one row, and the index cannot match on it:
+    # a uid occurs in OTHER bodies as [[uid]], so the search answers "what
+    # points at this" and never "this". The named row is pinned above its
+    # referrers -- the same treatment admin.py gives a pasted uid, here so
     # every caller inherits it rather than the dashboard alone.
     pinned: dict | None = None
     if is_opaque_query(query):
@@ -3158,66 +3022,26 @@ def search_hybrid(
             pinned = dict(row)
             pinned["match_source"] = "uid"
 
-    K = 60  # standard RRF damping constant
-    merged: dict[str, dict] = {}
-
-    def fold(rows, source: str, weight: float = 1.0) -> None:
-        for i, row in enumerate(rows):
-            uid = row["uid"]
-            contribution = weight / (K + i + 1)
-            seen = merged.get(uid)
-            if seen is None:
-                d = dict(row)
-                if source == "fts":
-                    d["fts_rank"] = d.pop("rank")
-                d["match_source"] = source
-                d["_rrf"] = contribution
-                merged[uid] = d
-            else:
-                if source == "fts":
-                    seen["fts_rank"] = row["rank"]
-                else:
-                    seen["vec_distance"] = row["vec_distance"]
-                seen["match_source"] = "both"
-                seen["_rrf"] += contribution
-
-    # `_FUSION_FETCH` rows per unit of `limit` from each arm, taken as one
-    # wider LIMIT rather than a second query.
-    deep = limit * _FUSION_FETCH
-    fold(search_memories(conn, query, domain=domain, type=type, tag=tag,
-                         status=status, limit=deep, subtree=subtree), "fts")
-    fold(search_semantic(conn, query, domain=domain, type=type, tag=tag,
-                         status=status, limit=deep, subtree=subtree), "vec", VEC_WEIGHT)
+    hits: list[dict] = []
+    for row in search_memories(conn, query, domain=domain, type=type, tag=tag,
+                               status=status, limit=limit, subtree=subtree):
+        d = dict(row)
+        d["fts_rank"] = d.pop("rank")
+        d["match_source"] = "fts"
+        hits.append(d)
 
     # Contradicted last, and only then by score: a memory marked known-wrong
-    # still comes back, never ahead of one that still holds.
-    ranked = sorted(
-        merged.values(),
-        key=lambda d: (d.get("confidence") == CONFIDENCE_CONTRADICTED, -d["_rrf"]),
-    )
-    results = (_collapse_near_copies(ranked) if collapse else ranked)[:limit]
-    for d in results:
-        del d["_rrf"]
+    # still comes back, never ahead of one that still holds. bm25 ascends, so
+    # the rank is the second key as it stands.
+    hits.sort(key=lambda d: (d.get("confidence") == CONFIDENCE_CONTRADICTED,
+                             d["fts_rank"]))
+    results = (_collapse_near_copies(hits) if collapse else hits)[:limit]
     if pinned is not None:
         results = [pinned] + [r for r in results if r["uid"] != pinned["uid"]]
         results = results[:limit]
     _attach_succession(conn, results)
     return results
 
-
-# What a vector hit is worth next to a keyword hit, in the fusion. Below the
-# equal vote plain RRF would give it: at an equal vote the vector arm displaces
-# keyword hits at the same rank.
-#
-# Calibrated against ONE corpus and ONE embedding model, like
-# VEC_MAX_DISTANCE; re-measure with tools/bench-retrieval.py before moving it.
-VEC_WEIGHT = 0.5
-
-# How many rows each retriever fetches per unit of `limit` before fusion. The
-# deeper the fetch, the more of the weaker arm's ranking gets a vote, so
-# raising this is a claim that both retrievers are informative -- measure it
-# against the store with tools/bench-retrieval.py first.
-_FUSION_FETCH = 1
 
 # Above this difflib ratio two results are the same text, not two takes on
 # one subject. Near-identity on purpose: this drops copies of one fact, it
@@ -3228,7 +3052,7 @@ _COPY_RATIO = 0.92
 def _collapse_near_copies(ranked: list[dict]) -> list[dict]:
     """Drop a result that repeats one already kept, and say so on the keeper.
 
-    Lexical, the same measure dedup_candidates falls back to: it matches
+    Lexical, the same measure dedup_candidates uses: it matches
     near-identical text, not paraphrases.
     """
     import difflib
@@ -3568,8 +3392,8 @@ def move_domain(
     two. A merge is not a separate operation -- renaming onto a path that
     already holds memories means those two sets are one domain now.
 
-    Every moved row is re-embedded (domain is part of the embedding
-    source) and audited in `edits`, so a re-home is reconstructible.
+    Every moved row is reindexed (domain is part of the index source) and
+    audited in `edits`, so a re-home is reconstructible.
 
     Cross-listings pointing INTO the moved scope follow it: renaming a
     subject renames it for the memories that merely belong to it too, or
@@ -3636,8 +3460,6 @@ def move_domain(
             "VALUES (?, ?, ?, ?, ?)",
             (r["uid"], now, r["content"], r["content"],
              f"meta: domain '{old}' → '{target}'"))
-        _upsert_vector(conn, r["rowid_pk"], r["content"], r["tags"], target,
-                       r["also_domains"])
         touched.add(old)
 
     # Retargeting a cross-listing can land it on the memory's own path -- a
@@ -3774,13 +3596,13 @@ def domain_links_for(conn: sqlite3.Connection, uids) -> dict[str, list[str]]:
 
 
 def _write_domain_links(conn: sqlite3.Connection, row: sqlite3.Row, paths: list[str]) -> list[str]:
-    """Rewrite one memory's cross-listings: rows, index text, vector.
+    """Rewrite one memory's cross-listings: the rows and the index text.
 
     `memory_domains` is the truth every domain filter reads.
     `memories.also_domains` is the same paths as one field, and exists for
-    the two readers that cannot join it: the FTS index and the embedder.
-    Nothing filters on that field -- which is why it is written here, and
-    only here, in the same breath as the rows it mirrors.
+    the reader that cannot join it: the FTS index. Nothing filters on that
+    field -- which is why it is written here, and only here, in the same
+    breath as the rows it mirrors.
     """
     uid = row["uid"]
     conn.execute("DELETE FROM memory_domains WHERE memory_uid = ?", (uid,))
@@ -3793,7 +3615,6 @@ def _write_domain_links(conn: sqlite3.Connection, row: sqlite3.Row, paths: list[
     conn.execute(
         "UPDATE memories SET also_domains = ?, updated_at = ? WHERE uid = ?",
         (blob, now, uid))
-    _upsert_vector(conn, row["rowid_pk"], row["content"], row["tags"], row["domain"], blob)
     return paths
 
 
@@ -3896,34 +3717,19 @@ def similar_memories(
     if row is None or row["type"] == DIAGRAM_TYPE:
         return []
 
-    scored: list[tuple[sqlite3.Row, float, str]] = []
-    if _vec_ready(conn):
-        emb = conn.execute(
-            "SELECT embedding FROM memories_vec WHERE rowid = ?", (row["rowid_pk"],)).fetchone()
-        if emb is not None:
-            for n in conn.execute(
-                "SELECT rowid, distance FROM memories_vec WHERE embedding MATCH ? AND k = ?",
-                (emb["embedding"], limit + 8),
-            ).fetchall():
-                if n["rowid"] == row["rowid_pk"] or 1.0 - n["distance"] < threshold:
-                    continue
-                other = conn.execute(
-                    "SELECT * FROM memories WHERE rowid_pk = ?", (n["rowid"],)).fetchone()
-                if other is not None:
-                    scored.append((other, 1.0 - n["distance"], "vector"))
-    else:
-        import difflib
+    import difflib
 
-        # Without vectors this is a scan, so it stays inside the scope the
-        # memory was filed under -- a write must not get slower as the
-        # store grows in branches it has nothing to do with.
-        clause, params = domain_clause(row["domain"], alias="") if row["domain"] else ("", [])
-        for other in conn.execute(
-            f"SELECT * FROM memories WHERE uid <> ? {clause}", [uid, *params]
-        ).fetchall():
-            ratio = difflib.SequenceMatcher(None, row["content"], other["content"]).quick_ratio()
-            if ratio >= threshold:
-                scored.append((other, ratio, "lexical"))
+    # A scan, so it stays inside the scope the memory was filed under -- a
+    # write must not get slower as the store grows in branches it has
+    # nothing to do with.
+    scored: list[tuple[sqlite3.Row, float, str]] = []
+    clause, params = domain_clause(row["domain"], alias="") if row["domain"] else ("", [])
+    for other in conn.execute(
+        f"SELECT * FROM memories WHERE uid <> ? {clause}", [uid, *params]
+    ).fetchall():
+        ratio = difflib.SequenceMatcher(None, row["content"], other["content"]).quick_ratio()
+        if ratio >= threshold:
+            scored.append((other, ratio, "lexical"))
 
     out = []
     for other, score, method in sorted(scored, key=lambda s: -s[1]):
@@ -3948,13 +3754,11 @@ def dedup_candidates(
 ) -> list[tuple[sqlite3.Row, sqlite3.Row, float, str]]:
     """Surface likely-duplicate/contradictory pairs for the agent to review.
 
-    Semantic-first: when the vector table is available, candidate pairs
-    come from cosine similarity over the embedded store (method
-    'vector'); without vectors it falls back to lexical difflib overlap
-    (method 'lexical'). `threshold` applies to the returned score in both
-    modes (score = 1 - cosine distance on the vector path). Not a merge,
-    just a candidate list -- the agent judges whether pairs are actually
-    duplicates, same "agent as embedder" split used for search.
+    Candidate pairs come from lexical difflib overlap (method 'lexical'),
+    which `threshold` applies to. It matches near-identical text, not
+    paraphrases: two takes on one subject in different words do not surface
+    here. Not a merge, just a candidate list -- the agent judges whether
+    pairs are actually duplicates, the same split search uses.
 
     `since` makes the hints directional for incremental runs: at least
     one side of every pair is new (created/updated at/after `since`),
@@ -3986,49 +3790,17 @@ def dedup_candidates(
     rows = conn.execute(" ".join(sql), params).fetchall()
     is_new = (lambda r: r["updated_at"] >= since) if since else (lambda r: True)
 
-    pairs: list[tuple[sqlite3.Row, sqlite3.Row, float, str]] = []
-    if _vec_ready(conn):
-        by_rowid = {r["rowid_pk"]: r for r in rows}
-        # widen k when a filter narrows the candidate set, same starvation
-        # logic as search_semantic: the neighbors we need may be far down
-        # the global distance order
-        total = conn.execute("SELECT COUNT(*) FROM memories_vec").fetchone()[0]
-        k = min(max(total, 1), _KNN_MAX_K) if (domain or type) else min(max(total, 1), 8)
-        seen: set[tuple[int, int]] = set()
-        for r in rows:
-            if not is_new(r):
-                continue  # probe from new memories only; matches may be old
-            emb = conn.execute(
-                "SELECT embedding FROM memories_vec WHERE rowid = ?", (r["rowid_pk"],)
-            ).fetchone()
-            if emb is None:
-                continue
-            neighbors = conn.execute(
-                "SELECT rowid, distance FROM memories_vec WHERE embedding MATCH ? AND k = ?",
-                (emb["embedding"], k),
-            ).fetchall()
-            for n in neighbors:
-                other = by_rowid.get(n["rowid"])
-                if other is None or n["rowid"] == r["rowid_pk"]:
-                    continue
-                key = (min(r["rowid_pk"], n["rowid"]), max(r["rowid_pk"], n["rowid"]))
-                if key in seen:
-                    continue
-                seen.add(key)
-                score = 1.0 - n["distance"]
-                if score >= threshold:
-                    pairs.append((r, other, score, "vector"))
-    else:
-        import difflib
+    import difflib
 
-        for i in range(len(rows)):
-            for j in range(i + 1, len(rows)):
-                a, b = rows[i], rows[j]
-                if not (is_new(a) or is_new(b)):
-                    continue
-                ratio = difflib.SequenceMatcher(None, a["content"], b["content"]).quick_ratio()
-                if ratio >= threshold:
-                    pairs.append((a, b, ratio, "lexical"))
+    pairs: list[tuple[sqlite3.Row, sqlite3.Row, float, str]] = []
+    for i in range(len(rows)):
+        for j in range(i + 1, len(rows)):
+            a, b = rows[i], rows[j]
+            if not (is_new(a) or is_new(b)):
+                continue
+            ratio = difflib.SequenceMatcher(None, a["content"], b["content"]).quick_ratio()
+            if ratio >= threshold:
+                pairs.append((a, b, ratio, "lexical"))
 
     pairs = [p for p in pairs if not _timeline_pair(p[0], p[1])]
 
@@ -4657,7 +4429,7 @@ def set_run_backup(conn: sqlite3.Connection, run_id: int, backup_path: str) -> N
 
 
 def _update_meta_field(conn: sqlite3.Connection, uid: str, field: str, value: str) -> None:
-    """Mirror admin.edit_meta for one tag/domain field: UPDATE + audit + re-embed.
+    """Mirror admin.edit_meta for one tag/domain field: UPDATE + audit.
 
     `field` is only ever 'tags' or 'domain' (caller-controlled), so the
     f-string interpolation is not an injection surface.
@@ -4678,12 +4450,6 @@ def _update_meta_field(conn: sqlite3.Connection, uid: str, field: str, value: st
     conn.execute(
         "INSERT INTO edits (memory_uid, edited_at, prev_content, new_content, note) VALUES (?, ?, ?, ?, ?)",
         (uid, now_iso(), row["content"], row["content"], note),
-    )
-    _upsert_vector(
-        conn, row["rowid_pk"], row["content"],
-        value if field == "tags" else row["tags"],
-        value if field == "domain" else row["domain"],
-        row["also_domains"],
     )
     if field == "domain" and row["also_domains"]:
         set_domain_links(conn, uid, get_domain_links(conn, uid))

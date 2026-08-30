@@ -1,12 +1,10 @@
 """The guard that starts the admin dashboard from the MCP server.
 
 Nothing here spawns a real process. It could not be hermetic if it did:
-conftest's autouse no_real_model fixture patches this interpreter only,
-so a genuine child would load the embedding model for real and bind a
-real port. _spawn_admin is replaced by a recorder instead, and the cases
-that need something on a port use an ephemeral listener -- a real socket,
-so the probe is really exercised, but one the kernel picked and the test
-owns.
+a genuine child would open the real store and bind a real port.
+_spawn_admin is replaced by a recorder instead, and the cases that need
+something on a port use an ephemeral listener -- a real socket, so the
+probe is really exercised, but one the kernel picked and the test owns.
 
 MEMAI_HOME is a tmp dir per test, which is where the registry file lives.
 """

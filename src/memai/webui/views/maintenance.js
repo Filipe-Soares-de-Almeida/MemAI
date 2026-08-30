@@ -10,21 +10,19 @@ import { pickerFor, pickerValue, setPickerValue, wirePicker, fixedItems } from '
 import { openRecord } from './record.js';
 import { t } from '../i18n.js';
 
+/* Free pages worth an amber dot and a mention. Below it the file is simply
+   in use and compacting would give back nothing anyone would notice. */
+const RECLAIM_WARN = 262144;
+
 const OPS = {
   'fts': { path: '/api/maintenance/fts-rebuild', body: {},
            msg: r => t('mn.msg.fts', { n: fmtInt(r.rows) }) },
-  'reembed-missing': { path: '/api/maintenance/reembed', body: { mode: 'missing' },
-                       msg: r => t('mn.msg.backfilled', { n: fmtInt(r.embedded), t: fmtInt(r.total) }) },
-  'reembed-all': { path: '/api/maintenance/reembed', body: { mode: 'all' },
-                   confirm: t('mn.confirm.reembedAll'),
-                   msg: r => t('mn.msg.recomputed', { n: fmtInt(r.total) }) },
-  /* Both of these delete, both are irreversible, and both used to fire on the
-     first click from a flat row of six identical buttons where only
-     reembed-all asked. Clean orphans DELETES rows; VACUUM rewrites the file
-     and discards the free pages an undo would have needed. */
+  /* Both of these delete and both are irreversible, so both ask first.
+     Clean orphans DELETES rows; VACUUM rewrites the file and discards the
+     free pages an undo would have needed. */
   'orphans': { path: '/api/maintenance/clean-orphans', body: {},
                confirm: t('mn.confirm.orphans'),
-               msg: r => t('mn.msg.orphans', { r: r.relations_removed, v: r.vectors_removed }) },
+               msg: r => t('mn.msg.orphans', { r: r.relations_removed }) },
   'vacuum': { path: '/api/maintenance/vacuum', body: {},
               confirm: t('mn.confirm.vacuum'),
               msg: r => t('mn.msg.vacuum', { a: fmtBytes(r.before), b: fmtBytes(r.after) }) },
@@ -73,8 +71,6 @@ export async function renderMaintenance(view) {
         <h3 class="panel-title">${t('mn.ops')}</h3>
         <div class="mnt-actions">
           <button class="btn" data-op="fts">${t('mn.op.fts')}</button>
-          <button class="btn" data-op="reembed-missing">${t('mn.op.reembedMissing')}</button>
-          <button class="btn" data-op="reembed-all">${t('mn.op.reembedAll')}</button>
           <button class="btn" data-op="orphans">${t('mn.op.orphans')}</button>
           <button class="btn" data-op="vacuum">${t('mn.op.vacuum')}</button>
           <button class="btn btn-solid" data-op="backup">${t('mn.op.backup')}</button>
@@ -158,13 +154,16 @@ export async function renderMaintenance(view) {
       h.integrity.detail ? esc(h.integrity.detail) : t('mn.h.quickClean'));
     push(h.fts.ok ? 'ok' : 'bad', t('mn.h.fts'),
       `${h.fts.detail ? esc(h.fts.detail) : t('mn.h.ftsConsistent')} · ${t('mn.h.rows', { a: fmtInt(h.fts.rows), b: fmtInt(h.fts.expected) })}`);
-    if (!h.vectors.ready) push('warn', t('mn.h.vectors'), t('mn.h.vecUnavailable'));
-    else push(h.vectors.missing === 0 && h.vectors.orphans === 0 ? 'ok' : 'warn', t('mn.h.vectors'),
-      `${t('mn.h.vecDetail', { a: fmtInt(h.vectors.rows), b: fmtInt(h.vectors.expected), m: h.vectors.missing, o: h.vectors.orphans })} · ${esc((h.vectors.model || '').split(/[\\/]/).pop())} ${esc(h.vectors.dim)}d${h.vectors.model_available ? '' : t('mn.h.modelUnavailable')}`);
     push(h.relations.orphans === 0 ? 'ok' : 'warn', t('mn.h.relations'),
       h.relations.orphans === 0 ? t('mn.h.noOrphans') : t('mn.h.orphanEdges', { n: h.relations.orphans }));
-    push(h.file.reclaimable > 262144 ? 'warn' : 'ok', t('mn.h.disk'),
-      t('mn.h.diskDetail', { size: fmtBytes(h.file.size), wal: h.file.wal_size ? ` + ${fmtBytes(h.file.wal_size)} WAL` : '', rec: fmtBytes(h.file.reclaimable) }));
+    /* the same threshold decides the dot and whether naming what freed the
+       pages helps: under it there is nothing to compact, so the reason is
+       noise rather than a prompt */
+    const reclaim = h.file.reclaimable > RECLAIM_WARN;
+    const why = reclaim && h.file.compact_reason === 'vector_store'
+      ? ` · ${t('mn.h.diskFromVectors')}` : '';
+    push(reclaim ? 'warn' : 'ok', t('mn.h.disk'),
+      t('mn.h.diskDetail', { size: fmtBytes(h.file.size), wal: h.file.wal_size ? ` + ${fmtBytes(h.file.wal_size)} WAL` : '', rec: fmtBytes(h.file.reclaimable) }) + why);
     if (!$('#healthBody')) return;
     $('#healthBody').innerHTML = rows.join('');
     $('#backupsBody').innerHTML = h.backups.length

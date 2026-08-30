@@ -71,8 +71,8 @@ RECEIPT = ".memai-skills.json"
 # definitions a host reads from there.
 AGENT_RECEIPT = ".memai-agents.json"
 
-# Seconds. A cold first run pays for the interpreter, the store and the
-# embedder behind it.
+# Seconds. A cold first run pays for the interpreter and for opening the
+# store.
 TIMEOUT = 15
 
 # The guard opens no store and reads one payload, and it runs in front of a

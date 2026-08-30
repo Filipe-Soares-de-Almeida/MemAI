@@ -32,7 +32,7 @@ def test_contradicted_sorts_behind_what_still_holds(conn):
     right = db.insert_memory(conn, type="note", content="cache warmup runs nightly",
                              domain="acme/x100")
     db.set_confidence(conn, wrong, "contradicted")
-    order = [r["uid"] for r in db.search_hybrid(conn, "cache warmup")]
+    order = [r["uid"] for r in db.search_ranked(conn, "cache warmup")]
     assert order == [right, wrong]
 
 
@@ -40,7 +40,7 @@ def test_contradicted_still_comes_back(conn):
     """Hiding it invites writing the same wrong thing again."""
     uid = db.insert_memory(conn, type="note", content="queue drain is single threaded")
     db.set_confidence(conn, uid, "contradicted")
-    hits = db.search_hybrid(conn, "queue drain")
+    hits = db.search_ranked(conn, "queue drain")
     assert [r["uid"] for r in hits] == [uid]
     assert hits[0]["confidence"] == "contradicted"
 

@@ -9,7 +9,7 @@ The tools answer any MCP host. What surrounds them targets Claude Code: the hook
 events that put the store in front of a session, the bundled skills, and the
 warden subagent that consults it on a session's behalf.
 
-One SQLite file holds all of it: rows, keyword index, vectors, edit history,
+One SQLite file holds all of it: rows, keyword index, edit history,
 relations, diagrams. A local admin dashboard serves the same store as the human
 curation surface.
 
@@ -136,8 +136,8 @@ How the parts work lives in the [wiki](../../wiki):
 
 | page | what it covers |
 |---|---|
-| [Storage and embeddings](../../wiki/Storage-and-embeddings) | the tables, and the bundled model behind the vectors |
-| [Retrieval](../../wiki/Retrieval) | hybrid BM25 + vector search, what a result carries, how to re-measure it |
+| [Storage](../../wiki/Storage) | the tables, and what each one is the record of |
+| [Retrieval](../../wiki/Retrieval) | BM25 keyword search, and what a result carries |
 | [Domains](../../wiki/Domains) | paths, subtree reads, and belonging to more than one |
 | [Diagrams](../../wiki/Diagrams) | documenting a routine as a graph, and reading it back |
 | [Curation](../../wiki/Curation) | confidence, decay, staged suggestions, dedup |
