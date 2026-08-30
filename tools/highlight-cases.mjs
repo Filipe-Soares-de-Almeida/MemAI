@@ -1,15 +1,11 @@
-/* Loads the vendored highlight.js the way the dashboard does and colours one
-   snippet per language, so tests/test_richtext.py can hold the vendored tree
-   to actually working: a grammar that goes missing on an update stops being
-   a silently colourless block and becomes a failing test.
+/* Reports what the dashboard's highlighter can do, as JSON, so
+   tests/test_richtext.py can hold it to working: every language the engine
+   registers, the aliases it answers to, and one coloured snippet per
+   language there is a snippet for.
 
    Usage: node tools/highlight-cases.mjs */
 
-import { readdir } from 'node:fs/promises';
-import { fileURLToPath } from 'node:url';
-
-const HERE = new URL('../src/memai/webui/public/vendor/highlight/', import.meta.url);
-const hljs = (await import(new URL('core.min.js', HERE))).default;
+const hljs = (await import('highlight.js')).default;
 hljs.configure({ ignoreUnescapedHTML: true });
 
 const SNIPPETS = {
@@ -24,18 +20,26 @@ const SNIPPETS = {
   ini: '[acme]\nflag = USE_NEW_PARSER   ; a comment',
   yaml: 'domain: acme/x100\ntotal: 42   # a comment',
   diff: '--- a\n+++ b\n-gone\n+arrived',
+  rust: 'fn warm(cache: &mut Cache) -> usize {\n    cache.fill(1) // the first request\n}',
+  go: 'func Warm(c *Cache) int {\n\treturn c.Fill(1) // the first request\n}',
+  csharp: 'public int Warm(Cache c) => c.Fill(1); // the first request',
 };
 
-const shipped = (await readdir(new URL('languages/', HERE)))
-  .filter(f => f.endsWith('.min.js')).map(f => f.replace('.min.js', '')).sort();
+/* the short names a fence can carry, answered by the engine itself */
+const ALIASES = ['rs', 'c#', 'golang', 'ts', 'kt', 'py', 'yml', 'sh', 'ps1', 'patch'];
 
-const out = { shipped, coloured: {}, failed: [] };
-for (const language of shipped) {
+const out = {
+  catalog: hljs.listLanguages().sort(),
+  aliases: Object.fromEntries(
+    ALIASES.map(alias => [alias, hljs.getLanguage(alias)?.name ?? null])),
+  coloured: {},
+  failed: [],
+};
+
+for (const language of Object.keys(SNIPPETS).sort()) {
   try {
-    const grammar = (await import(new URL(`languages/${language}.min.js`, HERE))).default;
-    hljs.registerLanguage(language, grammar);
+    if (!hljs.getLanguage(language)) { out.failed.push(`${language}: not registered`); continue; }
     const snippet = SNIPPETS[language];
-    if (snippet === undefined) { out.failed.push(`${language}: no snippet`); continue; }
     const html = hljs.highlight(snippet, { language }).value;
     out.coloured[language] = {
       /* what the theme in admin.css has to have a rule for */

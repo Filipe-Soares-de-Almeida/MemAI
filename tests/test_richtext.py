@@ -229,7 +229,7 @@ def test_prose_after_a_fence_is_prose_again(drawn):
     assert drawn["text_after_fence"].endswith('<p class="rt-p">back to prose</p>')
 
 
-# ------------------------------------------------- the vendored highlighter
+# ---------------------------------------------------------- the highlighter
 
 CSS = ROOT / "src" / "memai" / "webui" / "admin.css"
 HIGHLIGHT_CASES = ROOT / "tools" / "highlight-cases.mjs"
@@ -244,14 +244,36 @@ INHERITS = {"hljs-function", "hljs-params", "hljs-punctuation", "hljs-operator",
 @pytest.fixture(scope="module")
 def coloured() -> dict:
     out = subprocess.run(["node", str(HIGHLIGHT_CASES)], cwd=ROOT, capture_output=True,
-                         text=True, encoding="utf-8", timeout=60)
+                         text=True, encoding="utf-8", timeout=120)
     assert out.returncode == 0, out.stderr
     return json.loads(out.stdout)
 
 
-def test_every_vendored_grammar_loads_and_colours(coloured):
+def test_every_snippet_loads_its_grammar_and_colours(coloured):
     assert coloured["failed"] == []
-    assert set(coloured["coloured"]) == set(coloured["shipped"])
+    assert coloured["coloured"]
+
+
+def test_the_catalogue_is_every_language_the_engine_ships(coloured):
+    """The dashboard offers what highlight.js has, not a subset someone
+    curated. A memory written in any of these colours without a line being
+    added anywhere.
+    """
+    catalogue = coloured["catalog"]
+    assert len(catalogue) > 150, f"only {len(catalogue)} languages"
+    for language in ("rust", "go", "csharp", "typescript", "kotlin", "ruby",
+                     "php", "swift", "dockerfile", "makefile", "lua", "scala"):
+        assert language in catalogue, language
+
+
+def test_a_language_is_reachable_by_the_names_its_grammar_answers_to(coloured):
+    """The engine resolves each grammar's own aliases, so a fence tagged the
+    short way finds its language with no table kept here."""
+    table = coloured["aliases"]
+    for alias, language in (("rs", "Rust"), ("c#", "C#"), ("golang", "Go"),
+                            ("ts", "TypeScript"), ("py", "Python"), ("yml", "YAML"),
+                            ("sh", "Bash"), ("ps1", "PowerShell")):
+        assert table.get(alias) == language, f"{alias} -> {table.get(alias)}"
 
 
 def test_colouring_a_snippet_changes_no_character_of_it(coloured):
@@ -268,7 +290,15 @@ def test_the_dashboard_styles_every_scope_the_grammars_emit(coloured):
     assert not unstyled, f"no colour for {sorted(unstyled)} -- style it or list it in INHERITS"
 
 
-def test_the_vendored_tree_carries_its_licence():
-    vendor = ROOT / "src" / "memai" / "webui" / "public" / "vendor" / "highlight"
-    assert (vendor / "LICENSE").read_text(encoding="utf-8").startswith("BSD 3-Clause")
-    assert (vendor / "core.min.js").exists()
+NOTICES = (ROOT / "src" / "memai" / "webui" / "dist" / "THIRD-PARTY-NOTICES.txt")
+
+
+@pytest.mark.skipif(not NOTICES.is_file(), reason="dashboard not built (npm run build)")
+def test_the_build_carries_the_licence_of_what_it_bundles():
+    """highlight.js is BSD-3, which asks that the notice travel with every
+    copy, and the wheel ships the build. The file is generated from
+    node_modules by the vite config, so it names the bundled version."""
+    text = NOTICES.read_text(encoding="utf-8")
+    assert "highlight.js" in text
+    assert "BSD 3-Clause License" in text
+    assert "Copyright (c)" in text

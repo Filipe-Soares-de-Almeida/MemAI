@@ -1285,26 +1285,6 @@ def test_api_diagram_list(client):
     assert client.get("/api/diagrams?domain=nope").json()["total"] == 0
 
 
-@pytest.mark.skipif(not (admin.WEBUI_DIR / "index.html").is_file(),
-                    reason="dashboard not built (npm run build)")
-def test_every_vendored_grammar_is_served(client):
-    """core/highlight.js builds these URLs at runtime, so no bundler checks
-    them: a grammar left out of the build is a 404 nobody sees until a code
-    block stays grey.
-
-    Walked rather than listed, so adding a language cannot pass this test by
-    being forgotten in it.
-    """
-    vendor = WEBUI_SRC / "public" / "vendor" / "highlight"
-    files = [vendor / "core.min.js", *sorted((vendor / "languages").glob("*.min.js"))]
-    assert len(files) > 10, "expected the vendored grammars"
-    for path in files:
-        rel = path.relative_to(WEBUI_SRC / "public").as_posix()
-        res = client.get(f"/static/{rel}")
-        assert res.status_code == 200, rel
-        assert "text/javascript" in res.headers["content-type"], rel
-
-
 def test_every_referenced_icon_is_defined(client):
     """`<svg data-icon="x">` is filled in from core/icons.js at boot, so a
     name that module does not define is an icon that silently never draws.
