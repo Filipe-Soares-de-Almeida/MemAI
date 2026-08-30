@@ -154,6 +154,9 @@ export async function renderMaintenance(view) {
       h.integrity.detail ? esc(h.integrity.detail) : t('mn.h.quickClean'));
     push(h.fts.ok ? 'ok' : 'bad', t('mn.h.fts'),
       `${h.fts.detail ? esc(h.fts.detail) : t('mn.h.ftsConsistent')} · ${t('mn.h.rows', { a: fmtInt(h.fts.rows), b: fmtInt(h.fts.expected) })}`);
+    push(h.tags.untagged === 0 ? 'ok' : 'warn', t('mn.h.tags'),
+      h.tags.untagged === 0 ? t('mn.h.tagsAll')
+        : t('mn.h.untagged', { n: fmtInt(h.tags.untagged), total: fmtInt(h.tags.active) }));
     push(h.relations.orphans === 0 ? 'ok' : 'warn', t('mn.h.relations'),
       h.relations.orphans === 0 ? t('mn.h.noOrphans') : t('mn.h.orphanEdges', { n: h.relations.orphans }));
     /* the same threshold decides the dot and whether naming what freed the

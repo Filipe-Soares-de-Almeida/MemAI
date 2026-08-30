@@ -85,6 +85,53 @@ def test_every_hit_says_the_keyword_index_found_it(conn):
     assert all(h["fts_rank"] is not None for h in hits)
 
 
+# ------------------------------------------------------------- what tags reach
+
+# every writer that takes tags, with the fields it cannot do without
+_TAGGED_WRITERS = (
+    ("note", {"content": "the loader skips a blank part"}),
+    ("checkpoint", {"intent": "finish the loader", "established": "parts stream",
+                    "pursuing": "the blank case", "open_questions": "none"}),
+    ("anti_pattern", {"pattern": "retrying the whole batch", "why_wrong": "it doubles writes",
+                      "instead": "retry the failed part"}),
+    ("reasoning", {"hypothesis": "the loader stalls on blanks", "reasoning": "read the trace",
+                   "result": "it skips them", "revised_belief": "blanks are handled",
+                   "next_time": "read the trace first"}),
+    ("handoff", {"content": "pick up at the drain step"}),
+)
+
+
+@pytest.mark.parametrize("tool, fields", _TAGGED_WRITERS)
+def test_a_tag_finds_a_memory_whose_body_never_says_the_word(store, tool, fields):
+    """Tags weigh second only to the body and carry the synonyms it never
+    uses, so every type that can be written has to be able to reach them."""
+    uid = getattr(server, tool)(domain="acme/x100", tags="cold-start, warmup",
+                                **fields)["uid"]
+    assert uid in [h["uid"] for h in server.search(query="cold-start")["results"]]
+
+
+@pytest.mark.parametrize("tool, fields", _TAGGED_WRITERS)
+def test_no_writer_stamps_its_own_type_into_the_tags_column(store, tool, fields):
+    """The type is a column of its own that every read can filter on. A copy
+    of it in the weighted tags column buys no reach and costs a term."""
+    result = getattr(server, tool)(**fields)
+    with db.connect() as conn:
+        assert db.get_memory(conn, result["uid"])["tags"] == ""
+
+
+@pytest.mark.parametrize("tool, fields", _TAGGED_WRITERS)
+def test_an_untagged_write_says_so_while_the_writer_can_still_fix_it(store, tool, fields):
+    result = getattr(server, tool)(**fields)
+    assert result["tags_indexed"] == 0
+    assert "tags_hint" in result
+
+
+def test_a_tagged_write_reports_what_it_indexed(store):
+    result = server.note(content="the drain retries twice", tags="queue, drain, retry")
+    assert result["tags_indexed"] == 3
+    assert "tags_hint" not in result
+
+
 # ----------------------------------------------------------- what came after
 
 def test_a_superseded_hit_names_its_successor(conn):
