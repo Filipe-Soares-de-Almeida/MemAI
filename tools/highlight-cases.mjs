@@ -1,15 +1,14 @@
-/* Loads the vendored highlight.js the way the dashboard does and colours one
-   snippet per language, so tests/test_richtext.py can hold the vendored tree
-   to actually working: a grammar that goes missing on an update stops being
-   a silently colourless block and becomes a failing test.
+/* Loads highlight.js the way the dashboard does -- through the same GRAMMARS
+   map core/highlight.js hands the browser -- and colours one snippet per
+   language, so tests/test_richtext.py can hold the set to actually working:
+   a grammar that stops loading on an update becomes a failing test rather
+   than a silently colourless block.
 
    Usage: node tools/highlight-cases.mjs */
 
-import { readdir } from 'node:fs/promises';
-import { fileURLToPath } from 'node:url';
+import { GRAMMARS } from '../src/memai/webui/core/highlight.js';
 
-const HERE = new URL('../src/memai/webui/public/vendor/highlight/', import.meta.url);
-const hljs = (await import(new URL('core.min.js', HERE))).default;
+const hljs = (await import('highlight.js/lib/core')).default;
 hljs.configure({ ignoreUnescapedHTML: true });
 
 const SNIPPETS = {
@@ -26,13 +25,12 @@ const SNIPPETS = {
   diff: '--- a\n+++ b\n-gone\n+arrived',
 };
 
-const shipped = (await readdir(new URL('languages/', HERE)))
-  .filter(f => f.endsWith('.min.js')).map(f => f.replace('.min.js', '')).sort();
+const shipped = Object.keys(GRAMMARS).sort();
 
 const out = { shipped, coloured: {}, failed: [] };
 for (const language of shipped) {
   try {
-    const grammar = (await import(new URL(`languages/${language}.min.js`, HERE))).default;
+    const grammar = (await GRAMMARS[language]()).default;
     hljs.registerLanguage(language, grammar);
     const snippet = SNIPPETS[language];
     if (snippet === undefined) { out.failed.push(`${language}: no snippet`); continue; }
