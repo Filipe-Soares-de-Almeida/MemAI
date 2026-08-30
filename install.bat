@@ -11,12 +11,33 @@ if not exist .venv\Scripts\activate.bat (
     exit /b 1
 )
 
+where node >nul 2>nul
+if errorlevel 1 (
+    echo Failed to find node -- is Node 20.19+ on PATH?
+    exit /b 1
+)
+
 call .venv\Scripts\activate.bat
 python -m pip install --upgrade pip
 pip install -e ".[dev]"
 if errorlevel 1 (
     echo.
     echo Install failed.
+    exit /b 1
+)
+
+echo.
+echo Building the admin dashboard...
+call npm ci
+if errorlevel 1 (
+    echo.
+    echo npm ci failed.
+    exit /b 1
+)
+call npm run build
+if errorlevel 1 (
+    echo.
+    echo Dashboard build failed.
     exit /b 1
 )
 

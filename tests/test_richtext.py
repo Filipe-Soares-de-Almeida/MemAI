@@ -269,6 +269,6 @@ def test_the_dashboard_styles_every_scope_the_grammars_emit(coloured):
 
 
 def test_the_vendored_tree_carries_its_licence():
-    vendor = ROOT / "src" / "memai" / "webui" / "vendor" / "highlight"
+    vendor = ROOT / "src" / "memai" / "webui" / "public" / "vendor" / "highlight"
     assert (vendor / "LICENSE").read_text(encoding="utf-8").startswith("BSD 3-Clause")
     assert (vendor / "core.min.js").exists()

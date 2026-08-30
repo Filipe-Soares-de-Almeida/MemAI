@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Refresh src/memai/webui/fonts/ with the Roboto faces the admin UI asks for.
+"""Refresh src/memai/webui/public/fonts/ with the Roboto faces the admin UI
+asks for.
 
 The faces ARE tracked -- a clone has them, and so does the wheel. This
 script is how they got there and how they get updated; it is not a step
@@ -18,14 +19,13 @@ This is the ONLY part of MemAI that touches the network on purpose, which
 is why it is a separate script rather than something the server does.
 
 Roboto and Roboto Mono are Font Software under the SIL Open Font License
-1.1 -- see webui/fonts/OFL.txt, which ships beside them because the
+1.1 -- see webui/public/fonts/OFL.txt, which ships beside them because the
 licence requires the notice to travel with every copy. The OFL permits
 bundling outright; what it forbids is selling the fonts by themselves.
 
-Only the latin subset of each face is downloaded -- the admin UI is
-English, and the translated catalogs under webui/i18n/ have so far needed
-nothing outside it. Add the subset you need to SUBSET_FIRST_RANGE if that
-changes.
+Only the latin subset of each face is downloaded -- the admin UI is English,
+and the translated catalogs under webui/public/i18n/ have so far needed nothing
+outside it. Add the subset you need to SUBSET_FIRST_RANGE if that changes.
 """
 
 from __future__ import annotations
@@ -62,7 +62,8 @@ WANTED = {
     ("Roboto Mono", "600"): "roboto-mono-600.woff2",
 }
 
-OUT_DIR = Path(__file__).resolve().parent.parent / "src" / "memai" / "webui" / "fonts"
+OUT_DIR = (Path(__file__).resolve().parent.parent
+           / "src" / "memai" / "webui" / "public" / "fonts")
 
 BLOCK = re.compile(r"@font-face\s*\{(.*?)\}", re.S)
 

@@ -21,3 +21,7 @@ dist/
 
 # private working rules -- the documented spot for uncommitted project instructions
 /CLAUDE.local.md
+
+# node toolchain for the dashboard build
+/node_modules/
+/src/memai/webui/dist/

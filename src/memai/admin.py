@@ -2,7 +2,8 @@
 
 A Starlette + uvicorn app (both already shipped as dependencies of the
 `mcp` SDK, so this adds no new requirements) exposing a JSON API over
-db.py plus a static single-page UI (webui/). It is a *maintenance*
+db.py plus a single-page UI, built from webui/ by Vite into
+webui/dist/ and served from there. It is a *maintenance*
 surface: everything the MCP tools can do, plus operations that only
 make sense for a human curator -- bulk confidence triage, domain
 renames/merges, relation pruning, dedup review, FTS rebuilds,
@@ -58,7 +59,9 @@ mimetypes.add_type("text/css", ".css")
 # but there is no reason to describe a file wrongly.
 mimetypes.add_type("font/woff2", ".woff2")
 
-WEBUI_DIR = Path(__file__).parent / "webui"
+# The dashboard as served: the Vite build output, not its sources. `npm run
+# build` writes it; an install that skipped that step has no directory here.
+WEBUI_DIR = Path(__file__).parent / "webui" / "dist"
 SNIPPET_LIMIT = 280
 DEDUP_SNIPPET = 480
 
@@ -1600,7 +1603,14 @@ def optimization_delete_run(request, payload) -> dict:
 # ---------------------------------------------------------------- wiring
 
 async def index(request):
-    return FileResponse(WEBUI_DIR / "index.html")
+    """The built dashboard, or what to run when it has not been built."""
+    page = WEBUI_DIR / "index.html"
+    if not page.is_file():
+        return Response(
+            "The dashboard is not built. Run `npm ci && npm run build` in the "
+            "repository root, then reload.",
+            status_code=503, media_type="text/plain")
+    return FileResponse(page)
 
 
 async def ping(request):
@@ -1635,8 +1645,8 @@ WEBFONTS = (
 async def fonts_css(request):
     """@font-face rules, naming a file only when that file is really there.
 
-    webui/fonts/ ships with the repo, so the normal case is that every face
-    is present. The existence check stays because a url() in a static
+    webui/public/fonts/ ships with the repo, so the normal case is that every
+    face is present. The existence check stays because a url() in a static
     stylesheet is a request whether the file is there or not: a checkout
     someone pruned, or a face a future release renames, would log 404s in
     the console for something otherwise working. Generating the rules means
@@ -1649,7 +1659,7 @@ async def fonts_css(request):
     preferring local() meant the canvas broke a node label in a different
     place on a machine that happened to have Roboto installed.
     diagram_svg.measure() reads a width table extracted from the file in
-    webui/fonts/ (tools/gen-roboto-metrics.py), so the canvas has to be
+    webui/public/fonts/ (tools/gen-roboto-metrics.py), so the canvas has to be
     looking at that same file for the two renderers to wrap alike. local()
     stays as the fallback for a checkout missing the file, where nothing
     can be guaranteed anyway.
@@ -1782,7 +1792,10 @@ routes = [
     Route("/api/optimization/revert", api(optimization_revert), methods=["POST"]),
     Route("/api/audit", api(audit)),
     Route("/api/lookup", api(lookup)),
-    Mount("/static", StaticFiles(directory=str(WEBUI_DIR)), name="static"),
+    # check_dir=False: importing this module must not depend on the build
+    # having run, or every test that imports it fails at import time.
+    Mount("/static", StaticFiles(directory=str(WEBUI_DIR), check_dir=False),
+          name="static"),
 ]
 
 app = Starlette(routes=routes, middleware=[
