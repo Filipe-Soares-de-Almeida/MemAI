@@ -31,6 +31,7 @@ function optBefore(s) {
   switch (s.kind) {
     case 'compact': case 'reword': return esc(tg.snippet || '');
     case 'retag': return esc(tg.tags || '—');
+    case 'retitle': return esc(tg.title || '—');
     case 'redomain': return esc(tg.domain || '—');
     /* the whole set is replaced, so Before is the whole set -- and an em
        dash where a memory has none, like every other empty field here */
@@ -46,6 +47,7 @@ function optAfter(s) {
   switch (s.kind) {
     case 'compact': case 'reword': return esc(p.new_content || '');
     case 'retag': return esc(p.tags || '—');
+    case 'retitle': return esc(p.title || '—');
     case 'redomain': return esc(p.domain || '—');
     case 'crosslist': return esc((p.also || []).join(', ') || '—');
     case 'set_confidence': return esc(p.confidence || '—');

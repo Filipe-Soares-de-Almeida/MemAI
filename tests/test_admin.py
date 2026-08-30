@@ -199,6 +199,17 @@ def test_health_counts_the_memories_no_tag_can_reach(client):
     assert tags == {"untagged": 1, "active": 2}
 
 
+def test_health_counts_the_memories_with_no_name_of_their_own(client):
+    """A row with no title is listed by the opening line of its body."""
+    _create(client, content="a named row", title="How the drain retries")
+    with db.connect() as conn:
+        db.insert_memory(conn, type="note", content="a row nothing names")
+
+    title = client.get("/api/maintenance/health").json()["title"]
+
+    assert title == {"untitled": 1, "active": 2}
+
+
 def test_maintenance_suite(client):
     uid = _create(client, content="maintenance row content", domain="mnt")
     _create(client, content="maintenance row content nearly equal", domain="mnt")

@@ -157,6 +157,9 @@ export async function renderMaintenance(view) {
     push(h.tags.untagged === 0 ? 'ok' : 'warn', t('mn.h.tags'),
       h.tags.untagged === 0 ? t('mn.h.tagsAll')
         : t('mn.h.untagged', { n: fmtInt(h.tags.untagged), total: fmtInt(h.tags.active) }));
+    push(h.title.untitled === 0 ? 'ok' : 'warn', t('mn.h.title'),
+      h.title.untitled === 0 ? t('mn.h.titleAll')
+        : t('mn.h.untitled', { n: fmtInt(h.title.untitled), total: fmtInt(h.title.active) }));
     push(h.relations.orphans === 0 ? 'ok' : 'warn', t('mn.h.relations'),
       h.relations.orphans === 0 ? t('mn.h.noOrphans') : t('mn.h.orphanEdges', { n: h.relations.orphans }));
     /* the same threshold decides the dot and whether naming what freed the
