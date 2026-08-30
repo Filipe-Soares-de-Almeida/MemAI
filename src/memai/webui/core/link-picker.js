@@ -41,7 +41,7 @@ const previewOf = async uid => {
   return previews.get(uid);
 };
 
-/* the score behind a match badge -- reference for judging a borderline
+/* the score behind a result -- reference for judging a borderline
    candidate, which is why it is a title and not a column */
 const scoreTitle = it =>
   it.fts_rank != null ? `bm25 ${Number(it.fts_rank).toFixed(2)}` : '';
@@ -53,15 +53,17 @@ const rowHTML = (it, { picked, linked }) => {
   const meta = [
     it.domain ? `<span class="picker-domain">${esc(it.domain)}</span>` : '',
     `<span>${esc(TYPE_LABEL[it.type] || it.type)}</span>`,
-    it.match_source
-      ? `<span class="match-badge" title="${esc(scoreTitle(it))}">${esc(it.match_source)}</span>` : '',
+    it.match_source === 'uid'
+      ? `<span class="match-badge" title="${esc(t('badge.uidMatchWhy'))}">${t('badge.uidMatch')}</span>` : '',
     `<span class="picker-uid">${esc(it.uid)}</span>`,
     it.status === 'archived' ? statusTag('archived') : '',
     linked ? `<span class="status-tag">${t('lp.alreadyLinked')}</span>` : '',
   ].filter(Boolean).join('<span class="picker-sep" aria-hidden="true">·</span>');
+  const score = scoreTitle(it);
   return `
     <button type="button" class="picker-item lp-item${linked ? ' lp-linked' : ''}"
             data-uid="${esc(it.uid)}" aria-pressed="${picked ? 'true' : 'false'}"
+            ${score ? `title="${esc(score)}"` : ''}
             ${linked ? 'disabled' : ''}>
       <span class="lp-check" aria-hidden="true">${icon(picked ? 'confirmed' : 'unverified')}</span>
       <span class="picker-snippet">${esc(it.snippet)}</span>

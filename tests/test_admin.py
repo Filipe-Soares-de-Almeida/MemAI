@@ -624,6 +624,21 @@ def test_a_uid_appears_once_even_when_the_search_also_found_it(client):
     assert uids.count(target) == 1
 
 
+def test_the_pinned_row_says_it_is_there_by_uid(client):
+    """The list marks the one row in it that never matched a word, so a
+    reader can tell it from the referrers listed under it."""
+    target = _create(client, content="the cache warms on boot")
+    holder = _create(client, content=f"as established in [[{target}]]")
+
+    source = {i["uid"]: i["match_source"]
+              for i in client.get(f"/api/memories?q={target}").json()["items"]}
+    assert source[target] == "uid"
+    assert source[holder] == "fts"
+
+    picker = client.get(f"/api/lookup?q={target}").json()["items"]
+    assert picker[0]["uid"] == target and picker[0]["match_source"] == "uid"
+
+
 def test_a_query_that_is_not_a_uid_is_unchanged(client):
     _create(client, content="database tuning guide")
     hits = client.get("/api/memories?q=database tuning").json()
