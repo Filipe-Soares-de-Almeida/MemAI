@@ -191,3 +191,22 @@ def test_another_pretooluse_hook_is_left_where_it_is(tmp_path):
     groups = json.loads(settings.read_text(encoding="utf-8"))["hooks"]["PreToolUse"]
     assert groups[0] == theirs
     assert len(groups) == 2
+
+
+def test_the_refusal_spells_each_tool_as_a_signature(monkeypatch, capsys):
+    """A parameter list reads as a set unless something gives it an order.
+
+    The retry this asks for is the whole call retyped, so the order the tool
+    takes its fields in has to be in the message the model reads.
+    """
+    _, _, err = _run(_call("note"), monkeypatch, capsys)
+    assert "note(title, content)" in err
+    assert "checkpoint(title, intent, established, pursuing, open_questions)" in err
+    assert "POSITIONAL" in err
+
+
+def test_the_missing_fields_are_named_in_signature_order():
+    """The refusal claims the two orders agree; this is what makes that true."""
+    for tool, fields in guard.GUARDED.items():
+        missing, _, _ = guard.check(tool, {})
+        assert missing == list(fields), tool

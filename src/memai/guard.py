@@ -104,7 +104,14 @@ def check(tool: str, params: dict) -> tuple[list[str], list[str], list[str]]:
 
 
 def _table() -> str:
-    return " | ".join(f"{tool}={','.join(fields)}" for tool, fields in GUARDED.items())
+    """Every guarded tool as a signature, so the parameters read as an order.
+
+    Spelled `note(title, content)` rather than `note=title,content`: the
+    fields are the tool's positional parameters and a retry that supplies
+    them in another order, or supplies only the one named as missing, is
+    the same failed call again.
+    """
+    return " | ".join(f"{tool}({', '.join(fields)})" for tool, fields in GUARDED.items())
 
 
 def refusal(tool: str, missing: list[str], call: str = "") -> str:
@@ -121,9 +128,13 @@ def refusal(tool: str, missing: list[str], call: str = "") -> str:
         f"text is LOST before the call leaves the client, so nothing here can "
         f"recover it. REDO the call typing EVERY tag again with the prefix, "
         f"and do NOT reuse the text block from the attempt that failed, "
-        f"because the typo comes with it. The server names one missing field "
-        f"at a time, so a retry that fixes only the field named above will "
-        f"fail again on the next one. Required per tool: {_table()}."
+        f"because the typo comes with it. These are the tool's POSITIONAL "
+        f"parameters: the signature below is the order it takes them, the "
+        f"fields named above are listed in that same order, and EVERY one of "
+        f"them has to be in the retry, each under its own name=. The server "
+        f"names one missing field at a time, so a retry that fixes only the "
+        f"field named above will fail again on the next one. "
+        f"Signatures: {_table()}."
     )
 
 
