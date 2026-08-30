@@ -92,8 +92,10 @@ def test_projection_reads_in_flow_order(conn):
     assert order == ["start", "load", "check", "write", "done"]
 
 
-def test_tags_default_to_the_type_so_fts_can_find_it(conn):
-    assert db.get_memory(conn, _mk(conn))["tags"] == "diagram"
+def test_tags_hold_what_the_writer_supplied(conn):
+    """The type is a column of its own and every read filters on it, so a
+    copy of it in the weighted tags column buys no reach and costs a term."""
+    assert db.get_memory(conn, _mk(conn))["tags"] == ""
     assert db.get_memory(conn, _mk(conn, tags="export,nightly"))["tags"] == "export,nightly"
 
 

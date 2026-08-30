@@ -362,7 +362,16 @@ SIMILAR_HINT = (
 )
 
 
-def _write_result(conn, uid: str, warning: dict | None, also: str) -> dict:
+TAGS_HINT = (
+    "this memory has no tags. Search is BM25 over content and tags, so it is "
+    "findable only by the words its own body uses. edit_memory(uid, "
+    "tags='...') adds the identifier, the symbol and the plain-language "
+    "phrasing someone will type instead."
+)
+
+
+def _write_result(conn, uid: str, warning: dict | None, also: str,
+                  tags: str = "") -> dict:
     """The dict a writer tool returns: the uid, and whatever was adjusted.
 
     `also` is echoed only when it was asked for, because the stored set can
@@ -371,6 +380,9 @@ def _write_result(conn, uid: str, warning: dict | None, also: str) -> dict:
     db.apply_link_policy). An agent that cross-listed into three subjects
     and got two back learns which reading was redundant.
 
+    `tags_indexed` counts what reached the tags column, and `tags_hint`
+    replaces it with what an untagged memory costs in a BM25-only store.
+
     `similar` is the write-time half of dedup: the agent still has the
     context that produced this text, so it is the one moment when "the
     store already said something close to this" can be acted on for free.
@@ -378,6 +390,11 @@ def _write_result(conn, uid: str, warning: dict | None, also: str) -> dict:
     collision never sees the field, and the write is never blocked by one.
     """
     result = {"uid": uid}
+    # the count is the feedback: a writer sees what it indexed while it
+    # still holds the context that would supply the missing words
+    result["tags_indexed"] = len([t for t in tags.split(",") if t.strip()])
+    if not result["tags_indexed"]:
+        result["tags_hint"] = TAGS_HINT
     if warning:
         result["domain_adjusted"] = warning
     if also:
@@ -411,9 +428,12 @@ def note(content: str, domain: str = "", also: str = "", tags: str = "", session
     those paths returns it. A path that `domain` already sits under is
     dropped as redundant -- the result echoes what was stored.
 
-    tags: comma-separated keywords/synonyms -- write generously; tags are
-    indexed beside the content, so a memory is findable by the words its
-    body never happened to use.
+    tags: comma-separated keywords and synonyms. Retrieval is BM25 over
+    content, tags and domain paths, and tags weigh second only to the body,
+    so they are where a memory becomes findable by words its own text never
+    uses -- the identifier, the symbol, the error string, the plain-language
+    phrasing someone will actually type. A memory with none is reachable
+    only by quoting itself.
 
     review_after: when this stops being safe to trust unchecked, as a date
     ('2026-11-01') or a span from today ('90d'). pulse() counts what is
@@ -430,7 +450,7 @@ def note(content: str, domain: str = "", also: str = "", tags: str = "", session
         uid = db.insert_memory(conn, type=TYPE_NOTE, content=content, domain=domain,
                                also=also, session=session or SESSION, tags=tags,
                                review_after=review_after, source_ref=source_ref)
-        return _write_result(conn, uid, warning, also)
+        return _write_result(conn, uid, warning, also, tags)
 
 
 @tool("core")
@@ -442,6 +462,7 @@ def checkpoint(
     session: str = "",
     domain: str = "",
     also: str = "",
+    tags: str = "",
 ) -> dict:
     """Snapshot current working state (intent/established/pursuing/open_questions).
 
@@ -453,6 +474,10 @@ def checkpoint(
 
     also: other domain paths this belongs to, comma-separated -- the
     cross-cutting subjects beside the one it is filed under. See note().
+
+    `tags` carries the synonyms the body never uses: retrieval is BM25 over
+    content and tags, so a memory with none is reachable only by quoting
+    itself. See note() for what belongs there.
     """
     content = sections.render(TYPE_CHECKPOINT, {
         "intent": intent, "established": established,
@@ -461,21 +486,25 @@ def checkpoint(
         domain, warning = _coerce_domain(conn, domain)
         uid = db.insert_memory(
             conn, type=TYPE_CHECKPOINT, content=content, domain=domain, also=also,
-            session=session or SESSION, tags="checkpoint",
+            session=session or SESSION, tags=tags,
         )
-        return _write_result(conn, uid, warning, also)
+        return _write_result(conn, uid, warning, also, tags)
 
 
 @tool("core")
 def anti_pattern(
     pattern: str, why_wrong: str, instead: str, domain: str = "", also: str = "",
-    session: str = "", review_after: str = "", source_ref: str = "",
+    tags: str = "", session: str = "", review_after: str = "", source_ref: str = "",
 ) -> dict:
     """Record a mistake/temptation to avoid repeating, and the correct approach.
 
     Stored as type='anti_pattern'; open ones for a domain are surfaced by pulse().
     `also` cross-lists it into further domain paths, `review_after` dates
     when to recheck it and `source_ref` says what it came from -- see note().
+
+    `tags` carries the synonyms the body never uses: retrieval is BM25 over
+    content and tags, so a memory with none is reachable only by quoting
+    itself. See note() for what belongs there.
     """
     content = sections.render(TYPE_ANTI_PATTERN, {
         "pattern": pattern, "why_wrong": why_wrong, "instead": instead})
@@ -483,10 +512,10 @@ def anti_pattern(
         domain, warning = _coerce_domain(conn, domain)
         uid = db.insert_memory(
             conn, type=TYPE_ANTI_PATTERN, content=content, domain=domain, also=also,
-            session=session or SESSION, tags="anti_pattern",
+            session=session or SESSION, tags=tags,
             review_after=review_after, source_ref=source_ref,
         )
-        return _write_result(conn, uid, warning, also)
+        return _write_result(conn, uid, warning, also, tags)
 
 
 @tool("core")
@@ -498,6 +527,7 @@ def reasoning(
     next_time: str,
     domain: str = "",
     also: str = "",
+    tags: str = "",
     session: str = "",
     review_after: str = "",
     source_ref: str = "",
@@ -516,6 +546,10 @@ def reasoning(
     next_time: what someone hitting this again should do differently.
 
     `also`, `review_after` and `source_ref` behave as in note().
+
+    `tags` carries the synonyms the body never uses: retrieval is BM25 over
+    content and tags, so a memory with none is reachable only by quoting
+    itself. See note() for what belongs there.
     """
     content = sections.render(TYPE_REASONING, {
         "hypothesis": hypothesis, "reasoning": reasoning, "result": result,
@@ -523,23 +557,28 @@ def reasoning(
     with db.connect() as conn:
         domain, warning = _coerce_domain(conn, domain)
         uid = db.insert_memory(conn, type=TYPE_REASONING, content=content, domain=domain,
-                               also=also, session=session or SESSION,
+                               also=also, session=session or SESSION, tags=tags,
                                review_after=review_after, source_ref=source_ref)
-        return _write_result(conn, uid, warning, also)
+        return _write_result(conn, uid, warning, also, tags)
 
 
 @tool("core")
-def handoff(content: str, domain: str = "", also: str = "", session: str = "") -> dict:
+def handoff(content: str, domain: str = "", also: str = "", tags: str = "",
+            session: str = "") -> dict:
     """Leave a note for another agent/session picking up this work.
 
     Stored as type='handoff'; open ones for a domain are surfaced by pulse().
     `also` cross-lists it into further domain paths -- see note().
+
+    `tags` carries the synonyms the body never uses: retrieval is BM25 over
+    content and tags, so a memory with none is reachable only by quoting
+    itself. See note() for what belongs there.
     """
     with db.connect() as conn:
         domain, warning = _coerce_domain(conn, domain)
         uid = db.insert_memory(conn, type=TYPE_HANDOFF, content=content, domain=domain,
-                               also=also, session=session or SESSION)
-        return _write_result(conn, uid, warning, also)
+                               also=also, session=session or SESSION, tags=tags)
+        return _write_result(conn, uid, warning, also, tags)
 
 
 def _errors(errors: list[str]) -> dict:
@@ -615,7 +654,7 @@ def diagram(
         )
         if errors:
             return _errors(errors)
-        return _write_result(conn, uid, warning, also)
+        return _write_result(conn, uid, warning, also, tags)
 
 
 @tool("diagrams")
@@ -1647,8 +1686,11 @@ surfaces; old x old pairs are skipped), and domain_hints report any
 store-wide domain cluster the delta touches. Combine with
 domain/type to curate one slice at a time. Also included:
   - stats: totals for the whole filtered corpus (by_type,
-    by_confidence, by_domain, empty_domain) -- computed regardless of
-    `limit`,
+    by_confidence, by_domain, empty_domain, untagged) -- computed
+    regardless of `limit`. `untagged` counts the memories whose tags
+    are empty or are nothing but their own type: BM25 reads content,
+    tags and domain, so those answer only a query that quotes their
+    own wording. They are the retag work list,
   - domain_hints: clusters of domain-string variants that likely mean
     the same thing (case/separator drift, ticket-id spellings), with
     a suggested canonical -- ready-made redomain candidates,

@@ -1167,6 +1167,13 @@ def health(request, payload) -> dict:
             """SELECT COUNT(*) FROM relations
                WHERE from_uid NOT IN (SELECT uid FROM memories)
                   OR to_uid NOT IN (SELECT uid FROM memories)""").fetchone()[0]
+        active_count = conn.execute(
+            "SELECT COUNT(*) FROM memories WHERE status = 'active'").fetchone()[0]
+        # empty tags, or tags that are nothing but the type every read
+        # already filters on -- either way the row carries no synonym
+        untagged = conn.execute(
+            "SELECT COUNT(*) FROM memories WHERE status = 'active' "
+            "AND (TRIM(tags) = '' OR TRIM(tags) = type)").fetchone()[0]
         page_size = conn.execute("PRAGMA page_size").fetchone()[0]
         freelist = conn.execute("PRAGMA freelist_count").fetchone()[0]
         compact_reason = db.get_compact_reason(conn)
@@ -1183,6 +1190,9 @@ def health(request, payload) -> dict:
                       "detail": "" if integrity_ok else "; ".join(quick)[:400]},
         "fts": {"ok": fts_ok, "detail": fts_detail, "rows": fts_count, "expected": mem_count},
         "relations": {"orphans": orphan_rels},
+        # BM25 reads content, tags and domain, so a row with no tags answers
+        # only a query that quotes its own wording
+        "tags": {"untagged": untagged, "active": active_count},
         # generated SVGs are a cache, so what matters is what they cost and
         # whether the retention rule is actually clearing them
         "renders": {**db.renders_usage(), "retention": render_retention,

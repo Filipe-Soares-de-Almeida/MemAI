@@ -341,6 +341,16 @@ export async function renderMemories(view, params, ctx) {
   syncBulkbar();
 }
 
+/* Tags weigh second only to the body in BM25, so a row with none says so.
+   Tags that are only the type count as none: every read filters on it. */
+const tagChip = m => {
+  const tags = (m.tags || '').trim();
+  if (!tags || tags === m.type) {
+    return `<span class="chip untagged" title="${esc(t('mem.noTagsWhy'))}">${t('mem.noTags')}</span>`;
+  }
+  return `<span class="chip" title="${esc(t('mem.tagsWhy', { list: tags }))}">${esc(tags)}</span>`;
+};
+
 /* `scope` is the active domain filter, needed to tell a row that LIVES in it
    from one that is only cross-listed into it. A list that showed both the
    same way would be claiming the second is filed where it is not. */
@@ -382,6 +392,7 @@ function renderRows(items, scope = '') {
         ${statusTag(m.status)}
         ${away ? `<span class="chip" title="${esc(t('mem.alsoWhy', { domain: m.domain }))}">${t('mem.also')}</span>` : ''}
         ${m.domain ? `<span class="chip">${esc(m.domain)}</span>` : ''}
+        ${tagChip(m)}
         <!-- Only when it has been read back. A store where nothing has been
              recalled yet would otherwise wear a "0" on every row, and the
              rows that matter are found by sorting, not by reading zeros. -->

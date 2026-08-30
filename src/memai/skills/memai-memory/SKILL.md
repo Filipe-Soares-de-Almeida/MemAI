@@ -98,10 +98,12 @@ comes back later ([§3.1](#31-getting-back-what-you-wrote-which-tool-to-call)).
 | `session` | **optional** free text; a per-process stamp is applied when it is omitted, so one conversation's memories group together without an agent tracking an id | `20260810T1423-1f4c` |
 | `domain` | where the memory is **FILED**: a **path**, outermost scope first | `acme/x100/p200`, `acme/x100`, `proj-1042` |
 | `also` | csv of other paths the memory **BELONGS** to — the subjects that cut across the tree ([§2.2](#22-cross-listing--the-subject-that-cuts-across-the-tree)) | `omni/x900` |
-| `tags` | csv of keywords/synonyms; they are indexed beside the content, so write generously — a synonym here is the only way a body finds a query that words it differently | `cache,warmup,cold-start` · `queue,drain,retry` |
+| `tags` | csv of keywords/synonyms. Retrieval is **BM25 over content, tags and domain**, and tags weigh second only to the body — a synonym here is the only way a memory answers a query that words the subject differently. Write the identifier, the symbol, the error string and the plain-language phrasing someone will type | `cache,warmup,cold-start` · `queue,drain,retry` |
 
-> `tags` is an argument on **`note`** and **`diagram`** only. **`also` is on
-> every writer.** `review_after`/`source_ref` are on the durable writers —
+> **`tags` and `also` are on every writer.** A memory written without tags is
+> reachable only by quoting its own body, and the write says so: the result
+> carries `tags_indexed`, and `tags_hint` in its place when the count is zero.
+> `review_after`/`source_ref` are on the durable writers —
 > `note`, `reasoning`, `anti_pattern`, `diagram` — and not on `checkpoint` or
 > `handoff` ([§2.4](#24-decay--review_after-and-source_ref)). Signatures are
 > in [§7](#7-tool-reference).
@@ -295,15 +297,15 @@ type**. To bring it back, filter on that `type`.
   recovering in **any** future session. File it as deep as the fact is
   specific; it still comes back when someone asks about the module above it.
 - **`reasoning(hypothesis, reasoning, result, revised_belief, next_time,
-  domain, also, session, review_after, source_ref)`** — an analysis worth
+  domain, also, tags, session, review_after, source_ref)`** — an analysis worth
   keeping, field by field: what you believed, how you tested it, what came
   back, what you believe now, and what to do differently next time. The FACT
   it produced is a `note`; this is the process that produced it.
-- **`anti_pattern(pattern, why_wrong, instead, domain, also, session,
+- **`anti_pattern(pattern, why_wrong, instead, domain, also, tags, session,
   review_after, source_ref)`** — an approach that **looks** right and is a
   trap (restarting the worker to clear a stuck queue instead of draining it).
   Surfaced by `pulse`.
-- **`handoff(content, domain, also, session)`** — a message for the next
+- **`handoff(content, domain, also, tags, session)`** — a message for the next
   agent or session. Surfaced by `pulse`.
 - **`diagram(...)`** — a routine as a **flow/graph**
   ([§4.1](#41-diagrams-a-flow-as-a-graph)).
@@ -404,7 +406,7 @@ is written while the session is still alive** — the stop hook reminds, it does
 not write.
 
 - **`checkpoint(intent, established, pursuing, open_questions, session,
-  domain, also)`** — where the work stands, so the next session picks up the
+  domain, also, tags)`** — where the work stands, so the next session picks up the
   right bearing via `pulse`. Fields are **free-length**, but a checkpoint is
   read **for bearing, not as an archive**: keep it a readable summary and do
   not dump detail into it.
@@ -513,10 +515,10 @@ always published, `diagrams` and `curation` only when named (or under the
 | Writing | | group |
 |---|---|---|
 | `note(content, domain, also, tags, session, review_after, source_ref)` | Timeless knowledge → `type='note'` | core |
-| `reasoning(hypothesis, reasoning, result, revised_belief, next_time, domain, also, session, review_after, source_ref)` | A reasoning trace → `type='reasoning'` | core |
-| `anti_pattern(pattern, why_wrong, instead, domain, also, session, review_after, source_ref)` | A pitfall → `type='anti_pattern'` (surfaced by `pulse`) | core |
-| `checkpoint(intent, established, pursuing, open_questions, session, domain, also)` | Where the work stands → `type='checkpoint'` (summary, not an archive) | core |
-| `handoff(content, domain, also, session)` | A message for the next session → `type='handoff'` (surfaced by `pulse`) | core |
+| `reasoning(hypothesis, reasoning, result, revised_belief, next_time, domain, also, tags, session, review_after, source_ref)` | A reasoning trace → `type='reasoning'` | core |
+| `anti_pattern(pattern, why_wrong, instead, domain, also, tags, session, review_after, source_ref)` | A pitfall → `type='anti_pattern'` (surfaced by `pulse`) | core |
+| `checkpoint(intent, established, pursuing, open_questions, session, domain, also, tags)` | Where the work stands → `type='checkpoint'` (summary, not an archive) | core |
+| `handoff(content, domain, also, tags, session)` | A message for the next session → `type='handoff'` (surfaced by `pulse`) | core |
 | `diagram(title, nodes, edges, summary, domain, also, session, tags, kind, review_after, source_ref)` | A routine as a flow/graph → `type='diagram'` | diagrams |
 | `diagram_node` / `diagram_edge` / `diagram_link` / `diagram_jump` / `diagram_relayout` | One step / one arrow / a memory on a step / a jump into another flow / rebuild positions | diagrams |
 
