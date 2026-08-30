@@ -106,10 +106,10 @@ def check(tool: str, params: dict) -> tuple[list[str], list[str], list[str]]:
 def _table() -> str:
     """Every guarded tool as a signature, so the parameters read as an order.
 
-    Spelled `note(title, content)` rather than `note=title,content`: the
-    fields are the tool's positional parameters and a retry that supplies
-    them in another order, or supplies only the one named as missing, is
-    the same failed call again.
+    The fields are the tool's positional parameters, and the refusal around
+    this asks for the whole call to be retyped: a list with no order in it
+    invites a retry carrying only the field the message named, which fails
+    again on the next one.
     """
     return " | ".join(f"{tool}({', '.join(fields)})" for tool, fields in GUARDED.items())
 
