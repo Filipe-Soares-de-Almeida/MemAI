@@ -282,18 +282,18 @@ def test_a_move_with_nothing_at_all_at_the_source_still_raises(conn):
 
 def test_mcp_writers_take_also_and_echo_what_was_stored(monkeypatch, tmp_path):
     monkeypatch.setattr(db, "default_db_path", lambda: tmp_path / "test.db")
-    r = server.note(content="queue drain step", domain="acme/x100/p200",
+    r = server.note("fixture title", content="queue drain step", domain="acme/x100/p200",
                     also="omni/x900, acme")
     # 'acme' is already covered by the filed path, so it is not stored
     assert r["also"] == ["omni/x900"]
     assert server.list_by_domain(domain="omni/x900")["results"][0]["uid"] == r["uid"]
     # a writer without `also` does not grow the field
-    assert "also" not in server.note(content="plain", domain="acme")
+    assert "also" not in server.note("fixture title", content="plain", domain="acme")
 
 
 def test_mcp_also_domain_and_unfile_domain(monkeypatch, tmp_path):
     monkeypatch.setattr(db, "default_db_path", lambda: tmp_path / "test.db")
-    uid = server.note(content="queue drain step", domain="acme/x100/p200")["uid"]
+    uid = server.note("fixture title", content="queue drain step", domain="acme/x100/p200")["uid"]
     assert server.also_domain(uid, "omni/x900")["also"] == ["omni/x900"]
     assert server.get_memory(uid)["also"] == ["omni/x900"]
     assert server.unfile_domain(uid, "omni/x900")["also"] == []
@@ -303,13 +303,14 @@ def test_mcp_also_domain_and_unfile_domain(monkeypatch, tmp_path):
 
 def test_mcp_never_hands_back_the_indexing_mirror(monkeypatch, tmp_path):
     monkeypatch.setattr(db, "default_db_path", lambda: tmp_path / "test.db")
-    uid = server.note(content="x", domain="acme", also="omni/x900")["uid"]
+    uid = server.note("fixture title", content="x", domain="acme", also="omni/x900")["uid"]
     assert "also_domains" not in server.get_memory(uid)
     assert "also_domains" not in server.search("x")["results"][0]
 
 
 def _create(client, **kw):
-    body = {"type": "note", "content": "queue drain step", **kw}
+    body = {"title": "the queue drain step", "type": "note",
+            "content": "queue drain step", **kw}
     res = client.post("/api/memories", json=body)
     assert res.status_code == 200, res.text
     return res.json()

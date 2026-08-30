@@ -48,7 +48,7 @@ def test_the_estimate_is_the_character_length_over_a_fixed_ratio():
 # ------------------------------------------------- the full record, not the snippet
 
 def test_a_search_result_is_priced_by_the_full_record(store):
-    server.note(content=EXPORT, tags="finding")
+    server.note("fixture title", content=EXPORT, tags="finding")
     hit = server.search("export window")["results"][0]
     assert len(hit["content"]) < len(EXPORT)              # snippet-truncated
     assert hit["est_tokens"] == _full_estimate(EXPORT)
@@ -56,7 +56,7 @@ def test_a_search_result_is_priced_by_the_full_record(store):
 
 
 def test_the_estimate_matches_what_the_full_record_holds(store):
-    uid = server.note(content=EXPORT)["uid"]
+    uid = server.note("fixture title", content=EXPORT)["uid"]
     hit = server.search("export window")["results"][0]
     assert hit["est_tokens"] == db.est_tokens(len(server.get_memory(uid)["content"]))
 
@@ -68,7 +68,7 @@ def test_the_estimate_matches_what_the_full_record_holds(store):
     lambda: server.list_recent(),
 ])
 def test_every_list_read_prices_each_result(store, read):
-    server.note(content=EXPORT, domain="acme/x100")
+    server.note("fixture title", content=EXPORT, domain="acme/x100")
     results = read()["results"]
     assert results
     assert all(r["est_tokens"] == _full_estimate(EXPORT) for r in results)
@@ -76,7 +76,7 @@ def test_every_list_read_prices_each_result(store, read):
 
 def test_a_short_record_is_priced_too(store):
     """Present on every result, not only the ones a snippet cut."""
-    server.note(content="row merge keeps the older identifier")
+    server.note("fixture title", content="row merge keeps the older identifier")
     hit = server.list_recent()["results"][0]
     assert hit["content"] == "row merge keeps the older identifier"
     assert hit["est_tokens"] == _full_estimate("row merge keeps the older identifier")
@@ -92,7 +92,7 @@ def test_a_short_record_is_priced_too(store):
 ])
 def test_the_response_sums_what_it_returned(store, read):
     for content in (EXPORT, RETRY, MERGE):
-        server.note(content=content, domain="acme/x100", tags="finding")
+        server.note("fixture title", content=content, domain="acme/x100", tags="finding")
     response = read()
     assert len(response["results"]) == 3
     assert response["est_tokens"] == sum(r["est_tokens"] for r in response["results"])
@@ -108,7 +108,7 @@ def test_an_empty_response_costs_nothing(store):
 def test_the_aggregate_prices_the_results_and_not_the_store(store):
     """A limit that cut the list cuts the aggregate with it."""
     for content in (EXPORT, RETRY, MERGE):
-        server.note(content=content, tags="finding")
+        server.note("fixture title", content=content, tags="finding")
     one = server.search("finding", limit=1)
     three = server.search("finding", limit=3)
     assert one["est_tokens"] == one["results"][0]["est_tokens"]
@@ -118,13 +118,13 @@ def test_the_aggregate_prices_the_results_and_not_the_store(store):
 # ------------------------------------------------------------------- warm-up
 
 def test_a_pulse_prices_every_record_it_hands_over(store):
-    server.checkpoint(intent=EXPORT, established="the index is rebuilt",
+    server.checkpoint("fixture title", intent=EXPORT, established="the index is rebuilt",
                       pursuing="the batch retry", open_questions="none",
                       domain="acme/x100")
-    server.handoff(content=RETRY, domain="acme/x100")
-    server.anti_pattern(pattern=RETRY, why_wrong="it drops rows",
+    server.handoff("fixture title", content=RETRY, domain="acme/x100")
+    server.anti_pattern("fixture title", pattern=RETRY, why_wrong="it drops rows",
                         instead="drain the queue first", domain="acme/x100")
-    server.note(content=MERGE, domain="acme/x100")
+    server.note("fixture title", content=MERGE, domain="acme/x100")
 
     p = server.pulse(domain="acme/x100")
     for key in ("handoffs", "anti_patterns", "recent_notes"):
@@ -137,7 +137,7 @@ def test_a_pulse_prices_every_record_it_hands_over(store):
 def test_the_checkpoint_is_priced_by_the_body_pulse_returned_whole(store):
     """latest_checkpoint is not truncated, so its estimate covers the body
     that is already in the response."""
-    server.checkpoint(intent=EXPORT, established="the index is rebuilt",
+    server.checkpoint("fixture title", intent=EXPORT, established="the index is rebuilt",
                       pursuing="the batch retry", open_questions="none",
                       domain="acme/x100")
     checkpoint = server.pulse(domain="acme/x100")["latest_checkpoint"]
@@ -152,7 +152,7 @@ def test_a_scope_with_no_checkpoint_has_nothing_to_price(store):
 
 def test_a_full_record_is_not_priced(store):
     """get_memory returns the whole thing -- there is no fetch left to budget."""
-    uid = server.note(content=EXPORT)["uid"]
+    uid = server.note("fixture title", content=EXPORT)["uid"]
     record = server.get_memory(uid)
     assert record["content"] == EXPORT
     assert "est_tokens" not in record

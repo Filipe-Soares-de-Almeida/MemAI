@@ -35,7 +35,7 @@ def test_get_memory_on_an_unknown_uid_is_an_error(store):
 
 
 def test_get_memory_still_returns_the_record_it_has(store):
-    uid = server.note(content="a fact worth keeping", domain="acme/x100")["uid"]
+    uid = server.note("fixture title", content="a fact worth keeping", domain="acme/x100")["uid"]
     assert server.get_memory(uid)["content"] == "a fact worth keeping"
 
 
@@ -70,35 +70,35 @@ def test_a_second_relation_of_another_type_is_fine(conn):
 
 def test_link_memories_reports_a_bad_uid_instead_of_raising(store):
     """Before, the foreign key turned a typo into a raw IntegrityError."""
-    uid = server.note(content="a")["uid"]
+    uid = server.note("fixture title", content="a")["uid"]
     res = server.link_memories(uid, "no-such-uid", "relates_to")
     assert res["ok"] is False
     assert "unknown memory" in res["errors"][0]
 
 
 def test_link_memories_still_links(store):
-    a = server.note(content="a")["uid"]
-    b = server.note(content="b")["uid"]
+    a = server.note("fixture title", content="a")["uid"]
+    b = server.note("fixture title", content="b")["uid"]
     assert server.link_memories(a, b, "relates_to")["relation_id"]
 
 
 # ------------------------------------------------------------ editing content
 
 def test_append_adds_a_line_without_restating_the_body(store):
-    uid = server.note(content="cache warmup runs nightly")["uid"]
+    uid = server.note("fixture title", content="cache warmup runs nightly")["uid"]
     assert server.edit_memory(uid, "it is skipped on holidays", mode="append")["ok"]
     assert server.get_memory(uid)["content"] == (
         "cache warmup runs nightly\nit is skipped on holidays")
 
 
 def test_replace_is_still_the_default(store):
-    uid = server.note(content="cache warmup runs nightly")["uid"]
+    uid = server.note("fixture title", content="cache warmup runs nightly")["uid"]
     server.edit_memory(uid, "cache warmup runs hourly")
     assert server.get_memory(uid)["content"] == "cache warmup runs hourly"
 
 
 def test_an_append_keeps_the_previous_version(store):
-    uid = server.note(content="cache warmup runs nightly")["uid"]
+    uid = server.note("fixture title", content="cache warmup runs nightly")["uid"]
     server.edit_memory(uid, "and skips holidays", mode="append", note="learned today")
     history = server.get_memory(uid)["edit_history"]
     assert history[-1]["prev_content"] == "cache warmup runs nightly"
@@ -112,7 +112,7 @@ def test_appending_to_an_empty_body_does_not_lead_with_a_blank_line(conn):
 
 
 def test_an_unknown_mode_is_refused(store):
-    uid = server.note(content="x")["uid"]
+    uid = server.note("fixture title", content="x")["uid"]
     assert server.edit_memory(uid, "y", mode="prepend")["ok"] is False
 
 
@@ -143,7 +143,7 @@ def test_a_diagrams_reference_is_editable_though_its_body_is_not(store):
 
 def test_an_edit_that_asks_for_nothing_is_refused(store):
     """Neither field given is a caller mistake, not a no-op to swallow."""
-    uid = server.note(content="cache warmup runs nightly")["uid"]
+    uid = server.note("fixture title", content="cache warmup runs nightly")["uid"]
     res = server.edit_memory(uid)
     assert res["ok"] is False and "nothing to change" in res["errors"][0]
 

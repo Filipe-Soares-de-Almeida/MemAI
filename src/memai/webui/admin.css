@@ -1159,6 +1159,10 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   text-align: left;
 }
+/* A row named by its title reads at full contrast; one falling back to its
+   body stays as quiet as the body it is showing. */
+.mem-snippet.mem-named { color: var(--ink); font-weight: 500; }
+
 .mem-right { display: flex; align-items: center; gap: var(--sp-2); font-size: var(--fs-label); color: var(--ink-3); white-space: nowrap; }
 .mem-right .chip { max-width: 150px; }
 
@@ -1213,6 +1217,14 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
   display: flex; align-items: center; gap: var(--sp-3); flex-wrap: wrap;
 }
 .record-head .spacer { flex: 1; }
+/* The record's name, under the chips that identify it and above everything
+   the panels below do to it. Sits in the head, so it stays while the body
+   scrolls. */
+.record-title {
+  margin: var(--sp-2) 0 0;
+  font: 600 var(--fs-lg)/1.35 var(--font-ui);
+  color: var(--ink);
+}
 /* The way back to the memory you opened this one FROM. Named rather than a
    bare arrow, and capped rather than allowed to push the head's chips onto
    a second line. */

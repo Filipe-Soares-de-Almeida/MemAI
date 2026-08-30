@@ -91,14 +91,19 @@ comes back later ([§3.1](#31-getting-back-what-you-wrote-which-tool-to-call)).
 
 ---
 
-## 2. Labelling — session, domain, tags
+## 2. Labelling — title, session, domain, tags
 
 | Field | Convention | Examples |
 |---|---|---|
+| `title` | **required** on every writer: one line naming what the memory is about, in the words someone would look for it by. It is what a list shows instead of the body's opening line, and it outweighs every other field in search | `When the nightly export runs` · `Why the drain step retries twice` |
 | `session` | **optional** free text; a per-process stamp is applied when it is omitted, so one conversation's memories group together without an agent tracking an id | `20260810T1423-1f4c` |
 | `domain` | where the memory is **FILED**: a **path**, outermost scope first | `acme/x100/p200`, `acme/x100`, `proj-1042` |
 | `also` | csv of other paths the memory **BELONGS** to — the subjects that cut across the tree ([§2.2](#22-cross-listing--the-subject-that-cuts-across-the-tree)) | `omni/x900` |
 | `tags` | csv of keywords/synonyms. Retrieval is **BM25 over content, tags and domain**, and tags weigh second only to the body — a synonym here is the only way a memory answers a query that words the subject differently. Write the identifier, the symbol, the error string and the plain-language phrasing someone will type | `cache,warmup,cold-start` · `queue,drain,retry` |
+
+> **`title` is required; a write without one is refused before it reaches the
+> store.** Name the memory by its subject — a title that repeats the type
+> ("note about the loader") names nothing.
 
 > **`tags` and `also` are on every writer.** A memory written without tags is
 > reachable only by quoting its own body, and the write says so: the result
@@ -292,20 +297,20 @@ type**. To bring it back, filter on that `type`.
 
 ## 4. DURING the work
 
-- **`note(content, domain, also, tags, session, review_after, source_ref)`** —
+- **`note(title, content, domain, also, tags, session, review_after, source_ref)`** —
   timeless knowledge (a rule, a long-lived finding, a decision) worth
   recovering in **any** future session. File it as deep as the fact is
   specific; it still comes back when someone asks about the module above it.
-- **`reasoning(hypothesis, reasoning, result, revised_belief, next_time,
+- **`reasoning(title, hypothesis, reasoning, result, revised_belief, next_time,
   domain, also, tags, session, review_after, source_ref)`** — an analysis worth
   keeping, field by field: what you believed, how you tested it, what came
   back, what you believe now, and what to do differently next time. The FACT
   it produced is a `note`; this is the process that produced it.
-- **`anti_pattern(pattern, why_wrong, instead, domain, also, tags, session,
-  review_after, source_ref)`** — an approach that **looks** right and is a
+- **`anti_pattern(title, pattern, why_wrong, instead, domain, also, tags,
+  session, review_after, source_ref)`** — an approach that **looks** right and is a
   trap (restarting the worker to clear a stuck queue instead of draining it).
   Surfaced by `pulse`.
-- **`handoff(content, domain, also, tags, session)`** — a message for the next
+- **`handoff(title, content, domain, also, tags, session)`** — a message for the next
   agent or session. Surfaced by `pulse`.
 - **`diagram(...)`** — a routine as a **flow/graph**
   ([§4.1](#41-diagrams-a-flow-as-a-graph)).
@@ -320,13 +325,16 @@ both if they are genuinely different facts.
 
 **Curation, one record at a time:**
 
-- `edit_memory(uid, new_content, note, mode, source_ref)` corrects while keeping
+- `edit_memory(uid, new_content, note, mode, source_ref, title)` corrects while keeping
   the previous version; `mode='append'` adds a line instead of replacing the body,
   for a memory that **gains** a fact rather than turning out wrong. It
   **refuses a diagram's body** — that content is generated from the graph.
   `source_ref` repoints the memory at its source and takes no `new_content`,
   so a missing or moved reference is a one-argument fix
   ([§2.4](#24-decay--review_after-and-source_ref)); a diagram accepts that one.
+  `title` renames the memory, also on its own, and is **refused for a
+  diagram** — its title generates part of its body, so the dashboard renames
+  that one.
 - `set_confidence(uid, unverified|confirmed|contradicted)`.
 - `link_memories(from_uid, to_uid, relation_type, note)` creates a typed edge
   (`supersedes`, `relates_to`, `contradicts`, `links_to`); `get_relations(uid)`
@@ -405,7 +413,7 @@ Nothing writes a checkpoint but the call, so **a checkpoint exists only if it
 is written while the session is still alive** — the stop hook reminds, it does
 not write.
 
-- **`checkpoint(intent, established, pursuing, open_questions, session,
+- **`checkpoint(title, intent, established, pursuing, open_questions, session,
   domain, also, tags)`** — where the work stands, so the next session picks up the
   right bearing via `pulse`. Fields are **free-length**, but a checkpoint is
   read **for bearing, not as an archive**: keep it a readable summary and do
@@ -514,17 +522,17 @@ always published, `diagrams` and `curation` only when named (or under the
 
 | Writing | | group |
 |---|---|---|
-| `note(content, domain, also, tags, session, review_after, source_ref)` | Timeless knowledge → `type='note'` | core |
-| `reasoning(hypothesis, reasoning, result, revised_belief, next_time, domain, also, tags, session, review_after, source_ref)` | A reasoning trace → `type='reasoning'` | core |
-| `anti_pattern(pattern, why_wrong, instead, domain, also, tags, session, review_after, source_ref)` | A pitfall → `type='anti_pattern'` (surfaced by `pulse`) | core |
-| `checkpoint(intent, established, pursuing, open_questions, session, domain, also, tags)` | Where the work stands → `type='checkpoint'` (summary, not an archive) | core |
-| `handoff(content, domain, also, tags, session)` | A message for the next session → `type='handoff'` (surfaced by `pulse`) | core |
+| `note(title, content, domain, also, tags, session, review_after, source_ref)` | Timeless knowledge → `type='note'` | core |
+| `reasoning(title, hypothesis, reasoning, result, revised_belief, next_time, domain, also, tags, session, review_after, source_ref)` | A reasoning trace → `type='reasoning'` | core |
+| `anti_pattern(title, pattern, why_wrong, instead, domain, also, tags, session, review_after, source_ref)` | A pitfall → `type='anti_pattern'` (surfaced by `pulse`) | core |
+| `checkpoint(title, intent, established, pursuing, open_questions, session, domain, also, tags)` | Where the work stands → `type='checkpoint'` (summary, not an archive) | core |
+| `handoff(title, content, domain, also, tags, session)` | A message for the next session → `type='handoff'` (surfaced by `pulse`) | core |
 | `diagram(title, nodes, edges, summary, domain, also, session, tags, kind, review_after, source_ref)` | A routine as a flow/graph → `type='diagram'` | diagrams |
 | `diagram_node` / `diagram_edge` / `diagram_link` / `diagram_jump` / `diagram_relayout` | One step / one arrow / a memory on a step / a jump into another flow / rebuild positions | diagrams |
 
 | Editing and domains | | group |
 |---|---|---|
-| `edit_memory(uid, new_content, note, mode, source_ref)` | Correct (or `mode='append'` add to) a memory, keeping the previous version; **refuses a diagram's body**. `source_ref` repoints it at its source, alone or with the edit | core |
+| `edit_memory(uid, new_content, note, mode, source_ref, title)` | Correct (or `mode='append'` add to) a memory, keeping the previous version; **refuses a diagram's body**. `source_ref` repoints it at its source and `title` renames it, either alone or with the edit | core |
 | `link_memories(from_uid, to_uid, relation_type, note)` | A typed edge between two memories | core |
 | `set_confidence(uid, confidence)` | `unverified` \| `confirmed` \| `contradicted` | core |
 | `also_domain(uid, domain)` / `unfile_domain(uid, domain)` | Cross-list / drop one cross-listing — **never** moves the `domain` | core |

@@ -492,12 +492,12 @@ def test_the_server_declares_instructions():
 # ------------------------------------------------------------ session stamping
 
 def test_writes_carry_a_session_without_being_told(store):
-    uid = server.note(content="cache warmup runs nightly")["uid"]
+    uid = server.note("fixture title", content="cache warmup runs nightly")["uid"]
     assert server.get_memory(uid)["session"] == server.SESSION
 
 
 def test_an_explicit_session_still_wins(store):
-    uid = server.note(content="cache warmup runs nightly", session="proj-1042")["uid"]
+    uid = server.note("fixture title", content="cache warmup runs nightly", session="proj-1042")["uid"]
     assert server.get_memory(uid)["session"] == "proj-1042"
 
 

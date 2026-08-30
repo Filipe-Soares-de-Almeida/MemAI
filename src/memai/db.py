@@ -68,7 +68,7 @@ CONFIDENCE_CONTRADICTED = "contradicted"
 
 # The FTS index and its triggers, kept separate because they are also what a
 # store built before a new indexed column has to be rebuilt from (_ensure_fts).
-_FTS_COLUMNS = ("content", "tags", "domain", "also_domains")
+_FTS_COLUMNS = ("title", "content", "tags", "domain", "also_domains")
 
 # BM25 weights per indexed column, in _FTS_COLUMNS order. Unweighted, a
 # domain match scored like a claim: every row filed under 'acme/cache'
@@ -77,31 +77,34 @@ _FTS_COLUMNS = ("content", "tags", "domain", "also_domains")
 # stay indexed -- a scope name should be findable -- they just stop
 # outranking the memory that actually discusses the subject. Keyed by name
 # so adding an indexed column without weighting it fails at import.
-_FTS_WEIGHTS = {"content": 1.0, "tags": 0.8, "domain": 0.3, "also_domains": 0.3}
+# `title` outweighs the body: it is one line a writer chose to name the
+# memory by, so a match there is about the subject, not a mention in passing.
+_FTS_WEIGHTS = {"title": 1.5, "content": 1.0, "tags": 0.8,
+                "domain": 0.3, "also_domains": 0.3}
 _BM25 = f"bm25(memories_fts, {', '.join(str(_FTS_WEIGHTS[c]) for c in _FTS_COLUMNS)})"
 
 _FTS_SCHEMA = """
 CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(
-    content, tags, domain, also_domains,
+    title, content, tags, domain, also_domains,
     content='memories', content_rowid='rowid_pk',
     tokenize='porter unicode61'
 );
 
 CREATE TRIGGER IF NOT EXISTS memories_ai AFTER INSERT ON memories BEGIN
-    INSERT INTO memories_fts(rowid, content, tags, domain, also_domains)
-    VALUES (new.rowid_pk, new.content, new.tags, new.domain, new.also_domains);
+    INSERT INTO memories_fts(rowid, title, content, tags, domain, also_domains)
+    VALUES (new.rowid_pk, new.title, new.content, new.tags, new.domain, new.also_domains);
 END;
 
 CREATE TRIGGER IF NOT EXISTS memories_ad AFTER DELETE ON memories BEGIN
-    INSERT INTO memories_fts(memories_fts, rowid, content, tags, domain, also_domains)
-    VALUES ('delete', old.rowid_pk, old.content, old.tags, old.domain, old.also_domains);
+    INSERT INTO memories_fts(memories_fts, rowid, title, content, tags, domain, also_domains)
+    VALUES ('delete', old.rowid_pk, old.title, old.content, old.tags, old.domain, old.also_domains);
 END;
 
 CREATE TRIGGER IF NOT EXISTS memories_au AFTER UPDATE ON memories BEGIN
-    INSERT INTO memories_fts(memories_fts, rowid, content, tags, domain, also_domains)
-    VALUES ('delete', old.rowid_pk, old.content, old.tags, old.domain, old.also_domains);
-    INSERT INTO memories_fts(rowid, content, tags, domain, also_domains)
-    VALUES (new.rowid_pk, new.content, new.tags, new.domain, new.also_domains);
+    INSERT INTO memories_fts(memories_fts, rowid, title, content, tags, domain, also_domains)
+    VALUES ('delete', old.rowid_pk, old.title, old.content, old.tags, old.domain, old.also_domains);
+    INSERT INTO memories_fts(rowid, title, content, tags, domain, also_domains)
+    VALUES (new.rowid_pk, new.title, new.content, new.tags, new.domain, new.also_domains);
 END;
 """
 
@@ -114,6 +117,9 @@ CREATE TABLE IF NOT EXISTS memories (
     also_domains    TEXT NOT NULL DEFAULT '',   -- indexing mirror of memory_domains
     session         TEXT NOT NULL DEFAULT '',
     tags            TEXT NOT NULL DEFAULT '',
+    -- One line naming what the memory is about. Every writing tool requires
+    -- one; a row holding none is listed by the opening line of its body.
+    title           TEXT NOT NULL DEFAULT '',
     content         TEXT NOT NULL,
     status          TEXT NOT NULL DEFAULT 'active',
     confidence      TEXT NOT NULL DEFAULT 'unverified',
@@ -738,6 +744,7 @@ _ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
     ("diagram_nodes", "h", "REAL"),
     ("memories", "also_domains", "TEXT NOT NULL DEFAULT ''"),
     ("memories", "review_after", "TEXT NOT NULL DEFAULT ''"),
+    ("memories", "title", "TEXT NOT NULL DEFAULT ''"),
     ("memories", "source_ref", "TEXT NOT NULL DEFAULT ''"),
     ("memory_usage", "via_fts", "INTEGER NOT NULL DEFAULT 0"),
 )
@@ -1100,6 +1107,7 @@ def insert_memory(
     *,
     type: str,
     content: str,
+    title: str = "",
     domain: str = "",
     also: str = "",
     session: str = "",
@@ -1118,11 +1126,11 @@ def insert_memory(
     review_after = normalize_review_after(review_after, today=(created_at or ts)[:10])
     conn.execute(
         """INSERT INTO memories
-           (uid, type, domain, also_domains, session, tags, content, status,
+           (uid, type, domain, also_domains, session, tags, title, content, status,
             confidence, created_at, updated_at, review_after, source_ref)
-           VALUES (?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, ?, ?)""",
-        (uid, type, domain, blob, session, tags, content, confidence, ts, ts,
-         review_after, source_ref.strip()),
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, ?, ?)""",
+        (uid, type, domain, blob, session, tags, title.strip(), content, confidence,
+         ts, ts, review_after, source_ref.strip()),
     )
     if links:
         conn.executemany(
@@ -1153,11 +1161,12 @@ def restore_memory(conn: sqlite3.Connection, record: dict) -> str:
     links = [p for p in links if p and not in_domain(domain, p)]
     conn.execute(
         """INSERT INTO memories
-           (uid, type, domain, also_domains, session, tags, content, status,
+           (uid, type, domain, also_domains, session, tags, title, content, status,
             confidence, superseded_by, created_at, updated_at, review_after, source_ref)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (uid, record["type"], domain, ALSO_SEP.join(links),
-         record.get("session", ""), record.get("tags", ""), record.get("content", ""),
+         record.get("session", ""), record.get("tags", ""),
+         record.get("title", ""), record.get("content", ""),
          record.get("status", "active"), record.get("confidence", "unverified"),
          record.get("superseded_by") or None, ts, record.get("updated_at") or ts,
          record.get("review_after", ""), record.get("source_ref", "")),
@@ -1188,6 +1197,9 @@ def restore_diagram(conn: sqlite3.Connection, record: dict) -> None:
         "VALUES (?, ?, ?, ?, ?)",
         (uid, record.get("diagram_kind", "flowchart"), record.get("title", ""),
          record.get("summary", ""), record.get("font_scale", 1)))
+    # an export whose memory record carries no title holds the name here
+    conn.execute("UPDATE memories SET title = ? WHERE uid = ? AND title = ''",
+                 (record.get("title", ""), uid))
     conn.executemany(
         "INSERT INTO diagram_nodes (memory_uid, node_key, shape, label, note, seq, x, y, w, h) "
         "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
@@ -1356,6 +1368,32 @@ def set_source_ref(conn: sqlite3.Connection, uid: str, value: str, note: str = "
         "UPDATE memories SET source_ref = ?, updated_at = ? WHERE uid = ?",
         (value, now_iso(), uid))
     audit = f"meta: source_ref '{row['source_ref']}' -> '{value}'"
+    conn.execute(
+        "INSERT INTO edits (memory_uid, edited_at, prev_content, new_content, note) "
+        "VALUES (?, ?, ?, ?, ?)",
+        (uid, now_iso(), row["content"], row["content"],
+         f"{audit} ({note})" if note else audit))
+    return True
+
+
+def set_title(conn: sqlite3.Connection, uid: str, value: str, note: str = "") -> bool:
+    """Rename a memory, and audit the rename.
+
+    The update reindexes: `title` is an indexed column, so the FTS trigger
+    fires on it the way it does for the body. Refuses to clear one -- every
+    writer requires a title, and a rename to nothing would leave a row no
+    writer could have made.
+    """
+    row = get_memory(conn, uid)
+    if row is None:
+        return False
+    value = value.strip()
+    if not value or value == row["title"]:
+        return bool(value)
+    conn.execute(
+        "UPDATE memories SET title = ?, updated_at = ? WHERE uid = ?",
+        (value, now_iso(), uid))
+    audit = f"meta: title '{row['title']}' -> '{value}'"
     conn.execute(
         "INSERT INTO edits (memory_uid, edited_at, prev_content, new_content, note) "
         "VALUES (?, ?, ?, ?, ?)",
@@ -2054,7 +2092,7 @@ def insert_diagram(
     summary = str(summary).strip()
     uid = insert_memory(
         conn, type=DIAGRAM_TYPE, content=_render_text(title, summary, kind, n, e),
-        domain=domain, also=also, session=session, tags=tags,
+        title=title, domain=domain, also=also, session=session, tags=tags,
         review_after=review_after, source_ref=source_ref,
     )
     conn.execute(
@@ -2259,6 +2297,8 @@ def set_diagram_meta(
         "UPDATE diagrams SET title = ?, summary = ?, font_scale = ? WHERE memory_uid = ?",
         (new_title, new_summary, scale, uid),
     )
+    # the graph's title is the memory's title; one name, stored twice
+    conn.execute("UPDATE memories SET title = ? WHERE uid = ?", (new_title, uid))
     if scale != was:
         # Every default box just changed size, so the arrangement has to
         # come with it: scaling the coordinates by the same factor keeps a

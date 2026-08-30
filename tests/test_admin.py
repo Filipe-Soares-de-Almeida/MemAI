@@ -24,7 +24,7 @@ def client(tmp_path, monkeypatch):
 def _create(client, **kw) -> str:
     """POST a memory. A type made of fields gets the text spread over them,
     since the endpoint builds those bodies rather than taking one."""
-    body = {"type": "note", "content": "test fact", **kw}
+    body = {"title": "a fixture memory", "type": "note", "content": "test fact", **kw}
     spec = sections.spec_for(body["type"])
     if spec:
         text = body.pop("content")
@@ -310,7 +310,7 @@ def test_cross_origin_write_is_refused(client):
     """
     uid = _create(client)
 
-    res = client.post("/api/memories", json={"type": "note", "content": "x"},
+    res = client.post("/api/memories", json={"title": "fixture title", "type": "note", "content": "x"},
                       headers={"Sec-Fetch-Site": "cross-site"})
     assert res.status_code == 403
 
@@ -329,7 +329,7 @@ def test_cross_origin_write_is_refused(client):
 def test_same_origin_write_is_allowed(client):
     """The UI's own requests carry both headers and must sail through."""
     res = client.post("/api/memories",
-                      json={"type": "note", "content": "from the real UI"},
+                      json={"title": "fixture title", "type": "note", "content": "from the real UI"},
                       headers={"Sec-Fetch-Site": "same-origin",
                                "Origin": "http://testserver"})
     assert res.status_code == 200, res.text
@@ -478,7 +478,7 @@ def test_the_config_serves_the_fields_a_form_needs(client):
 
 
 def test_creating_a_sectioned_memory_refuses_a_plain_body(client):
-    res = client.post("/api/memories", json={"type": "checkpoint", "content": CHECKPOINT_BODY})
+    res = client.post("/api/memories", json={"title": "fixture title", "type": "checkpoint", "content": CHECKPOINT_BODY})
     assert res.status_code == 400
     assert "created from its sections" in res.text
 
@@ -512,7 +512,7 @@ def test_reclassifying_a_stuck_body_empties_the_queue(client):
     client.post("/api/maintenance/sectionize", json={})
     assert client.get("/api/maintenance/sections-queue").json()["queue"] != []
 
-    res = client.post(f"/api/memories/{uid}/meta", json={"type": "note"})
+    res = client.post(f"/api/memories/{uid}/meta", json={"title": "fixture title", "type": "note"})
 
     assert res.status_code == 200, res.text
     assert client.get("/api/maintenance/sections-queue").json()["queue"] == []
@@ -521,7 +521,7 @@ def test_reclassifying_a_stuck_body_empties_the_queue(client):
 def test_claiming_a_type_made_of_fields_needs_a_body_that_reads_that_way(client):
     uid = _create(client, type="note", content="the cache warms on boot")
 
-    res = client.post(f"/api/memories/{uid}/meta", json={"type": "checkpoint"})
+    res = client.post(f"/api/memories/{uid}/meta", json={"title": "fixture title", "type": "checkpoint"})
 
     assert res.status_code == 400
     assert "INTENT, ESTABLISHED, PURSUING, OPEN QUESTIONS" in res.text
@@ -531,7 +531,7 @@ def test_claiming_a_type_made_of_fields_needs_a_body_that_reads_that_way(client)
 def test_a_body_that_already_reads_that_way_may_claim_the_type(client):
     uid = _create(client, type="note", content=CHECKPOINT_BODY)
 
-    res = client.post(f"/api/memories/{uid}/meta", json={"type": "checkpoint"})
+    res = client.post(f"/api/memories/{uid}/meta", json={"title": "fixture title", "type": "checkpoint"})
 
     assert res.status_code == 200, res.text
     detail = client.get(f"/api/memories/{uid}").json()
@@ -543,7 +543,7 @@ def test_leaving_a_type_made_of_fields_drops_the_fields(client):
     uid = _create(client, type="checkpoint", content="the queue drain")
     assert client.get(f"/api/memories/{uid}").json()["sections"]
 
-    res = client.post(f"/api/memories/{uid}/meta", json={"type": "note"})
+    res = client.post(f"/api/memories/{uid}/meta", json={"title": "fixture title", "type": "note"})
 
     assert res.status_code == 200, res.text
     detail = client.get(f"/api/memories/{uid}").json()

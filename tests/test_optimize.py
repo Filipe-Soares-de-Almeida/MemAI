@@ -642,7 +642,7 @@ def _stage_via_db(uid, kind, payload):
 
 
 def _new_memory(client, **kw):
-    res = client.post("/api/memories", json={"type": "note", "content": "api fact", **kw})
+    res = client.post("/api/memories", json={"title": "fixture title", "type": "note", "content": "api fact", **kw})
     assert res.status_code == 200, res.text
     return res.json()["uid"]
 
