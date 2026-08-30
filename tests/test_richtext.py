@@ -267,11 +267,12 @@ def test_the_catalogue_is_every_language_the_engine_ships(coloured):
 
 
 def test_a_language_is_reachable_by_the_names_its_grammar_answers_to(coloured):
-    """The alias table is read off the grammars themselves, so a fence tagged
-    the short way finds its language."""
+    """The engine resolves each grammar's own aliases, so a fence tagged the
+    short way finds its language with no table kept here."""
     table = coloured["aliases"]
-    for alias, language in (("rs", "rust"), ("c#", "csharp"), ("golang", "go"),
-                            ("ts", "typescript"), ("py", "python"), ("yml", "yaml")):
+    for alias, language in (("rs", "Rust"), ("c#", "C#"), ("golang", "Go"),
+                            ("ts", "TypeScript"), ("py", "Python"), ("yml", "YAML"),
+                            ("sh", "Bash"), ("ps1", "PowerShell")):
         assert table.get(alias) == language, f"{alias} -> {table.get(alias)}"
 
 

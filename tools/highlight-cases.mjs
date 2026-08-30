@@ -1,13 +1,11 @@
 /* Reports what the dashboard's highlighter can do, as JSON, so
-   tests/test_richtext.py can hold it to working: the whole catalogue
-   highlight.js ships, the alias table read off those grammars, and one
-   coloured snippet per language there is a snippet for.
+   tests/test_richtext.py can hold it to working: every language the engine
+   registers, the aliases it answers to, and one coloured snippet per
+   language there is a snippet for.
 
    Usage: node tools/highlight-cases.mjs */
 
-import { aliases, languages } from './hljs-catalog.mjs';
-
-const hljs = (await import('highlight.js/lib/core')).default;
+const hljs = (await import('highlight.js')).default;
 hljs.configure({ ignoreUnescapedHTML: true });
 
 const SNIPPETS = {
@@ -27,14 +25,20 @@ const SNIPPETS = {
   csharp: 'public int Warm(Cache c) => c.Fill(1); // the first request',
 };
 
-const catalog = await languages();
-const out = { catalog, aliases: await aliases(catalog), coloured: {}, failed: [] };
+/* the short names a fence can carry, answered by the engine itself */
+const ALIASES = ['rs', 'c#', 'golang', 'ts', 'kt', 'py', 'yml', 'sh', 'ps1', 'patch'];
+
+const out = {
+  catalog: hljs.listLanguages().sort(),
+  aliases: Object.fromEntries(
+    ALIASES.map(alias => [alias, hljs.getLanguage(alias)?.name ?? null])),
+  coloured: {},
+  failed: [],
+};
 
 for (const language of Object.keys(SNIPPETS).sort()) {
   try {
-    if (!catalog.includes(language)) { out.failed.push(`${language}: not shipped`); continue; }
-    const grammar = (await import(`highlight.js/lib/languages/${language}`)).default;
-    hljs.registerLanguage(language, grammar);
+    if (!hljs.getLanguage(language)) { out.failed.push(`${language}: not registered`); continue; }
     const snippet = SNIPPETS[language];
     const html = hljs.highlight(snippet, { language }).value;
     out.coloured[language] = {
