@@ -1179,6 +1179,10 @@ def health(request, payload) -> dict:
         untagged = conn.execute(
             "SELECT COUNT(*) FROM memories WHERE status = 'active' "
             "AND (TRIM(tags) = '' OR TRIM(tags) = type)").fetchone()[0]
+        # no name of its own, so every list falls back to its body
+        untitled = conn.execute(
+            "SELECT COUNT(*) FROM memories WHERE status = 'active' "
+            "AND TRIM(title) = ''").fetchone()[0]
         page_size = conn.execute("PRAGMA page_size").fetchone()[0]
         freelist = conn.execute("PRAGMA freelist_count").fetchone()[0]
         compact_reason = db.get_compact_reason(conn)
@@ -1198,6 +1202,9 @@ def health(request, payload) -> dict:
         # BM25 reads content, tags and domain, so a row with no tags answers
         # only a query that quotes its own wording
         "tags": {"untagged": untagged, "active": active_count},
+        # a row with no title is listed by the first line of its body, which
+        # is the body doing a job it was not written for
+        "title": {"untitled": untitled, "active": active_count},
         # generated SVGs are a cache, so what matters is what they cost and
         # whether the retention rule is actually clearing them
         "renders": {**db.renders_usage(), "retention": render_retention,
@@ -1443,6 +1450,7 @@ def _suggestion_json(conn, row) -> dict:
         if target is not None:
             trow = db.get_memory(conn, row["target_uid"])
             target["tags"] = trow["tags"]
+            target["title"] = trow["title"]
             # a crosslist suggestion replaces the whole set, so the Before
             # pane needs the whole set, not only the filed path
             target["also"] = db.get_domain_links(conn, row["target_uid"])

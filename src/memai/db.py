@@ -3856,7 +3856,7 @@ def dedup_candidates(
 
 CONFIDENCE_VALUES = ("unverified", "confirmed", CONFIDENCE_CONTRADICTED)
 SUGGESTION_KINDS = (
-    "compact", "reword", "retag", "redomain", "crosslist",
+    "compact", "reword", "retag", "retitle", "redomain", "crosslist",
     "set_confidence", "review", "archive", "link", "merge", "distill",
 )
 # distill targets must be durable knowledge types -- distilling INTO a
@@ -4173,6 +4173,11 @@ def optimization_corpus(
         "untagged": conn.execute(
             f"SELECT COUNT(*) FROM memories WHERE {where_sql} "
             "AND (TRIM(tags) = '' OR TRIM(tags) = type)", params).fetchone()[0],
+        # No name of its own, so every list falls back to the opening line of
+        # its body. `retitle` is the kind that fixes it.
+        "untitled": conn.execute(
+            f"SELECT COUNT(*) FROM memories WHERE {where_sql} AND TRIM(title) = ''",
+            params).fetchone()[0],
         "due_for_review": conn.execute(
             f"SELECT COUNT(*) FROM memories WHERE {where_sql} AND {_due_clause(today)[0]}",
             [*params, today]).fetchone()[0],
@@ -4259,6 +4264,15 @@ def _validate_suggestion(conn: sqlite3.Connection, s: object) -> tuple[dict | No
             return None, err
         if "tags" not in payload:
             return None, "payload.tags required"
+    elif kind == "retitle":
+        err = target_err()
+        if err:
+            return None, err
+        if not str(payload.get("title", "")).strip():
+            return None, "payload.title required (a memory cannot be left unnamed)"
+        if is_diagram(conn, target_uid):
+            return None, (f"{target_uid} is a diagram: its title is part of what "
+                          "generates its body. Rename it through the graph.")
     elif kind == "review":
         err = target_err()
         if err:
@@ -4476,8 +4490,8 @@ def set_run_backup(conn: sqlite3.Connection, run_id: int, backup_path: str) -> N
 def _update_meta_field(conn: sqlite3.Connection, uid: str, field: str, value: str) -> None:
     """Mirror admin.edit_meta for one tag/domain field: UPDATE + audit.
 
-    `field` is only ever 'tags' or 'domain' (caller-controlled), so the
-    f-string interpolation is not an injection surface.
+    `field` is only ever 'tags', 'title' or 'domain' (caller-controlled), so
+    the f-string interpolation is not an injection surface.
 
     A domain change re-runs the cross-listing policy: the memory's new path
     may already satisfy a membership it used to need (see
@@ -4517,6 +4531,11 @@ def _apply_kind(conn: sqlite3.Connection, kind: str, target_uid: str | None, pay
         row = get_memory(conn, target_uid)
         prev = {"tags": row["tags"]}
         _update_meta_field(conn, target_uid, "tags", str(payload["tags"]).strip())
+        return prev
+    if kind == "retitle":
+        row = get_memory(conn, target_uid)
+        prev = {"title": row["title"]}
+        _update_meta_field(conn, target_uid, "title", str(payload["title"]).strip())
         return prev
     if kind == "review":
         row = get_memory(conn, target_uid)
@@ -4584,6 +4603,8 @@ def _revert_kind(
         update_memory_content(conn, target_uid, prev["content"], note=f"optimize:undo {kind}")
     elif kind == "retag":
         _update_meta_field(conn, target_uid, "tags", prev["tags"])
+    elif kind == "retitle":
+        _update_meta_field(conn, target_uid, "title", prev["title"])
     elif kind == "review":
         set_review_after(conn, target_uid, prev["review_after"])
     elif kind == "redomain":

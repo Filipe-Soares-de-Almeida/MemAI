@@ -1786,6 +1786,7 @@ Each suggestion is an object:
 Kinds and their payload:
   compact / reword   {"new_content": str}
   retag              {"tags": str}                 comma-separated
+  retitle            {"title": str}                one line naming the memory
   redomain           {"domain": str}
   crosslist          {"also": [path, ...]}         replaces the whole set
   set_confidence     {"confidence": "unverified|confirmed|contradicted"}

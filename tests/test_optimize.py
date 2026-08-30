@@ -109,6 +109,8 @@ def test_apply_refuses_a_diagram_rewrite_staged_before_the_guard(conn):
     ("reword", {"new_content": "reworded"}, lambda r: r["content"] == "reworded"),
     ("compact", {"new_content": "short"}, lambda r: r["content"] == "short"),
     ("retag", {"tags": "x, y"}, lambda r: r["tags"] == "x, y"),
+    ("retitle", {"title": "How the drain retries"},
+     lambda r: r["title"] == "How the drain retries"),
     ("redomain", {"domain": "newdom"}, lambda r: r["domain"] == "newdom"),
     ("set_confidence", {"confidence": "confirmed"}, lambda r: r["confidence"] == "confirmed"),
     ("archive", {"reason": "stale"}, lambda r: r["status"] == "archived"),
@@ -130,6 +132,9 @@ def test_apply_and_revert_roundtrip(conn, kind, payload, check):
     after = db.get_memory(conn, uid)
     assert after["content"] == before["content"]
     assert after["tags"] == before["tags"]
+    # a row that had no name goes back to having none: undo restores the
+    # state a backfill found, not a state a writer could have made
+    assert after["title"] == before["title"]
     assert after["domain"] == before["domain"]
     assert after["confidence"] == before["confidence"]
     assert after["status"] == before["status"]
@@ -451,6 +456,39 @@ def test_corpus_counts_what_a_retag_would_reach(conn):
         tags="anti_pattern")
 
     assert db.optimization_corpus(conn)["stats"]["untagged"] == 2
+
+
+def test_corpus_counts_what_a_retitle_would_reach(conn):
+    """A memory with no title of its own is listed everywhere by the opening
+    line of its body."""
+    _mk(conn, content="the drain retries twice", title="How the drain retries")
+    _mk(conn, content="the loader skips a blank part")
+    _mk(conn, content="a temptation and its cure", type="anti_pattern")
+
+    assert db.optimization_corpus(conn)["stats"]["untitled"] == 2
+
+
+def test_a_retitle_needs_a_name(conn):
+    uid = _mk(conn, content="the drain retries twice")
+    run = db.stage_optimization(conn, "r", [
+        {"kind": "retitle", "target_uid": uid, "payload": {"title": "   "},
+         "rationale": "why", "verified": "read the body"},
+    ])
+    assert run["staged"] == 0
+    assert "payload.title required" in run["errors"][0]["error"]
+
+
+def test_a_diagram_is_not_retitled_through_a_suggestion(conn):
+    """Its title generates part of its body, so an applied rename would last
+    until the next structural change."""
+    diag = _mk_diagram(conn)
+    run = db.stage_optimization(conn, "r", [
+        {"kind": "retitle", "target_uid": diag, "payload": {"title": "Another name"},
+         "rationale": "why", "verified": "read the graph"},
+    ])
+    assert run["staged"] == 0
+    assert "generates its body" in run["errors"][0]["error"]
+    assert db.get_memory(conn, diag)["title"] == "Cache warmup routine"
 
 
 def test_corpus_extracts_anchors(conn):
