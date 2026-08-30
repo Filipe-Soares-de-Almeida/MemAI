@@ -1,23 +1,32 @@
 /* Syntax highlighting for the fenced code blocks a memory's body carries.
 
-   The engine is highlight.js, vendored under webui/public/vendor/highlight
-   (see the README there) and served from /static/vendor. Nothing is loaded
-   until a block asks for it: the core comes in on the first highlighted
-   block, each grammar on the first block written in that language, and a
-   page with no code block loads neither.
+   The engine is highlight.js, an npm dependency bundled into the build.
+   Nothing is loaded until a block asks for it: the core comes in on the
+   first highlighted block, each grammar on the first block written in that
+   language, and a page with no code block loads neither. Every entry in
+   GRAMMARS is its own lazy chunk.
 
-   A language with no grammar file leaves the block plain monospace, which is
-   also what happens when a load fails. The text is already on screen by
-   then, escaped, so the worst case is colourless -- never empty, never
-   mangled.
+   A language with no entry leaves the block plain monospace, which is also
+   what happens when a load fails. The text is already on screen by then,
+   escaped, so the worst case is colourless -- never empty, never mangled.
 
-   Adding a language means dropping its file into
-   public/vendor/highlight/languages and, if it goes by more than one name,
-   adding a line to ALIASES. */
+   Adding a language is one line in GRAMMARS and, if it goes by more than one
+   name, one in ALIASES. The specifier has to be written out: a bundler
+   cannot follow an import path assembled at runtime. */
 
-/* Built at runtime, not resolved at build time: the grammars are copied into
-   the build as-is and picked by name, one file per language. */
-const VENDOR = '/static/vendor/highlight';
+export const GRAMMARS = {
+  bash: () => import('highlight.js/lib/languages/bash'),
+  delphi: () => import('highlight.js/lib/languages/delphi'),
+  diff: () => import('highlight.js/lib/languages/diff'),
+  ini: () => import('highlight.js/lib/languages/ini'),
+  javascript: () => import('highlight.js/lib/languages/javascript'),
+  json: () => import('highlight.js/lib/languages/json'),
+  powershell: () => import('highlight.js/lib/languages/powershell'),
+  python: () => import('highlight.js/lib/languages/python'),
+  sql: () => import('highlight.js/lib/languages/sql'),
+  xml: () => import('highlight.js/lib/languages/xml'),
+  yaml: () => import('highlight.js/lib/languages/yaml'),
+};
 
 const ALIASES = {
   sh: 'bash', shell: 'bash', zsh: 'bash',
@@ -42,7 +51,7 @@ const grammars = new Map();   // language -> Promise<boolean>, false once it has
 
 const engine = () => {
   if (!enginePromise) {
-    enginePromise = import(/* @vite-ignore */ `${VENDOR}/core.min.js`)
+    enginePromise = import('highlight.js/lib/core')
       .then(m => {
         const hljs = m.default;
         /* the body is inserted as text, so a class this does not know about
@@ -57,10 +66,11 @@ const engine = () => {
 
 function grammar(hljs, language) {
   if (!grammars.has(language)) {
-    grammars.set(language, import(
-      /* @vite-ignore */ `${VENDOR}/languages/${language}.min.js`)
-      .then(m => { hljs.registerLanguage(language, m.default); return true; })
-      .catch(() => false));
+    const load = GRAMMARS[language];
+    grammars.set(language, !load ? Promise.resolve(false)
+      : load()
+        .then(m => { hljs.registerLanguage(language, m.default); return true; })
+        .catch(() => false));
   }
   return grammars.get(language);
 }
