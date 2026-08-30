@@ -2,45 +2,11 @@ import { readdir, readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'vite';
 
-import { aliases, languages } from './tools/hljs-catalog.mjs';
-
 /* The dashboard's sources sit inside the Python package. memai.admin serves
    the build output, webui/dist, under /static -- hence root and base. */
 const webui = fileURLToPath(new URL('src/memai/webui/', import.meta.url));
 
 const admin = `http://127.0.0.1:${process.env.MEMAI_ADMIN_PORT || '8888'}`;
-
-const CATALOG = 'virtual:hljs-catalog';
-const RESOLVED = '\0' + CATALOG;
-
-/* Hands core/highlight.js every language highlight.js ships.
-
-   One lazy importer per grammar, each specifier written out, because a path
-   assembled from a variable is the one form Rollup cannot follow into a
-   chunk. The alias table is what each grammar declares about itself, so a
-   fence tagged `rs` or `c#` finds its language. */
-function hljsCatalog() {
-  return {
-    name: 'memai:hljs-catalog',
-    resolveId: id => (id === CATALOG ? RESOLVED : null),
-    async load(id) {
-      if (id !== RESOLVED) return null;
-      const names = await languages();
-      const importers = names.map(name => {
-        const subpath = JSON.stringify(`highlight.js/lib/languages/${name}`);
-        return `  ${JSON.stringify(name)}: () => import(${subpath}),`;
-      });
-      return [
-        'export const GRAMMARS = {',
-        ...importers,
-        '};',
-        '',
-        `export const ALIASES = ${JSON.stringify(await aliases(names), null, 2)};`,
-        '',
-      ].join('\n');
-    },
-  };
-}
 
 const NOTICES = 'THIRD-PARTY-NOTICES.txt';
 const RULE = '='.repeat(70);
@@ -88,7 +54,7 @@ function thirdPartyNotices() {
 }
 
 export default defineConfig({
-  plugins: [hljsCatalog(), thirdPartyNotices()],
+  plugins: [thirdPartyNotices()],
   root: webui,
   base: '/static/',
   /* Copied verbatim, never hashed: the fonts and the locale catalogs are both
@@ -99,6 +65,9 @@ export default defineConfig({
     emptyOutDir: true,
     /* i18n.js awaits its catalog at module scope */
     target: 'es2022',
+    /* the highlight.js chunk is ~1 MB and is read from loopback on the first
+       code block, so the default 500 kB warning says nothing useful here */
+    chunkSizeWarningLimit: 1200,
   },
   server: {
     /* The API and the generated /fonts.css come from memai.admin. Proxying

@@ -1,23 +1,21 @@
 /* Syntax highlighting for the fenced code blocks a memory's body carries.
 
-   The engine is highlight.js, an npm dependency. Every language it ships is
-   available: the grammar map and the alias table are generated at build time
-   from the installed package (see the hljs-catalog plugin in
-   vite.config.js), so a body written in any of them colours without anything
-   being added here.
+   The engine is highlight.js, an npm dependency, imported whole: every
+   language it ships is registered, so a body written in any of the 193
+   colours without a list to keep anywhere. The engine resolves each
+   grammar's own aliases too, which is how a fence tagged `rs`, `c#` or
+   `golang` finds its language.
 
-   Nothing is loaded until a block asks for it. The catalog and the engine
-   come in on the first highlighted block and each grammar on the first block
-   written in that language, every one its own lazy chunk, so a page with no
-   code block loads none of it.
+   The import is dynamic, so the engine arrives with the first highlighted
+   block and a page with no code block never loads it. It is one chunk, read
+   from loopback.
 
    A language the engine does not know leaves the block plain monospace,
-   which is also what happens when a load fails. The text is already on
+   which is also what happens when the load fails. The text is already on
    screen by then, escaped, so the worst case is colourless -- never empty,
    never mangled. */
 
-/* Names the grammars do not claim for themselves, plus the ones this
-   dashboard routes elsewhere on purpose: highlight.js reads `shell` as a
+/* Names no grammar answers to, plus `shell`: highlight.js reads that as a
    terminal session, and a fence tagged that way here is a script. */
 const OVERRIDES = {
   shell: 'bash',
@@ -27,17 +25,11 @@ const OVERRIDES = {
   cfg: 'ini', conf: 'ini',
 };
 
-let catalogPromise = null;
 let enginePromise = null;
-const grammars = new Map();   // language -> Promise<boolean>, false once it has failed
-
-/* the generated GRAMMARS/ALIASES, kept out of the eager bundle */
-const catalog = () => (catalogPromise ??= import('virtual:hljs-catalog')
-  .catch(() => ({ GRAMMARS: {}, ALIASES: {} })));
 
 const engine = () => {
   if (!enginePromise) {
-    enginePromise = import('highlight.js/lib/core')
+    enginePromise = import('highlight.js')
       .then(m => {
         const hljs = m.default;
         /* the body is inserted as text, so a class this does not know about
@@ -50,40 +42,25 @@ const engine = () => {
   return enginePromise;
 };
 
-const canonical = (table, name) => {
-  const key = String(name || '').trim().toLowerCase();
-  return OVERRIDES[key] || table[key] || key;
-};
-
-function grammar(hljs, importers, language) {
-  if (!grammars.has(language)) {
-    const load = importers[language];
-    grammars.set(language, !load ? Promise.resolve(false)
-      : load()
-        .then(m => { hljs.registerLanguage(language, m.default); return true; })
-        .catch(() => false));
-  }
-  return grammars.get(language);
-}
-
 /* Colour every code block under `root` that names a language the engine has.
 
    Idempotent: a block is marked once it has been through, so re-rendering a
    record does not highlight the same text twice. Blocks are read before the
-   first await, so a dialog that closes mid-load simply updates nothing. */
+   await, so a dialog that closes mid-load simply updates nothing. */
 export async function highlightIn(root) {
   const blocks = [...root.querySelectorAll('code[data-lang]:not([data-hl])')];
   if (!blocks.length) return;
-  const [{ GRAMMARS, ALIASES }, hljs] = await Promise.all([catalog(), engine()]);
+  const hljs = await engine();
   if (!hljs) return;
-  await Promise.all(blocks.map(async block => {
-    const language = canonical(ALIASES, block.dataset.lang);
+  for (const block of blocks) {
+    const tag = String(block.dataset.lang || '').trim().toLowerCase();
+    const language = OVERRIDES[tag] || tag;
     block.dataset.hl = 'done';
-    if (!language || !(await grammar(hljs, GRAMMARS, language))) return;
+    if (!language || !hljs.getLanguage(language)) continue;
     try {
       block.innerHTML = hljs.highlight(block.textContent, { language }).value;
     } catch {
       /* a grammar that throws on this text leaves it as it was */
     }
-  }));
+  }
 }
