@@ -2,8 +2,8 @@
 
 Covers the db-layer staging/apply/revert dispatchers per suggestion kind
 plus the admin API (backup-before-apply, revert, reject). Same hermetic
-setup as the rest of the suite: conftest keeps the real embedder out, so
-everything runs FTS-only; the admin client points MEMAI_HOME at a tmp dir.
+setup as the rest of the suite: the admin client points MEMAI_HOME at a
+tmp dir.
 """
 
 from __future__ import annotations
@@ -538,7 +538,7 @@ def test_corpus_since_filters_incrementally(conn):
 
 
 def test_dedup_since_pairs_new_against_old_lexical(conn):
-    # lexical path (no embedder); identical contents guarantee a hit
+    # identical contents guarantee a hit
     old_a = db.insert_memory(conn, type="note", content="the retry loop lacks backoff",
                              created_at="2026-01-05T10:00:00+00:00")
     db.insert_memory(conn, type="note", content="the retry loop lacks backoff",
@@ -583,8 +583,7 @@ def test_corpus_domain_hints_cluster_variants(conn):
     assert h["canonical"] in {"PROJ-1042", "proj-1042"}  # counts tie -> shortest wins among them
 
 
-def test_dedup_lexical_fallback_ranks_checkpoints_below(conn):
-    # no fake_embedder here: the autouse fixture keeps vectors off -> lexical path
+def test_dedup_ranks_checkpoints_below(conn):
     n1 = _mk(conn, content="alpha beta gamma delta epsilon")
     n2 = _mk(conn, content="alpha beta gamma delta epsilon")
     _mk(conn, content="zeta eta theta iota kappa", type="checkpoint", domain="d1")

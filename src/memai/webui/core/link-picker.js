@@ -41,12 +41,10 @@ const previewOf = async uid => {
   return previews.get(uid);
 };
 
-/* the two scores behind a match badge -- reference for judging a
-   borderline candidate, which is why it is a title and not a column */
-const scoreTitle = it => [
-  it.fts_rank != null ? `bm25 ${Number(it.fts_rank).toFixed(2)}` : '',
-  it.vec_distance != null ? `cos ${Number(it.vec_distance).toFixed(3)}` : '',
-].filter(Boolean).join(' ');
+/* the score behind a match badge -- reference for judging a borderline
+   candidate, which is why it is a title and not a column */
+const scoreTitle = it =>
+  it.fts_rank != null ? `bm25 ${Number(it.fts_rank).toFixed(2)}` : '';
 
 /* One result. A real button, so the keyboard reaches it; `aria-pressed`
    rather than a checkbox because pressing it is what selects, and a

@@ -2,7 +2,7 @@
 name: memai-memory
 description: >
   How to use the MemAI MCP server (long-term agent memory: one ACID SQLite
-  store, hybrid BM25 + vector search, bundled offline embedder) — which tool
+  store, BM25 keyword search) — which tool
   family to call when: pulse/search/recall/list_by_domain/list_recent/
   list_domains/get_memory/help to read; note, reasoning, anti_pattern,
   checkpoint, handoff, diagram to write; diagram_*/get_diagram for flows;
@@ -20,11 +20,12 @@ description: >
 
 # memai-memory — using the MemAI MCP server
 
-**MemAI** is a long-term memory store with **hybrid BM25 + vector** retrieval,
+**MemAI** is a long-term memory store with **BM25 keyword** retrieval,
 exposed over MCP under the name the host registered the server with —
-`mcp__memai__*` for the documented one. It matches an **exact identifier**
-(`F100_TOTAL`, `USE_NEW_PARSER`, `proj-1042`) **and** a paraphrase of the same
-thing, so a store full of codes stays findable either way.
+`mcp__memai__*` for the documented one. It matches on the **words that were
+written** — an exact identifier (`F100_TOTAL`, `USE_NEW_PARSER`, `proj-1042`)
+as readily as a phrase — which is why `tags` carry the synonyms a body never
+happened to use.
 
 > **`help()` is the source of truth for the tools.** `help()` lists every tool
 > with a one-line summary; `help(command='<name>')` returns that tool's
@@ -47,12 +48,9 @@ thing, so a store full of codes stays findable either way.
 
 > **Architecture:** **one SQLite file** (WAL, ACID) at `$MEMAI_HOME/memai.db`,
 > or `~/.memai/memai.db` when `MEMAI_HOME` is unset. Rows, FTS5 index (BM25),
-> `sqlite-vec` vectors, edit history, relations and the **diagram graph**
-> (nodes, edges, step links, jumps) commit in the same transaction. There is
-> **no `snapshot`/`reindex`** — a write is durable when it returns. The
-> embedder is a bundled model2vec model (`minishlab/potion-base-8M`) that runs
-> **offline**; if it cannot load, writes still happen and retrieval degrades
-> to keyword-only until the vectors are backfilled.
+> edit history, relations and the **diagram graph** (nodes, edges, step links,
+> jumps) commit in the same transaction. There is **no `snapshot`/`reindex`**
+> — a write is durable when it returns. Nothing here reaches the network.
 
 ---
 
@@ -100,7 +98,7 @@ comes back later ([§3.1](#31-getting-back-what-you-wrote-which-tool-to-call)).
 | `session` | **optional** free text; a per-process stamp is applied when it is omitted, so one conversation's memories group together without an agent tracking an id | `20260810T1423-1f4c` |
 | `domain` | where the memory is **FILED**: a **path**, outermost scope first | `acme/x100/p200`, `acme/x100`, `proj-1042` |
 | `also` | csv of other paths the memory **BELONGS** to — the subjects that cut across the tree ([§2.2](#22-cross-listing--the-subject-that-cuts-across-the-tree)) | `omni/x900` |
-| `tags` | csv of keywords/synonyms; they feed **both** the keyword index and the embedding, so write generously | `cache,warmup,cold-start` · `queue,drain,retry` |
+| `tags` | csv of keywords/synonyms; they are indexed beside the content, so write generously — a synonym here is the only way a body finds a query that words it differently | `cache,warmup,cold-start` · `queue,drain,retry` |
 
 > `tags` is an argument on **`note`** and **`diagram`** only. **`also` is on
 > every writer.** `review_after`/`source_ref` are on the durable writers —
@@ -216,21 +214,21 @@ When the session-start hook fires, or when resuming work:
    drill-down plan: `search(query, domain=…)`
    or `list_by_domain(domain, type=…, limit=…)` on the child that was only
    counted.
-2. **`search(query, domain, type, limit)`** — hybrid BM25 + vector over the
-   subject at hand. **Spend terms freely:** every space-separated term is
-   asked for separately and a row matching more of them ranks higher, so
-   piling the identifier, the routine name and the plain-language phrasing
-   into one query costs one call and finds strictly more. Each hit carries
-   `match_source` (`fts`/`vec`/`both`), `fts_rank` (lower = better) and
-   `vec_distance` (lower = closer). Content comes back **truncated** — open
-   the full record with `get_memory(uid)`.
+2. **`search(query, domain, type, limit)`** — BM25 over the subject at hand.
+   **Spend terms freely:** every space-separated term is asked for separately
+   and a row matching more of them ranks higher, so piling the identifier, the
+   routine name and the plain-language phrasing into one query costs one call
+   and finds strictly more. Each hit carries `match_source` (`fts`, or `uid`
+   for the row a pasted identifier names) and `fts_rank` (lower = better).
+   Content comes back **truncated** — open the full record with
+   `get_memory(uid)`.
 3. **`recall(query, domain)`** — the dedicated verb for long-term knowledge
    written with `note` ([§3.1](#31-getting-back-what-you-wrote-which-tool-to-call)).
 4. **`timeline(uid | query, before, after, domain, type)`** — what else was
    being written **around** one memory, in creation order, whether or not it
    shares a word with it. The neighbours of a checkpoint are the notes and
    pitfalls of the same stretch of work. One of `uid` or `query` is required
-   (`uid` wins if both are given; `query` takes the top hybrid hit), and the
+   (`uid` wins if both are given; `query` takes the top hit), and the
    response reports `anchored_by` plus the whole `anchor`, so the record it
    was built around is never a guess. `domain`/`type` narrow the
    **neighbourhood**, not the anchor.
@@ -275,8 +273,8 @@ type**. To bring it back, filter on that `type`.
 | `handoff` | `handoff` | comes back in **`pulse`** (open ones) · or `list_*`/`search` with `type='handoff'` |
 | `diagram` | `diagram` | **titles** in `pulse` · or `list_*`/`search` with `type='diagram'` (search matches the prose the graph generates) · the graph itself via **`get_diagram(uid)`** |
 
-> **`recall(query, domain)`** is the dedicated recall verb: hybrid search
-> scoped to `type='note'` and ranked by **relevance**, which is what timeless
+> **`recall(query, domain)`** is the dedicated recall verb: a search scoped
+> to `type='note'` and ranked by **relevance**, which is what timeless
 > knowledge wants. It therefore never surfaces a diagram — use `search` for
 > that. `pulse` complements it with the scope's `recent_notes` by **recency**.
 >
@@ -500,7 +498,7 @@ always published, `diagrams` and `curation` only when named (or under the
 | Reading | | group |
 |---|---|---|
 | `pulse(domain)` | Warm-up: latest checkpoint (+ relations), open handoffs/anti-patterns, `recent_notes`, flow titles, and the `scope` census (incl. `stale`) | core |
-| `search(query, domain, type, limit)` | Hybrid BM25 + vector, annotated with `match_source`/`fts_rank`/`vec_distance` | core |
+| `search(query, domain, type, limit)` | BM25, annotated with `match_source`/`fts_rank` | core |
 | `recall(query, domain, limit)` | Relevance-ranked recall of `note()`d knowledge (`search` scoped to `type='note'`) | core |
 | `list_by_domain(domain, type, limit, subtree)` | Recency-ordered, scoped to a path and its subdomains | core |
 | `list_recent(type, domain, limit, subtree)` | Recency-ordered, global unless a `type`/`domain` narrows it | core |

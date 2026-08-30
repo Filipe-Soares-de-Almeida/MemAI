@@ -1,17 +1,14 @@
 """Tests for the diagram memory type.
 
 A diagram stores a graph -- one row per step -- and generates the prose
-that FTS and the embedder index. Two invariants get most of the attention
-here, because everything else leans on them:
+FTS indexes. Two invariants get most of the attention here, because
+everything else leans on them:
 
 * the generated projection is the only thing that ever writes
   memories.content, so a hand edit has to be refused;
 * node coordinates are authoritative in the store, so a node always has
   them, a drag never looks like an edit, and no renderer needs a layout
   algorithm of its own.
-
-Same hermetic setup as the rest of the suite: conftest keeps the real
-embedder out, so retrieval runs FTS-only unless a test opts in.
 """
 
 from __future__ import annotations
@@ -711,7 +708,7 @@ def test_a_matching_diagram_comes_back_ranked_like_anything_else(conn):
                             content="The export window is inclusive on both ends.")
     uid = _mk(conn, summary="Reads the export window and ships one file per store.")
 
-    hits = db.search_hybrid(conn, "export window")
+    hits = db.search_ranked(conn, "export window")
     uids = [h["uid"] for h in hits]
     assert uid in uids and note in uids
     assert all("rank_reason" not in h for h in hits)
@@ -730,7 +727,7 @@ def test_a_diagram_that_lost_the_ranking_is_not_backfilled_in(conn):
         {"key": "done", "shape": "end", "label": "done"}],
         edges=[{"from": "start", "to": "done"}])
 
-    hits = db.search_hybrid(conn, "export window", limit=3)
+    hits = db.search_ranked(conn, "export window", limit=3)
     assert len(hits) == 3
     assert {h["type"] for h in hits} == {"note"}
 
@@ -739,9 +736,9 @@ def test_confidence_no_longer_changes_a_diagrams_position(conn):
     """It only ever mattered because promotion had to exclude a flow that had
     stopped being the truth. Ranking is scores now, for every type."""
     uid = _mk(conn, summary="Reads the export window.")
-    before = [h["uid"] for h in db.search_hybrid(conn, "export window")]
+    before = [h["uid"] for h in db.search_ranked(conn, "export window")]
     db.set_confidence(conn, uid, "contradicted")
-    assert [h["uid"] for h in db.search_hybrid(conn, "export window")] == before
+    assert [h["uid"] for h in db.search_ranked(conn, "export window")] == before
 
 
 def test_a_type_filter_still_excludes_diagrams(conn):
@@ -749,25 +746,9 @@ def test_a_type_filter_still_excludes_diagrams(conn):
     is what keeps a flow out of it."""
     _mk(conn, summary="Reads the export window.")
     note = db.insert_memory(conn, type="note", content="The export window is inclusive.")
-    hits = db.search_hybrid(conn, "export window", type="note")
+    hits = db.search_ranked(conn, "export window", type="note")
     assert [h["uid"] for h in hits] == [note]
 
-
-def test_a_diagram_is_reachable_by_vector_alone(tmp_path, fake_embedder):
-    """The prose projection is embedded like any other content, so a flow
-    still surfaces on a semantic-only match -- it just is not lifted."""
-    with db.connect(tmp_path / "vec.db") as conn:
-        uid = _mk(conn, title="Car maintenance schedule", nodes=[
-            {"key": "start", "shape": "start", "label": "car maintenance"},
-            {"key": "done", "shape": "end", "label": "schedule the next service"},
-        ], edges=[{"from": "start", "to": "done"}])
-        # 'automobile' is a synonym of 'car' for the fake embedder and does
-        # not appear literally anywhere, so this can only match by vector
-        hits = db.search_hybrid(conn, "automobile maintenance")
-        assert [h["uid"] for h in hits] == [uid]
-        # the vector side is what carries 'automobile'; the keyword side only
-        # has 'maintenance' to go on, hence 'both' rather than 'vec'
-        assert hits[0]["vec_distance"] is not None
 
 
 def test_api_lookup_ranks_by_relevance(client):
@@ -787,15 +768,6 @@ def test_diagrams_never_become_dedup_candidates(conn):
     assert db.dedup_candidates(conn, threshold=0.1) == []
     assert db.dedup_candidates(conn, type="diagram", threshold=0.1) == []
 
-
-def test_semantic_search_reaches_a_diagram(tmp_path, fake_embedder):
-    with db.connect(tmp_path / "vec.db") as conn:
-        uid = _mk(conn, title="Car maintenance schedule", nodes=[
-            {"key": "start", "shape": "start", "label": "car maintenance schedule"},
-            {"key": "done", "shape": "end", "label": "database tuning"},
-        ], edges=[{"from": "start", "to": "done"}])
-        hits = db.search_semantic(conn, "automobile maintenance", limit=5)
-        assert uid in [r["uid"] for r in hits]
 
 
 # --------------------------------------------------------------------- mermaid

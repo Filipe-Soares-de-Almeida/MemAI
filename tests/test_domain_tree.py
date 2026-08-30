@@ -2,9 +2,7 @@
 
 Covers the path helpers, the subtree filters every read shares, the
 subtree-aware move, the nesting proposals the curation pass reads, and the
-admin/MCP surfaces built on them. Hermetic FTS-only path like the rest of
-the suite (the autouse fixture in conftest keeps the real embedder out);
-every example domain is synthetic.
+admin/MCP surfaces built on them. Every example domain is synthetic.
 """
 
 from __future__ import annotations
