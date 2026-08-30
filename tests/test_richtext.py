@@ -244,14 +244,35 @@ INHERITS = {"hljs-function", "hljs-params", "hljs-punctuation", "hljs-operator",
 @pytest.fixture(scope="module")
 def coloured() -> dict:
     out = subprocess.run(["node", str(HIGHLIGHT_CASES)], cwd=ROOT, capture_output=True,
-                         text=True, encoding="utf-8", timeout=60)
+                         text=True, encoding="utf-8", timeout=120)
     assert out.returncode == 0, out.stderr
     return json.loads(out.stdout)
 
 
-def test_every_grammar_loads_and_colours(coloured):
+def test_every_snippet_loads_its_grammar_and_colours(coloured):
     assert coloured["failed"] == []
-    assert set(coloured["coloured"]) == set(coloured["shipped"])
+    assert coloured["coloured"]
+
+
+def test_the_catalogue_is_every_language_the_engine_ships(coloured):
+    """The dashboard offers what highlight.js has, not a subset someone
+    curated. A memory written in any of these colours without a line being
+    added anywhere.
+    """
+    catalogue = coloured["catalog"]
+    assert len(catalogue) > 150, f"only {len(catalogue)} languages"
+    for language in ("rust", "go", "csharp", "typescript", "kotlin", "ruby",
+                     "php", "swift", "dockerfile", "makefile", "lua", "scala"):
+        assert language in catalogue, language
+
+
+def test_a_language_is_reachable_by_the_names_its_grammar_answers_to(coloured):
+    """The alias table is read off the grammars themselves, so a fence tagged
+    the short way finds its language."""
+    table = coloured["aliases"]
+    for alias, language in (("rs", "rust"), ("c#", "csharp"), ("golang", "go"),
+                            ("ts", "typescript"), ("py", "python"), ("yml", "yaml")):
+        assert table.get(alias) == language, f"{alias} -> {table.get(alias)}"
 
 
 def test_colouring_a_snippet_changes_no_character_of_it(coloured):

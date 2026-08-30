@@ -1,12 +1,11 @@
-/* Loads highlight.js the way the dashboard does -- through the same GRAMMARS
-   map core/highlight.js hands the browser -- and colours one snippet per
-   language, so tests/test_richtext.py can hold the set to actually working:
-   a grammar that stops loading on an update becomes a failing test rather
-   than a silently colourless block.
+/* Reports what the dashboard's highlighter can do, as JSON, so
+   tests/test_richtext.py can hold it to working: the whole catalogue
+   highlight.js ships, the alias table read off those grammars, and one
+   coloured snippet per language there is a snippet for.
 
    Usage: node tools/highlight-cases.mjs */
 
-import { GRAMMARS } from '../src/memai/webui/core/highlight.js';
+import { aliases, languages } from './hljs-catalog.mjs';
 
 const hljs = (await import('highlight.js/lib/core')).default;
 hljs.configure({ ignoreUnescapedHTML: true });
@@ -23,17 +22,20 @@ const SNIPPETS = {
   ini: '[acme]\nflag = USE_NEW_PARSER   ; a comment',
   yaml: 'domain: acme/x100\ntotal: 42   # a comment',
   diff: '--- a\n+++ b\n-gone\n+arrived',
+  rust: 'fn warm(cache: &mut Cache) -> usize {\n    cache.fill(1) // the first request\n}',
+  go: 'func Warm(c *Cache) int {\n\treturn c.Fill(1) // the first request\n}',
+  csharp: 'public int Warm(Cache c) => c.Fill(1); // the first request',
 };
 
-const shipped = Object.keys(GRAMMARS).sort();
+const catalog = await languages();
+const out = { catalog, aliases: await aliases(catalog), coloured: {}, failed: [] };
 
-const out = { shipped, coloured: {}, failed: [] };
-for (const language of shipped) {
+for (const language of Object.keys(SNIPPETS).sort()) {
   try {
-    const grammar = (await GRAMMARS[language]()).default;
+    if (!catalog.includes(language)) { out.failed.push(`${language}: not shipped`); continue; }
+    const grammar = (await import(`highlight.js/lib/languages/${language}`)).default;
     hljs.registerLanguage(language, grammar);
     const snippet = SNIPPETS[language];
-    if (snippet === undefined) { out.failed.push(`${language}: no snippet`); continue; }
     const html = hljs.highlight(snippet, { language }).value;
     out.coloured[language] = {
       /* what the theme in admin.css has to have a rule for */
