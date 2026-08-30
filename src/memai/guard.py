@@ -26,12 +26,15 @@ from __future__ import annotations
 
 from memai import sections
 
-# tool -> the parameters it has no default for.
+# tool -> the parameters it has no default for. `title` opens every writer's
+# signature, so it opens every tuple here: the order is compared against the
+# signature itself (tests/test_guard.py).
 GUARDED: dict[str, tuple[str, ...]] = {
-    "note": ("content",),
-    "reasoning": ("content",),
-    "handoff": ("content",),
-    **{tool: tuple(s.key for s in spec) for tool, spec in sections.SECTION_SPEC.items()},
+    "note": ("title", "content"),
+    "reasoning": ("title", "content"),
+    "handoff": ("title", "content"),
+    **{tool: ("title", *(s.key for s in spec))
+       for tool, spec in sections.SECTION_SPEC.items()},
 }
 
 # tool -> the optional parameters worth missing. Absence here is not an

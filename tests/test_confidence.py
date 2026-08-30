@@ -48,18 +48,18 @@ def test_contradicted_still_comes_back(conn):
 # ---------------------------------------------------------------- the warm-up
 
 def test_pulse_leaves_a_contradicted_anti_pattern_out(store):
-    live = server.anti_pattern(pattern="retry without backoff", why_wrong="stampede",
+    live = server.anti_pattern("fixture title", pattern="retry without backoff", why_wrong="stampede",
                                instead="exponential backoff", domain="acme/x100")["uid"]
-    stale = server.anti_pattern(pattern="batch over 100 rows", why_wrong="times out",
+    stale = server.anti_pattern("fixture title", pattern="batch over 100 rows", why_wrong="times out",
                                 instead="page it", domain="acme/x100")["uid"]
     server.set_confidence(stale, "contradicted")
     assert [r["uid"] for r in server.pulse("acme/x100")["anti_patterns"]] == [live]
 
 
 def test_pulse_falls_through_to_a_sound_checkpoint(store):
-    good = server.checkpoint(intent="i", established="e", pursuing="p",
+    good = server.checkpoint("fixture title", intent="i", established="e", pursuing="p",
                              open_questions="q", domain="acme/x100")["uid"]
-    bad = server.checkpoint(intent="i2", established="e2", pursuing="p2",
+    bad = server.checkpoint("fixture title", intent="i2", established="e2", pursuing="p2",
                             open_questions="q2", domain="acme/x100")["uid"]
     server.set_confidence(bad, "contradicted")
     assert server.pulse("acme/x100")["latest_checkpoint"]["uid"] == good
@@ -67,7 +67,7 @@ def test_pulse_falls_through_to_a_sound_checkpoint(store):
 
 def test_listing_a_scope_still_means_everything_in_it(store):
     """The exclusion is pulse's, not the list tools'."""
-    uid = server.note(content="row merge keeps the older id", domain="acme/x100")["uid"]
+    uid = server.note("fixture title", content="row merge keeps the older id", domain="acme/x100")["uid"]
     server.set_confidence(uid, "contradicted")
     assert [r["uid"] for r in server.list_by_domain("acme/x100")["results"]] == [uid]
     assert [r["uid"] for r in server.list_recent(domain="acme/x100")["results"]] == [uid]

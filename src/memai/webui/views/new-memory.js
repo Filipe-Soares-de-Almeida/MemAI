@@ -30,6 +30,9 @@ export async function openNewMemory() {
         <div class="field"><label for="nmConf">${t('nm.conf')}</label>
           ${pickerFor({ id: 'nmConf', value: 'unverified', items: confs, ariaLabel: t('nm.conf') })}</div>
       </div>
+      <div class="field"><label for="nmTitle">${t('nm.name')}</label>
+        <input type="text" id="nmTitle" placeholder="${t('nm.titlePh')}">
+        <div class="dg-empty" id="nmDiagramHint" style="margin-top:7px" hidden>${t('nm.diagramHint')}</div></div>
       <div class="field"><label for="nmDomain">${t('nm.domain')}</label>
         <input type="text" id="nmDomain" list="nmDomainsDL" placeholder="${t('nm.domainPh')}">
         <datalist id="nmDomainsDL">${domainDatalist(domains)}</datalist></div>
@@ -40,10 +43,7 @@ export async function openNewMemory() {
         <input type="text" id="nmTags" placeholder="${t('nm.tagsPh')}"></div>
       <div class="field" id="nmContentField"><label for="nmContent">${t('nm.content')}</label>
         <textarea id="nmContent" rows="7" placeholder="${t('nm.contentPh')}"></textarea></div>
-      <div id="nmSectionFields" hidden></div>
-      <div class="field" id="nmTitleField" hidden><label for="nmTitle">${t('dg.meta.name')}</label>
-        <input type="text" id="nmTitle" placeholder="${t('nm.titlePh')}">
-        <div class="dg-empty" style="margin-top:7px">${t('nm.diagramHint')}</div></div>`,
+      <div id="nmSectionFields" hidden></div>`,
     footHTML: `<button class="btn" data-x>${t('common.cancel')}</button><button class="btn btn-solid" data-ok>${t('nm.create')}</button>`,
   });
   const mq = s => modal.querySelector(s);
@@ -54,7 +54,7 @@ export async function openNewMemory() {
     const type = pickerValue(modal, 'nmType');
     const fields = fieldsFor();
     mq('#nmContentField').hidden = isDiagram() || fields.length > 0;
-    mq('#nmTitleField').hidden = !isDiagram();
+    mq('#nmDiagramHint').hidden = !isDiagram();
     mq('#nmSectionFields').hidden = fields.length === 0;
     mq('#nmSectionFields').innerHTML = fields.map(f => `
       <div class="field"><label for="nmSec-${esc(f.key)}">${sectionLabelHTML(type, f)}
@@ -98,6 +98,7 @@ export async function openNewMemory() {
       const fields = fieldsFor();
       const r = await api('/api/memories', { body: {
         type: pickerValue(modal, 'nmType'), confidence: pickerValue(modal, 'nmConf'),
+        title: mq('#nmTitle').value,
         domain: mq('#nmDomain').value, also: mq('#nmAlso').value,
         tags: mq('#nmTags').value,
         ...(fields.length

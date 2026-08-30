@@ -67,7 +67,7 @@ def test_nonsense_is_refused_rather_than_stored(conn):
 # ------------------------------------------------------------- on a memory
 
 def test_a_writer_records_both_fields(store):
-    uid = server.note(content="the export window is inclusive on both ends",
+    uid = server.note("fixture title", content="the export window is inclusive on both ends",
                       domain="acme/x100", review_after="30d",
                       source_ref="src/acme/x100/export.py")["uid"]
     row = server.get_memory(uid)
@@ -77,13 +77,13 @@ def test_a_writer_records_both_fields(store):
 
 def test_a_memory_that_does_not_go_stale_carries_no_field(store):
     """Most do not, and an empty field costs its name in every result."""
-    uid = server.note(content="row merge keeps the older identifier")["uid"]
+    uid = server.note("fixture title", content="row merge keeps the older identifier")["uid"]
     row = server.get_memory(uid)
     assert "review_after" not in row and "source_ref" not in row
 
 
 def test_search_results_stay_clean_too(store):
-    server.note(content="cache warmup runs nightly")
+    server.note("fixture title", content="cache warmup runs nightly")
     hit = server.search("cache warmup")["results"][0]
     assert "review_after" not in hit and "source_ref" not in hit
 
@@ -115,14 +115,14 @@ def test_an_archived_memory_is_not_due(conn):
 
 
 def test_a_warm_up_counts_what_is_overdue_in_the_scope(store):
-    server.note(content="cache warmup runs nightly", domain="acme/x100",
+    server.note("fixture title", content="cache warmup runs nightly", domain="acme/x100",
                 review_after=YESTERDAY)
-    server.note(content="row merge keeps the older id", domain="acme/x100")
+    server.note("fixture title", content="row merge keeps the older id", domain="acme/x100")
     assert server.pulse("acme/x100")["scope"]["stale"] == 1
 
 
 def test_a_scope_with_nothing_overdue_does_not_carry_the_field(store):
-    server.note(content="cache warmup runs nightly", domain="acme/x100",
+    server.note("fixture title", content="cache warmup runs nightly", domain="acme/x100",
                 review_after=NEXT_YEAR)
     assert "stale" not in server.pulse("acme/x100")["scope"]
 
@@ -130,9 +130,9 @@ def test_a_scope_with_nothing_overdue_does_not_carry_the_field(store):
 # --------------------------------------------------------------- curation
 
 def test_the_corpus_flags_what_is_due_and_what_to_check_it_against(store):
-    due = server.note(content="the export window is inclusive", review_after=YESTERDAY,
+    due = server.note("fixture title", content="the export window is inclusive", review_after=YESTERDAY,
                       source_ref="src/acme/x100/export.py")["uid"]
-    fine = server.note(content="row merge keeps the older id", review_after=NEXT_YEAR)["uid"]
+    fine = server.note("fixture title", content="row merge keeps the older id", review_after=NEXT_YEAR)["uid"]
     corpus = server.optimize_scan()
     by_uid = {m["uid"]: m for m in corpus["memories"]}
     assert by_uid[due]["due"] is True
@@ -142,7 +142,7 @@ def test_the_corpus_flags_what_is_due_and_what_to_check_it_against(store):
 
 
 def test_a_pass_can_push_the_date_out(store):
-    uid = server.note(content="the export window is inclusive",
+    uid = server.note("fixture title", content="the export window is inclusive",
                       review_after=YESTERDAY)["uid"]
     run = server.optimize_stage([{
         "kind": "review", "target_uid": uid, "payload": {"review_after": "180d"},
@@ -155,7 +155,7 @@ def test_a_pass_can_push_the_date_out(store):
 
 def test_the_staged_date_is_resolved_when_it_is_staged(store):
     """'180d' means a different day depending on when the panel is read."""
-    uid = server.note(content="x", review_after=YESTERDAY)["uid"]
+    uid = server.note("fixture title", content="x", review_after=YESTERDAY)["uid"]
     run = server.optimize_stage([{
         "kind": "review", "target_uid": uid, "payload": {"review_after": "180d"},
         "rationale": "r", "verified": "v"}])
@@ -164,7 +164,7 @@ def test_the_staged_date_is_resolved_when_it_is_staged(store):
 
 
 def test_an_unparseable_date_is_rejected_at_staging(store):
-    uid = server.note(content="x")["uid"]
+    uid = server.note("fixture title", content="x")["uid"]
     run = server.optimize_stage([{
         "kind": "review", "target_uid": uid, "payload": {"review_after": "whenever"},
         "rationale": "r"}])
@@ -193,14 +193,14 @@ def test_a_reference_can_be_added_to_a_memory_that_has_none(store):
     """`source_ref` is settable on its own, after the fact, with no content
     edit -- the case of a memory written before anyone knew where the code
     lived."""
-    uid = server.note(content="the export window is inclusive")["uid"]
+    uid = server.note("fixture title", content="the export window is inclusive")["uid"]
     res = server.edit_memory(uid, source_ref="src/acme/x100/export.py")
     assert res["ok"] and res["changed"] == ["source_ref"]
     assert server.get_memory(uid)["source_ref"] == "src/acme/x100/export.py"
 
 
 def test_repointing_leaves_the_body_alone_and_says_where_it_moved(store):
-    uid = server.note(content="the export window is inclusive",
+    uid = server.note("fixture title", content="the export window is inclusive",
                       source_ref="src/acme/x100/old.py")["uid"]
     server.edit_memory(uid, source_ref="src/acme/x100/export.py", note="the file moved")
     row = server.get_memory(uid)
@@ -211,7 +211,7 @@ def test_repointing_leaves_the_body_alone_and_says_where_it_moved(store):
 
 
 def test_the_body_and_the_reference_can_move_in_one_call(store):
-    uid = server.note(content="the export window is inclusive")["uid"]
+    uid = server.note("fixture title", content="the export window is inclusive")["uid"]
     res = server.edit_memory(uid, "the export window excludes the last day",
                              source_ref="src/acme/x100/export.py")
     assert res["changed"] == ["content", "source_ref"]
@@ -231,7 +231,7 @@ def test_repointing_at_the_same_reference_writes_no_audit_entry(conn):
 
 def test_the_dashboard_can_set_and_clear_the_date(client):
     uid = client.post("/api/memories",
-                      json={"type": "note", "content": "x"}).json()["uid"]
+                      json={"title": "fixture title", "type": "note", "content": "x"}).json()["uid"]
     client.post(f"/api/memories/{uid}/meta", json={"review_after": "90d",
                                                    "source_ref": "src/acme/x100/export.py"})
     body = client.get(f"/api/memories/{uid}").json()
@@ -243,6 +243,6 @@ def test_the_dashboard_can_set_and_clear_the_date(client):
 
 
 def test_the_dashboard_refuses_a_date_it_cannot_parse(client):
-    uid = client.post("/api/memories", json={"type": "note", "content": "x"}).json()["uid"]
+    uid = client.post("/api/memories", json={"title": "fixture title", "type": "note", "content": "x"}).json()["uid"]
     res = client.post(f"/api/memories/{uid}/meta", json={"review_after": "soon"})
     assert res.status_code == 400
