@@ -71,12 +71,18 @@ sub-skill. Read each source once; nothing below is read twice.
    **only the delta** (a full scan on the first pass, or on request). The
    fields that drive the pass:
    - `stats` — over the whole filtered corpus, independent of `limit`,
-     including `due_for_review`, `never_recalled` and **`untagged`**;
+     including `due_for_review`, `never_recalled`, **`untagged`** and
+     **`untitled`**;
    - **`untagged`** — memories whose `tags` are empty, or are nothing but the
      type every read already filters on. Retrieval is BM25 over content, tags
      and domain, so those rows answer only queries that quote their own
      wording. They are the work list for `retag`: give each the identifier,
      the symbol and the plain-language phrasing someone will type;
+   - **`untitled`** — memories with no title, listed everywhere by the opening
+     line of their body. They are the work list for `retitle`: name each one
+     by its subject, in the words someone would look for it by. The title
+     outweighs every other field in BM25, so this is retrieval work, not
+     cosmetics;
    - **`due: true`** per memory, with its `review_after` and `source_ref` — the
      store saying a writer dated this claim for a recheck and the date has
      passed. This is the decay work list; `recalls` is **not** (a low count
@@ -111,12 +117,13 @@ sub-skill. Read each source once; nothing below is read twice.
 
 ---
 
-## 1. The eleven suggestion kinds (exact payload)
+## 1. The twelve suggestion kinds (exact payload)
 
 | `kind` | `payload` | notes |
 |---|---|---|
 | `compact` / `reword` | `{new_content}` | two kinds, one payload. **Rejected on a `type=diagram`** (§3) |
 | `retag` | `{tags}` | csv; replaces the field (`cache,warmup,cold-start`) |
+| `retitle` | `{title}` | one line naming the memory; replaces the field. **Refused empty** — a writer cannot make an unnamed memory either — and **rejected on a `type=diagram`**, whose title generates part of its body |
 | `redomain` | `{domain}` | where the memory is **FILED** — one path, one parent chain. Path shape is normalized **at staging**, so the panel shows the path the memory will land in; the **casing** is applied through the store policy at apply |
 | `crosslist` | `{also: [path, …]}` | **replaces the whole set**; `[]` clears it |
 | `set_confidence` | `{confidence}` | `unverified` \| `confirmed` \| `contradicted` |
