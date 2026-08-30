@@ -13,10 +13,23 @@ everything else leans on them:
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 from starlette.testclient import TestClient
 
 from memai import admin, db
+
+# The dashboard's sources. admin.WEBUI_DIR is the build output, which is one
+# bundled file and answers none of the questions below.
+WEBUI_SRC = Path(__file__).resolve().parents[1] / "src" / "memai" / "webui"
+
+
+def _own_modules() -> list[Path]:
+    """Every module the dashboard is written in, without the copied-in
+    third-party code under public/ or the build output under dist/."""
+    skip = {"public", "dist"}
+    return [p for p in WEBUI_SRC.rglob("*.js") if not skip & set(p.parts)]
 
 
 @pytest.fixture
@@ -1272,19 +1285,21 @@ def test_api_diagram_list(client):
     assert client.get("/api/diagrams?domain=nope").json()["total"] == 0
 
 
-def test_every_module_is_served(client):
-    """The UI is a graph of ES modules: any 404 breaks the whole SPA.
+@pytest.mark.skipif(not (admin.WEBUI_DIR / "index.html").is_file(),
+                    reason="dashboard not built (npm run build)")
+def test_every_vendored_grammar_is_served(client):
+    """core/highlight.js builds these URLs at runtime, so no bundler checks
+    them: a grammar left out of the build is a 404 nobody sees until a code
+    block stays grey.
 
-    Walked rather than listed, so splitting a view into a new file cannot
-    pass this test by being forgotten in it.
+    Walked rather than listed, so adding a language cannot pass this test by
+    being forgotten in it.
     """
-    from pathlib import Path
-
-    root = Path(admin.WEBUI_DIR)
-    modules = sorted(p for p in root.rglob("*.js"))
-    assert len(modules) > 10, "expected the split-out core/ and views/ modules"
-    for path in modules:
-        rel = path.relative_to(root).as_posix()
+    vendor = WEBUI_SRC / "public" / "vendor" / "highlight"
+    files = [vendor / "core.min.js", *sorted((vendor / "languages").glob("*.min.js"))]
+    assert len(files) > 10, "expected the vendored grammars"
+    for path in files:
+        rel = path.relative_to(WEBUI_SRC / "public").as_posix()
         res = client.get(f"/static/{rel}")
         assert res.status_code == 200, rel
         assert "text/javascript" in res.headers["content-type"], rel
@@ -1298,15 +1313,13 @@ def test_every_referenced_icon_is_defined(client):
     object literal rather than running the module.
     """
     import re
-    from pathlib import Path
 
-    root = Path(admin.WEBUI_DIR)
-    icons_js = (root / "core" / "icons.js").read_text(encoding="utf-8")
+    icons_js = (WEBUI_SRC / "core" / "icons.js").read_text(encoding="utf-8")
     defined = set(re.findall(r"^ {2}'?([\w-]+)'?:\s*\{", icons_js, re.M))
     assert {"brand-seal", "overview", "graph", "search"} <= defined, defined
 
     used = set()
-    for path in [root / "index.html", *root.rglob("*.js")]:
+    for path in [WEBUI_SRC / "index.html", *_own_modules()]:
         src = path.read_text(encoding="utf-8")
         used |= set(re.findall(r"""data-icon=["']([\w-]+)["']""", src))
         used |= set(re.findall(r"""\bicon\(\s*['"]([\w-]+)['"]""", src))
@@ -1321,12 +1334,10 @@ def test_module_imports_resolve(client):
     that every relative import names a file that exists on disk.
     """
     import re
-    from pathlib import Path
 
-    root = Path(admin.WEBUI_DIR)
     pattern = re.compile(r"""from\s+['"](\.[^'"]+)['"]""")
     seen = 0
-    for path in root.rglob("*.js"):
+    for path in _own_modules():
         for spec in pattern.findall(path.read_text(encoding="utf-8")):
             target = (path.parent / spec).resolve()
             assert target.is_file(), f"{path.name} imports missing {spec}"
@@ -1337,9 +1348,8 @@ def test_module_imports_resolve(client):
 def test_locale_catalogs_stay_in_parity():
     """A key present in only one catalog silently falls back to English."""
     import json
-    from pathlib import Path
 
-    i18n = Path(admin.WEBUI_DIR) / "i18n"
+    i18n = WEBUI_SRC / "public" / "i18n"
     en = json.loads((i18n / "en.json").read_text(encoding="utf-8"))["strings"]
     pt = json.loads((i18n / "pt-BR.json").read_text(encoding="utf-8"))["strings"]
     assert set(en) == set(pt)
