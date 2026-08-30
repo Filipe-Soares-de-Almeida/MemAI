@@ -173,39 +173,38 @@ def test_a_much_read_memory_does_not_outrank_a_better_match(conn):
                              content="cache warmup runs nightly at midnight sharp")
     for _ in range(500):
         db.record_recall(conn, [popular])
-    order = [r["uid"] for r in db.search_hybrid(conn, "nightly midnight sharp")]
+    order = [r["uid"] for r in db.search_ranked(conn, "nightly midnight sharp")]
     assert order[0] == exact
 
 
 def test_recording_a_read_does_not_change_what_a_search_returns(conn):
     for i in range(6):
         db.insert_memory(conn, type="note", content=f"queue drain finding {i}")
-    before = [r["uid"] for r in db.search_hybrid(conn, "queue drain")]
+    before = [r["uid"] for r in db.search_ranked(conn, "queue drain")]
     for uid in before[3:]:
         db.record_recall(conn, [uid])
         db.record_recall(conn, [uid])
-    assert [r["uid"] for r in db.search_hybrid(conn, "queue drain")] == before
+    assert [r["uid"] for r in db.search_ranked(conn, "queue drain")] == before
 
 
 def test_no_ranking_query_reads_the_usage_table():
     """Cheaper than trusting the two tests above to catch every future
     wiring: the SQL that orders results must not name the table at all."""
     import inspect
-    for fn in (db.search_memories, db.search_semantic, db.search_hybrid,
+    for fn in (db.search_memories, db.search_ranked,
                db.list_by_domain, db.list_recent, db.domain_census):
         src = inspect.getsource(fn)
         assert "memory_usage" not in src and "recall_count" not in src, fn.__name__
 
 
-# ------------------------------------------------------- which arm paid off
+# ------------------------------------------------ what a search actually found
 
-def test_a_search_credits_the_arm_that_surfaced_the_row(store):
+def test_a_search_credits_the_index_that_surfaced_the_row(store):
     server.note(content="cache warmup runs nightly", tags="warmup")
     server.search("cache warmup")
     with db.connect() as conn:
-        arms = db.arm_effectiveness(conn)
-    assert arms["from_search"] == 1
-    assert arms["fts"] + arms["both"] == 1  # keyword-backed, no vectors in tests
+        share = db.search_share(conn)
+    assert share["from_search"] == 1 and share["fts"] == 1
 
 
 def test_a_read_with_no_search_behind_it_credits_nobody(store):
@@ -213,12 +212,12 @@ def test_a_read_with_no_search_behind_it_credits_nobody(store):
     server.get_memory(uid)
     server.pulse("acme/x100")
     with db.connect() as conn:
-        arms = db.arm_effectiveness(conn)
-    assert arms["reads"] == 2 and arms["from_search"] == 0
+        share = db.search_share(conn)
+    assert share["reads"] == 2 and share["from_search"] == 0
 
 
-def test_the_arm_tally_survives_a_store_that_predates_it(conn):
-    """The columns arrive by migration; a store written before them must
+def test_the_tally_survives_a_store_that_predates_it(conn):
+    """The column arrives by migration; a store written before it must
     still count reads rather than fail on the INSERT."""
     conn.execute("DROP TABLE memory_usage")
     conn.execute("CREATE TABLE memory_usage (memory_uid TEXT PRIMARY KEY "
@@ -226,5 +225,5 @@ def test_the_arm_tally_survives_a_store_that_predates_it(conn):
                  "last_recalled_at TEXT NOT NULL)")
     db._ensure_columns(conn)
     uid = db.insert_memory(conn, type="note", content="x")
-    assert db.record_recall(conn, [uid], sources={uid: "vec"}) == 1
-    assert db.arm_effectiveness(conn)["vec"] == 1
+    assert db.record_recall(conn, [uid], sources={uid: "fts"}) == 1
+    assert db.search_share(conn)["fts"] == 1

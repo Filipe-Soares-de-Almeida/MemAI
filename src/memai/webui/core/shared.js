@@ -304,12 +304,8 @@ export const cachedDomains = () => cache || [];
 /* ─── rail ───────────────────────────────────────────────────────────── */
 
 export function updateRail(o) {
-  const cov = o.db.vec_ready && o.totals.memories
-    ? Math.round(o.db.vec_rows / o.totals.memories * 100) : 0;
   $('#railHealth').innerHTML = `
     <div class="rh-row"><span>${t('rail.db')}</span><b>${fmtBytes(o.db.size)}</b></div>
-    <div class="rh-row"><span>${t('rail.vectors')}</span><b>${cov}%</b></div>
-    <div class="rh-meter"><div class="rh-fill" style="--v:${cov / 100}"></div></div>
     <div class="rh-row"><span>${t('rail.active')}</span><b>${fmtInt(o.totals.active)}</b></div>`;
   $('#dbBadge').textContent = t('badge.active', { n: fmtInt(o.totals.active) });
   $('#dbBadge').title = o.db.path;

@@ -26,9 +26,10 @@ always confirmed against a live /api/ping before it is believed. A stale
 entry degrades to "start one", not to "never start one again".
 
 Everything here is imported eagerly and on purpose: `socket` pulls in a C
-extension, and embed.py documents that loading one late -- once the stdio
-server's reader threads are up -- deadlocks on Windows. For the same
-reason this runs from server.main() before mcp.run(), not from a
+extension, and on Windows loading one late -- once the stdio server's
+reader threads are up -- deadlocks, because the DLL load blocks forever
+waiting on a loader lock the reader threads hold. For the same reason
+this runs from server.main() before mcp.run(), not from a
 lifespan hook: the SDK enters the lifespan before the session exists, so
 work there sits on the initialize path with the reader threads already
 running.

@@ -5,7 +5,7 @@ A Starlette + uvicorn app (both already shipped as dependencies of the
 db.py plus a static single-page UI (webui/). It is a *maintenance*
 surface: everything the MCP tools can do, plus operations that only
 make sense for a human curator -- bulk confidence triage, domain
-renames/merges, relation pruning, dedup review, FTS/vector rebuilds,
+renames/merges, relation pruning, dedup review, FTS rebuilds,
 VACUUM/backup, and an audit trail over the edits table.
 
 Handlers do blocking SQLite work directly inside async endpoints; this
@@ -47,7 +47,7 @@ from starlette.responses import FileResponse, JSONResponse, Response
 from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 
-from memai import __version__, autostart, db, embed, sections
+from memai import __version__, autostart, db, sections
 
 # Windows' registry-derived mimetypes map serves .js as text/plain, which
 # browsers refuse to execute as an ES module. Force the correct types.
@@ -91,8 +91,8 @@ def _snip(text: str, limit: int = SNIPPET_LIMIT) -> str:
 def _paths(d: dict) -> dict:
     """Swap the `also_domains` mirror for the `also` list a view reads.
 
-    That column exists for the FTS index and the embedder, which cannot
-    join (see db); db.parse_domains is its inverse. No payload carries the
+    That column exists for the FTS index, which cannot join (see db);
+    db.parse_domains is its inverse. No payload carries the
     mirror -- a view that filtered on it would be reading the copy instead
     of the rows in memory_domains.
     """
@@ -245,9 +245,6 @@ def overview(request, payload) -> dict:
         ]
         domains = db.list_domains(conn)
         recent = [_summary(r, 150) for r in db.list_recent(conn, limit=8)]
-        vec_ok = db._vec_ready(conn)
-        vec_rows = conn.execute("SELECT COUNT(*) FROM memories_vec").fetchone()[0] if vec_ok else 0
-        meta = dict(conn.execute("SELECT key, value FROM meta").fetchall())
     return {
         "totals": {
             "memories": total,
@@ -270,11 +267,6 @@ def overview(request, payload) -> dict:
             "path": str(dbfile),
             "size": _file_size(dbfile),
             "wal_size": _file_size(dbfile.with_name(dbfile.name + "-wal")),
-            "embed_model": meta.get("embed_model", ""),
-            "embed_dim": meta.get("embed_dim", ""),
-            "embed_available": embed.embedding_dim() is not None,
-            "vec_rows": vec_rows,
-            "vec_ready": vec_ok,
         },
     }
 
@@ -300,13 +292,13 @@ def list_memories(request, payload) -> dict:
     with db.connect() as conn:
         scope = _scope_echo(conn, domain)
         if q:
-            hits = db.search_hybrid(conn, q, domain=domain, type=type_, status=status,
+            hits = db.search_ranked(conn, q, domain=domain, type=type_, status=status,
                                     limit=200, subtree=subtree)
             if confidence:
                 hits = [h for h in hits if h["confidence"] == confidence]
             if session:
                 hits = [h for h in hits if h["session"] == session]
-            # A pasted uid names one row, and nothing in the hybrid index
+            # A pasted uid names one row, and nothing in the keyword index
             # matches on it: a uid appears in OTHER bodies as [[uid]], so the
             # search answers "what points at this" and never "this". Both are
             # worth having, so the named row is pinned above its referrers --
@@ -437,9 +429,8 @@ def edit_content(request, payload) -> dict:
 
 
 def edit_meta(request, payload) -> dict:
-    """Update domain/also/tags/session/type. Domain, also or tags changes
-    re-embed the row (the vector is computed over content+tags+domains) and
-    every change leaves an audit entry in edits, so curation stays traceable.
+    """Update domain/also/tags/session/type. Every change leaves an audit
+    entry in edits, so curation stays traceable.
 
     `also` is the set of extra domains the memory belongs to, replaced whole
     -- a list, or one string of comma-separated paths. It is applied AFTER a
@@ -491,11 +482,6 @@ def edit_meta(request, payload) -> dict:
             conn.execute(
                 "INSERT INTO edits (memory_uid, edited_at, prev_content, new_content, note) VALUES (?, ?, ?, ?, ?)",
                 (uid, db.now_iso(), row["content"], row["content"], note))
-            if "domain" in changed or "tags" in changed:
-                db._upsert_vector(
-                    conn, row["rowid_pk"], row["content"],
-                    changed.get("tags", row["tags"]), changed.get("domain", row["domain"]),
-                    row["also_domains"])
         # a domain change with no `also` in the request still re-runs the
         # link policy: the new path may already cover a membership the old
         # one needed (db.apply_link_policy)
@@ -973,8 +959,8 @@ def rename_domain(request, payload) -> dict:
 
     'to' is a full path, so this is also how a domain is nested: renaming
     'x100' to 'acme/x100' moves the bucket (and its subtree) under 'acme'.
-    Every affected row is re-embedded (domain is part of the embedding
-    source) and audited in edits -- see db.move_domain.
+    Every affected row is reindexed (domain is part of the index source)
+    and audited in edits -- see db.move_domain.
 
     Cross-listings into the renamed scope follow it (`also_affected`), so a
     memory that merely belongs to the subject is not left pointing at a path
@@ -1074,7 +1060,7 @@ def normalize_domains(request, payload) -> dict:
 
     dry_run (default true) returns the plan for preview -- what renames
     and what merges -- without touching data. dry_run=false applies it,
-    reusing the rename/merge path (UPDATE + audit + re-embed). Each entry
+    reusing the rename/merge path (UPDATE + audit). Each entry
     names one exact stored domain, so the moves are exact-path (a
     descendant appears as its own entry, or does not need moving at all).
     No-op when everything already conforms.
@@ -1174,23 +1160,13 @@ def health(request, payload) -> dict:
         fts_ok, fts_detail = _fts_check(conn)
         mem_count = conn.execute("SELECT COUNT(*) FROM memories").fetchone()[0]
         fts_count = conn.execute("SELECT COUNT(*) FROM memories_fts").fetchone()[0]
-        vec_ready = db._vec_ready(conn)
-        vec_count = missing_vec = orphan_vec = 0
-        if vec_ready:
-            vec_count = conn.execute("SELECT COUNT(*) FROM memories_vec").fetchone()[0]
-            missing_vec = conn.execute(
-                """SELECT COUNT(*) FROM memories
-                   WHERE rowid_pk NOT IN (SELECT rowid FROM memories_vec)""").fetchone()[0]
-            orphan_vec = conn.execute(
-                """SELECT COUNT(*) FROM memories_vec
-                   WHERE rowid NOT IN (SELECT rowid_pk FROM memories)""").fetchone()[0]
         orphan_rels = conn.execute(
             """SELECT COUNT(*) FROM relations
                WHERE from_uid NOT IN (SELECT uid FROM memories)
                   OR to_uid NOT IN (SELECT uid FROM memories)""").fetchone()[0]
         page_size = conn.execute("PRAGMA page_size").fetchone()[0]
         freelist = conn.execute("PRAGMA freelist_count").fetchone()[0]
-        meta = dict(conn.execute("SELECT key, value FROM meta").fetchall())
+        compact_reason = db.get_compact_reason(conn)
         render_retention = db.get_svg_retention(conn)
     backups = sorted(
         ({"name": p.name, "size": _file_size(p),
@@ -1203,12 +1179,6 @@ def health(request, payload) -> dict:
         "integrity": {"ok": integrity_ok,
                       "detail": "" if integrity_ok else "; ".join(quick)[:400]},
         "fts": {"ok": fts_ok, "detail": fts_detail, "rows": fts_count, "expected": mem_count},
-        "vectors": {
-            "ready": vec_ready, "rows": vec_count, "missing": missing_vec,
-            "orphans": orphan_vec, "expected": mem_count,
-            "model": meta.get("embed_model", ""), "dim": meta.get("embed_dim", ""),
-            "model_available": embed.embedding_dim() is not None,
-        },
         "relations": {"orphans": orphan_rels},
         # generated SVGs are a cache, so what matters is what they cost and
         # whether the retention rule is actually clearing them
@@ -1219,6 +1189,9 @@ def health(request, payload) -> dict:
             "size": _file_size(dbfile),
             "wal_size": _file_size(dbfile.with_name(dbfile.name + "-wal")),
             "reclaimable": page_size * freelist,
+            # what freed those pages, so the disk row can say what the space
+            # is instead of only how much of it there is
+            "compact_reason": compact_reason,
         },
         "backups": backups[:12],
     }
@@ -1231,25 +1204,6 @@ def fts_rebuild(request, payload) -> dict:
     return {"ok": True, "rows": count}
 
 
-def reembed(request, payload) -> dict:
-    """mode=missing backfills absent vectors; mode=all drops and rebuilds
-    every vector (useful after content surgery or a model change)."""
-    mode = payload.get("mode", "missing")
-    if mode not in ("missing", "all"):
-        raise ValueError("mode must be missing|all")
-    if embed.embedding_dim() is None:
-        raise ValueError("embedding model unavailable in this process")
-    with db.connect() as conn:
-        if not db._vec_ready(conn):
-            raise ValueError("sqlite-vec extension unavailable")
-        if mode == "all":
-            conn.execute("DELETE FROM memories_vec")
-        before = conn.execute("SELECT COUNT(*) FROM memories_vec").fetchone()[0]
-        db._ensure_vec(conn)
-        after = conn.execute("SELECT COUNT(*) FROM memories_vec").fetchone()[0]
-    return {"ok": True, "embedded": after - before, "total": after}
-
-
 def clean_orphans(request, payload) -> dict:
     with db.connect() as conn:
         cur = conn.execute(
@@ -1257,11 +1211,6 @@ def clean_orphans(request, payload) -> dict:
                WHERE from_uid NOT IN (SELECT uid FROM memories)
                   OR to_uid NOT IN (SELECT uid FROM memories)""")
         rels = cur.rowcount
-        vecs = 0
-        if db._vec_ready(conn):
-            cur = conn.execute(
-                "DELETE FROM memories_vec WHERE rowid NOT IN (SELECT rowid_pk FROM memories)")
-            vecs = cur.rowcount
         cur = conn.execute(
             """DELETE FROM optimization_suggestions
                WHERE status = 'pending'
@@ -1289,7 +1238,7 @@ def clean_orphans(request, payload) -> dict:
                         SELECT node_key FROM diagram_nodes
                         WHERE diagram_nodes.memory_uid = diagram_jumps.to_uid))""")
         jumps = cur.rowcount
-    return {"ok": True, "relations_removed": rels, "vectors_removed": vecs,
+    return {"ok": True, "relations_removed": rels,
             "suggestions_removed": sugs, "node_links_removed": links,
             "jumps_removed": jumps}
 
@@ -1320,6 +1269,8 @@ def vacuum(request, payload) -> dict:
     finally:
         conn.close()
     after = _file_size(dbfile) + _file_size(dbfile.with_name(dbfile.name + "-wal"))
+    with db.connect() as conn:
+        db.clear_compact_reason(conn)
     return {"ok": True, "before": before, "after": after}
 
 
@@ -1445,14 +1396,14 @@ def lookup(request, payload) -> dict:
             # named the row, there is nothing left to narrow.
             exact = db.get_memory(conn, q)
             rows = [dict(exact)] if exact is not None else \
-                db.search_hybrid(conn, q, type=type_, domain=domain, tag=tag,
+                db.search_ranked(conn, q, type=type_, domain=domain, tag=tag,
                                  status=status, limit=fetch)
     rows = [r for r in rows if r["uid"] != exclude]
     items = [{
         "uid": r["uid"], "type": r["type"], "domain": r["domain"],
         "status": r["status"], "snippet": _snip(r["content"], 110),
         "match_source": r.get("match_source", ""),
-        "fts_rank": r.get("fts_rank"), "vec_distance": r.get("vec_distance"),
+        "fts_rank": r.get("fts_rank"),
     } for r in rows[:limit]]
     return {"items": items, "has_more": len(rows) > limit}
 
@@ -1787,7 +1738,6 @@ routes = [
     Route("/api/domains/delete", api(delete_domain), methods=["POST"]),
     Route("/api/maintenance/health", api(health)),
     Route("/api/maintenance/fts-rebuild", api(fts_rebuild), methods=["POST"]),
-    Route("/api/maintenance/reembed", api(reembed), methods=["POST"]),
     Route("/api/maintenance/clean-orphans", api(clean_orphans), methods=["POST"]),
     Route("/api/maintenance/prune-renders", api(prune_renders), methods=["POST"]),
     Route("/api/maintenance/vacuum", api(vacuum), methods=["POST"]),

@@ -86,8 +86,8 @@ else — the writer rejects any other value.
 ## 3. Tools and hygiene
 
 - **`dedup_scan(domain, type, threshold=0.6, limit=20)`** — candidate pairs,
-  each carrying its `method` (semantic over the embedded store when vectors
-  are available, lexical overlap otherwise) and its `ratio`. It **never
+  each carrying its `method` (`lexical`, overlap over near-identical text)
+  and its `ratio`. It **never
   merges**; it is the starting point. A very high ratio over the same durable
   content is not a link, it is a **merge** for [[memai-distill]]. `domain`
   scans the path **and its subtree**, which is where near-duplicates collect

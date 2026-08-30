@@ -152,8 +152,8 @@ def test_search_and_recent_share_the_scope_arm(conn):
 
 
 def test_the_cross_listing_is_indexed_as_text(conn):
-    """FTS and the embedder read one field (memories.also_domains), which is
-    why a query naming the subject finds a memory filed elsewhere."""
+    """FTS reads one field (memories.also_domains), which is why a query
+    naming the subject finds a memory filed elsewhere."""
     _crossing(conn)
     assert {r["content"] for r in db.search_memories(conn, "x900")} == {
         "queue drain step", "token refresh step"}
