@@ -4,10 +4,9 @@ Tools for long-term agent memory: note/checkpoint/anti_pattern/
 reasoning/handoff/diagram to write, search/recall/list_by_domain/
 list_recent/timeline/list_domains/pulse to read, plus edit history, a relations
 graph, a dedup-candidate scanner, confidence/status tracking, and help()
-for self-documentation straight from these docstrings. Retrieval is
-hybrid FTS5 (BM25) + local model2vec vectors in sqlite-vec, all in one
-ACID SQLite file -- both retrievers only narrow candidates, the calling
-agent judges relevance.
+for self-documentation straight from these docstrings. Retrieval is FTS5
+(BM25) keyword search over one ACID SQLite file -- it only narrows
+candidates, the calling agent judges relevance.
 
 Writer tool names match the `type` value they store (note stores
 type='note', reasoning stores type='reasoning', ...), so what an agent
@@ -216,8 +215,8 @@ def _row_to_dict(row) -> dict:
     """A memory row as a payload dict, with its cross-listings as `also`.
 
     `also_domains` never leaves here: it is the one-field mirror the FTS
-    index and the embedder read (see db), and db.parse_domains is its
-    inverse. A caller gets the paths as a list or not at all.
+    index reads (see db), and db.parse_domains is its inverse. A caller
+    gets the paths as a list or not at all.
     """
     if row is None:
         return {}
@@ -307,10 +306,10 @@ def _read(conn, rows):
     dashboard deliberately does not.
 
     A row that came out of a search carries `match_source`, and that goes
-    with the count: it is what lets the store say later which retriever was
-    worth having, over real queries, without anyone reading transcripts.
-    Reads with no search behind them (a warm-up, a list, get_memory) have
-    no arm to credit and are counted plainly.
+    with the count: it is what lets the store say later how much of what it
+    holds is ever found rather than merely listed, over real queries,
+    without anyone reading transcripts. Reads with no search behind them (a
+    warm-up, a list, get_memory) are counted plainly.
 
     What this is NOT for is ranking. A memory read twice a year is about a
     rarer subject, not a worse one, and boosting what is already popular
@@ -412,9 +411,9 @@ def note(content: str, domain: str = "", also: str = "", tags: str = "", session
     those paths returns it. A path that `domain` already sits under is
     dropped as redundant -- the result echoes what was stored.
 
-    tags: comma-separated keywords/synonyms -- write generously; tags
-    feed both the keyword index and the embedding, so they make the
-    memory findable even when the vector side is unavailable.
+    tags: comma-separated keywords/synonyms -- write generously; tags are
+    indexed beside the content, so a memory is findable by the words its
+    body never happened to use.
 
     review_after: when this stops being safe to trust unchecked, as a date
     ('2026-11-01') or a span from today ('90d'). pulse() counts what is
@@ -847,12 +846,12 @@ def _write_render(conn, uid: str, data: dict, format: str) -> dict:
 
 @tool("core")
 def search(query: str, domain: str = "", type: str = "", limit: int = 10) -> dict:
-    """Hybrid search over memory content+tags+domain: BM25 keywords + local-model vectors.
+    """Keyword search over memory content+tags+domain: FTS5 BM25.
 
-    Each result is annotated with match_source ("fts" | "vec" | "both"),
-    fts_rank (bm25, lower = better) and/or vec_distance (cosine, lower =
-    closer). Both retrievers only widen the candidate set -- judge the
-    returned candidates yourself.
+    Each result is annotated with match_source ("fts", or "uid" for the row
+    a pasted identifier names) and fts_rank (bm25, lower = better). The
+    search only widens the candidate set -- judge the returned candidates
+    yourself.
 
     SPEND TERMS FREELY. Every space-separated term is asked for separately
     and a row matching more of them ranks higher, so piling on synonyms,
@@ -862,7 +861,6 @@ def search(query: str, domain: str = "", type: str = "", limit: int = 10) -> dic
     near zero and cost nothing, so there is nothing to strip.
 
     Only active memories by default.
-    Falls back to keyword-only if the embedding model is unavailable.
 
     Returns {"results": [...], "est_tokens": N}. Content is
     snippet-truncated per result -- call get_memory(uid) for the full
@@ -879,7 +877,7 @@ def search(query: str, domain: str = "", type: str = "", limit: int = 10) -> dic
     worth a slot, and it is what stops it being written again.
 
     A diagram ranks like any other memory: it comes back when it matches
-    the query, in the position its scores earn. Nothing lifts a type to the
+    the query, in the position its score earns. Nothing lifts a type to the
     top, so a flow in the results is a flow this query actually hit -- and
     when one does show up it is worth opening first, because it states a
     whole routine the surrounding notes only annotate.
@@ -897,7 +895,7 @@ def search(query: str, domain: str = "", type: str = "", limit: int = 10) -> dic
     `domain`, which is where to read what the filter actually covered.
     """
     with db.connect() as conn:
-        results = _read(conn, db.search_hybrid(conn, query, domain=domain, type=type,
+        results = _read(conn, db.search_ranked(conn, query, domain=domain, type=type,
                                               limit=limit, collapse=True))
     return _listing(results)
 
@@ -906,9 +904,9 @@ def search(query: str, domain: str = "", type: str = "", limit: int = 10) -> dic
 def recall(query: str, domain: str = "", limit: int = 10) -> dict:
     """Recall long-term knowledge saved with note() (type='note').
 
-    The dedicated verb for "bring back what I noted": a hybrid search
-    (BM25 + vectors) scoped to type='note', ranked by relevance -- which
-    is what you want for timeless facts/rules/decisions. note() has no
+    The dedicated verb for "bring back what I noted": a BM25 search scoped
+    to type='note', ranked by relevance -- which is what you want for
+    timeless facts/rules/decisions. note() has no
     recency warm-up hook the way checkpoints have pulse(); this (or
     search(type='note')) is how notes come back.
 
@@ -922,7 +920,7 @@ def recall(query: str, domain: str = "", limit: int = 10) -> dict:
     `succeeded_by` / `collapsed` annotations search() explains.
     """
     with db.connect() as conn:
-        results = _read(conn, db.search_hybrid(conn, query, domain=domain, type=TYPE_NOTE,
+        results = _read(conn, db.search_ranked(conn, query, domain=domain, type=TYPE_NOTE,
                                               limit=limit, collapse=True))
     return _listing(results)
 
@@ -991,8 +989,8 @@ def timeline(
     same stretch of work.
 
     One of uid or query is required. uid names the anchor outright; query
-    searches for it and takes the top hit (the same hybrid search search()
-    runs, scoped by domain/type). Give both and uid wins. The response
+    searches for it and takes the top hit (the same search search() runs,
+    scoped by domain/type). Give both and uid wins. The response
     reports `anchored_by` ('uid' or 'query') and the whole anchor record,
     so which record the timeline is built around is never a guess.
 
@@ -1023,7 +1021,7 @@ def timeline(
                 return _errors([f"no memory {uid}"])
         else:
             anchored_by = "query"
-            hits = db.search_hybrid(conn, query, domain=domain, type=type, limit=1)
+            hits = db.search_ranked(conn, query, domain=domain, type=type, limit=1)
             if not hits:
                 return _errors([f"no memory matches query: {query}"])
             # Re-read as a record: a search hit carries retrieval annotations
@@ -1388,8 +1386,8 @@ def set_confidence(uid: str, confidence: str) -> dict:
 def forget(uid: str, reason: str = "", superseded_by: str = "") -> dict:
     """Archive a memory (soft delete -- content is kept, just excluded from default search/list).
 
-    A `reason` is recorded as a status-change audit entry (without touching
-    the content or recomputing its embedding).
+    A `reason` is recorded as a status-change audit entry, without touching
+    the content.
     """
     with db.connect() as conn:
         ok = db.set_status(
@@ -1423,9 +1421,10 @@ def purge_memory(uid: str, confirm_phrase: str) -> dict:
 def dedup_scan(domain: str = "", type: str = "", threshold: float = 0.6, limit: int = 20) -> list[dict]:
     """Surface likely-duplicate/contradictory memory pairs.
 
-    Semantic (cosine over the embedded store) when vectors are available,
-    lexical overlap otherwise -- each pair carries its `method`. Same-
-    domain/session checkpoint pairs are excluded (timelines, not dups)
+    Lexical overlap over near-identical text -- each pair carries its
+    `method`. Two takes on one subject in different words do not surface
+    here. Same-domain/session checkpoint pairs are excluded (timelines, not
+    dups)
     and checkpoint pairs rank below durable-type pairs. Not an automatic
     merge -- returns candidate pairs + similarity score for the agent to
     review and decide (link_memories / edit_memory / forget as
@@ -1832,12 +1831,11 @@ assert set(_LONG_DOC) <= set(_TOOLS), f"_LONG_DOC names no such tool: {set(_LONG
 
 
 def main() -> None:
-    # Before mcp.run(), deliberately. This is the last moment on the main
-    # thread with no event loop and no stdio reader threads running --
-    # the state embed.py requires for anything that loads a C extension,
-    # and the only place a few tens of milliseconds cost nothing. A
-    # lifespan hook would look tidier and be worse: the SDK enters it
-    # before the session exists, putting this on the initialize path.
+    # Before mcp.run(), deliberately: the last moment on the main thread
+    # with no event loop and no stdio reader threads running, and the only
+    # place a few tens of milliseconds cost nothing. A lifespan hook would
+    # look tidier and be worse: the SDK enters it before the session
+    # exists, putting this on the initialize path.
     # Does nothing unless MEMAI_ADMIN_AUTOSTART says otherwise, and
     # cannot raise -- see autostart.ensure_admin_running.
     autostart.ensure_admin_running()

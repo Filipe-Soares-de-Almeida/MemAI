@@ -350,7 +350,7 @@ function renderRows(items, scope = '') {
     const away = Boolean(scope) && !inDomainPath(m.domain, scope)
       && (m.also || []).some(p => inDomainPath(p, scope));
     const match = m.match_source
-      ? `<span class="match-badge" title="${m.fts_rank !== undefined ? `bm25 ${Number(m.fts_rank).toFixed(2)} ` : ''}${m.vec_distance !== undefined ? `cos ${Number(m.vec_distance).toFixed(3)}` : ''}">${esc(m.match_source)}</span>` : '';
+      ? `<span class="match-badge" title="${m.fts_rank !== undefined ? `bm25 ${Number(m.fts_rank).toFixed(2)}` : ''}">${esc(m.match_source)}</span>` : '';
     /* The row keeps its click for the mouse, but the thing that OPENS the
        record is a real button around the snippet -- the row itself cannot be
        one, because it already contains a checkbox and a copy button and a

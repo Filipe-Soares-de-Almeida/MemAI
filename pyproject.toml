@@ -5,14 +5,11 @@ build-backend = "hatchling.build"
 [project]
 name = "memai"
 version = "0.1.0"
-description = "Long-term memory MCP server for agentic coding with Claude (SQLite + FTS5 + sqlite-vec hybrid retrieval, local model2vec embeddings)"
+description = "Long-term memory MCP server for agentic coding with Claude (SQLite + FTS5 keyword retrieval)"
 license = "MIT"
 requires-python = ">=3.12"
 dependencies = [
     "mcp>=1.28,<2",
-    "sqlite-vec>=0.1.9,<0.2",
-    "model2vec>=0.8,<0.9",
-    "numpy>=2.5,<3",
     "starlette>=1.3,<2",
     "uvicorn>=0.50,<0.51",
 ]
@@ -28,7 +25,6 @@ memai-store = "memai.portable:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/memai"]
-artifacts = ["src/memai/models/**"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

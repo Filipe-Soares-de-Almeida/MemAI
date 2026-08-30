@@ -163,7 +163,7 @@ def test_usage_counts_come_along(source, target):
 
 
 def test_the_restored_store_is_searchable(source, target):
-    """FTS and the vectors are derived -- an import has to rebuild them."""
+    """The FTS index is derived -- an import has to rebuild it."""
     ids = _populate(source)
     _roundtrip(source, target)
     assert [r["uid"] for r in db.search_memories(target, "warmup first request")][:1] == [

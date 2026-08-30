@@ -14,9 +14,9 @@ Two formats, for the two jobs:
   md     one document, grouped by domain. Export only, for reading and
          grepping.
 
-What is deliberately NOT here: the edit history and the FTS/vector indexes.
-History is what `VACUUM INTO` is for, and both indexes are derived -- an
-import rebuilds them from the content it writes.
+What is deliberately NOT here: the edit history and the FTS index. History
+is what `VACUUM INTO` is for, and the index is derived -- an import rebuilds
+it from the content it writes.
 """
 
 from __future__ import annotations
