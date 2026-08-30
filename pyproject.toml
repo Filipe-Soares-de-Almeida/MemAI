@@ -25,6 +25,9 @@ memai-store = "memai.portable:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/memai"]
+# The dashboard build is generated and git-ignored, so hatchling leaves it out
+# unless it is named here.
+artifacts = ["src/memai/webui/dist/**"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

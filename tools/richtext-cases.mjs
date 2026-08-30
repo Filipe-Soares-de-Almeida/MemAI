@@ -3,19 +3,23 @@
    Usage: node tools/richtext-cases.mjs
 
    The renderer reaches core/dom.js for esc(), which reaches the i18n
-   runtime, which fetches its catalog at module load. Node's fetch has no
-   file: scheme, so one is installed here rather than the module being
-   restructured to suit a test: what runs below is the module the browser
-   loads, import chain and all. */
+   runtime, which fetches its catalog from /static/i18n at module load.
+   Nothing serves that path here, so a fetch reading the catalog off disk is
+   installed rather than the module being restructured to suit a test: what
+   runs below is the module the browser loads, import chain and all. */
 
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 
+const CATALOGS = '/static/i18n/';
+const CATALOG_DIR = new URL('../src/memai/webui/public/i18n/', import.meta.url);
+
 const realFetch = globalThis.fetch;
 globalThis.fetch = async (input, init) => {
-  const url = input instanceof URL ? input : new URL(String(input));
-  if (url.protocol !== 'file:') return realFetch(input, init);
-  const body = await readFile(fileURLToPath(url), 'utf8');
+  const path = String(input);
+  if (!path.startsWith(CATALOGS)) return realFetch(input, init);
+  const file = new URL(path.slice(CATALOGS.length), CATALOG_DIR);
+  const body = await readFile(fileURLToPath(file), 'utf8');
   return { ok: true, status: 200, json: async () => JSON.parse(body) };
 };
 globalThis.localStorage = { getItem: () => null, setItem: () => {} };

@@ -32,6 +32,8 @@ the hosts.
 
 - Python 3.12 or newer on PATH (`py -3 --version` on Windows, `python3 --version`
   elsewhere)
+- Node 20.19 or newer on PATH (`node --version`) — the admin dashboard is a
+  Vite build, and `memai.admin` serves that build
 - git
 
 ## 2. Clone and install
@@ -41,13 +43,22 @@ git clone https://github.com/Filipe-Soares-de-Almeida/MemAI.git
 cd MemAI
 ```
 
-On Windows, `install.bat` creates `.venv` and installs the package editable
-with its dev extras. Everywhere else:
+On Windows, `install.bat` creates `.venv`, installs the package editable with
+its dev extras, and builds the dashboard. Everywhere else:
 
 ```sh
 python -m venv .venv
 .venv/bin/pip install -e ".[dev]"
+npm ci
+npm run build
 ```
+
+`npm run build` writes `src/memai/webui/dist/`, which is what the dashboard
+serves. Without it every page answers 503 naming the command to run.
+
+To iterate on the dashboard, `npm run dev` serves it with hot reload and proxies
+`/api` and `/fonts.css` to a `memai-admin` on `MEMAI_ADMIN_PORT` (8888 by
+default), which keeps the browser same-origin with the API.
 
 The checkout is the install. Do not also install MemAI into the system or user
 site-packages: two copies of the same package on one machine make it impossible

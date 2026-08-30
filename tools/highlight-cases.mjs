@@ -8,7 +8,7 @@
 import { readdir } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 
-const HERE = new URL('../src/memai/webui/vendor/highlight/', import.meta.url);
+const HERE = new URL('../src/memai/webui/public/vendor/highlight/', import.meta.url);
 const hljs = (await import(new URL('core.min.js', HERE))).default;
 hljs.configure({ ignoreUnescapedHTML: true });
 
