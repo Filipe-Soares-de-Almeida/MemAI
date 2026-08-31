@@ -131,7 +131,7 @@ sub-skill. Read each source once; nothing below is read twice.
 | `archive` | `{reason}` | soft and reversible — never deletes |
 | `link` | `{from_uid, to_uid, relation_type, note?}` | `target_uid` derives from `from_uid` — omit it |
 | `merge` | `{keep_uid, drop_uid, note?}` | links `supersedes` and archives `drop_uid`; `target_uid` derives from `drop_uid` — omit it |
-| `distill` | `{source_uids: […], new_type, new_content, tags?, domain?}` | **n-ary**; `new_type` ∈ `note` \| `reasoning` \| `anti_pattern`; creates the target, links `supersedes` from it to every source and archives them. **Omit `target_uid`** — there is nothing to point at yet |
+| `distill` | `{source_uids: […], new_type, new_content, title, tags?, domain?}` | **n-ary**; `new_type` ∈ `note` \| `reasoning` \| `anti_pattern`; creates the target, links `supersedes` from it to every source and archives them. `title` is **required** — this is the one kind that authors a memory, and nothing names it later. **Omit `target_uid`** — there is nothing to point at yet |
 
 - **`verified` is mandatory on the destructive kinds:** `archive`,
   `set_confidence=contradicted`, `merge`, `distill`. Staging refuses them

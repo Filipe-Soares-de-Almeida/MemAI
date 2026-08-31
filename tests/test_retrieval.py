@@ -252,3 +252,44 @@ def test_more_terms_widen_the_net(conn):
     b = db.insert_memory(conn, type="note", content="an index rebuild drops triggers")
     assert {r["uid"] for r in db.search_memories(conn, "cache")} == {a}
     assert {r["uid"] for r in db.search_memories(conn, "cache rebuild triggers")} == {a, b}
+
+
+def test_the_hint_names_a_call_that_works(store):
+    """TAGS_HINT tells an untagged writer to fix it with edit_memory(tags=...).
+
+    The hint is the only place that call is advertised, so a signature
+    without it would send every untagged write at a tool that refuses.
+    """
+    assert "edit_memory(uid, tags='...')" in server.TAGS_HINT
+    uid = server.note("The drain retry window", content="the drain retries twice")["uid"]
+    assert server.edit_memory(uid, tags="queue, drain, retry") == {
+        "ok": True, "changed": ["tags"]}
+    with db.connect() as conn:
+        assert db.get_memory(conn, uid)["tags"] == "queue, drain, retry"
+
+
+def test_tags_added_after_the_write_are_searchable(store):
+    """The tags column is indexed, so the update has to reindex the row."""
+    uid = server.note("The drain retry window", content="it gives up on the third pass")["uid"]
+    with db.connect() as conn:
+        assert db.search_memories(conn, "backoff") == []
+    server.edit_memory(uid, tags="backoff, retry")
+    with db.connect() as conn:
+        assert [r["uid"] for r in db.search_memories(conn, "backoff")] == [uid]
+
+
+def test_editing_tags_replaces_the_set(store):
+    uid = server.note("The drain retry window", content="the drain retries twice",
+                      tags="queue, drain")["uid"]
+    server.edit_memory(uid, tags="backoff")
+    with db.connect() as conn:
+        assert db.get_memory(conn, uid)["tags"] == "backoff"
+
+
+def test_empty_tags_leave_the_stored_set_alone(store):
+    """'' is 'do not touch', like source_ref: clearing is a dashboard edit."""
+    uid = server.note("The drain retry window", content="the drain retries twice",
+                      tags="queue, drain")["uid"]
+    assert server.edit_memory(uid, tags="   ")["ok"] is False
+    with db.connect() as conn:
+        assert db.get_memory(conn, uid)["tags"] == "queue, drain"

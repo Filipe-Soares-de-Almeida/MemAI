@@ -15,8 +15,8 @@ import { t } from '../i18n.js';
 
 /* the kinds the before/after pair below knows how to render. Anything else
    is shown as its payload rather than as two empty boxes -- see optRaw. */
-const DIFF_KINDS = new Set(['compact', 'reword', 'retag', 'redomain', 'crosslist',
-                            'set_confidence', 'archive']);
+const DIFF_KINDS = new Set(['compact', 'reword', 'retag', 'retitle', 'redomain',
+                            'crosslist', 'set_confidence', 'review', 'archive']);
 
 /* The kinds whose "before" IS the memory's own content. For these, the
    memory-under-review preview and the Before pane print the identical
@@ -37,6 +37,7 @@ function optBefore(s) {
        dash where a memory has none, like every other empty field here */
     case 'crosslist': return esc((tg.also || []).join(', ') || '—');
     case 'set_confidence': return esc(tg.confidence || '—');
+    case 'review': return esc(tg.review_after || '—');
     case 'archive': return esc(tg.status || 'active');
     default: return '';
   }
@@ -51,6 +52,8 @@ function optAfter(s) {
     case 'redomain': return esc(p.domain || '—');
     case 'crosslist': return esc((p.also || []).join(', ') || '—');
     case 'set_confidence': return esc(p.confidence || '—');
+    /* '' clears the date, and the panel has to show that as the absence it is */
+    case 'review': return esc(p.review_after || '—');
     case 'archive': return 'archived' + (p.reason ? ` · ${esc(p.reason)}` : '');
     default: return '';
   }
@@ -86,6 +89,7 @@ function optDistillBody(s) {
     ${srcs}
     <div class="opt-arrow" title="${t('op.relType.title')}">supersedes${icon('arrow-right')}</div>
     <span class="opt-label">${t('op.distill.new')}${p.new_type ? ` · ${esc(p.new_type)}` : ''}${p.domain ? ` · ${esc(p.domain)}` : ''}</span>
+    ${p.title ? `<div class="snippet"><strong>${esc(p.title)}</strong></div>` : ''}
     <div class="snippet">${esc(p.new_content || '')}</div>
   </div>`;
 }

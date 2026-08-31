@@ -459,6 +459,10 @@ def edit_meta(request, payload) -> dict:
         raise ValueError("type cannot be empty")
     if "title" in updates and not updates["title"]:
         raise ValueError("title cannot be empty")
+    if "title" in updates:
+        error = db.title_error(updates["title"])
+        if error:
+            raise ValueError(error)
     if "type" in updates and updates["type"] not in KNOWN_TYPES:
         raise ValueError(f"type must be one of {KNOWN_TYPES}")
     with db.connect() as conn:
@@ -1454,6 +1458,7 @@ def _suggestion_json(conn, row) -> dict:
             trow = db.get_memory(conn, row["target_uid"])
             target["tags"] = trow["tags"]
             target["title"] = trow["title"]
+            target["review_after"] = trow["review_after"]
             # a crosslist suggestion replaces the whole set, so the Before
             # pane needs the whole set, not only the filed path
             target["also"] = db.get_domain_links(conn, row["target_uid"])

@@ -432,7 +432,8 @@ def test_a_distill_into_a_sectioned_type_is_held_to_the_shape(conn):
     result = db.stage_optimization(conn, "distill it", [
         {"kind": "distill", "verified": "checked against the worker log",
          "payload": {"source_uids": [src], "new_type": "anti_pattern",
-                     "new_content": "widening the batch does not help"}}])
+                     "new_content": "widening the batch does not help",
+                     "title": "Widening the batch does not help"}}])
     assert result["staged"] == 0
     assert "TEMPTATION, WHY WRONG, INSTEAD" in result["errors"][0]["error"]
 
