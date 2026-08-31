@@ -418,7 +418,9 @@ def note(title: str, content: str, domain: str = "", also: str = "", tags: str =
     title: one line naming what this memory is about, in the words someone
     would look for it by. It is what a list shows instead of the opening of
     the body, and it outweighs every other field in search, so a title that
-    repeats the type ("note about the parser") names nothing.
+    repeats the type ("note about the parser") names nothing. At most 120
+    characters, and a name that needs more than that is summarizing the
+    body instead of naming it.
 
     domain: the subject this belongs to, as a path from the outermost
     scope in ('acme/x100/p200'). File it as deep as the fact is specific
@@ -482,7 +484,9 @@ def checkpoint(
     title: one line naming what this memory is about, in the words someone
     would look for it by. It is what a list shows instead of the opening of
     the body, and it outweighs every other field in search, so a title that
-    repeats the type ("note about the parser") names nothing.
+    repeats the type ("note about the parser") names nothing. At most 120
+    characters, and a name that needs more than that is summarizing the
+    body instead of naming it.
 
     also: other domain paths this belongs to, comma-separated -- the
     cross-cutting subjects beside the one it is filed under. See note().
@@ -518,7 +522,9 @@ def anti_pattern(
     title: one line naming what this memory is about, in the words someone
     would look for it by. It is what a list shows instead of the opening of
     the body, and it outweighs every other field in search, so a title that
-    repeats the type ("note about the parser") names nothing.
+    repeats the type ("note about the parser") names nothing. At most 120
+    characters, and a name that needs more than that is summarizing the
+    body instead of naming it.
 
     `tags` carries the synonyms the body never uses: retrieval is BM25 over
     content and tags, so a memory with none is reachable only by quoting
@@ -560,7 +566,9 @@ def reasoning(
     title: one line naming what this memory is about, in the words someone
     would look for it by. It is what a list shows instead of the opening of
     the body, and it outweighs every other field in search, so a title that
-    repeats the type ("note about the parser") names nothing.
+    repeats the type ("note about the parser") names nothing. At most 120
+    characters, and a name that needs more than that is summarizing the
+    body instead of naming it.
 
     hypothesis: what you believed going in, as a claim that could be wrong.
     reasoning: how you tested it -- what you read, ran or compared.
@@ -598,7 +606,9 @@ def handoff(title: str, content: str, domain: str = "", also: str = "",
     title: one line naming what this memory is about, in the words someone
     would look for it by. It is what a list shows instead of the opening of
     the body, and it outweighs every other field in search, so a title that
-    repeats the type ("note about the parser") names nothing.
+    repeats the type ("note about the parser") names nothing. At most 120
+    characters, and a name that needs more than that is summarizing the
+    body instead of naming it.
 
     `tags` carries the synonyms the body never uses: retrieval is BM25 over
     content and tags, so a memory with none is reachable only by quoting
@@ -1364,7 +1374,7 @@ def get_memory(uid: str) -> dict:
 
 @tool("core")
 def edit_memory(uid: str, new_content: str = "", note: str = "", mode: str = "replace",
-                source_ref: str = "", title: str = "") -> dict:
+                source_ref: str = "", title: str = "", tags: str = "") -> dict:
     """Correct a memory's content or its source reference, keeping the previous version.
 
     Corrections are common in append-only memory stores that only
@@ -1386,10 +1396,16 @@ def edit_memory(uid: str, new_content: str = "", note: str = "", mode: str = "re
     than a silent no-op.
 
     title renames the memory: the one line a list shows it by, and the
-    field weighing most in search. Settable on its own, like source_ref. A
-    diagram is renamed through its graph instead -- its title is part of
-    what generates the body, so a rename here would be overwritten by the
-    next structural change.
+    field weighing most in search, at most 120 characters. Settable on its
+    own, like source_ref. A diagram is renamed through its graph instead --
+    its title is part of what generates the body, so a rename here would be
+    overwritten by the next structural change.
+
+    tags REPLACES the tag set, comma-separated: pass the whole set that
+    should survive, not the one being added. Settable on its own, and
+    indexed, so this is how an untagged memory becomes findable by the words
+    its body never uses. An empty string leaves the stored tags alone --
+    clearing them, like clearing a source_ref, is a dashboard edit.
 
     Refuses to rewrite a diagram's content: that is generated from the
     graph, so a hand-written replacement would be silently overwritten by
@@ -1399,8 +1415,8 @@ def edit_memory(uid: str, new_content: str = "", note: str = "", mode: str = "re
     """
     if mode not in ("replace", "append"):
         return _errors([f"mode must be 'replace' or 'append'; got {mode!r}"])
-    if not new_content.strip() and not source_ref.strip() and not title.strip():
-        return _errors(["nothing to change: pass new_content, source_ref or title"])
+    if not (new_content.strip() or source_ref.strip() or title.strip() or tags.strip()):
+        return _errors(["nothing to change: pass new_content, source_ref, title or tags"])
     changed = []
     with db.connect() as conn:
         if new_content.strip():
@@ -1424,9 +1440,16 @@ def edit_memory(uid: str, new_content: str = "", note: str = "", mode: str = "re
                     "body, so a rename here would be overwritten by the next "
                     "structural change. Rename it in the dashboard."
                 ])
+            too_long = db.title_error(title)
+            if too_long:
+                return _errors([too_long])
             if not db.set_title(conn, uid, title, note=note):
                 return _errors([f"no memory {uid}"])
             changed.append("title")
+        if tags.strip():
+            if not db.set_tags(conn, uid, tags, note=note):
+                return _errors([f"no memory {uid}"])
+            changed.append("tags")
     return {"ok": True, "changed": changed}
 
 
@@ -1591,7 +1614,7 @@ def optimize_stage(suggestions: list[dict], note: str = "") -> dict:
     {"confidence"}, review {"review_after"} (a date or a span like '180d';
     '' clears it), archive {"reason"}, link {"from_uid","to_uid",
     "relation_type"}, merge {"keep_uid","drop_uid"}, distill
-    {"source_uids","new_type","new_content"}. link/merge derive target_uid
+    {"source_uids","new_type","new_content","title"}. link/merge derive target_uid
     from the payload and distill creates its target -- omit it for those.
 
     Destructive kinds (archive, set_confidence=contradicted, merge,
@@ -1786,7 +1809,7 @@ Each suggestion is an object:
 Kinds and their payload:
   compact / reword   {"new_content": str}
   retag              {"tags": str}                 comma-separated
-  retitle            {"title": str}                one line naming the memory
+  retitle            {"title": str}                one line naming the memory, max 120 chars
   redomain           {"domain": str}
   crosslist          {"also": [path, ...]}         replaces the whole set
   set_confidence     {"confidence": "unverified|confirmed|contradicted"}
@@ -1795,7 +1818,7 @@ Kinds and their payload:
   link               {"from_uid", "to_uid", "relation_type", "note"?}
   merge              {"keep_uid", "drop_uid", "note"?}   links supersedes + archives drop
   distill            {"source_uids": [uid, ...], "new_type": "note|reasoning|anti_pattern",
-                      "new_content": str, "tags"?, "domain"?}
+                      "new_content": str, "title": str, "tags"?, "domain"?}
 
 redomain moves where a memory is FILED -- one path, one parent chain.
 crosslist sets what it also BELONGS to: the subjects that cut across
@@ -1812,9 +1835,10 @@ distill extracts the durable knowledge out of one or MORE source
 memories into a newly authored one: creates it, links it `supersedes`
 each source and archives the sources (all reversible). Use it to
 retire closed-ticket checkpoints without losing what they taught, or
-as an n-ary merge when the survivor needs synthesized content. Those
-payload keys are the whole set it applies -- any other key is reported
-in `errors`. A diagram cannot be a source: its content is generated
+as an n-ary merge when the survivor needs synthesized content. It is the
+only kind that authors a memory, so it takes that memory's `title` the way
+a writing tool does: no later step names it. Those payload keys are the
+whole set it applies -- any other key is reported in `errors`. A diagram cannot be a source: its content is generated
 from its graph, so retire a flow with archive instead.
 
 link/merge derive target_uid from the payload (from_uid / drop_uid)
