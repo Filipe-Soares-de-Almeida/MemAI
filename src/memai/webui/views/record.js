@@ -32,6 +32,7 @@ import { pickMemories } from '../core/link-picker.js';
 import { go, refreshBehind } from '../core/router.js';
 import { renderRich, wireRich } from '../core/richtext.js';
 import { highlightIn } from '../core/highlight.js';
+import { DiagramEditor } from '../diagram-engine.js';
 import { t } from '../i18n.js';
 
 /* The record's own scrim while it is open, so a re-render can write into
@@ -40,6 +41,16 @@ import { t } from '../i18n.js';
    the sub-form with it. */
 let rec = null;
 const dq = s => rec.querySelector(s);
+
+/* The read-only canvas a diagram record draws itself on. It listens on
+   window and holds a ResizeObserver, so dropping the subtree that carries
+   its <canvas> is not enough -- every repaint and every close has to end
+   it by hand. */
+let recEngine = null;
+const endRecordCanvas = () => {
+  try { recEngine?.destroy(); } catch (err) { console.error(err); }
+  recEngine = null;
+};
 
 /* Where you have been inside this dialog, oldest first.
 
@@ -180,6 +191,7 @@ export const recordOpen = () => Boolean(rec && document.contains(rec));
    sits above it in the stack, and leaving that behind over a dialog that
    no longer exists is not a state this app should be able to reach. */
 export function closeRecord() {
+  endRecordCanvas();
   while (recordOpen()) closeModal();
   rec = null;
   trail = [];
@@ -191,6 +203,7 @@ export function closeRecord() {
    again, or saving from inside it, repaints these two rather than tearing
    the dialog down -- see the note on `rec`. */
 const paint = (head, body) => {
+  endRecordCanvas();
   rec.querySelector('.modal-head').innerHTML = head;
   rec.querySelector('.modal-body').innerHTML = body;
 };
@@ -347,7 +360,14 @@ export async function openRecord(uid) {
           : ''}
         ${isSectioned && !m.section_problem ? sectionPanes() : `
         ${isDiagram
-          ? `<pre class="content-pre" id="dContent">${esc(m.content)}</pre>`
+          ? `<div class="dg-stage dg-stage-record" id="dRecordStage">
+               <canvas id="dRecordCanvas" role="img"
+                       aria-label="${esc(t('dr.canvasAlt', { title: m.title || uid }))}"></canvas>
+             </div>
+             <!-- the projection stays in the DOM as the fallback: it is what
+                  shows if the graph cannot be fetched, and it is still the
+                  text the index was built from -->
+             <pre class="content-pre" id="dContent" hidden>${esc(m.content)}</pre>`
           : `<div class="content-pre content-prose rt" id="dContent">${renderRich(m.content, m.body_links)}</div>`}`}
         ${isDiagram ? `<div class="dg-empty" style="margin-top:8px">${t('dr.generated')}</div>` : `
         <div id="dEditBox" hidden style="display:grid;gap:9px;margin-top:10px">
@@ -485,6 +505,22 @@ export async function openRecord(uid) {
   /* edit content — a diagram is edited on its canvas instead */
   if (isDiagram) {
     dq('#dOpenEditor').addEventListener('click', () => { closeRecord(); go('diagram', { uid }); });
+    /* The graph is a second request, so the canvas fills in after the rest
+       of the record. DiagramEditor is read-only unless told otherwise, and
+       the layout is whatever was arranged in the editor -- this draws it,
+       it does not re-derive it. */
+    const stage = dq('#dRecordStage');
+    api(`/api/diagrams/${seg(uid)}`).then(data => {
+      /* the dialog may have been closed, or repainted onto another record,
+         while this was in flight */
+      if (!recordOpen() || !document.contains(stage)) return;
+      recEngine = new DiagramEditor(stage.querySelector('canvas'), data, {});
+    }).catch(err => {
+      console.error(err);
+      if (!document.contains(stage)) return;
+      stage.hidden = true;
+      stage.parentElement.querySelector('#dContent').hidden = false;
+    });
   } else {
     const editBtn = dq('#dEdit');
     const syncEdit = open => {
