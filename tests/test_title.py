@@ -229,3 +229,65 @@ def test_the_tool_refuses_to_rename_a_diagram(store):
     res = server.edit_memory(uid, title="Hourly export routine")
     assert res["ok"] is False and "dashboard" in res["errors"][0]
     assert server.get_memory(uid)["title"] == "Nightly export routine"
+
+
+# ------------------------------------------------------- how long it may be
+
+AT_LIMIT = "N" + "a" * (db.TITLE_MAX - 1)
+OVER_LIMIT = "N" + "a" * db.TITLE_MAX
+
+
+def test_a_title_at_the_limit_is_stored(conn):
+    uid = db.insert_memory(conn, type="note", title=AT_LIMIT, content="a fact")
+    assert db.get_memory(conn, uid)["title"] == AT_LIMIT
+
+
+def test_a_writer_is_refused_a_longer_one(conn):
+    with pytest.raises(ValueError, match=str(db.TITLE_MAX)):
+        db.insert_memory(conn, type="note", title=OVER_LIMIT, content="a fact")
+
+
+def test_the_length_is_measured_after_stripping(conn):
+    """Padding does not spend the budget: the stored name is what counts."""
+    uid = db.insert_memory(conn, type="note", title=f"   {AT_LIMIT}   ", content="a fact")
+    assert db.get_memory(conn, uid)["title"] == AT_LIMIT
+
+
+def test_renaming_over_the_limit_leaves_the_old_name(conn):
+    uid = db.insert_memory(conn, type="note", title="The export window", content="a fact")
+    with pytest.raises(ValueError, match=str(db.TITLE_MAX)):
+        db.set_title(conn, uid, OVER_LIMIT)
+    assert db.get_memory(conn, uid)["title"] == "The export window"
+
+
+def test_the_tool_refuses_a_rename_over_the_limit(store):
+    uid = server.note(title="The export window", content="both ends are inclusive")["uid"]
+    res = server.edit_memory(uid, title=OVER_LIMIT)
+    assert res["ok"] is False and str(db.TITLE_MAX) in res["errors"][0]
+    assert server.get_memory(uid)["title"] == "The export window"
+
+
+def test_a_diagram_cannot_be_named_over_the_limit(store):
+    res = server.diagram(title=OVER_LIMIT,
+                         nodes=[{"key": "a", "label": "Start", "shape": "start"},
+                                {"key": "b", "label": "Done", "shape": "end"}],
+                         edges=[{"from": "a", "to": "b"}])
+    assert res["ok"] is False and str(db.TITLE_MAX) in res["errors"][0]
+
+
+def test_the_dashboard_refuses_a_title_over_the_limit(client):
+    uid = client.post("/api/memories", json={
+        "title": "The export window", "type": "note", "content": "a fact"}).json()["uid"]
+    res = client.post(f"/api/memories/{uid}/meta", json={"title": OVER_LIMIT})
+    assert res.status_code == 400
+    assert client.get(f"/api/memories/{uid}").json()["title"] == "The export window"
+
+
+def test_staging_a_retitle_over_the_limit_is_reported_not_staged(conn):
+    uid = db.insert_memory(conn, type="note", title="The export window", content="a fact")
+    res = db.stage_optimization(conn, "a run", [
+        {"kind": "retitle", "target_uid": uid, "payload": {"title": OVER_LIMIT}},
+        {"kind": "retitle", "target_uid": uid, "payload": {"title": "Export window bounds"}},
+    ])
+    assert res["staged"] == 1
+    assert str(db.TITLE_MAX) in res["errors"][0]["error"]

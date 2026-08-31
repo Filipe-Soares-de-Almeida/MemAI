@@ -9,6 +9,8 @@ tmp dir.
 from __future__ import annotations
 
 import json
+import re
+from pathlib import Path
 
 import pytest
 from starlette.testclient import TestClient
@@ -289,7 +291,8 @@ def test_every_kind_in_verified_required_is_actually_refused(conn):
         "archive": ({"target_uid": a}, {}),
         "merge": ({}, {"keep_uid": a, "drop_uid": b}),
         "distill": ({}, {"source_uids": [a], "new_type": "note",
-                         "new_content": "the durable fact"}),
+                         "new_content": "the durable fact",
+                         "title": "What the drain retries"}),
     }
     assert set(payloads) == set(db.VERIFIED_REQUIRED), (
         "a kind entered VERIFIED_REQUIRED without a case here")
@@ -332,7 +335,8 @@ def test_link_merge_reject_mismatched_target_uid(conn):
 
 def test_distill_validation(conn):
     a, b = _mk(conn, content="one"), _mk(conn, content="two")
-    ok = {"source_uids": [a, b], "new_type": "note", "new_content": "the durable fact"}
+    ok = {"source_uids": [a, b], "new_type": "note", "new_content": "the durable fact",
+          "title": "What the drain retries"}
     res = db.stage_optimization(conn, "distill guards", [
         {"kind": "distill", "payload": ok},                                     # no verified
         {"kind": "distill", "target_uid": a, "payload": ok, "verified": "v"},   # target_uid forbidden
@@ -341,16 +345,20 @@ def test_distill_validation(conn):
         {"kind": "distill", "payload": {**ok, "source_uids": [a, "deadbeef"]}, "verified": "v"},
         {"kind": "distill", "payload": {**ok, "new_type": "checkpoint"}, "verified": "v"},
         {"kind": "distill", "payload": {**ok, "new_content": "  "}, "verified": "v"},
+        {"kind": "distill", "payload": {**ok, "title": "  "}, "verified": "v"},
+        {"kind": "distill", "payload": {**ok, "title": "N" + "a" * db.TITLE_MAX},
+         "verified": "v"},
         {"kind": "distill", "payload": ok, "verified": "checked repo"},         # valid
     ])
     assert res["staged"] == 1
-    assert {e["index"] for e in res["errors"]} == {0, 1, 2, 3, 4, 5, 6}
+    assert {e["index"] for e in res["errors"]} == {0, 1, 2, 3, 4, 5, 6, 7, 8}
 
 
 def test_distill_rejects_a_payload_key_it_does_not_apply(conn):
     """A key outside the distill payload comes back in errors instead of being dropped."""
     a = _mk(conn, content="one")
-    ok = {"source_uids": [a], "new_type": "note", "new_content": "the durable fact"}
+    ok = {"source_uids": [a], "new_type": "note", "new_content": "the durable fact",
+          "title": "What the drain retries"}
     res = db.stage_optimization(conn, "distill keys", [
         {"kind": "distill", "payload": {**ok, "review_after": "90d"}, "verified": "checked repo"},
         {"kind": "distill", "payload": {**ok, "source_ref": "src/memai/db.py", "session": "s"},
@@ -371,6 +379,7 @@ def test_distill_refuses_a_diagram_as_a_source(conn):
         {"kind": "distill", "payload": {
             "source_uids": [note, diag], "new_type": "note",
             "new_content": "warmup loads the hot keys before traffic",
+            "title": "How warmup loads the hot keys",
         }, "verified": "walked the routine in the code"},
     ])
     assert res["staged"] == 0 and res["run_id"] is None
@@ -385,6 +394,7 @@ def test_distill_apply_and_revert(conn):
         {"kind": "distill", "payload": {
             "source_uids": [a, b], "new_type": "note",
             "new_content": "root cause: retry loop lacked backoff",
+            "title": "Why the retry loop stalled",
             "tags": "retry, timeout", "domain": "proj-1042",
         }, "verified": "checked repo, fix merged"},
     ])
@@ -737,6 +747,7 @@ def test_api_distill_card_sources_and_new_uid(client):
         staged = db.stage_optimization(conn, "api distill", [
             {"kind": "distill", "payload": {
                 "source_uids": [a, b], "new_type": "note", "new_content": "distilled",
+                "title": "What the sources taught",
             }, "rationale": "r", "verified": "v"},
         ])
     got = client.get(f"/api/optimization/suggestions?run={staged['run_id']}").json()
@@ -795,3 +806,60 @@ def test_api_apply_all_and_discard(client):
 
     client.request("DELETE", f"/api/optimization/runs/{staged['run_id']}")
     assert client.get("/api/optimization/runs").json()["runs"] == []
+
+
+# ------------------------------------- the dashboard renders every staged kind
+
+OPTIMIZATION_JS = (Path(__file__).resolve().parents[1]
+                   / "src" / "memai" / "webui" / "views" / "optimization.js")
+
+# The kinds optCard routes away from the before/after pair, because they are
+# about a pair of memories rather than a field: link and merge print two peer
+# cards, distill prints its sources.
+RELATIONAL = {"link", "merge", "distill"}
+
+
+def _diff_kinds() -> set[str]:
+    """The kinds optimization.js gives a before/after pair, read from the file."""
+    body = OPTIMIZATION_JS.read_text(encoding="utf-8")
+    match = re.search(r"const DIFF_KINDS = new Set\(\[(.*?)\]\)", body, re.S)
+    assert match, "DIFF_KINDS is not where this test expects it"
+    return set(re.findall(r"'([a-z_]+)'", match.group(1)))
+
+
+def test_every_staged_kind_reaches_a_renderer():
+    """A kind the staging accepts and the dashboard cannot draw is staged blind.
+
+    optCard falls back to printing the raw payload, so the run lands, the
+    Apply button works, and the reviewer decides against a JSON dump.
+    """
+    assert set(db.SUGGESTION_KINDS) == _diff_kinds() | RELATIONAL
+
+
+@pytest.mark.parametrize("side", ["optBefore", "optAfter"])
+def test_each_diff_kind_has_a_case_on_both_sides(side):
+    """Being in DIFF_KINDS is not enough: both panes switch on the kind."""
+    body = OPTIMIZATION_JS.read_text(encoding="utf-8")
+    start = body.index(f"function {side}(")
+    arm = body[start:body.index("\n}", start)]
+    assert _diff_kinds() <= set(re.findall(r"case '([a-z_]+)'", arm))
+
+
+def test_the_distilled_memory_is_born_with_its_name(conn):
+    """distill is the only kind that authors a memory, so it carries the title.
+
+    Nothing names the new memory afterwards: staged without one it would be
+    listed by the opening line of its body for good.
+    """
+    a = _mk(conn, content="checkpoint one", type="checkpoint", domain="proj-1042")
+    run = db.stage_optimization(conn, "distill", [
+        {"kind": "distill", "verified": "checked repo", "payload": {
+            "source_uids": [a], "new_type": "note",
+            "new_content": "the retry loop lacked backoff",
+            "title": "Why the retry loop stalled",
+        }},
+    ])
+    sug = db.get_optimization_suggestions(conn, run["run_id"])[0]
+    db.apply_suggestion(conn, sug["id"])
+    new_uid = json.loads(db.get_suggestion(conn, sug["id"])["prev_state"])["new_uid"]
+    assert db.get_memory(conn, new_uid)["title"] == "Why the retry loop stalled"
