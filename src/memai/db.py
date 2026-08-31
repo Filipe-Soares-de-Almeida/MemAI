@@ -66,6 +66,11 @@ ALSO_SEP = "\n"
 # warm-up leaves it out (see search_ranked, _sound_clause).
 CONFIDENCE_CONTRADICTED = "contradicted"
 
+# The longest a title may be, counted in characters after stripping. A title
+# is one line naming the memory, and every listing shows a row by it: wider
+# than this it stops naming the memory and starts restating it.
+TITLE_MAX = 120
+
 # The FTS index and its triggers, kept separate because they are also what a
 # store built before a new indexed column has to be rebuilt from (_ensure_fts).
 _FTS_COLUMNS = ("title", "content", "tags", "domain", "also_domains")
@@ -841,6 +846,19 @@ def _refuse_unreadable(conn: sqlite3.Connection, type: str, content: str) -> Non
         raise ValueError(error)
 
 
+def title_error(value: str) -> str | None:
+    """Say why `value` cannot title a memory, or None if it can.
+
+    Measures the stripped string against TITLE_MAX. An empty title is not an
+    error here: the callers that require one reject it themselves, and the
+    ones that allow it pass ''.
+    """
+    value = value.strip()
+    if len(value) > TITLE_MAX:
+        return f"title is {len(value)} characters; the limit is {TITLE_MAX}"
+    return None
+
+
 def _write_sections(conn: sqlite3.Connection, uid: str, type: str, content: str) -> None:
     """Read a body into its fields, replacing whatever was stored for it.
 
@@ -1118,6 +1136,9 @@ def insert_memory(
     source_ref: str = "",
 ) -> str:
     _refuse_unreadable(conn, type, content)
+    error = title_error(title)
+    if error:
+        raise ValueError(error)
     uid = new_uid()
     ts = created_at or now_iso()
     domain = apply_domain_policy(conn, domain)
@@ -1376,6 +1397,32 @@ def set_source_ref(conn: sqlite3.Connection, uid: str, value: str, note: str = "
     return True
 
 
+def set_tags(conn: sqlite3.Connection, uid: str, value: str, note: str = "") -> bool:
+    """Replace a memory's tags, and audit the change.
+
+    The update reindexes: `tags` is an indexed column, so the FTS trigger
+    fires on it the way it does for the body. `value` replaces the field
+    rather than adding to it -- pass the whole set that should survive,
+    comma-separated.
+    """
+    row = get_memory(conn, uid)
+    if row is None:
+        return False
+    value = value.strip()
+    if value == row["tags"]:
+        return True
+    conn.execute(
+        "UPDATE memories SET tags = ?, updated_at = ? WHERE uid = ?",
+        (value, now_iso(), uid))
+    audit = f"meta: tags '{row['tags']}' -> '{value}'"
+    conn.execute(
+        "INSERT INTO edits (memory_uid, edited_at, prev_content, new_content, note) "
+        "VALUES (?, ?, ?, ?, ?)",
+        (uid, now_iso(), row["content"], row["content"],
+         f"{audit} ({note})" if note else audit))
+    return True
+
+
 def set_title(conn: sqlite3.Connection, uid: str, value: str, note: str = "") -> bool:
     """Rename a memory, and audit the rename.
 
@@ -1390,6 +1437,9 @@ def set_title(conn: sqlite3.Connection, uid: str, value: str, note: str = "") ->
     value = value.strip()
     if not value or value == row["title"]:
         return bool(value)
+    error = title_error(value)
+    if error:
+        raise ValueError(error)
     conn.execute(
         "UPDATE memories SET title = ?, updated_at = ? WHERE uid = ?",
         (value, now_iso(), uid))
@@ -2084,6 +2134,9 @@ def insert_diagram(
     title = str(title).strip()
     if not title:
         return None, ["diagram needs a title"]
+    error = title_error(title)
+    if error:
+        return None, [error]
     n = _norm_nodes(nodes)
     e = _norm_edges(edges)
     errors = _validate_graph(n, e)
@@ -2287,6 +2340,9 @@ def set_diagram_meta(
     new_summary = d["summary"] if summary is None else str(summary).strip()
     if not new_title:
         return False, ["diagram needs a title"]
+    error = title_error(new_title)
+    if error:
+        return False, [error]
     was = float(d["font_scale"] or 1)
     scale = was
     if font_scale is not None:
@@ -3863,7 +3919,7 @@ SUGGESTION_KINDS = (
 # checkpoint/handoff would just recreate the ephemera it exists to retire
 DISTILL_TYPES = ("note", "reasoning", "anti_pattern")
 # the payload keys distill applies; any other key is a staging error
-DISTILL_PAYLOAD_KEYS = ("source_uids", "new_type", "new_content", "tags", "domain")
+DISTILL_PAYLOAD_KEYS = ("source_uids", "new_type", "new_content", "title", "tags", "domain")
 # the kinds staging refuses without a non-empty `verified`, mapped to what
 # each one is being asked to justify: every one of them archives a memory.
 # set_confidence belongs here only when its payload says `contradicted`, so
@@ -4270,6 +4326,9 @@ def _validate_suggestion(conn: sqlite3.Connection, s: object) -> tuple[dict | No
             return None, err
         if not str(payload.get("title", "")).strip():
             return None, "payload.title required (a memory cannot be left unnamed)"
+        too_long = title_error(str(payload["title"]))
+        if too_long:
+            return None, too_long
         if is_diagram(conn, target_uid):
             return None, (f"{target_uid} is a diagram: its title is part of what "
                           "generates its body. Rename it through the graph.")
@@ -4383,6 +4442,14 @@ def _validate_suggestion(conn: sqlite3.Connection, s: object) -> tuple[dict | No
             return None, f"payload.new_type must be one of {DISTILL_TYPES}"
         if not str(payload.get("new_content", "")).strip():
             return None, "payload.new_content required"
+        # the memory this writes is authored here and nowhere else: no writing
+        # tool names it afterwards, so a distill with no title leaves a
+        # permanently unnamed row
+        if not str(payload.get("title", "")).strip():
+            return None, "payload.title required (the distilled memory needs a name)"
+        too_long = title_error(str(payload["title"]))
+        if too_long:
+            return None, too_long
         # anti_pattern is a distill target and is made of fields, so the body
         # a distill writes has to read back the same way any other one does
         err = section_error(conn, str(payload["new_type"]), str(payload["new_content"]))
@@ -4580,6 +4647,9 @@ def _apply_kind(conn: sqlite3.Connection, kind: str, target_uid: str | None, pay
     if kind == "distill":
         new_uid = insert_memory(
             conn, type=payload["new_type"], content=payload["new_content"],
+            # staging requires a title; .get keeps a run staged before it did
+            # appliable rather than failing here
+            title=str(payload.get("title", "")).strip(),
             tags=str(payload.get("tags", "")).strip(),
             domain=str(payload.get("domain", "")).strip(),
         )

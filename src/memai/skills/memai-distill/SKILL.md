@@ -27,7 +27,7 @@ a checkpoint that is about to be archived, without losing any of it.
 ## 1. `distill` — extract the durable (ARCHIVES the sources)
 
 `optimize_stage` kind **`distill`**, payload `{source_uids:[...],
-new_type:"note|reasoning|anti_pattern", new_content, tags?, domain?}`:
+new_type:"note|reasoning|anti_pattern", new_content, title, tags?, domain?}`:
 **creates** the new memory, links `supersedes` from it to every source and
 **archives every source**. The dashboard's undo purges the created memory
 and restores each source, so the whole thing is reversible. Two uses:
@@ -58,10 +58,15 @@ Payload details:
   memory is filed nowhere. A cross-cutting axis does not go here: after
   the apply, `crosslist` (`{"also": ["omni/x900"]}`) or
   `also_domain(uid, 'omni/x900')`.
-- **The payload accepts `source_uids`, `new_type`, `new_content`, `tags`
-  and `domain`, and nothing else.** Any other key is refused at staging
-  and returned in `errors`, so `also`, `review_after`, `source_ref` and
-  `session` do not travel with a distill — they are the follow-up in §2.
+- **The payload accepts `source_uids`, `new_type`, `new_content`, `title`,
+  `tags` and `domain`, and nothing else.** Any other key is refused at
+  staging and returned in `errors`, so `also`, `review_after`, `source_ref`
+  and `session` do not travel with a distill — they are the follow-up in §2.
+- **`title` is required, at most 120 characters.** `distill` is the only
+  suggestion kind that AUTHORS a memory, and nothing names it afterwards:
+  staged without one, the new memory would be listed by the opening line of
+  its body forever. Name it by its subject, in the words someone would look
+  for it by — the same line a `note()` would have taken.
 - **A `diagram` cannot be a source.** Its content is the projection of its
   graph, and archiving it trades a navigable flow for prose, so staging
   refuses it. An obsolete diagram is an explicit `archive`; a **wrong**
