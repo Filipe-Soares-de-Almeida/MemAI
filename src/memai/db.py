@@ -765,6 +765,30 @@ def _ensure_columns(conn: sqlite3.Connection) -> None:
             conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
 
 
+def _ensure_diagram_titles(conn: sqlite3.Connection) -> None:
+    """Give a diagram memory the name its graph already carries.
+
+    A diagram's title is one name stored twice: `diagrams.title` and
+    `memories.title` (see update_diagram). A store whose diagrams predate
+    the `memories.title` column has the name on the graph only, and every
+    listing falls back to the opening line of the generated body.
+
+    Copies, never invents: the length cap that title_error applies to a new
+    title is not applied here, or a name already in the store would be
+    unrecoverable.
+
+    Runs after _ensure_fts: this UPDATE fires the index triggers, and on a
+    store whose index predates the column they name a field memories_fts
+    does not have yet.
+    """
+    conn.execute(
+        "UPDATE memories SET title = ("
+        "  SELECT TRIM(d.title) FROM diagrams d WHERE d.memory_uid = memories.uid)"
+        " WHERE TRIM(title) = ''"
+        "   AND EXISTS (SELECT 1 FROM diagrams d"
+        "               WHERE d.memory_uid = memories.uid AND TRIM(d.title) <> '')")
+
+
 def _ensure_fts(conn: sqlite3.Connection) -> None:
     """Rebuild the FTS index when its columns are behind _FTS_SCHEMA.
 
@@ -1113,6 +1137,7 @@ def connect(db_path: Path | None = None):
     _ensure_columns(conn)
     _drop_vector_store(conn)
     _ensure_fts(conn)
+    _ensure_diagram_titles(conn)
     try:
         yield conn
         conn.commit()
