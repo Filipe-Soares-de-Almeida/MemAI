@@ -2531,6 +2531,13 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
 .dg-stage canvas.dragging { cursor: grabbing; }
 .dg-stage canvas.linkmode { cursor: crosshair; }
 
+/* The record dialog draws the same flow at a reading size: it sits in a
+   scrolling column beside the metadata, so it takes a fixed slice of the
+   dialog instead of the viewport the editor gets. Panning and zooming
+   still work -- what it does not do is edit. */
+.dg-stage-record { height: 340px; min-height: 0; }
+@media (max-width: 720px) { .dg-stage-record { height: 240px; } }
+
 .dg-tools {
   display: flex; flex-wrap: wrap; gap: var(--sp-2); align-items: center;
   min-width: 0;
