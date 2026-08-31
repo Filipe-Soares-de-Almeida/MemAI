@@ -1337,3 +1337,54 @@ def test_locale_catalogs_stay_in_parity():
         assert en.get(key) and pt.get(key)
     for shape in db.NODE_SHAPES:
         assert f"dg.shape.{shape}" in en
+
+
+def test_a_diagram_written_before_the_title_column_is_named_on_connect(tmp_path):
+    """The graph's name reaches memories.title when the store is opened.
+
+    A store whose diagrams predate the column carries the name on
+    `diagrams` only, and every listing falls back to the generated body.
+    """
+    path = tmp_path / "old.db"
+    with db.connect(path) as conn:
+        uid, errors = db.insert_diagram(
+            conn, title="Nightly export routine",
+            nodes=[{"key": "a", "label": "Start", "shape": "start"},
+                   {"key": "b", "label": "Done", "shape": "end"}],
+            edges=[{"from": "a", "to": "b"}])
+        assert not errors
+        # what the store looked like before the column existed
+        conn.execute("UPDATE memories SET title = '' WHERE uid = ?", (uid,))
+    with db.connect(path) as conn:
+        assert db.get_memory(conn, uid)["title"] == "Nightly export routine"
+
+
+def test_the_backfill_keeps_a_name_longer_than_the_cap(tmp_path):
+    """It copies a name the store already holds, so the cap does not apply.
+
+    Refusing the length here would leave that diagram permanently unnamed,
+    which is the opposite of what the backfill is for.
+    """
+    path = tmp_path / "old.db"
+    long_name = "Nightly export routine, " + ", ".join(["retries"] * 12)
+    assert len(long_name) > db.TITLE_MAX
+    with db.connect(path) as conn:
+        uid, errors = db.insert_diagram(
+            conn, title="Nightly export routine",
+            nodes=[{"key": "a", "label": "Start", "shape": "start"},
+                   {"key": "b", "label": "Done", "shape": "end"}],
+            edges=[{"from": "a", "to": "b"}])
+        assert not errors
+        conn.execute("UPDATE memories SET title = '' WHERE uid = ?", (uid,))
+        conn.execute("UPDATE diagrams SET title = ? WHERE memory_uid = ?", (long_name, uid))
+    with db.connect(path) as conn:
+        assert db.get_memory(conn, uid)["title"] == long_name
+
+
+def test_the_backfill_does_not_touch_a_memory_that_has_a_title(tmp_path):
+    path = tmp_path / "store.db"
+    with db.connect(path) as conn:
+        uid = db.insert_memory(conn, type="note", title="A name of its own",
+                               content="a fact", domain="acme")
+    with db.connect(path) as conn:
+        assert db.get_memory(conn, uid)["title"] == "A name of its own"
