@@ -98,7 +98,7 @@ def _session_start(args, payload) -> None:
         pass
     with db.connect() as conn:
         _emit("SessionStart", brief.session_brief(
-            conn, domain=args.domain, budget=args.budget, store=db.active_store()))
+            conn, domain=args.domain, budget=args.budget, project=db.active_project()))
 
 
 def _pre_compact(args, payload) -> None:

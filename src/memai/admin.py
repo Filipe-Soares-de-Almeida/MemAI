@@ -191,18 +191,19 @@ def _file_size(path: Path) -> int:
 
 
 def _raw_connect() -> sqlite3.Connection:
-    """Autocommit connection to the active store, for statements that refuse
+    """Autocommit connection to the active project, for statements that refuse
     to run inside a transaction (VACUUM, wal_checkpoint)."""
     return sqlite3.connect(str(db.default_db_path()), timeout=30.0, isolation_level=None)
 
 
 def _backup(kind: str = "") -> Path:
-    """A fresh backup of the active store, named after it (db.backup_name)."""
-    store = db.active_store()
-    dest = db.backups_dir() / db.backup_name(store, kind)
+    """A fresh backup of the active project, in its own folder and named after
+    it (db.backups_dir, db.backup_name)."""
+    project = db.active_project()
+    dest = db.backups_dir(project) / db.backup_name(project, kind)
     if dest.exists():
         raise ValueError(f"backup already exists: {dest.name}")
-    return db.backup_to(dest, store=store)
+    return db.backup_to(dest, project=project)
 
 
 def api(handler):
@@ -270,7 +271,7 @@ def overview(request, payload) -> dict:
         "domains": domains[:10],
         "recent": recent,
         "db": {
-            "store": db.active_store(),
+            "project": db.active_project(),
             "path": str(dbfile),
             "size": _file_size(dbfile),
             "wal_size": _file_size(dbfile.with_name(dbfile.name + "-wal")),
@@ -278,40 +279,37 @@ def overview(request, payload) -> dict:
     }
 
 
-# ------------------------------------------------------------------- stores
+# ----------------------------------------------------------------- projects
 
-def stores(request, payload) -> dict:
-    """Every store in the home, with its active-row count, and which is active."""
-    return {"active": db.active_store(), "stores": db.list_stores(counts=True)}
+def projects(request, payload) -> dict:
+    """Every project in the home, with its active-row count, and which is active."""
+    return {"active": db.active_project(), "projects": db.list_projects(counts=True)}
 
 
-def store_create(request, payload) -> dict:
-    """Create an empty store. `activate` switches to it in the same call.
-
-    The name is lowercased before it is checked, so `Acme` and `acme` name
-    one store rather than a refusal.
-    """
-    name = str(payload.get("name") or "").strip().lower()
-    db.create_store(name)
+def project_create(request, payload) -> dict:
+    """Create an empty project, named as typed apart from surrounding spaces.
+    `activate` switches to it in the same call."""
+    name = str(payload.get("name") or "").strip()
+    db.create_project(name)
     if payload.get("activate"):
-        db.set_active_store(name)
-    return {"ok": True, "name": name, **stores(request, payload)}
+        db.set_active_project(name)
+    return {"ok": True, "name": name, **projects(request, payload)}
 
 
-def store_activate(request, payload) -> dict:
+def project_activate(request, payload) -> dict:
     """Point every process on this home at `name` from its next connect on."""
     name = str(payload.get("name") or "").strip()
-    return {"ok": True, "active": db.set_active_store(name)}
+    return {"ok": True, "active": db.set_active_project(name)}
 
 
-def store_delete(request, payload) -> dict:
-    """Remove an empty, inactive store. Refuses anything else -- see db.delete_store."""
-    db.delete_store(request.path_params["name"])
-    return {"ok": True, **stores(request, payload)}
+def project_delete(request, payload) -> dict:
+    """Remove an empty, inactive project. Refuses anything else -- see db.delete_project."""
+    db.delete_project(request.path_params["name"])
+    return {"ok": True, **projects(request, payload)}
 
 
-def store_move(request, payload) -> dict:
-    """Carry memories out of the active store into `target` -- see portable.move.
+def project_move(request, payload) -> dict:
+    """Carry memories out of the active project into `target` -- see portable.move.
 
     `uids` is a list of at most BULK_MAX, `domain` a path; either or both.
     `dry_run` is the default and only reports; `create` makes a target that
@@ -323,7 +321,7 @@ def store_move(request, payload) -> dict:
     if len(uids) > BULK_MAX:
         raise ValueError(f"at most {BULK_MAX} uids per operation")
     return portable.move(
-        db.active_store(), str(payload.get("target") or "").strip().lower(),
+        db.active_project(), str(payload.get("target") or "").strip(),
         uids=[str(u) for u in uids], domain=str(payload.get("domain") or "").strip(),
         dry_run=bool(payload.get("dry_run", True)), create=bool(payload.get("create")))
 
@@ -1222,7 +1220,7 @@ def _fts_check(conn: sqlite3.Connection) -> tuple[bool, str]:
 
 
 def health(request, payload) -> dict:
-    store = db.active_store()
+    project = db.active_project()
     dbfile = db.default_db_path()
     with db.connect() as conn:
         quick = [r[0] for r in conn.execute("PRAGMA quick_check").fetchall()]
@@ -1249,13 +1247,13 @@ def health(request, payload) -> dict:
         freelist = conn.execute("PRAGMA freelist_count").fetchone()[0]
         compact_reason = db.get_compact_reason(conn)
         render_retention = db.get_svg_retention(conn)
-    # the active store's own backups; another store's are listed when it is
+    # the active project's own backups; another project's are listed when it is
     backups = [
         {"name": p.name, "size": _file_size(p),
          "mtime": datetime.fromtimestamp(p.stat().st_mtime, tz=timezone.utc).isoformat()}
-        for p in db.backup_files(store)]
+        for p in db.backup_files(project)]
     return {
-        "store": store,
+        "project": project,
         # same rule as _fts_check: "ok" is quick_check's way of saying
         # nothing is wrong, and the UI has its own words for that
         "integrity": {"ok": integrity_ok,
@@ -1364,7 +1362,7 @@ def vacuum(request, payload) -> dict:
 
 def backup(request, payload) -> dict:
     dest = _backup()
-    return {"ok": True, "store": db.active_store(), "path": str(dest),
+    return {"ok": True, "project": db.active_project(), "path": str(dest),
             "size": _file_size(dest)}
 
 
@@ -1669,7 +1667,7 @@ async def ping(request):
         "app": "memai",
         "version": __version__,
         "pid": os.getpid(),
-        "store": db.active_store(),
+        "project": db.active_project(),
         "db": str(db.default_db_path()),
     })
 
@@ -1822,11 +1820,11 @@ routes = [
     Route("/api/maintenance/prune-renders", api(prune_renders), methods=["POST"]),
     Route("/api/maintenance/vacuum", api(vacuum), methods=["POST"]),
     Route("/api/maintenance/backup", api(backup), methods=["POST"]),
-    Route("/api/stores", api(stores), methods=["GET"]),
-    Route("/api/stores", api(store_create), methods=["POST"]),
-    Route("/api/stores/active", api(store_activate), methods=["POST"]),
-    Route("/api/stores/move", api(store_move), methods=["POST"]),
-    Route("/api/stores/{name}", api(store_delete), methods=["DELETE"]),
+    Route("/api/projects", api(projects), methods=["GET"]),
+    Route("/api/projects", api(project_create), methods=["POST"]),
+    Route("/api/projects/active", api(project_activate), methods=["POST"]),
+    Route("/api/projects/move", api(project_move), methods=["POST"]),
+    Route("/api/projects/{name}", api(project_delete), methods=["DELETE"]),
     Route("/api/maintenance/dedup", api(dedup)),
     Route("/api/maintenance/sectionize", api(sectionize), methods=["POST"]),
     Route("/api/maintenance/sections-queue", api(section_queue)),
@@ -1997,7 +1995,7 @@ def main() -> None:
               f"(memai-admin --status says what is there)")
         raise SystemExit(1)
 
-    print(f"memai admin · store {db.active_store()} · db {db.default_db_path()} "
+    print(f"memai admin · project {db.active_project()} · db {db.default_db_path()} "
           f"· http://{args.host}:{args.port}")
     if args.host not in LOOPBACK_HOSTS:
         print(f"  WARNING: {args.host} is not loopback. This API has NO authentication:"

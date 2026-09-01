@@ -1,14 +1,15 @@
-/* The store switch in the topbar, and the dialog that sends memories to
-   another store.
+/* The project switch on the rail, and the dialog that sends memories to
+   another project.
 
-   A store is one SQLite file. The dashboard reads and writes the one the
-   home's `active` file names, and so does every MCP server on this machine
-   from its next call on. The switch lists the stores, changes the active one
-   and offers to create a new one. A switch re-runs the current route: every
-   view fetches what it shows, so re-rendering it IS reading the other store.
+   A project is one SQLite file holding a whole memory. The dashboard reads
+   and writes the one the home's `active` file names, and so does every MCP
+   server on this machine from its next call on. The switch lists the
+   projects, changes the active one and offers to create a new one. A switch
+   re-runs the current route: every view fetches what it shows, so
+   re-rendering it IS reading the other project.
 
    It refuses to switch while a dialog is open, for the reason the language
-   switch does: the form on screen belongs to the store it was opened on. */
+   switch does: the form on screen belongs to the project it was opened on. */
 
 import { $, esc, fmtInt, debounce } from './dom.js';
 import { api } from './api.js';
@@ -18,75 +19,78 @@ import { route, parseHash } from './router.js';
 import { refreshRail } from './shared.js';
 import { t } from '../i18n.js';
 
-/* The row that is an action rather than a store. A store name is lowercase
-   letters, digits, '.', '_' and '-', so no store can be called this. */
-const NEW = '+new';
+/* The row that is an action rather than a project. A project name is a file
+   name, and no file name may carry this character. */
+const NEW = '*new';
 
 let active = '';
 let rows = [];
 
-const storeItem = s => ({
-  value: s.name, label: s.name,
-  title: t('store.count', { name: s.name, n: fmtInt(s.memories) }),
+/* The default project wears its role in the list. Its name stays what the
+   server calls it, which is what every other surface prints. */
+const labelOf = p => (p.general ? t('project.default', { name: esc(p.name) }) : esc(p.name));
+const projectItem = p => ({
+  value: p.name, html: `<span class="pick-label">${labelOf(p)}</span>`, label: p.name,
+  title: t('project.count', { name: p.name, n: fmtInt(p.memories) }),
 });
-const newItem = () => ({ value: NEW, label: t('store.new'), cls: 'pick-new' });
-const items = () => [...rows.map(storeItem), newItem()];
+const newItem = () => ({ value: NEW, label: t('project.new'), cls: 'pick-new' });
+const items = () => [...rows.map(projectItem), newItem()];
 
-export async function mountStorePicker() {
-  if (!$('#storeHost')) return;
-  try { paint(await api('/api/stores')); }
-  catch (err) { failed('err.store', err); }
+export async function mountProjectPicker() {
+  if (!$('#railProject')) return;
+  try { paint(await api('/api/projects')); }
+  catch (err) { failed('err.project', err); }
 }
 
 function paint(data) {
   active = data.active;
-  rows = data.stores;
+  rows = data.projects;
   const list = items();
-  $('#storeHost').innerHTML = pickerFor({
-    id: 'storeSel', value: active, items: list,
-    ariaLabel: t('store.title'), cls: 'store-sel',
-  });
-  wirePicker(document, { id: 'storeSel', items: fixedItems(list), onPick: pick });
+  $('#railProject').innerHTML = `
+    <div class="rh-row"><span>${t('project.title')}</span></div>
+    ${pickerFor({ id: 'projectSel', value: active, items: list,
+                  ariaLabel: t('project.title'), cls: 'project-sel' })}`;
+  wirePicker(document, { id: 'projectSel', items: fixedItems(list), onPick: pick, minWidth: 220 });
 }
 
 /* The button has already repainted itself to the row that was clicked, so a
-   refusal puts the active store's face back before saying why. */
-const revert = () => setPickerValue($('#storeSel'), items().find(it => it.value === active));
+   refusal puts the active project's face back before saying why. */
+const revert = () => setPickerValue($('#projectSel'), items().find(it => it.value === active));
 
 async function pick(value) {
   if (value === active) return;
-  if (modalOpen()) { revert(); toast(t('store.busy'), 'bad'); return; }
+  if (modalOpen()) { revert(); toast(t('project.busy'), 'bad'); return; }
   if (value === NEW) { revert(); await create(); return; }
   try {
-    await api('/api/stores/active', { body: { name: value } });
-    active = value;
-    toast(t('store.switched', { name: value }), 'ok');
+    const r = await api('/api/projects/active', { body: { name: value } });
+    active = r.active;
+    toast(t('project.switched', { name: esc(r.active) }), 'ok');
     reread();
-  } catch (err) { revert(); failed('err.store', err); }
+  } catch (err) { revert(); failed('err.project', err); }
 }
 
 async function create() {
   const name = await promptModal({
-    title: t('store.create.title'), body: t('store.create.body'),
-    label: t('store.create.label'), placeholder: 'acme', okLabel: t('store.create.ok'),
+    title: t('project.create.title'), body: t('project.create.body'),
+    label: t('project.create.label'), placeholder: 'Acme', okLabel: t('project.create.ok'),
   });
   if (name === null) return;
   try {
-    const data = await api('/api/stores', { body: { name: name.trim(), activate: true } });
+    const data = await api('/api/projects', { body: { name: name.trim(), activate: true } });
     paint(data);
-    toast(t('store.created', { name: data.active }), 'ok');
+    toast(t('project.created', { name: esc(data.active) }), 'ok');
     reread();
-  } catch (err) { failed('err.store', err); }
+  } catch (err) { failed('err.project', err); }
 }
 
-/* The view repaints against the store that is active now. Overview hands its
-   own payload to the rail; every other view needs the rail fetched apart. */
+/* The view repaints against the project that is active now. Overview hands
+   its own payload to the rail; every other view needs the rail fetched apart. */
 function reread() {
   route();
   if (parseHash().name !== 'overview') refreshRail();
 }
 
-/* ─── sending memories to another store ──────────────────────────────────
+/* ─── sending memories to another project ────────────────────────────────
    Offered from the bulk bar (a selection) and from the Domains view (a
    subtree). The dialog asks the server for a dry run as soon as a target is
    named and shows what would move and what the copy cannot carry -- the
@@ -95,12 +99,12 @@ function reread() {
    live. The move is the same request with dry_run off. Resolves to whether
    anything moved. */
 
-export async function moveToStoreModal({ uids = [], domain = '' }) {
+export async function moveToProjectModal({ uids = [], domain = '' }) {
   let data;
-  try { data = await api('/api/stores'); }
-  catch (err) { failed('err.store', err); return false; }
-  const others = data.stores.filter(s => s.name !== data.active);
-  const targets = [...others.map(storeItem), newItem()];
+  try { data = await api('/api/projects'); }
+  catch (err) { failed('err.project', err); return false; }
+  const others = data.projects.filter(p => p.name !== data.active);
+  const targets = [...others.map(projectItem), newItem()];
   const first = others.length ? others[0].name : NEW;
   const scope = domain
     ? t('mv.scope.domain', { domain: esc(domain) })
@@ -116,8 +120,8 @@ export async function moveToStoreModal({ uids = [], domain = '' }) {
         <div class="field"><label>${t('mv.target')}</label>
           <div class="mv-target">
             ${pickerFor({ id: 'mvTarget', value: first, items: targets, ariaLabel: t('mv.target') })}
-            <input type="text" data-new placeholder="acme" autocomplete="off" spellcheck="false"
-                   aria-label="${t('store.create.label')}"${first === NEW ? '' : ' hidden'}>
+            <input type="text" data-new placeholder="Acme" autocomplete="off" spellcheck="false"
+                   aria-label="${t('project.create.label')}"${first === NEW ? '' : ' hidden'}>
           </div></div>
         <div class="mv-plan" data-plan><div>${scope}</div></div>`,
       footHTML: `<button class="btn" data-x>${t('common.cancel')}</button>
@@ -127,7 +131,7 @@ export async function moveToStoreModal({ uids = [], domain = '' }) {
     const plan = m.querySelector('[data-plan]');
     const input = m.querySelector('[data-new]');
     const creating = () => pickerValue(m, 'mvTarget') === NEW;
-    const target = () => (creating() ? input.value.trim().toLowerCase() : pickerValue(m, 'mvTarget'));
+    const target = () => (creating() ? input.value.trim() : pickerValue(m, 'mvTarget'));
     const body = dry => ({ target: target(), uids, domain, dry_run: dry, create: creating() });
 
     const preview = async () => {
@@ -135,7 +139,7 @@ export async function moveToStoreModal({ uids = [], domain = '' }) {
       okBtn.disabled = true;
       if (!name) { plan.innerHTML = `<div>${scope}</div><div class="hint">${t('mv.nameIt')}</div>`; return; }
       try {
-        const r = await api('/api/stores/move', { body: body(true) });
+        const r = await api('/api/projects/move', { body: body(true) });
         if (target() !== name) return;   /* the field moved on while this was in flight */
         plan.innerHTML = planHTML(r, scope);
         okBtn.disabled = r.memories - r.conflicts.length <= 0;
@@ -153,10 +157,10 @@ export async function moveToStoreModal({ uids = [], domain = '' }) {
     okBtn.onclick = async () => {
       okBtn.disabled = true;
       try {
-        const r = await api('/api/stores/move', { body: body(false) });
+        const r = await api('/api/projects/move', { body: body(false) });
         toast(t('mv.done', { n: fmtInt(r.moved), target: esc(r.target) }), 'ok',
               r.backup ? { detail: t('mv.backup', { name: r.backup.split(/[\\/]/).pop() }) } : {});
-        /* the caller repaints its view; the rail's counts are this store's
+        /* the caller repaints its view; the rail's counts are this project's
            and just changed too */
         if (r.moved > 0) refreshRail();
         done(r.moved > 0);

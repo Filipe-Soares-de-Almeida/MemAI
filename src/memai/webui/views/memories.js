@@ -14,7 +14,7 @@ import { typeTag, statusTag, confPill, getDomains, inDomainPath,
          typeItems, confItems } from '../core/shared.js';
 import { pickerHTML, pickerFor, wirePicker, fixedItems } from '../core/pick.js';
 import { domainPickerHTML, wireDomainPicker } from '../core/domain-picker.js';
-import { moveToStoreModal } from '../core/stores.js';
+import { moveToProjectModal } from '../core/projects.js';
 import { go, refreshBehind } from '../core/router.js';
 import { onTeardown } from '../core/lifecycle.js';
 import { openRecord, setRecordSequence } from './record.js';
@@ -457,10 +457,10 @@ function syncBulkbar() {
     await runBulk({ action: 'archive', reason });
   });
   bar.querySelector('#bulkRest').addEventListener('click', () => runBulk({ action: 'restore' }));
-  /* The selection leaves this store: the dialog previews the move and runs
+  /* The selection leaves this project: the dialog previews the move and runs
      it, and the rows are gone from here once it has. */
   bar.querySelector('#bulkMove').addEventListener('click', async () => {
-    const moved = await moveToStoreModal({ uids: [...selection] });
+    const moved = await moveToProjectModal({ uids: [...selection] });
     if (!moved) return;
     selection.clear();
     refreshBehind();

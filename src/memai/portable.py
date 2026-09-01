@@ -17,7 +17,7 @@ Two formats, for the two jobs:
 The FTS index is never in an export: it is derived, and an import rebuilds
 it from the content it writes. The edit history is left out by default --
 `VACUUM INTO` keeps it -- and carried when asked for (`include_edits`),
-which is how move() takes a memory from one store to another whole.
+which is how move() takes a memory from one project to another whole.
 """
 
 from __future__ import annotations
@@ -272,7 +272,7 @@ def read_jsonl(text: str):
             yield json.loads(line)
 
 
-# ------------------------------------------------------- moving between stores
+# ----------------------------------------------------- moving between projects
 
 def boundary(conn, uids) -> dict:
     """What a slice of memories points at, or is pointed at from, outside itself.
@@ -342,43 +342,44 @@ def _spare_name(folder: Path, name: str) -> Path:
 
 def move(source: str, target: str, *, uids=(), domain: str = "", dry_run: bool = True,
          create: bool = False) -> dict:
-    """Carry memories from one store to another, whole, and remove the originals.
+    """Carry memories from one project to another, whole, and remove the originals.
 
     The slice is `uids`, `domain` (a path and its subdomains, archived rows
     included) or both. It is exported with its edit history, imported into
     `target`, and only a memory confirmed to be there afterwards is purged
     from `source` -- after a backup of `source` is written. A memory whose
     uid `target` already holds is left in both places and listed under
-    `conflicts`. Two stores are two files, so a failure between the copy and
-    the purge leaves a duplicate, never a loss.
+    `conflicts`. Two projects are two files, so a failure between the copy
+    and the purge leaves a duplicate, never a loss.
 
-    `dry_run` (the default) returns the same report and changes nothing.
-    `create` makes `target` when it does not exist; a dry run only reports
-    `creates`.
+    Project names are matched in any casing and reported as the projects
+    spell them. `dry_run` (the default) returns the same report and changes
+    nothing. `create` makes `target` when it does not exist; a dry run only
+    reports `creates`.
     """
     for name in (source, target):
-        error = db.store_name_error(name)
+        error = db.project_name_error(name)
         if error:
             raise ValueError(error)
-    if source == target:
-        raise ValueError("source and target are the same store")
+    source = db.project_name(source)
+    target = db.find_project(target) or target
+    if source.casefold() == target.casefold():
+        raise ValueError("source and target are the same project")
     if not uids and not domain:
         raise ValueError("name what to move: uids, a domain, or both")
-    if not db.store_exists(source):
-        raise ValueError(f"no store named '{source}'")
-    creates = not db.store_exists(target)
+    creates = not db.project_exists(target)
     if creates and not create:
-        raise ValueError(f"no store named '{target}'")
+        raise ValueError(f"no project named '{target}'")
 
     wanted = [str(u).strip() for u in uids if str(u).strip()]
-    with db.connect(store=source) as src:
+    with db.connect(project=source) as src:
         records = list(export_records(src, domain=domain, uids=wanted or None,
                                       include_archived=True, include_edits=True))
         slice_uids = [r["uid"] for r in records if r["record"] == "memory"]
         outside = boundary(src, slice_uids)
     conflicts: list[str] = []
     if not creates:
-        with db.connect(store=target) as dst:
+        with db.connect(project=target) as dst:
             conflicts = [u for u in slice_uids if db.get_memory(dst, u) is not None]
     kinds = Counter(r["record"] for r in records)
     report = {
@@ -395,14 +396,14 @@ def move(source: str, target: str, *, uids=(), domain: str = "", dry_run: bool =
     if not movable:
         return {"dry_run": False, "moved": 0, "backup": "", "errors": [], **report}
     if creates:
-        db.create_store(target)
-    backup = _spare_name(db.backups_dir(), db.backup_name(source, "move"))
-    db.backup_to(backup, store=source)
-    with db.connect(store=target) as dst:
+        db.create_project(target)
+    backup = _spare_name(db.backups_dir(source), db.backup_name(source, "move"))
+    db.backup_to(backup, project=source)
+    with db.connect(project=target) as dst:
         result = import_records(dst, records)
-    with db.connect(store=target) as dst:
+    with db.connect(project=target) as dst:
         landed = [u for u in movable if db.get_memory(dst, u) is not None]
-    with db.connect(store=source) as src:
+    with db.connect(project=source) as src:
         for uid in landed:
             db.purge_memory(src, uid)
     return {"dry_run": False, "moved": len(landed), "backup": str(backup),
@@ -415,7 +416,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="memai-store",
         description="Export the memai store as text, import one back, or move "
-                    "memories between stores.")
+                    "memories between projects.")
     sub = parser.add_subparsers(dest="command", required=True)
 
     out = sub.add_parser("export", help="write the store as jsonl or markdown")
@@ -431,14 +432,14 @@ def main(argv: list[str] | None = None) -> int:
     into.add_argument("--dry-run", action="store_true",
                       help="report what would be written, write nothing")
 
-    mv = sub.add_parser("move", help="carry memories from one store into another")
-    mv.add_argument("--to", dest="target", required=True, help="the target store")
+    mv = sub.add_parser("move", help="carry memories from one project into another")
+    mv.add_argument("--to", dest="target", required=True, help="the target project")
     mv.add_argument("--from", dest="source", default="",
-                    help="the source store (default: the active one)")
+                    help="the source project (default: the active one)")
     mv.add_argument("--domain", default="", help="this path and its subdomains")
     mv.add_argument("--uids", default="", help="comma-separated uids")
     mv.add_argument("--create", action="store_true",
-                    help="create the target store when it does not exist")
+                    help="create the target project when it does not exist")
     mv.add_argument("--dry-run", action="store_true",
                     help="report what would move, move nothing")
 
@@ -458,7 +459,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command == "move":
-        result = move(args.source or db.active_store(), args.target,
+        result = move(args.source or db.active_project(), args.target,
                       uids=[u for u in args.uids.split(",") if u.strip()],
                       domain=args.domain, dry_run=args.dry_run, create=args.create)
         print(json.dumps(result, ensure_ascii=False))

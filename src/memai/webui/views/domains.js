@@ -12,7 +12,7 @@ import { toast, failed, openModal, closeModal, confirmModal, promptModal,
 import { typeColor, TYPE_ORDER, getDomains, invalidateDomains, byDomainPath, domainLeaf,
          domainDatalist, inDomainPath, domainGuides, domainRailHTML } from '../core/shared.js';
 import { pickerFor, pickerValue, wirePicker, fixedItems } from '../core/pick.js';
-import { moveToStoreModal } from '../core/stores.js';
+import { moveToProjectModal } from '../core/projects.js';
 import { go, refreshBehind } from '../core/router.js';
 import { t } from '../i18n.js';
 
@@ -226,9 +226,9 @@ function rows(domains) {
         <!-- offered on an implicit level too: it holds no memory of its own,
              but moving it takes the subtree hanging off it -->
         <button class="btn btn-sm" data-ren="${esc(d.domain)}">${t('do.rn.move')}</button>
-        <!-- to another STORE, subtree and archived memories included; unlike
+        <!-- to another PROJECT, subtree and archived memories included; unlike
              the rename above, the memories leave this file -->
-        <button class="btn btn-sm" data-mv="${esc(d.domain)}">${t('do.act.toStore')}</button>
+        <button class="btn btn-sm" data-mv="${esc(d.domain)}">${t('do.act.toProject')}</button>
         <!-- One direction at a time, chosen by what is under the level:
              something active to archive, otherwise something archived to
              bring back. A purely cross-cutting level has neither, and gets
@@ -260,7 +260,7 @@ function wire(body, domains, draw) {
     b.addEventListener('click', () => openRenameModal(b.dataset.ren, domains)));
   body.querySelectorAll('[data-mv]').forEach(b =>
     b.addEventListener('click', async () => {
-      const moved = await moveToStoreModal({ domain: b.dataset.mv });
+      const moved = await moveToProjectModal({ domain: b.dataset.mv });
       if (!moved) return;
       invalidateDomains();
       refreshBehind();
