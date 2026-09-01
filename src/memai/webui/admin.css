@@ -501,13 +501,27 @@ kbd {
 .db-badge { font-size: var(--fs-sm); color: var(--ink-3); }
 .lang-sel { font-size: var(--fs-sm); padding-left: var(--sp-2); padding-right: var(--sp-5); }
 
-/* the project switch on the rail foot: a row label, then the control across
-   the whole foot, above the health rows */
-.project-sel {
-  width: 100%; margin: var(--sp-1) 0 var(--sp-3);
-  font-size: var(--fs-sm); padding-left: var(--sp-2); padding-right: var(--sp-5);
+/* The project switch is a rail row like the two under it: the label on the
+   left and the value on the right, in the data font -- except that here the
+   value is the control. So the box, the fill and the border of a .pick go,
+   and the caret stays as the one hint that this row opens. */
+.rh-project { align-items: center; }
+/* two classes, so this outranks the .pick rules that come later in the file */
+.pick.project-sel {
+  font: 500 var(--fs-label)/1.4 var(--font-m);
+  color: var(--ink-2);
+  background-color: transparent;
+  border: none;
+  border-radius: var(--r-sm);
+  padding: 0 14px 0 0;
+  height: auto; min-height: 0;
+  flex: 1; min-width: 0;
+  justify-content: flex-end;
+  background-position: right 0 center;
 }
-.project-sel .pick-value { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pick.project-sel:hover, .pick.project-sel[aria-expanded="true"] { color: var(--ink); }
+.pick.project-sel:focus-visible { outline: 1px solid var(--accent); outline-offset: 2px; }
+.pick.project-sel .pick-value { text-align: right; }
 /* the one row of the project list that is an action, not a project */
 .pick-row.pick-new .pick-label { color: var(--accent); }
 
