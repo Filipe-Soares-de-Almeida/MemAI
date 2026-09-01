@@ -505,6 +505,17 @@ kbd {
 /* the one row of the store list that is an action, not a store */
 .pick-row.pick-new .pick-label { color: var(--accent); }
 
+/* the send-to-store dialog: the target row, and the dry run under it */
+.mv-target { display: flex; flex-wrap: wrap; gap: var(--sp-2); align-items: center; }
+.mv-target > .pick { flex: none; min-width: 160px; }
+.mv-target > input { flex: 1; min-width: 140px; font-family: var(--font-m); }
+.mv-plan {
+  display: flex; flex-direction: column; gap: var(--sp-1);
+  margin-top: var(--sp-3);
+  font-size: var(--fs-sm); color: var(--ink-2);
+}
+.warn-line { color: var(--warn); }
+
 /* ── buttons & inputs ────────────────────────────────────────────────── */
 
 .btn {

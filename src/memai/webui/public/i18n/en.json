@@ -711,6 +711,26 @@
     "store.create.ok": "Create and switch",
     "store.created": "Store {name} created and active",
     "rail.store": "Store",
-    "err.store": "The store operation did not go through."
+    "err.store": "The store operation did not go through.",
+    "mv.title": "Send to another store",
+    "mv.body": "The memories leave store <b>{from}</b>: they are copied into the target with their history, checked there, and only then removed here. A backup of {from} is written first.",
+    "mv.target": "Target store",
+    "mv.nameIt": "Name the new store to see what would move",
+    "mv.scope.uids": "{n} selected memories",
+    "mv.scope.domain": "Everything filed under <code>{domain}</code>, subdomains and archived memories included",
+    "mv.plan": "{m} memories move, {d} of them diagrams, with {r} relations and {e} history entries",
+    "mv.creates": "The store {target} is created on the way",
+    "mv.conflicts": "{n} already exist in the target and stay here",
+    "mv.unknown": "{n} of the uids are not in this store",
+    "mv.outside.relations": "{n} relations to memories outside the selection are dropped",
+    "mv.outside.diagrams": "{n} diagram links or jumps cross the selection and are dropped",
+    "mv.outside.superseded": "{n} supersedes marks point across the selection",
+    "mv.outside.body": "{n} [[uid]] references in bodies cross the selection and will not resolve",
+    "mv.ok": "Move",
+    "mv.done": "{n} memories moved to {target}",
+    "mv.backup": "Backup: {name}",
+    "bulk.move": "Send to store…",
+    "do.act.toStore": "Send to store…",
+    "err.move": "The move did not go through."
   }
 }
