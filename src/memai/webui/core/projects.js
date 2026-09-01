@@ -46,10 +46,11 @@ function paint(data) {
   active = data.active;
   rows = data.projects;
   const list = items();
+  /* one row like the ones under it: the label, and the value IS the control */
   $('#railProject').innerHTML = `
-    <div class="rh-row"><span>${t('project.title')}</span></div>
-    ${pickerFor({ id: 'projectSel', value: active, items: list,
-                  ariaLabel: t('project.title'), cls: 'project-sel' })}`;
+    <div class="rh-row rh-project"><span>${t('project.title')}</span>
+      ${pickerFor({ id: 'projectSel', value: active, items: list,
+                    ariaLabel: t('project.title'), cls: 'project-sel' })}</div>`;
   wirePicker(document, { id: 'projectSel', items: fixedItems(list), onPick: pick, minWidth: 220 });
 }
 
