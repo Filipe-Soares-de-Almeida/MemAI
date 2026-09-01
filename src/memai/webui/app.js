@@ -18,11 +18,11 @@
    import { go, refreshBehind } and the cycle stays broken. */
 
 import { $ } from './core/dom.js';
-import { api } from './core/api.js';
 import { paintIcons } from './core/icons.js';
 import { modalOpen, closeModal, toast } from './core/ui.js';
 import { pickerFor, setPickerValue, wirePicker, fixedItems } from './core/pick.js';
-import { updateRail } from './core/shared.js';
+import { refreshRail } from './core/shared.js';
+import { mountStorePicker } from './core/stores.js';
 import { registerViews, route, go, parseHash } from './core/router.js';
 import { I18N, t } from './i18n.js';
 
@@ -51,6 +51,8 @@ registerViews({
 /* draw the shell's icons before the first route, so the rail is never
    shown mid-assembly (i18n does the same for its text, at import time) */
 paintIcons();
+/* the store switch needs a fetch of its own, so it fills in when that lands */
+mountStorePicker();
 
 $('#btnNew').addEventListener('click', openNewMemory);
 
@@ -104,4 +106,4 @@ route();
 /* Rail health on first paint. Overview renders from /api/overview and hands
    the same payload to updateRail itself, so asking for it here as well put
    two copies of one request in flight on the landing view. */
-if (parseHash().name !== 'overview') api('/api/overview').then(updateRail).catch(() => {});
+if (parseHash().name !== 'overview') refreshRail();

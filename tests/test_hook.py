@@ -156,7 +156,11 @@ def test_session_start_emits_the_brief(store, capsysbinary):
         _seed(conn)
     out = _run("session-start", {}, capsysbinary)
     assert out["hookSpecificOutput"]["hookEventName"] == "SessionStart"
-    assert "acme/x100" in out["hookSpecificOutput"]["additionalContext"]
+    context = out["hookSpecificOutput"]["additionalContext"]
+    assert "acme/x100" in context
+    # the brief names the store it was read from, and a home with no
+    # pointer is on the general one
+    assert "in store 'general'" in context
 
 
 def test_session_start_on_an_empty_store_emits_nothing(store, capsysbinary):

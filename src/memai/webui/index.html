@@ -75,6 +75,9 @@
        real field now (see app.js). -->
   <header class="topbar">
     <div class="topbar-right">
+      <!-- which store the dashboard, and every MCP server on this machine,
+           reads and writes right now; built and wired in core/stores.js -->
+      <span id="storeHost"></span>
       <span id="dbBadge" class="db-badge" title=""></span>
       <span id="langHost"></span>
       <button id="btnNew" class="btn btn-solid" data-i18n="topbar.newMemory">+ New memory</button>

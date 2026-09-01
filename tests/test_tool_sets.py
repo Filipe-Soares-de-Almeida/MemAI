@@ -65,7 +65,7 @@ def test_the_published_counts_are_the_ones_documented(monkeypatch):
     """The four counts the wiki's MEMAI_TOOLS table quotes."""
     counts = {setting or "full": len(_published(_load(monkeypatch, setting)))
               for setting in (None, "core,curation", "core,diagrams", "core")}
-    assert counts == {"full": 36, "core,curation": 30, "core,diagrams": 28, "core": 22}
+    assert counts == {"full": 37, "core,curation": 31, "core,diagrams": 29, "core": 23}
 
 
 def test_core_leaves_out_authoring_and_curation(monkeypatch):
