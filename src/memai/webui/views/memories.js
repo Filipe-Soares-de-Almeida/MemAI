@@ -14,6 +14,7 @@ import { typeTag, statusTag, confPill, getDomains, inDomainPath,
          typeItems, confItems } from '../core/shared.js';
 import { pickerHTML, pickerFor, wirePicker, fixedItems } from '../core/pick.js';
 import { domainPickerHTML, wireDomainPicker } from '../core/domain-picker.js';
+import { moveToStoreModal } from '../core/stores.js';
 import { go, refreshBehind } from '../core/router.js';
 import { onTeardown } from '../core/lifecycle.js';
 import { openRecord, setRecordSequence } from './record.js';
@@ -433,6 +434,7 @@ function syncBulkbar() {
     ${pickerHTML({ id: 'bulkConf', label: t('bulk.setConf'), ariaLabel: t('bulk.setConf') })}
     <button type="button" class="btn btn-sm" id="bulkArch">${t('common.archive')}</button>
     <button type="button" class="btn btn-sm" id="bulkRest">${t('common.restore')}</button>
+    <button type="button" class="btn btn-sm" id="bulkMove">${t('bulk.move')}</button>
     <button type="button" class="icon-btn" id="bulkClear"
             title="${t('bulk.clear.title')}" aria-label="${t('bulk.clear.title')}">${icon('close')}</button>`;
   document.body.appendChild(bar);
@@ -455,6 +457,14 @@ function syncBulkbar() {
     await runBulk({ action: 'archive', reason });
   });
   bar.querySelector('#bulkRest').addEventListener('click', () => runBulk({ action: 'restore' }));
+  /* The selection leaves this store: the dialog previews the move and runs
+     it, and the rows are gone from here once it has. */
+  bar.querySelector('#bulkMove').addEventListener('click', async () => {
+    const moved = await moveToStoreModal({ uids: [...selection] });
+    if (!moved) return;
+    selection.clear();
+    refreshBehind();
+  });
   /* Clearing a selection changes no data, so it unticks the boxes in place.
      It used to call refreshBehind(), which re-ran the whole route -- a fetch
      and a full repaint to undo three checkboxes. */

@@ -39,7 +39,7 @@ import os
 
 from mcp.server.fastmcp import FastMCP
 
-from memai import autostart, brief, db, diagram_svg, hook_install, sections
+from memai import autostart, brief, db, diagram_svg, hook_install, portable, sections
 
 # Sent to the host in the initialize handshake, and injected into the
 # model's context by the hosts that support it. Kept to a paragraph on
@@ -1548,6 +1548,31 @@ def purge_memory(uid: str, confirm_phrase: str) -> dict:
 
 
 @tool("curation")
+def move_to_store(target: str, uids: str = "", domain: str = "", dry_run: bool = True,
+                  create: bool = False) -> dict:
+    """Carry memories from the active store into another store, and remove them here.
+
+    `uids` is comma-separated, `domain` a path (its subdomains and archived
+    rows go too); give either or both. Each memory travels whole -- body,
+    cross-listings, usage counts, edit history, the relations and diagram
+    graph inside the slice -- into `target`, is checked there, and only
+    then purged from the active store, after a backup of it is written.
+
+    `dry_run` is the default and moves nothing: it reports what would move,
+    `conflicts` (uids `target` already holds, which stay here) and
+    `outside` -- the relations, diagram links and jumps, `superseded_by`
+    marks and [[uid]] references that cross the edge of the slice, all of
+    which the move drops. Read that report with the user, then widen the
+    slice or accept the loss BEFORE calling again with dry_run=False: the
+    purge is irreversible short of the backup. `create` makes a `target`
+    that does not exist yet. list_stores() names the stores there are.
+    """
+    wanted = [u.strip() for u in uids.split(",") if u.strip()]
+    return portable.move(db.active_store(), target, uids=wanted, domain=domain,
+                         dry_run=dry_run, create=create)
+
+
+@tool("curation")
 def dedup_scan(domain: str = "", type: str = "", threshold: float = 0.6, limit: int = 20) -> list[dict]:
     """Surface likely-duplicate/contradictory memory pairs.
 
@@ -1949,6 +1974,7 @@ _TOOLS = {
     "set_confidence": set_confidence,
     "forget": forget,
     "purge_memory": purge_memory,
+    "move_to_store": move_to_store,
     "dedup_scan": dedup_scan,
     "optimize_scan": optimize_scan,
     "optimize_stage": optimize_stage,

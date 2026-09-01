@@ -216,6 +216,14 @@ server, hook and dashboard on the machine opens the active store on its
 next call — no restart. Every write's result and every `pulse()` name the
 store they touched, and `list_stores()` lists them all.
 
+Memories move between stores from the dashboard — a selection in Memories,
+or a whole domain in Domains — with `move_to_store()`, or with
+`memai-store move`. A move copies each memory with its history into the
+target, checks it there and only then removes the original, after a backup
+of the source is written. What the copy cannot carry — a relation to a
+memory outside the selection, a diagram jump across it — is reported before
+anything moves.
+
 ---
 
 ## Documentation

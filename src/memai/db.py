@@ -1500,6 +1500,16 @@ def restore_diagram_refs(conn: sqlite3.Connection, record: dict) -> None:
          if j.get("direction") == "out" and known(j["peer_uid"])])
 
 
+def restore_edit(conn: sqlite3.Connection, record: dict) -> None:
+    """Put one row of a memory's edit history back as it was exported."""
+    conn.execute(
+        "INSERT INTO edits (memory_uid, edited_at, prev_content, new_content, note) "
+        "VALUES (?, ?, ?, ?, ?)",
+        (str(record["uid"]), record.get("edited_at") or now_iso(),
+         record.get("prev_content", ""), record.get("new_content", ""),
+         record.get("note", "")))
+
+
 def get_memory(conn: sqlite3.Connection, uid: str) -> sqlite3.Row | None:
     return conn.execute("SELECT * FROM memories WHERE uid = ?", (uid,)).fetchone()
 

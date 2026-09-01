@@ -711,6 +711,26 @@
     "store.create.ok": "Criar e ativar",
     "store.created": "Store {name} criado e ativo",
     "rail.store": "Store",
-    "err.store": "A operação no store não foi concluída."
+    "err.store": "A operação no store não foi concluída.",
+    "mv.title": "Enviar para outro store",
+    "mv.body": "As memórias saem do store <b>{from}</b>: são copiadas para o destino com o histórico, conferidas lá e só então removidas daqui. Um backup de {from} é gravado antes.",
+    "mv.target": "Store de destino",
+    "mv.nameIt": "Dê nome ao novo store para ver o que iria",
+    "mv.scope.uids": "{n} memórias selecionadas",
+    "mv.scope.domain": "Tudo guardado sob <code>{domain}</code>, subdomínios e memórias arquivadas incluídos",
+    "mv.plan": "{m} memórias vão, {d} delas diagramas, com {r} relações e {e} entradas de histórico",
+    "mv.creates": "O store {target} é criado no caminho",
+    "mv.conflicts": "{n} já existem no destino e ficam aqui",
+    "mv.unknown": "{n} dos uids não estão neste store",
+    "mv.outside.relations": "{n} relações com memórias fora da seleção são perdidas",
+    "mv.outside.diagrams": "{n} vínculos ou saltos de diagrama cruzam a seleção e são perdidos",
+    "mv.outside.superseded": "{n} marcas de substituição apontam para fora da seleção",
+    "mv.outside.body": "{n} referências [[uid]] em corpos cruzam a seleção e não vão resolver",
+    "mv.ok": "Mover",
+    "mv.done": "{n} memórias movidas para {target}",
+    "mv.backup": "Backup: {name}",
+    "bulk.move": "Enviar para store…",
+    "do.act.toStore": "Enviar para store…",
+    "err.move": "O envio não foi concluído."
   }
 }

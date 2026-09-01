@@ -48,7 +48,7 @@ from starlette.responses import FileResponse, JSONResponse, Response
 from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 
-from memai import __version__, autostart, db, sections
+from memai import __version__, autostart, db, portable, sections
 
 # Windows' registry-derived mimetypes map serves .js as text/plain, which
 # browsers refuse to execute as an ES module. Force the correct types.
@@ -308,6 +308,24 @@ def store_delete(request, payload) -> dict:
     """Remove an empty, inactive store. Refuses anything else -- see db.delete_store."""
     db.delete_store(request.path_params["name"])
     return {"ok": True, **stores(request, payload)}
+
+
+def store_move(request, payload) -> dict:
+    """Carry memories out of the active store into `target` -- see portable.move.
+
+    `uids` is a list of at most BULK_MAX, `domain` a path; either or both.
+    `dry_run` is the default and only reports; `create` makes a target that
+    does not exist yet.
+    """
+    uids = payload.get("uids") or []
+    if not isinstance(uids, list):
+        raise ValueError("uids must be a list")
+    if len(uids) > BULK_MAX:
+        raise ValueError(f"at most {BULK_MAX} uids per operation")
+    return portable.move(
+        db.active_store(), str(payload.get("target") or "").strip().lower(),
+        uids=[str(u) for u in uids], domain=str(payload.get("domain") or "").strip(),
+        dry_run=bool(payload.get("dry_run", True)), create=bool(payload.get("create")))
 
 
 # ---------------------------------------------------------------- memories
@@ -1807,6 +1825,7 @@ routes = [
     Route("/api/stores", api(stores), methods=["GET"]),
     Route("/api/stores", api(store_create), methods=["POST"]),
     Route("/api/stores/active", api(store_activate), methods=["POST"]),
+    Route("/api/stores/move", api(store_move), methods=["POST"]),
     Route("/api/stores/{name}", api(store_delete), methods=["DELETE"]),
     Route("/api/maintenance/dedup", api(dedup)),
     Route("/api/maintenance/sectionize", api(sectionize), methods=["POST"]),

@@ -14,9 +14,10 @@ Two formats, for the two jobs:
   md     one document, grouped by domain. Export only, for reading and
          grepping.
 
-What is deliberately NOT here: the edit history and the FTS index. History
-is what `VACUUM INTO` is for, and the index is derived -- an import rebuilds
-it from the content it writes.
+The FTS index is never in an export: it is derived, and an import rebuilds
+it from the content it writes. The edit history is left out by default --
+`VACUUM INTO` keeps it -- and carried when asked for (`include_edits`),
+which is how move() takes a memory from one store to another whole.
 """
 
 from __future__ import annotations
@@ -24,12 +25,23 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from collections import Counter
 from pathlib import Path
 
 from memai import db
 
 FORMATS = ("jsonl", "md")
 FORMAT_VERSION = 1
+# how many crossings of each kind a boundary report spells out; the count
+# beside them is always the whole number
+BOUNDARY_LIMIT = 20
+# uids per IN (...) list; SQLite refuses a statement with too many parameters
+_CHUNK = 500
+
+
+def _chunks(items: list, size: int = _CHUNK):
+    for i in range(0, len(items), size):
+        yield items[i:i + size]
 
 
 # --------------------------------------------------------------- exporting
@@ -51,18 +63,28 @@ def _memory_record(conn, row, usage: dict) -> dict:
     return out
 
 
-def export_records(conn, *, domain: str = "", include_archived: bool = False):
+def export_records(conn, *, domain: str = "", uids=None, include_archived: bool = False,
+                   include_edits: bool = False):
     """Every record of the export, in the order an import has to read them.
 
-    Memories first, then the diagram graphs, then relations and diagram
-    references: each of those names two memories, and both have to exist
-    before the row joining them can.
+    Memories first, then their edit history when `include_edits` asks for
+    it, then the diagram graphs, then relations and diagram references:
+    each of those names a memory that has to exist before the row about it
+    can.
+
+    `domain` narrows the export to a path and its subdomains; `uids` to
+    those memories, leaving out any the store does not hold. Given both,
+    the export is their intersection.
     """
     where, params = ["1=1"], []
     if domain:
         clause, values, _ = db.domain_scope_clause(conn, domain, alias="", subtree=True)
         where.append(clause)
         params.extend(values)
+    if uids is not None:
+        wanted = list(dict.fromkeys(str(u) for u in uids))
+        where.append(f"AND uid IN ({','.join('?' * len(wanted)) or 'NULL'})")
+        params.extend(wanted)
     if not include_archived:
         where.append("AND status = 'active'")
     rows = conn.execute(
@@ -77,6 +99,16 @@ def export_records(conn, *, domain: str = "", include_archived: bool = False):
            **({"domain": domain} if domain else {})}
     for row in rows:
         yield _memory_record(conn, row, usage)
+    if include_edits:
+        for chunk in _chunks(uids):
+            for r in conn.execute(
+                "SELECT memory_uid, edited_at, prev_content, new_content, note FROM edits "
+                f"WHERE memory_uid IN ({','.join('?' * len(chunk))}) ORDER BY edited_at, id",
+                chunk,
+            ).fetchall():
+                yield {"record": "edit", "uid": r["memory_uid"], "edited_at": r["edited_at"],
+                       "prev_content": r["prev_content"], "new_content": r["new_content"],
+                       **({"note": r["note"]} if r["note"] else {})}
     for row in rows:
         if row["type"] != db.DIAGRAM_TYPE:
             continue
@@ -177,9 +209,13 @@ def import_records(conn, records) -> dict:
     restored, merged into or carried, and in all three the local row is the
     one somebody has been using. Re-importing the same file changes nothing,
     which is what makes it safe to run twice.
+
+    An `edit` record is written only under a memory this import added: a
+    memory already here keeps the history it has.
     """
     added, skipped, errors = 0, 0, []
-    diagrams, relations = [], []
+    fresh: set[str] = set()
+    diagrams, relations, edits = [], [], []
     for i, rec in enumerate(records):
         kind = rec.get("record")
         try:
@@ -188,7 +224,10 @@ def import_records(conn, records) -> dict:
                     skipped += 1
                     continue
                 db.restore_memory(conn, rec)
+                fresh.add(str(rec["uid"]))
                 added += 1
+            elif kind == "edit":
+                edits.append(rec)
             elif kind == "diagram":
                 diagrams.append(rec)
             elif kind == "relation":
@@ -196,6 +235,15 @@ def import_records(conn, records) -> dict:
         except Exception as exc:  # one bad line must not lose the rest
             errors.append({"line": i + 1, "error": str(exc)})
 
+    history = 0
+    for rec in edits:
+        if str(rec.get("uid")) not in fresh:
+            continue
+        try:
+            db.restore_edit(conn, rec)
+            history += 1
+        except Exception as exc:
+            errors.append({"uid": rec.get("uid"), "error": str(exc)})
     for rec in diagrams:
         try:
             if db.get_memory(conn, rec["uid"]) is None:
@@ -213,7 +261,8 @@ def import_records(conn, records) -> dict:
             linked += 1
         except ValueError:
             pass  # an end that was skipped, or an edge that already exists
-    return {"added": added, "skipped": skipped, "relations": linked, "errors": errors}
+    return {"added": added, "skipped": skipped, "relations": linked, "edits": history,
+            "errors": errors}
 
 
 def read_jsonl(text: str):
@@ -223,12 +272,150 @@ def read_jsonl(text: str):
             yield json.loads(line)
 
 
+# ------------------------------------------------------- moving between stores
+
+def boundary(conn, uids) -> dict:
+    """What a slice of memories points at, or is pointed at from, outside itself.
+
+    An export carries only what joins two memories of the slice, so a
+    relation, a diagram link or jump, a `superseded_by` or a [[uid]] written
+    in a body that crosses the edge of the slice is dropped by the copy and
+    deleted with the originals. Each kind comes back as `count` plus up to
+    BOUNDARY_LIMIT `items`; the count is always the whole number.
+    """
+    inside = list(dict.fromkeys(str(u) for u in uids))
+    conn.execute("CREATE TEMP TABLE IF NOT EXISTS export_slice (uid TEXT PRIMARY KEY)")
+    conn.execute("DELETE FROM export_slice")
+    conn.executemany("INSERT OR IGNORE INTO export_slice (uid) VALUES (?)",
+                     [(u,) for u in inside])
+    try:
+        held = "IN (SELECT uid FROM export_slice)"
+
+        def crossing(sql: str) -> dict:
+            rows = conn.execute(sql).fetchall()
+            return {"count": len(rows), "items": [dict(r) for r in rows[:BOUNDARY_LIMIT]]}
+
+        out = {
+            "relations": crossing(
+                "SELECT from_uid, to_uid, relation_type FROM relations "
+                f"WHERE (from_uid {held}) <> (to_uid {held}) ORDER BY id"),
+            "diagram_links": crossing(
+                "SELECT memory_uid AS diagram_uid, node_key, target_uid FROM diagram_node_links "
+                f"WHERE (memory_uid {held}) <> (target_uid {held}) ORDER BY created_at"),
+            "diagram_jumps": crossing(
+                "SELECT from_uid, from_node, to_uid FROM diagram_jumps "
+                f"WHERE (from_uid {held}) <> (to_uid {held}) ORDER BY id"),
+            "superseded_by": crossing(
+                "SELECT uid, superseded_by FROM memories WHERE superseded_by IS NOT NULL "
+                f"AND (uid {held}) <> (superseded_by {held}) ORDER BY created_at"),
+        }
+        # a [[uid]] is written inside the text, so the bodies are read: those
+        # of the slice for a name outside it, and every other for a name inside
+        slice_set = set(inside)
+        mentions = []
+        for row in conn.execute("SELECT uid, content FROM memories WHERE content LIKE '%[[%'"):
+            here = row["uid"] in slice_set
+            for target in sorted({m.group(1) for m in db._BODY_LINK.finditer(row["content"] or "")}):
+                if target != row["uid"] and (target in slice_set) != here:
+                    mentions.append({"uid": row["uid"], "target_uid": target})
+        # a name nothing in the store resolves is already dangling, and no move
+        # changes that
+        known: set[str] = set()
+        for chunk in _chunks(sorted({m["target_uid"] for m in mentions})):
+            known |= {r[0] for r in conn.execute(
+                f"SELECT uid FROM memories WHERE uid IN ({','.join('?' * len(chunk))})", chunk)}
+        mentions = [m for m in mentions if m["target_uid"] in known]
+        out["body_links"] = {"count": len(mentions), "items": mentions[:BOUNDARY_LIMIT]}
+        return out
+    finally:
+        conn.execute("DROP TABLE IF EXISTS export_slice")
+
+
+def _spare_name(folder: Path, name: str) -> Path:
+    """`folder/name`, or the same name with -2, -3, ... when it is taken."""
+    dest, n = folder / name, 2
+    while dest.exists():
+        dest = folder / f"{name[:-3]}-{n}.db"
+        n += 1
+    return dest
+
+
+def move(source: str, target: str, *, uids=(), domain: str = "", dry_run: bool = True,
+         create: bool = False) -> dict:
+    """Carry memories from one store to another, whole, and remove the originals.
+
+    The slice is `uids`, `domain` (a path and its subdomains, archived rows
+    included) or both. It is exported with its edit history, imported into
+    `target`, and only a memory confirmed to be there afterwards is purged
+    from `source` -- after a backup of `source` is written. A memory whose
+    uid `target` already holds is left in both places and listed under
+    `conflicts`. Two stores are two files, so a failure between the copy and
+    the purge leaves a duplicate, never a loss.
+
+    `dry_run` (the default) returns the same report and changes nothing.
+    `create` makes `target` when it does not exist; a dry run only reports
+    `creates`.
+    """
+    for name in (source, target):
+        error = db.store_name_error(name)
+        if error:
+            raise ValueError(error)
+    if source == target:
+        raise ValueError("source and target are the same store")
+    if not uids and not domain:
+        raise ValueError("name what to move: uids, a domain, or both")
+    if not db.store_exists(source):
+        raise ValueError(f"no store named '{source}'")
+    creates = not db.store_exists(target)
+    if creates and not create:
+        raise ValueError(f"no store named '{target}'")
+
+    wanted = [str(u).strip() for u in uids if str(u).strip()]
+    with db.connect(store=source) as src:
+        records = list(export_records(src, domain=domain, uids=wanted or None,
+                                      include_archived=True, include_edits=True))
+        slice_uids = [r["uid"] for r in records if r["record"] == "memory"]
+        outside = boundary(src, slice_uids)
+    conflicts: list[str] = []
+    if not creates:
+        with db.connect(store=target) as dst:
+            conflicts = [u for u in slice_uids if db.get_memory(dst, u) is not None]
+    kinds = Counter(r["record"] for r in records)
+    report = {
+        "source": source, "target": target, "creates": creates,
+        "memories": len(slice_uids), "diagrams": kinds.get("diagram", 0),
+        "relations": kinds.get("relation", 0), "edits": kinds.get("edit", 0),
+        "conflicts": conflicts, "unknown": sorted(set(wanted) - set(slice_uids)),
+        "outside": outside,
+    }
+    if dry_run:
+        return {"dry_run": True, **report}
+
+    movable = [u for u in slice_uids if u not in set(conflicts)]
+    if not movable:
+        return {"dry_run": False, "moved": 0, "backup": "", "errors": [], **report}
+    if creates:
+        db.create_store(target)
+    backup = _spare_name(db.backups_dir(), db.backup_name(source, "move"))
+    db.backup_to(backup, store=source)
+    with db.connect(store=target) as dst:
+        result = import_records(dst, records)
+    with db.connect(store=target) as dst:
+        landed = [u for u in movable if db.get_memory(dst, u) is not None]
+    with db.connect(store=source) as src:
+        for uid in landed:
+            db.purge_memory(src, uid)
+    return {"dry_run": False, "moved": len(landed), "backup": str(backup),
+            "errors": result["errors"], **report}
+
+
 # --------------------------------------------------------------------- cli
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="memai-store",
-        description="Export the memai store as text, or import one back.")
+        description="Export the memai store as text, import one back, or move "
+                    "memories between stores.")
     sub = parser.add_subparsers(dest="command", required=True)
 
     out = sub.add_parser("export", help="write the store as jsonl or markdown")
@@ -236,18 +423,32 @@ def main(argv: list[str] | None = None) -> int:
     out.add_argument("--out", help="file to write (default: stdout)")
     out.add_argument("--domain", default="", help="only this path and its subdomains")
     out.add_argument("--include-archived", action="store_true")
+    out.add_argument("--include-edits", action="store_true",
+                     help="carry the edit history as well")
 
     into = sub.add_parser("import", help="read a jsonl export into this store")
     into.add_argument("path", help="the .jsonl file, or - for stdin")
     into.add_argument("--dry-run", action="store_true",
                       help="report what would be written, write nothing")
 
+    mv = sub.add_parser("move", help="carry memories from one store into another")
+    mv.add_argument("--to", dest="target", required=True, help="the target store")
+    mv.add_argument("--from", dest="source", default="",
+                    help="the source store (default: the active one)")
+    mv.add_argument("--domain", default="", help="this path and its subdomains")
+    mv.add_argument("--uids", default="", help="comma-separated uids")
+    mv.add_argument("--create", action="store_true",
+                    help="create the target store when it does not exist")
+    mv.add_argument("--dry-run", action="store_true",
+                    help="report what would move, move nothing")
+
     args = parser.parse_args(argv)
 
     if args.command == "export":
         with db.connect() as conn:
             records = list(export_records(conn, domain=args.domain,
-                                          include_archived=args.include_archived))
+                                          include_archived=args.include_archived,
+                                          include_edits=args.include_edits))
         text = to_jsonl(records) if args.format == "jsonl" else to_markdown(records)
         if args.out:
             Path(args.out).write_text(text, encoding="utf-8")
@@ -255,6 +456,13 @@ def main(argv: list[str] | None = None) -> int:
         else:
             sys.stdout.buffer.write(text.encode("utf-8"))
         return 0
+
+    if args.command == "move":
+        result = move(args.source or db.active_store(), args.target,
+                      uids=[u for u in args.uids.split(",") if u.strip()],
+                      domain=args.domain, dry_run=args.dry_run, create=args.create)
+        print(json.dumps(result, ensure_ascii=False))
+        return 1 if result.get("errors") else 0
 
     text = sys.stdin.read() if args.path == "-" else Path(args.path).read_text(encoding="utf-8")
     records = list(read_jsonl(text))
