@@ -548,7 +548,7 @@
     "mn.sub": "Health checks, duplicate review, index rebuilds and the change log",
     "mn.title": "Maintenance",
     "mn.wd.aside": "A subagent that consults the store on the session's behalf",
-    "mn.wd.body": "The Stop hook asks a session to launch it once the interval has passed; it reads the turns since its last run and reports only what bears on them. Off means the hook never asks, and costs nothing. This setting is store-wide, so it applies to every project on this machine.",
+    "mn.wd.body": "The Stop hook asks a session to launch it once the interval has passed; it reads the turns since its last run and reports only what bears on them. Off means the hook never asks, and costs nothing. This setting belongs to the active store; another store keeps its own.",
     "mn.wd.every": "Ask again after",
     "mn.wd.mins": "{n} min",
     "mn.wd.off": "Off",
@@ -699,6 +699,18 @@
     "type.handoff": "Handoff",
     "type.note": "Note",
     "type.reasoning": "Reasoning",
-    "uid.copyTitle": "Copy uid"
+    "uid.copyTitle": "Copy uid",
+    "store.title": "Active store",
+    "store.new": "New store…",
+    "store.busy": "Close the open dialog before switching store",
+    "store.switched": "Reading and writing store {name}",
+    "store.count": "{name}: {n} active memories",
+    "store.create.title": "New store",
+    "store.create.body": "A store is its own file. While it is active, every memory written — from this dashboard or by an agent — is filed in it and nowhere else. Lowercase letters, digits, '.', '_' and '-'.",
+    "store.create.label": "Name",
+    "store.create.ok": "Create and switch",
+    "store.created": "Store {name} created and active",
+    "rail.store": "Store",
+    "err.store": "The store operation did not go through."
   }
 }

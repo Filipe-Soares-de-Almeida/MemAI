@@ -73,8 +73,8 @@ def _log(message: str) -> None:
 
 
 def home() -> Path:
-    """MEMAI_HOME, created if needed -- db.default_db_path() does the mkdir."""
-    return db.default_db_path().parent
+    """MEMAI_HOME, created if needed -- db.home() does the mkdir."""
+    return db.home()
 
 
 def registry_path() -> Path:

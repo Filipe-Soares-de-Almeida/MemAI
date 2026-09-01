@@ -499,7 +499,11 @@ kbd {
 }
 .topbar-right { display: flex; align-items: center; gap: var(--sp-4); }
 .db-badge { font-size: var(--fs-sm); color: var(--ink-3); }
-.lang-sel { font-size: var(--fs-sm); padding-left: var(--sp-2); padding-right: var(--sp-5); }
+.lang-sel, .store-sel { font-size: var(--fs-sm); padding-left: var(--sp-2); padding-right: var(--sp-5); }
+/* the store's name is an identifier, set like the uids and the paths are */
+.store-sel { font-family: var(--font-m); }
+/* the one row of the store list that is an action, not a store */
+.pick-row.pick-new .pick-label { color: var(--accent); }
 
 /* ── buttons & inputs ────────────────────────────────────────────────── */
 

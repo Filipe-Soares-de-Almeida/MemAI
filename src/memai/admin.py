@@ -190,16 +190,19 @@ def _file_size(path: Path) -> int:
         return 0
 
 
-def _backups_dir() -> Path:
-    d = db.default_db_path().parent / "backups"
-    d.mkdir(parents=True, exist_ok=True)
-    return d
-
-
 def _raw_connect() -> sqlite3.Connection:
-    """Autocommit connection for statements that refuse to run inside a
-    transaction (VACUUM, VACUUM INTO, wal_checkpoint)."""
+    """Autocommit connection to the active store, for statements that refuse
+    to run inside a transaction (VACUUM, wal_checkpoint)."""
     return sqlite3.connect(str(db.default_db_path()), timeout=30.0, isolation_level=None)
+
+
+def _backup(kind: str = "") -> Path:
+    """A fresh backup of the active store, named after it (db.backup_name)."""
+    store = db.active_store()
+    dest = db.backups_dir() / db.backup_name(store, kind)
+    if dest.exists():
+        raise ValueError(f"backup already exists: {dest.name}")
+    return db.backup_to(dest, store=store)
 
 
 def api(handler):
@@ -267,11 +270,44 @@ def overview(request, payload) -> dict:
         "domains": domains[:10],
         "recent": recent,
         "db": {
+            "store": db.active_store(),
             "path": str(dbfile),
             "size": _file_size(dbfile),
             "wal_size": _file_size(dbfile.with_name(dbfile.name + "-wal")),
         },
     }
+
+
+# ------------------------------------------------------------------- stores
+
+def stores(request, payload) -> dict:
+    """Every store in the home, with its active-row count, and which is active."""
+    return {"active": db.active_store(), "stores": db.list_stores(counts=True)}
+
+
+def store_create(request, payload) -> dict:
+    """Create an empty store. `activate` switches to it in the same call.
+
+    The name is lowercased before it is checked, so `Acme` and `acme` name
+    one store rather than a refusal.
+    """
+    name = str(payload.get("name") or "").strip().lower()
+    db.create_store(name)
+    if payload.get("activate"):
+        db.set_active_store(name)
+    return {"ok": True, "name": name, **stores(request, payload)}
+
+
+def store_activate(request, payload) -> dict:
+    """Point every process on this home at `name` from its next connect on."""
+    name = str(payload.get("name") or "").strip()
+    return {"ok": True, "active": db.set_active_store(name)}
+
+
+def store_delete(request, payload) -> dict:
+    """Remove an empty, inactive store. Refuses anything else -- see db.delete_store."""
+    db.delete_store(request.path_params["name"])
+    return {"ok": True, **stores(request, payload)}
 
 
 # ---------------------------------------------------------------- memories
@@ -1168,6 +1204,7 @@ def _fts_check(conn: sqlite3.Connection) -> tuple[bool, str]:
 
 
 def health(request, payload) -> dict:
+    store = db.active_store()
     dbfile = db.default_db_path()
     with db.connect() as conn:
         quick = [r[0] for r in conn.execute("PRAGMA quick_check").fetchall()]
@@ -1194,12 +1231,13 @@ def health(request, payload) -> dict:
         freelist = conn.execute("PRAGMA freelist_count").fetchone()[0]
         compact_reason = db.get_compact_reason(conn)
         render_retention = db.get_svg_retention(conn)
-    backups = sorted(
-        ({"name": p.name, "size": _file_size(p),
-          "mtime": datetime.fromtimestamp(p.stat().st_mtime, tz=timezone.utc).isoformat()}
-         for p in _backups_dir().glob("*.db")),
-        key=lambda b: b["name"], reverse=True)
+    # the active store's own backups; another store's are listed when it is
+    backups = [
+        {"name": p.name, "size": _file_size(p),
+         "mtime": datetime.fromtimestamp(p.stat().st_mtime, tz=timezone.utc).isoformat()}
+        for p in db.backup_files(store)]
     return {
+        "store": store,
         # same rule as _fts_check: "ok" is quick_check's way of saying
         # nothing is wrong, and the UI has its own words for that
         "integrity": {"ok": integrity_ok,
@@ -1307,16 +1345,9 @@ def vacuum(request, payload) -> dict:
 
 
 def backup(request, payload) -> dict:
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
-    dest = _backups_dir() / f"memai-{stamp}.db"
-    if dest.exists():
-        raise ValueError(f"backup already exists: {dest.name}")
-    conn = _raw_connect()
-    try:
-        conn.execute("VACUUM INTO ?", (str(dest),))
-    finally:
-        conn.close()
-    return {"ok": True, "path": str(dest), "size": _file_size(dest)}
+    dest = _backup()
+    return {"ok": True, "store": db.active_store(), "path": str(dest),
+            "size": _file_size(dest)}
 
 
 def sectionize(request, payload) -> dict:
@@ -1327,13 +1358,7 @@ def sectionize(request, payload) -> dict:
     as it stood before that. The per-body previous text is in `edits`
     either way, so one memory can be put back without the file.
     """
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
-    dest = _backups_dir() / f"sectionize-{stamp}.db"
-    conn = _raw_connect()
-    try:
-        conn.execute("VACUUM INTO ?", (str(dest),))
-    finally:
-        conn.close()
+    dest = _backup("sectionize")
     with db.connect() as c:
         result = db.migrate_sections(c)
     return {"ok": True, "backup": str(dest), **result}
@@ -1515,9 +1540,9 @@ def optimization_suggestions(request, payload) -> dict:
 def _ensure_run_backup(run_id: int) -> str | None:
     """Take a whole-DB backup for a run once, before its first apply.
 
-    VACUUM INTO can't run inside a transaction, so this uses a raw
-    autocommit connection (like backup()) between two short db.connect()
-    reads/writes. Returns the backup path (existing or freshly created).
+    The copy is taken between two short db.connect() reads/writes, on its
+    own autocommit connection (see db.backup_to). Returns the backup path
+    (existing or freshly created).
     """
     with db.connect() as conn:
         run = db.get_optimization_run(conn, run_id)
@@ -1525,13 +1550,7 @@ def _ensure_run_backup(run_id: int) -> str | None:
             raise ValueError(f"unknown run: {run_id}")
         if run["backup_path"]:
             return run["backup_path"]
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
-    dest = _backups_dir() / f"optimize-run{run_id}-{stamp}.db"
-    conn = _raw_connect()
-    try:
-        conn.execute("VACUUM INTO ?", (str(dest),))
-    finally:
-        conn.close()
+    dest = _backup(f"optimize-run{run_id}")
     with db.connect() as conn:
         db.set_run_backup(conn, run_id, str(dest))
     return str(dest)
@@ -1632,6 +1651,7 @@ async def ping(request):
         "app": "memai",
         "version": __version__,
         "pid": os.getpid(),
+        "store": db.active_store(),
         "db": str(db.default_db_path()),
     })
 
@@ -1784,6 +1804,10 @@ routes = [
     Route("/api/maintenance/prune-renders", api(prune_renders), methods=["POST"]),
     Route("/api/maintenance/vacuum", api(vacuum), methods=["POST"]),
     Route("/api/maintenance/backup", api(backup), methods=["POST"]),
+    Route("/api/stores", api(stores), methods=["GET"]),
+    Route("/api/stores", api(store_create), methods=["POST"]),
+    Route("/api/stores/active", api(store_activate), methods=["POST"]),
+    Route("/api/stores/{name}", api(store_delete), methods=["DELETE"]),
     Route("/api/maintenance/dedup", api(dedup)),
     Route("/api/maintenance/sectionize", api(sectionize), methods=["POST"]),
     Route("/api/maintenance/sections-queue", api(section_queue)),
@@ -1954,7 +1978,8 @@ def main() -> None:
               f"(memai-admin --status says what is there)")
         raise SystemExit(1)
 
-    print(f"memai admin · db {db.default_db_path()} · http://{args.host}:{args.port}")
+    print(f"memai admin · store {db.active_store()} · db {db.default_db_path()} "
+          f"· http://{args.host}:{args.port}")
     if args.host not in LOOPBACK_HOSTS:
         print(f"  WARNING: {args.host} is not loopback. This API has NO authentication:"
               f"\n  anyone who can reach {args.host}:{args.port} can read, edit and"

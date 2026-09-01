@@ -548,7 +548,7 @@
     "mn.sub": "Verificações de saúde, revisão de duplicatas, reconstrução de índices e registro de alterações",
     "mn.title": "Manutenção",
     "mn.wd.aside": "Um subagente que consulta o store em nome da sessão",
-    "mn.wd.body": "O hook Stop pede que a sessão o lance quando o intervalo passa; ele lê os turnos desde a última execução e reporta só o que tem a ver com eles. Desligado, o hook nunca pede, e não custa nada. Esta configuração vale para o store inteiro, ou seja, para todos os projetos desta máquina.",
+    "mn.wd.body": "O hook Stop pede que a sessão o lance quando o intervalo passa; ele lê os turnos desde a última execução e reporta só o que tem a ver com eles. Desligado, o hook nunca pede, e não custa nada. Esta configuração é do store ativo; outro store guarda a sua.",
     "mn.wd.every": "Pedir de novo após",
     "mn.wd.mins": "{n} min",
     "mn.wd.off": "Desligado",
@@ -699,6 +699,18 @@
     "type.handoff": "Handoff",
     "type.note": "Nota",
     "type.reasoning": "Raciocínio",
-    "uid.copyTitle": "Copiar uid"
+    "uid.copyTitle": "Copiar uid",
+    "store.title": "Store ativo",
+    "store.new": "Novo store…",
+    "store.busy": "Feche a caixa de diálogo aberta antes de trocar de store",
+    "store.switched": "Lendo e gravando no store {name}",
+    "store.count": "{name}: {n} memórias ativas",
+    "store.create.title": "Novo store",
+    "store.create.body": "Um store é um arquivo próprio. Enquanto estiver ativo, toda memória gravada — por este painel ou por um agente — fica nele e em nenhum outro. Letras minúsculas, dígitos, '.', '_' e '-'.",
+    "store.create.label": "Nome",
+    "store.create.ok": "Criar e ativar",
+    "store.created": "Store {name} criado e ativo",
+    "rail.store": "Store",
+    "err.store": "A operação no store não foi concluída."
   }
 }

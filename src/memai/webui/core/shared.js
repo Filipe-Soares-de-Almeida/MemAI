@@ -305,8 +305,13 @@ export const cachedDomains = () => cache || [];
 
 export function updateRail(o) {
   $('#railHealth').innerHTML = `
+    <div class="rh-row"><span>${t('rail.store')}</span><b>${esc(o.db.store)}</b></div>
     <div class="rh-row"><span>${t('rail.db')}</span><b>${fmtBytes(o.db.size)}</b></div>
     <div class="rh-row"><span>${t('rail.active')}</span><b>${fmtInt(o.totals.active)}</b></div>`;
   $('#dbBadge').textContent = t('badge.active', { n: fmtInt(o.totals.active) });
   $('#dbBadge').title = o.db.path;
 }
+
+/* The rail from /api/overview, for the moments no view is about to hand the
+   payload over itself: the first paint off Overview, and a store switch. */
+export const refreshRail = () => api('/api/overview').then(updateRail).catch(() => {});

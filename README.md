@@ -39,8 +39,9 @@ warden subagent that consults it on a session's behalf.
   what is actually happening.
 - **Curation stays a person's.** Confidence, decay dates, dedup and staged
   suggestions: an agent proposes, a human applies them in the dashboard.
-- **One file holds all of it.** Rows, keyword index, edit history, relations,
-  diagrams. Copy it, back it up, delete it.
+- **One file holds a store.** Rows, keyword index, edit history, relations,
+  diagrams. Keep one store for everything, or one per project and switch
+  between them from the dashboard. Copy it, back it up, delete it.
 
 ## What it looks like
 
@@ -198,9 +199,22 @@ that JSON wants its backslashes doubled.
 
 ## Where the data lives
 
-`$MEMAI_HOME/memai.db` if `MEMAI_HOME` is set, otherwise `~/.memai/memai.db`,
-with `backups/`, `renders/` and `warden/` beside it. Not tracked in git — user
-data, created on first run.
+Under `$MEMAI_HOME` if it is set, otherwise `~/.memai`. Not tracked in git —
+user data, created on first run.
+
+| path | what it is |
+|---|---|
+| `memai.db` | the `general` store, the one every install starts with |
+| `stores/<name>.db` | every other store, one file each |
+| `active` | one line naming the store in use; absent means `general` |
+| `backups/` | `VACUUM INTO` copies, named `<store>-<stamp>.db` |
+| `renders/`, `warden/` | generated SVGs, and the warden's per-session state |
+
+A store is one whole memory: its own domains, relations, diagrams and
+settings. The dashboard's topbar switches the active one, and every MCP
+server, hook and dashboard on the machine opens the active store on its
+next call — no restart. Every write's result and every `pulse()` name the
+store they touched, and `list_stores()` lists them all.
 
 ---
 

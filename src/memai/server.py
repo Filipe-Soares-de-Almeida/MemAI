@@ -389,7 +389,10 @@ def _write_result(conn, uid: str, warning: dict | None, also: str,
     Present only when something crossed the threshold -- a store with no
     collision never sees the field, and the write is never blocked by one.
     """
-    result = {"uid": uid}
+    # the store as well as the uid: the active store is switched from the
+    # dashboard and a running server follows on its next call, so this is
+    # where a writer learns which file its memory landed in
+    result = {"uid": uid, "store": db.active_store()}
     # the count is the feedback: a writer sees what it indexed while it
     # still holds the context that would supply the missing words
     result["tags_indexed"] = len([t for t in tags.split(",") if t.strip()])
@@ -1119,6 +1122,23 @@ def timeline(
 
 
 @tool("core")
+def list_stores() -> dict:
+    """The stores in this home, and which one every call here reads and writes.
+
+    A store is one SQLite file with its own memories, domains, relations and
+    diagrams. The active one is switched in the admin dashboard, and a running
+    server follows on its next call -- so every write's result names the
+    store it landed in, and pulse() names the one it read. Each entry carries
+    `name`, `memories` (the active rows) and `active`.
+    """
+    return {
+        "active": db.active_store(),
+        "stores": [{"name": s["name"], "memories": s["memories"], "active": s["active"]}
+                   for s in db.list_stores(counts=True)],
+    }
+
+
+@tool("core")
 def list_domains() -> list[dict]:
     """List the domain tree: every path with its counts and latest activity.
 
@@ -1307,6 +1327,7 @@ def pulse(domain: str = "") -> dict:
         if left > 0:
             not_shown[key] = left
     return {
+        "store": db.active_store(),
         "latest_checkpoint": checkpoint_dict,
         "handoffs": [_snippet_dict(_row_to_dict(r)) for r in handoffs],
         "anti_patterns": [_snippet_dict(_row_to_dict(r)) for r in anti_patterns],
@@ -1335,7 +1356,7 @@ def warm_up(domain: str = "") -> str:
     store can be READ without the agent having decided to read it.
     """
     with db.connect() as conn:
-        text = brief.session_brief(conn, domain=domain)
+        text = brief.session_brief(conn, domain=domain, store=db.active_store())
     return text or "The memai store is empty -- nothing to warm up from yet."
 
 
@@ -1914,6 +1935,7 @@ _TOOLS = {
     "list_by_domain": list_by_domain,
     "list_recent": list_recent,
     "timeline": timeline,
+    "list_stores": list_stores,
     "list_domains": list_domains,
     "also_domain": also_domain,
     "unfile_domain": unfile_domain,

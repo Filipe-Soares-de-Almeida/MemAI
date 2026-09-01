@@ -75,7 +75,10 @@ export async function renderMaintenance(view) {
           <button class="btn" data-op="vacuum">${t('mn.op.vacuum')}</button>
           <button class="btn btn-solid" data-op="backup">${t('mn.op.backup')}</button>
         </div>
-        <h3 class="panel-title" style="margin-top:20px">${t('mn.backups')}</h3>
+        <!-- the store's name beside the heading: the list is the active
+             store's own backups, and another store's are listed when it is -->
+        <h3 class="panel-title" style="margin-top:20px">${t('mn.backups')}
+          <span class="panel-aside" id="backupsStore"></span></h3>
         <div id="backupsBody" class="hint">—</div>
 
         <!-- Renders are the one thing here that accumulates on disk without
@@ -172,6 +175,7 @@ export async function renderMaintenance(view) {
       t('mn.h.diskDetail', { size: fmtBytes(h.file.size), wal: h.file.wal_size ? ` + ${fmtBytes(h.file.wal_size)} WAL` : '', rec: fmtBytes(h.file.reclaimable) }) + why);
     if (!$('#healthBody')) return;
     $('#healthBody').innerHTML = rows.join('');
+    $('#backupsStore').textContent = h.store;
     $('#backupsBody').innerHTML = h.backups.length
       ? h.backups.map(b => `<div class="backup-row"><span>${esc(b.name)}</span><span>${fmtBytes(b.size)}</span></div>`).join('')
       : t('mn.backups.empty');
