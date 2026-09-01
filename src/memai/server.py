@@ -389,10 +389,10 @@ def _write_result(conn, uid: str, warning: dict | None, also: str,
     Present only when something crossed the threshold -- a store with no
     collision never sees the field, and the write is never blocked by one.
     """
-    # the store as well as the uid: the active store is switched from the
+    # the project as well as the uid: the active project is switched from the
     # dashboard and a running server follows on its next call, so this is
     # where a writer learns which file its memory landed in
-    result = {"uid": uid, "store": db.active_store()}
+    result = {"uid": uid, "project": db.active_project()}
     # the count is the feedback: a writer sees what it indexed while it
     # still holds the context that would supply the missing words
     result["tags_indexed"] = len([t for t in tags.split(",") if t.strip()])
@@ -1122,19 +1122,20 @@ def timeline(
 
 
 @tool("core")
-def list_stores() -> dict:
-    """The stores in this home, and which one every call here reads and writes.
+def list_projects() -> dict:
+    """The projects in this home, and which one every call here reads and writes.
 
-    A store is one SQLite file with its own memories, domains, relations and
-    diagrams. The active one is switched in the admin dashboard, and a running
-    server follows on its next call -- so every write's result names the
-    store it landed in, and pulse() names the one it read. Each entry carries
-    `name`, `memories` (the active rows) and `active`.
+    A project is one SQLite file with its own memories, domains, relations
+    and diagrams. The active one is switched in the admin dashboard, and a
+    running server follows on its next call -- so every write's result names
+    the project it landed in, and pulse() names the one it read. Each entry
+    carries `name`, `memories` (the active rows) and `active`. Names are
+    matched without regard to case wherever a tool takes one.
     """
     return {
-        "active": db.active_store(),
-        "stores": [{"name": s["name"], "memories": s["memories"], "active": s["active"]}
-                   for s in db.list_stores(counts=True)],
+        "active": db.active_project(),
+        "projects": [{"name": s["name"], "memories": s["memories"], "active": s["active"]}
+                   for s in db.list_projects(counts=True)],
     }
 
 
@@ -1327,7 +1328,7 @@ def pulse(domain: str = "") -> dict:
         if left > 0:
             not_shown[key] = left
     return {
-        "store": db.active_store(),
+        "project": db.active_project(),
         "latest_checkpoint": checkpoint_dict,
         "handoffs": [_snippet_dict(_row_to_dict(r)) for r in handoffs],
         "anti_patterns": [_snippet_dict(_row_to_dict(r)) for r in anti_patterns],
@@ -1356,7 +1357,7 @@ def warm_up(domain: str = "") -> str:
     store can be READ without the agent having decided to read it.
     """
     with db.connect() as conn:
-        text = brief.session_brief(conn, domain=domain, store=db.active_store())
+        text = brief.session_brief(conn, domain=domain, project=db.active_project())
     return text or "The memai store is empty -- nothing to warm up from yet."
 
 
@@ -1548,15 +1549,15 @@ def purge_memory(uid: str, confirm_phrase: str) -> dict:
 
 
 @tool("curation")
-def move_to_store(target: str, uids: str = "", domain: str = "", dry_run: bool = True,
+def move_to_project(target: str, uids: str = "", domain: str = "", dry_run: bool = True,
                   create: bool = False) -> dict:
-    """Carry memories from the active store into another store, and remove them here.
+    """Carry memories from the active project into another one, and remove them here.
 
     `uids` is comma-separated, `domain` a path (its subdomains and archived
     rows go too); give either or both. Each memory travels whole -- body,
     cross-listings, usage counts, edit history, the relations and diagram
     graph inside the slice -- into `target`, is checked there, and only
-    then purged from the active store, after a backup of it is written.
+    then purged from the active project, after a backup of it is written.
 
     `dry_run` is the default and moves nothing: it reports what would move,
     `conflicts` (uids `target` already holds, which stay here) and
@@ -1565,10 +1566,10 @@ def move_to_store(target: str, uids: str = "", domain: str = "", dry_run: bool =
     which the move drops. Read that report with the user, then widen the
     slice or accept the loss BEFORE calling again with dry_run=False: the
     purge is irreversible short of the backup. `create` makes a `target`
-    that does not exist yet. list_stores() names the stores there are.
+    that does not exist yet. list_projects() names the projects there are.
     """
     wanted = [u.strip() for u in uids.split(",") if u.strip()]
-    return portable.move(db.active_store(), target, uids=wanted, domain=domain,
+    return portable.move(db.active_project(), target, uids=wanted, domain=domain,
                          dry_run=dry_run, create=create)
 
 
@@ -1960,7 +1961,7 @@ _TOOLS = {
     "list_by_domain": list_by_domain,
     "list_recent": list_recent,
     "timeline": timeline,
-    "list_stores": list_stores,
+    "list_projects": list_projects,
     "list_domains": list_domains,
     "also_domain": also_domain,
     "unfile_domain": unfile_domain,
@@ -1974,7 +1975,7 @@ _TOOLS = {
     "set_confidence": set_confidence,
     "forget": forget,
     "purge_memory": purge_memory,
-    "move_to_store": move_to_store,
+    "move_to_project": move_to_project,
     "dedup_scan": dedup_scan,
     "optimize_scan": optimize_scan,
     "optimize_stage": optimize_stage,

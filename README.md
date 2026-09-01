@@ -39,9 +39,10 @@ warden subagent that consults it on a session's behalf.
   what is actually happening.
 - **Curation stays a person's.** Confidence, decay dates, dedup and staged
   suggestions: an agent proposes, a human applies them in the dashboard.
-- **One file holds a store.** Rows, keyword index, edit history, relations,
-  diagrams. Keep one store for everything, or one per project and switch
-  between them from the dashboard. Copy it, back it up, delete it.
+- **One file holds a project.** Rows, keyword index, edit history, relations,
+  diagrams: a project's whole memory in one SQLite file. Keep one for
+  everything, or one per project and switch between them from the dashboard.
+  Copy it, back it up, delete it.
 
 ## What it looks like
 
@@ -204,20 +205,22 @@ user data, created on first run.
 
 | path | what it is |
 |---|---|
-| `memai.db` | the `general` store, the one every install starts with |
-| `stores/<name>.db` | every other store, one file each |
-| `active` | one line naming the store in use; absent means `general` |
-| `backups/` | `VACUUM INTO` copies, named `<store>-<stamp>.db` |
+| `memai.db` | the `General` project, the one every install starts with |
+| `projects/<name>.db` | every other project, one file each, named as you named it |
+| `active` | one line naming the project in use; absent means `General` |
+| `backups/` | `VACUUM INTO` copies of `General`, named `General-<stamp>.db`; any other project's go in `backups/<name>/` |
 | `renders/`, `warden/` | generated SVGs, and the warden's per-session state |
 
-A store is one whole memory: its own domains, relations, diagrams and
-settings. The dashboard's topbar switches the active one, and every MCP
-server, hook and dashboard on the machine opens the active store on its
-next call — no restart. Every write's result and every `pulse()` name the
-store they touched, and `list_stores()` lists them all.
+A project is one whole memory: its own domains, relations, diagrams and
+settings. Any name that works as a Windows file name works as a project
+name, and two names that differ only in case are one project. The switch is
+on the dashboard's rail, and every MCP server, hook and dashboard on the
+machine opens the active project on its next call — no restart. Every
+write's result and every `pulse()` name the project they touched, and
+`list_projects()` lists them all.
 
-Memories move between stores from the dashboard — a selection in Memories,
-or a whole domain in Domains — with `move_to_store()`, or with
+Memories move between projects from the dashboard — a selection in
+Memories, or a whole domain in Domains — with `move_to_project()`, or with
 `memai-store move`. A move copies each memory with its history into the
 target, checks it there and only then removes the original, after a backup
 of the source is written. What the copy cannot carry — a relation to a

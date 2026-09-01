@@ -3,9 +3,9 @@
 One store is one WAL-mode file holding memory rows, an FTS5 index, edit
 history, a relations graph, and the node/edge tables behind type='diagram'
 memories together under one set of ACID transactions, so there is nothing
-that can desync from the metadata on a hard-kill. A home directory holds
-any number of stores and names the one every connect() opens by default --
-see the store functions after SCHEMA.
+that can desync from the metadata on a hard-kill. One such file is a
+PROJECT: a home directory holds any number of them and names the one every
+connect() opens by default -- see the project functions after SCHEMA.
 
 Retrieval is FTS5 BM25 keyword search. It only widens the candidate set --
 semantic judgment is left to the calling agent, which reads the candidates
@@ -341,27 +341,29 @@ CREATE INDEX IF NOT EXISTS idx_optsug_status ON optimization_suggestions(status)
 """
 
 
-# ------------------------------------------------------------------ stores
-# One store is one SQLite file. The home directory (MEMAI_HOME, or ~/.memai)
-# holds `memai.db`, the store named GENERAL_STORE, and `stores/<name>.db` for
-# every other one. A one-line file named ACTIVE_FILE in the home says which
-# of them connect() opens when handed no path; without it, or with a name
-# that cannot be a store, that is GENERAL_STORE. The file is read on every
-# connect(), so a switch written by one process reaches every other process
-# on its next call.
-GENERAL_STORE = "general"
+# ---------------------------------------------------------------- projects
+# One project is one SQLite file holding a whole memory. The home directory
+# (MEMAI_HOME, or ~/.memai) holds `memai.db`, the project named
+# GENERAL_PROJECT, and `projects/<name>.db` for every other one. A one-line
+# file named ACTIVE_FILE in the home says which of them connect() opens when
+# handed no path; without it, or naming a project that is not there, that is
+# GENERAL_PROJECT. The file is read on every connect(), so a switch written
+# by one process reaches every other process on its next call.
+GENERAL_PROJECT = "General"
 GENERAL_FILE = "memai.db"
-STORES_DIRNAME = "stores"
+PROJECTS_DIRNAME = "projects"
 ACTIVE_FILE = "active"
 BACKUPS_DIRNAME = "backups"
-# Lowercase, so a name is one file on a case-insensitive filesystem and on a
-# case-sensitive one alike, and never a path: no separators, no leading dot.
-_STORE_NAME = re.compile(r"^[a-z0-9][a-z0-9._-]{0,39}$")
-# The prefixes GENERAL_STORE's backups carry when written without the store
-# name in front -- see backup_files().
-_LEGACY_BACKUP_GLOBS = ("memai-*.db", "optimize-run*.db", "sectionize-*.db")
-# A store by one of these names would file its backups under a legacy prefix.
-_RESERVED_STORE_NAMES = ("memai", "optimize", "sectionize")
+PROJECT_NAME_MAX = 80
+# A project's name is its file name, so it follows the rules of the strictest
+# filesystem the home may sit on, which is Windows: none of these characters,
+# no control character, no leading or trailing space, no trailing dot, and
+# none of the device names. Two names that differ only in case are one file
+# there, so they are one project everywhere.
+_PROJECT_BAD_CHARS = frozenset('<>:"/\\|?*') | frozenset(chr(c) for c in range(32))
+_PROJECT_DEVICES = frozenset(
+    ["con", "prn", "aux", "nul",
+     *(f"com{i}" for i in range(1, 10)), *(f"lpt{i}" for i in range(1, 10))])
 
 
 def home() -> Path:
@@ -371,62 +373,98 @@ def home() -> Path:
     return path
 
 
-def store_name_error(name: object) -> str | None:
-    """Why `name` cannot name a store, or None when it can."""
+def project_name_error(name: object) -> str | None:
+    """Why `name` cannot name a project, or None when it can."""
     text = str(name or "")
-    if not _STORE_NAME.match(text):
-        return ("a store name is 1 to 40 characters of lowercase letters, digits, "
-                "'.', '_' or '-', and starts with a letter or digit")
-    if text in _RESERVED_STORE_NAMES:
-        return f"'{text}' is reserved"
+    if not text.strip():
+        return "a project needs a name"
+    if text != text.strip() or text.endswith("."):
+        return "a project name cannot start or end with a space, or end with a dot"
+    if len(text) > PROJECT_NAME_MAX:
+        return f"a project name has at most {PROJECT_NAME_MAX} characters"
+    bad = sorted(c for c in set(text) if c in _PROJECT_BAD_CHARS)
+    if bad:
+        shown = " ".join(repr(c) if ord(c) < 32 else c for c in bad)
+        return f"a project name cannot contain {shown}"
+    if text.split(".")[0].casefold() in _PROJECT_DEVICES:
+        return f"'{text}' is a device name on Windows"
     return None
 
 
-def _checked_store(name: object) -> str:
-    error = store_name_error(name)
+def _checked_project(name: object) -> str:
+    error = project_name_error(name)
     if error:
         raise ValueError(error)
     return str(name)
 
 
-def store_path(name: str) -> Path:
-    """The file behind a store name. GENERAL_STORE is `memai.db` in the home root."""
-    name = _checked_store(name)
-    if name == GENERAL_STORE:
-        return home() / GENERAL_FILE
-    folder = home() / STORES_DIRNAME
+def _same_project(a: str, b: str) -> bool:
+    return a.casefold() == b.casefold()
+
+
+def _projects_dir() -> Path:
+    folder = home() / PROJECTS_DIRNAME
     folder.mkdir(parents=True, exist_ok=True)
-    return folder / f"{name}.db"
+    return folder
 
 
-def store_exists(name: str) -> bool:
-    """Whether a store of that name is on disk. GENERAL_STORE always counts
-    as existing: connect() creates its file."""
-    return name == GENERAL_STORE or store_path(name).exists()
+def find_project(name: str) -> str | None:
+    """The project called `name`, spelled the way its file is, or None when
+    there is none. Matched without regard to case; GENERAL_PROJECT is always
+    there."""
+    if _same_project(name, GENERAL_PROJECT):
+        return GENERAL_PROJECT
+    for path in _projects_dir().glob("*.db"):
+        if path.is_file() and _same_project(path.stem, name):
+            return path.stem
+    return None
 
 
-def active_store() -> str:
-    """The store connect() opens when handed no path.
+def project_name(name: str) -> str:
+    """`name` spelled the way the project is, or ValueError when there is no
+    such project."""
+    found = find_project(_checked_project(name))
+    if found is None:
+        raise ValueError(f"no project named '{name}'")
+    return found
 
-    Read from ACTIVE_FILE in the home; GENERAL_STORE when the file is absent
-    or holds something that cannot name a store.
+
+def project_exists(name: str) -> bool:
+    return project_name_error(name) is None and find_project(name) is not None
+
+
+def project_path(name: str) -> Path:
+    """The file behind a project name. GENERAL_PROJECT is `memai.db` in the
+    home root; any other is `projects/<name>.db`, spelled as the file is when
+    one exists."""
+    name = _checked_project(name)
+    if _same_project(name, GENERAL_PROJECT):
+        return home() / GENERAL_FILE
+    return _projects_dir() / f"{find_project(name) or name}.db"
+
+
+def active_project() -> str:
+    """The project connect() opens when handed no path.
+
+    Read from ACTIVE_FILE in the home; GENERAL_PROJECT when the file is
+    absent, or names something that is not a project here.
     """
     try:
         name = (home() / ACTIVE_FILE).read_text(encoding="utf-8").strip()
     except OSError:
-        return GENERAL_STORE
-    return name if store_name_error(name) is None else GENERAL_STORE
+        return GENERAL_PROJECT
+    if project_name_error(name):
+        return GENERAL_PROJECT
+    return find_project(name) or GENERAL_PROJECT
 
 
-def set_active_store(name: str) -> str:
+def set_active_project(name: str) -> str:
     """Point every later connect() at `name`, which has to exist already.
 
     Written to a sibling file and renamed into place: a concurrent reader
     gets the old name or the new one, never part of either.
     """
-    name = _checked_store(name)
-    if not store_exists(name):
-        raise ValueError(f"no store named '{name}'")
+    name = project_name(name)
     target = home() / ACTIVE_FILE
     tmp = target.with_name(f"{ACTIVE_FILE}.tmp")
     tmp.write_text(f"{name}\n", encoding="utf-8")
@@ -434,34 +472,34 @@ def set_active_store(name: str) -> str:
     return name
 
 
-def create_store(name: str) -> Path:
-    """A new, empty store with the schema in place. Refuses a name already taken."""
-    path = store_path(name)
-    if path.exists():
-        raise ValueError(f"store '{name}' already exists")
+def create_project(name: str) -> Path:
+    """A new, empty project with the schema in place. Refuses a name already
+    taken, in any casing."""
+    name = _checked_project(name)
+    if find_project(name) is not None:
+        raise ValueError(f"project '{name}' already exists")
+    path = project_path(name)
     with connect(path):
         pass
     return path
 
 
-def delete_store(name: str) -> None:
-    """Remove a store that holds no memory and is not the active one.
+def delete_project(name: str) -> None:
+    """Remove a project that holds no memory and is not the active one.
 
-    GENERAL_STORE is never removed. The WAL and shared-memory files go with
+    GENERAL_PROJECT is never removed. The WAL and shared-memory files go with
     the database.
     """
-    name = _checked_store(name)
-    if name == GENERAL_STORE:
-        raise ValueError("the general store cannot be deleted")
-    path = store_path(name)
-    if not path.exists():
-        raise ValueError(f"no store named '{name}'")
-    if name == active_store():
-        raise ValueError("switch to another store before deleting the active one")
+    name = project_name(name)
+    if name == GENERAL_PROJECT:
+        raise ValueError("the General project cannot be deleted")
+    if name == active_project():
+        raise ValueError("switch to another project before deleting the active one")
+    path = project_path(name)
     with connect(path) as conn:
         held = conn.execute("SELECT COUNT(*) FROM memories").fetchone()[0]
     if held:
-        raise ValueError(f"store '{name}' holds {held} memories; move them out first")
+        raise ValueError(f"project '{name}' holds {held} memories; move them out first")
     for suffix in ("", "-wal", "-shm"):
         try:
             path.with_name(path.name + suffix).unlink()
@@ -469,26 +507,27 @@ def delete_store(name: str) -> None:
             pass
 
 
-def list_stores(*, counts: bool = False) -> list[dict]:
-    """Every store in the home: GENERAL_STORE first, the rest by name.
+def list_projects(*, counts: bool = False) -> list[dict]:
+    """Every project in the home: GENERAL_PROJECT first, the rest by name.
 
     Per entry: `name`, `path`, `size` in bytes (0 until the first connect
-    creates the file) and `active`. With `counts`, also `memories` -- the
-    active rows, which opens each store to ask.
+    creates the file), `active` and `general`. With `counts`, also
+    `memories` -- the active rows, which opens each project to ask.
     """
-    active = active_store()
-    found = [(GENERAL_STORE, home() / GENERAL_FILE)]
-    folder = home() / STORES_DIRNAME
-    if folder.is_dir():
-        found += sorted((p.stem, p) for p in folder.glob("*.db")
-                        if store_name_error(p.stem) is None and p.stem != GENERAL_STORE)
+    active = active_project()
+    found = [(GENERAL_PROJECT, home() / GENERAL_FILE)]
+    found += sorted(((p.stem, p) for p in _projects_dir().glob("*.db")
+                     if p.is_file() and project_name_error(p.stem) is None
+                     and not _same_project(p.stem, GENERAL_PROJECT)),
+                    key=lambda item: item[0].casefold())
     out = []
     for name, path in found:
         try:
             size = path.stat().st_size
         except OSError:
             size = 0
-        entry = {"name": name, "path": str(path), "size": size, "active": name == active}
+        entry = {"name": name, "path": str(path), "size": size,
+                 "active": name == active, "general": name == GENERAL_PROJECT}
         if counts:
             with connect(path) as conn:
                 entry["memories"] = conn.execute(
@@ -498,8 +537,8 @@ def list_stores(*, counts: bool = False) -> list[dict]:
 
 
 def default_db_path() -> Path:
-    """The active store's file: what connect() opens when handed no path."""
-    return store_path(active_store())
+    """The active project's file: what connect() opens when handed no path."""
+    return project_path(active_project())
 
 
 def renders_dir() -> Path:
@@ -517,42 +556,39 @@ def renders_dir() -> Path:
 
 # ----------------------------------------------------------------- backups
 
-def backups_dir() -> Path:
-    """`<home>/backups`, created if needed. One folder shared by every store;
-    the file name carries the store -- see backup_name()."""
-    out = home() / BACKUPS_DIRNAME
+def backups_dir(project: str = GENERAL_PROJECT) -> Path:
+    """Where a project's backups go, created if needed: `<home>/backups` for
+    GENERAL_PROJECT, `<home>/backups/<name>` for any other project."""
+    root = home() / BACKUPS_DIRNAME
+    if _same_project(project, GENERAL_PROJECT):
+        out = root
+    else:
+        out = root / (find_project(project) or project)
     out.mkdir(parents=True, exist_ok=True)
     return out
 
 
-def backup_name(store: str, kind: str = "") -> str:
-    """`<store>-[<kind>-]<UTC stamp>.db`: the file a backup of `store` is
+def backup_name(project: str, kind: str = "") -> str:
+    """`<project>-[<kind>-]<UTC stamp>.db`: the file a backup of `project` is
     written as."""
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
-    return f"{store}-{kind}-{stamp}.db" if kind else f"{store}-{stamp}.db"
+    return f"{project}-{kind}-{stamp}.db" if kind else f"{project}-{stamp}.db"
 
 
-def backup_files(store: str) -> list[Path]:
-    """The backups of one store, newest name first.
-
-    GENERAL_STORE also owns the files written with no store name in front:
-    `memai-*.db`, `optimize-run*.db` and `sectionize-*.db`.
-    """
-    folder = backups_dir()
-    globs = [f"{store}-*.db"]
-    if store == GENERAL_STORE:
-        globs += _LEGACY_BACKUP_GLOBS
-    found = {p for g in globs for p in folder.glob(g)}
-    return sorted(found, key=lambda p: p.name, reverse=True)
+def backup_files(project: str) -> list[Path]:
+    """The backups of one project, newest first: the `.db` files in its
+    backups_dir(), whatever they are named."""
+    files = [p for p in backups_dir(project).glob("*.db") if p.is_file()]
+    return sorted(files, key=lambda p: p.stat().st_mtime, reverse=True)
 
 
-def backup_to(dest: Path, *, store: str | None = None) -> Path:
-    """Copy a store into `dest` with VACUUM INTO: `store`, or the active one.
+def backup_to(dest: Path, *, project: str | None = None) -> Path:
+    """Copy a project into `dest` with VACUUM INTO: `project`, or the active one.
 
     Runs on an autocommit connection, since the statement refuses to run
     inside a transaction. Fails when `dest` already exists.
     """
-    src = store_path(store) if store else default_db_path()
+    src = project_path(project) if project else default_db_path()
     conn = sqlite3.connect(str(src), timeout=30.0, isolation_level=None)
     try:
         conn.execute("VACUUM INTO ?", (str(dest),))
@@ -599,8 +635,8 @@ WARDEN_MINUTES_RANGE = (1, 480)
 def get_warden_enabled(conn: sqlite3.Connection) -> bool:
     """Whether the Stop hook may ask a session to launch the warden.
 
-    Read from the store `conn` is on: each store carries its own switch, and
-    the hook consults the active one.
+    Read from the project `conn` is on: each project carries its own switch,
+    and the hook consults the active one.
     """
     value = _get_meta(conn, WARDEN_ENABLED_KEY)
     return WARDEN_ENABLED_DEFAULT if value is None else value == "1"
@@ -1327,16 +1363,16 @@ def _drop_vector_store(conn: sqlite3.Connection) -> bool:
 
 
 @contextmanager
-def connect(db_path: Path | None = None, *, store: str | None = None):
-    """A connection to one store, committed when the block exits cleanly.
+def connect(db_path: Path | None = None, *, project: str | None = None):
+    """A connection to one project's file, committed when the block exits cleanly.
 
-    `db_path` opens that file, `store` opens the store of that name, and
-    neither opens the active store (see active_store). The schema and the
-    migrations run on every open.
+    `db_path` opens that file, `project` opens the project of that name (in
+    any casing), and neither opens the active project (see active_project).
+    The schema and the migrations run on every open.
     """
-    if db_path is not None and store is not None:
-        raise ValueError("pass db_path or store, not both")
-    path = db_path or (store_path(store) if store else default_db_path())
+    if db_path is not None and project is not None:
+        raise ValueError("pass db_path or project, not both")
+    path = db_path or (project_path(project) if project else default_db_path())
     conn = sqlite3.connect(str(path), timeout=30.0)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL;")

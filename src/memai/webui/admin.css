@@ -499,13 +499,19 @@ kbd {
 }
 .topbar-right { display: flex; align-items: center; gap: var(--sp-4); }
 .db-badge { font-size: var(--fs-sm); color: var(--ink-3); }
-.lang-sel, .store-sel { font-size: var(--fs-sm); padding-left: var(--sp-2); padding-right: var(--sp-5); }
-/* the store's name is an identifier, set like the uids and the paths are */
-.store-sel { font-family: var(--font-m); }
-/* the one row of the store list that is an action, not a store */
+.lang-sel { font-size: var(--fs-sm); padding-left: var(--sp-2); padding-right: var(--sp-5); }
+
+/* the project switch on the rail foot: a row label, then the control across
+   the whole foot, above the health rows */
+.project-sel {
+  width: 100%; margin: var(--sp-1) 0 var(--sp-3);
+  font-size: var(--fs-sm); padding-left: var(--sp-2); padding-right: var(--sp-5);
+}
+.project-sel .pick-value { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* the one row of the project list that is an action, not a project */
 .pick-row.pick-new .pick-label { color: var(--accent); }
 
-/* the send-to-store dialog: the target row, and the dry run under it */
+/* the send-to-project dialog: the target row, and the dry run under it */
 .mv-target { display: flex; flex-wrap: wrap; gap: var(--sp-2); align-items: center; }
 .mv-target > .pick { flex: none; min-width: 160px; }
 .mv-target > input { flex: 1; min-width: 140px; font-family: var(--font-m); }
