@@ -1960,46 +1960,70 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
   border-top: 1px solid var(--line-soft);
   color: var(--ink-3); font-size: var(--fs-label);
 }
+/* The card floats over the drawing, so its height is canvas the reader does
+   not get to look at. It answers four things -- what this memory is, what it
+   is called, where it is filed, and where you can go from it -- and stops. */
 .graph-card {
   position: absolute; left: 12px; bottom: 12px; z-index: 4;
-  width: min(420px, calc(100% - 24px));
+  width: min(324px, calc(100% - 24px));
   background: var(--overlay);
   border: 1px solid var(--line);
   border-radius: var(--r-lg);
-  padding: var(--sp-3) var(--sp-4);
+  padding: var(--sp-3);
   box-shadow: var(--shadow-pop);
   animation: rise .2s both;
 }
-.graph-card .snippet { font-size: var(--fs-sm); color: var(--ink-2); margin: var(--sp-2) 0 var(--sp-3); line-height: 1.5; }
+.gc-head { display: flex; align-items: flex-start; gap: var(--sp-2); }
+.gc-head .gc-tags { flex: 1; min-width: 0; }
+/* the close button sits on the first line of the chips beside it, not on the
+   centre of a row its own 30px target defines -- same fix as the toast */
+.gc-head .icon-btn {
+  flex: none;
+  margin-block: calc((var(--fs-sm) * 1.5 - var(--ctl-h-sm)) / 2);
+}
+/* Two lines of the body, clamped: the record is one button away and this is
+   a reminder of which memory the star is, not a place to read it. */
+.graph-card .snippet {
+  font-size: var(--fs-sm); color: var(--ink-2);
+  margin: var(--sp-1) 0 var(--sp-3); line-height: 1.5;
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2;
+  overflow: hidden;
+}
 .gc-tags { display: flex; gap: var(--sp-2); align-items: center; flex-wrap: wrap; }
 /* The memory's own name, which is the first thing the card has to answer.
    A titled memory shows its title; one written before the column shows the
    opening line of its body, and then the snippet below would repeat it. */
 .gc-name {
-  margin: var(--sp-2) 0 var(--sp-3);
+  margin: var(--sp-2) 0 0;
   font: 500 var(--fs-md)/1.4 var(--font-ui);
   color: var(--ink);
+  /* three lines is a title that has stopped naming and started restating;
+     TITLE_MAX is 120 characters and this is where that shows */
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3;
+  overflow: hidden;
 }
+.gc-name + .act-row { margin-top: var(--sp-3); }
 /* Where you can go from here. This is the view's whole traversal: land on a
    memory, then step along its relations without returning to a list. */
 .gc-travel {
-  margin-top: var(--sp-3); padding-top: var(--sp-3);
+  margin-top: var(--sp-3); padding-top: var(--sp-2);
   border-top: 1px solid var(--line-soft);
 }
 .gc-travel-head {
-  display: block; margin-bottom: var(--sp-2);
+  display: block; margin-bottom: var(--sp-1);
   font-size: var(--fs-label); color: var(--ink-3);
 }
 .gc-walk { font-family: var(--font-m); }
-.gc-hops { display: flex; flex-wrap: wrap; gap: var(--sp-2); }
+.gc-hops { display: flex; flex-wrap: wrap; gap: var(--sp-1); }
 .gc-hop {
-  display: inline-flex; align-items: center; gap: 6px;
+  display: inline-flex; align-items: center; gap: 5px;
   max-width: 100%;
   background: var(--chip-fill);
   border: 1px solid var(--line-soft);
   border-radius: var(--r-sm);
-  padding: 4px var(--sp-2);
+  padding: 3px var(--sp-2);
   font-size: var(--fs-sm); color: var(--ink-2);
+  white-space: nowrap;
   cursor: pointer;
 }
 .gc-hop:hover { background: var(--hover-3); border-color: var(--line); color: var(--ink); }
