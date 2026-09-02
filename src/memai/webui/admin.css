@@ -1808,22 +1808,16 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
   height: calc(100vh - 200px); min-height: 480px;
   border: 1px solid var(--line-soft);
   border-radius: var(--r-lg);
-  background:
-    radial-gradient(circle at 1px 1px, rgba(255, 255, 255, .05) 1.1px, transparent 0) 0 0 / 26px 26px,
-    var(--bg);
-  overflow: hidden;
-}
-
-/* The relations universe is drawn in space rather than on the dotted well the
-   diagram canvas uses. Its stars composite ADDITIVELY over this, so the ground
-   has to stay the darkest tone the theme has and the depth cannot come from a
-   lighter surface -- two washes in the primary and secondary hues carry it
-   instead, at an alpha where they read as distance and not as decoration. */
-.graph-wrap.sky {
+  /* Not the dotted well the diagram canvas uses: what is drawn here
+     composites ADDITIVELY over the ground, so the ground has to stay the
+     darkest tone the theme has and the depth cannot come from a lighter
+     surface. Two washes in the primary and secondary hues carry it instead,
+     at an alpha where they read as distance and not as decoration. */
   background:
     radial-gradient(115% 85% at 50% 42%, rgba(187, 134, 252, .06), transparent 60%),
     radial-gradient(95% 75% at 82% 90%, rgba(3, 218, 198, .045), transparent 58%),
     var(--bg);
+  overflow: hidden;
 }
 /* free flight is a MODE, and a cursor cannot say so: the frame does */
 .graph-wrap.flying { box-shadow: inset 0 0 0 1px rgba(187, 134, 252, .38); }
@@ -1851,12 +1845,12 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
 }
 .graph-wrap canvas.grabbing { cursor: grabbing; }
 .graph-wrap canvas.linkmode { cursor: crosshair; }
-/* The names sit on their own canvas over the star field, and nothing is aimed
+/* The names sit on their own canvas over the drawing, and nothing is aimed
    at them: every gesture belongs to the WebGL canvas underneath. */
 .graph-wrap #gLabels { z-index: 2; pointer-events: none; cursor: default; }
 
 /* The arrangement, while it is still arranging. On a large store this is a
-   real wait and the universe visibly condenses through it, so it reports how
+   real wait and the layout visibly condenses through it, so it reports how
    much is left rather than spinning. */
 .graph-settle {
   position: absolute; left: 50%; top: 50%;
@@ -1953,7 +1947,7 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
   font-size: var(--fs-label); color: var(--ink-2);
 }
 .graph-legend .legend-item { font-size: var(--fs-label); }
-/* Which way a relation points, now that it is a gradient along the filament
+/* Which way a relation points, now that it is a gradient along the line
    rather than an arrowhead -- three pixels at an angle read as nothing. */
 .graph-legend .legend-note {
   margin-top: var(--sp-1); padding-top: var(--sp-1);
@@ -1982,7 +1976,7 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
   margin-block: calc((var(--fs-sm) * 1.5 - var(--ctl-h-sm)) / 2);
 }
 /* Two lines of the body, clamped: the record is one button away and this is
-   a reminder of which memory the star is, not a place to read it. */
+   a reminder of which memory the node is, not a place to read it. */
 .graph-card .snippet {
   font-size: var(--fs-sm); color: var(--ink-2);
   margin: var(--sp-1) 0 var(--sp-3); line-height: 1.5;
@@ -2728,7 +2722,7 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
   height: calc(100vh - 262px); min-height: 420px;
   border: 1px solid var(--line-soft);
   border-radius: var(--r-lg);
-  /* same dotted well as the relations graph, so the two read as siblings */
+  /* a dotted well: the cards sit ON something, and the dots say where */
   background:
     radial-gradient(circle at 1px 1px, rgba(255, 255, 255, .05) 1.1px, transparent 0) 0 0 / 26px 26px,
     var(--bg);

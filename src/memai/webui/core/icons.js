@@ -197,7 +197,7 @@ const ICONS = {
     body: `<path d="M6 3.2L10.8 8 6 12.8"/>`,
   },
 
-  /* free flight in the relations universe: a body and the path around it,
+  /* free flight in the relations graph: a body and the path around it,
      tilted, so it reads as depth rather than as a target */
   'orbit': {
     viewBox: '0 0 16 16',
