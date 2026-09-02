@@ -304,21 +304,21 @@ void main() {
      with, plus a gap. Capped at a share of the span, or two memories closer
      together than their own radii would turn the ribbon inside out. */
   vec3 span = eb - ea;
-  float len = length(span);
-  vec3 u = len > 1e-5 ? span / len : vec3(0.0, 0.0, 1.0);
+  float reach = length(span);
+  vec3 along = reach > 1e-5 ? span / reach : vec3(0.0, 0.0, 1.0);
   float da = max(0.001, -ea.z), db = max(0.001, -eb.z);
   float ra = (starPx(a_style.z, da, u_minPx, u_maxPx) + u_width.z) * da / u_px;
   float rb = (starPx(a_style.w, db, u_minPx, u_maxPx) + u_width.z) * db / u_px;
-  float room = len * 0.42;
-  ea += u * min(ra, room);
-  eb -= u * min(rb, room);
+  float room = reach * 0.42;
+  ea += along * min(ra, room);
+  eb -= along * min(rb, room);
   vec3 e = mix(ea, eb, a_corner.x);
   float dist = max(0.001, -e.z);
   vec3 nrm = cross(eb - ea, e);
-  float len = length(nrm);
+  float side = length(nrm);
   /* a filament pointing straight at the camera has no perpendicular to
      offset along; it is a point, and any direction will do */
-  nrm = len > 1e-5 ? nrm / len : vec3(1.0, 0.0, 0.0);
+  nrm = side > 1e-5 ? nrm / side : vec3(1.0, 0.0, 0.0);
   float half_px = u_width.x * mix(1.0, u_width.y, a_style.y);
   e += nrm * (a_corner.y * half_px * dist / u_px);
   v_edge = a_corner.y;
@@ -406,11 +406,26 @@ export class Universe {
     onLink = () => {}, onSettle = () => {}, onFlight = () => {},
     obstacles = () => [],
   }) {
+    /* No powerPreference. Asking for 'high-performance' asks a machine with
+       switchable graphics for its discrete GPU, and a browser that cannot
+       hand one over -- on battery, in a power-saving mode, with the card
+       asleep -- answers by creating no context at all. A few hundred stars do
+       not need it, and a view that draws on the integrated GPU beats a view
+       that does not draw.
+
+       The browser's own reason for refusing arrives on an event rather than
+       as a return value, and it is the only thing that tells a reader whether
+       this is a driver, a setting, or too many pages already drawing. */
+    let refused = '';
+    glCanvas.addEventListener('webglcontextcreationerror',
+      e => { refused = e.statusMessage || ''; }, { once: true });
     const gl = glCanvas.getContext('webgl2', {
-      alpha: true, antialias: false, premultipliedAlpha: true,
-      depth: false, powerPreference: 'high-performance',
+      alpha: true, antialias: false, premultipliedAlpha: true, depth: false,
     });
-    if (!gl) throw new Error('webgl2');
+    if (!gl) {
+      throw Object.assign(new Error(refused || 'getContext("webgl2") returned null'),
+                          { kind: 'context' });
+    }
     this.gl = gl;
     this.cv = glCanvas;
     this.lv = labelCanvas;
@@ -556,7 +571,17 @@ export class Universe {
     removeEventListener('keydown', this._keyDown);
     removeEventListener('keyup', this._keyUp);
     removeEventListener('blur', this._blur);
-    this.gl.getExtension('WEBGL_lose_context')?.loseContext();
+    /* Hand the buffers back before dropping the context. Losing it should
+       free them anyway; a browser keeps a small number of contexts alive at
+       once, and this view is entered and left often enough that it is worth
+       not relying on that. */
+    const gl = this.gl;
+    for (const p of [this.pStar, this.pLink, this.pSky]) if (p) gl.deleteProgram(p.p);
+    for (const v of [this.starVAO, this.linkVAO, this.skyVAO]) if (v) gl.deleteVertexArray(v);
+    for (const b of [this.posBuf, this.styleBuf, this.linkPosBuf, this.linkSBuf]) {
+      if (b) gl.deleteBuffer(b);
+    }
+    gl.getExtension('WEBGL_lose_context')?.loseContext();
   }
 
   /* --------------------------------------------------------- the layout */
