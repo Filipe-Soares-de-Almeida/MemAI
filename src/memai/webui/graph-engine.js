@@ -142,6 +142,20 @@ const SKY_STARS = 1400;
 /* one instance of the star buffer: r, g, b, size, flags, dim, seed */
 const STYLE_STRIDE = 7;
 
+/* The same rule as GLSL_STAR_PX, for the pointer and the names; the
+   constants are shared with it and only the language differs.
+
+   The JavaScript side used to be `size * px / dist` with the floor and NO
+   ceiling, so a star drawn 16px across answered a pointer 25px away and wore
+   its name 30px out. Both errors grew as 1/dist: the closer the camera came,
+   the further from a memory you could hover it. Measured at a middling zoom,
+   a star kept answering across 50px of a row it is drawn 33px wide in. */
+const starPx = (size, dist, px) => {
+  const cap = MAX_PX * (MAX_PX_LEAF + (1 - MAX_PX_LEAF)
+    * Math.min(1, Math.max(0, (size - R_BASE) / R_MAX_LINK)));
+  return Math.min(cap, Math.max(MIN_PX, size * px / dist));
+};
+
 /* --------------------------------------------------------------- mat4 */
 
 const mat4 = () => new Float32Array(16);
@@ -194,12 +208,14 @@ function rgb(css, fallback) {
 
 /* --------------------------------------------------------------- shaders */
 
-/* How wide a memory is on screen, in pixels, held between the floor and a
-   ceiling that a leaf gets less of than a hub. Both programs need it -- the
-   star to size its quad, the filament to know where the disc it must stop at
-   ends -- so it is written once and pasted into both. A filament that trimmed
-   by a different rule than the star draws by would either cross the disc or
-   stop short of it, and nothing would fail. Reads `u_px`, which both declare. */
+/* How wide a memory is on screen, in pixels: the floor keeps a distant one
+   receding rather than vanishing, and the ceiling -- which a leaf gets less
+   of than a hub -- stops a near one becoming a lamp.
+
+   THREE readers, and they have to agree. Two are shader programs: the star
+   sizes its quad by it, the filament stops at the disc it names. The third is
+   `starPx` in JavaScript below, which the pointer and the labels read. Reads
+   `u_px`, which both programs declare. */
 const GLSL_STAR_PX = `
 float starPx(float size, float dist, float minPx, float maxPx) {
   float cap = maxPx * mix(${MAX_PX_LEAF.toFixed(2)}, 1.0,
@@ -476,7 +492,16 @@ export class Universe {
     /* x, y in CSS px, radius in px, distance from the camera -- or a negative
        distance for a memory behind it. Labels and hit testing both read it. */
     this.scr = new Float32Array(n * 4);
-    this.scrDirty = true;
+    /* What keeps it honest is a pair of counters, not a dirty flag. A camera
+       change bumps camAt, an arrangement bumps posAt, and the projection
+       records the pair it was computed from -- so a path that changes the
+       camera cannot hand a reader stale screen coordinates by forgetting to
+       invalidate anything. Every one of them forgot: a wheel, a pan, an orbit
+       and each frame of a flight set camDirty alone, and _project() returned
+       on a clean flag before applying the pending camera. What that produces
+       is a pointer answered by where a star USED to be. */
+    this.camAt = 0; this.posAt = 0;
+    this.scrCamAt = -1; this.scrPosAt = -1;
     this.radius = 400;
     this.settled = false;
 
@@ -506,7 +531,6 @@ export class Universe {
     this.running = true;
     this.raf = 0;
     this.dirty = true;
-    this.labelsDirty = true;
 
     this.colors = {
       edge: rgb(cssVar('--canvas-edge'), [1, 1, 1]),
@@ -654,8 +678,6 @@ export class Universe {
       this.follow = { target: center, dist };
     }
     this.dirty = true;
-    this.scrDirty = true;
-    this.labelsDirty = true;
     this._wake();
     this.cb.onSettle(msg.progress, this.settled);
   }
@@ -830,6 +852,7 @@ export class Universe {
     });
     gl.bindBuffer(gl.ARRAY_BUFFER, this.linkPosBuf);
     gl.bufferSubData(gl.ARRAY_BUFFER, 0, lp);
+    this.posAt++;
   }
 
   /* How lit a memory is: 1, or the lower of whatever the spotlight and the
@@ -870,7 +893,6 @@ export class Universe {
     gl.bufferSubData(gl.ARRAY_BUFFER, o * Float32Array.BYTES_PER_ELEMENT,
                      this.style.subarray(o, o + STYLE_STRIDE));
     this.dirty = true;
-    this.labelsDirty = true;
     this._wake();
   }
 
@@ -897,7 +919,6 @@ export class Universe {
     gl.bindBuffer(gl.ARRAY_BUFFER, this.linkSBuf);
     gl.bufferSubData(gl.ARRAY_BUFFER, 0, st);
     this.dirty = true;
-    this.labelsDirty = true;
     this._wake();
   }
 
@@ -913,9 +934,7 @@ export class Universe {
     this.gl.viewport(0, 0, this.cv.width, this.cv.height);
     this.lx.setTransform(dpr, 0, 0, dpr, 0, 0);
     this.camDirty = true;
-    this.scrDirty = true;
     this.dirty = true;
-    this.labelsDirty = true;
     this._wake();
   }
 
@@ -960,8 +979,7 @@ export class Universe {
        recedes instead of competing with it. */
     this.fog = [this.dist * .9, this.dist + this.radius * 1.9 + 200];
     this.camDirty = false;
-    this.scrDirty = true;
-    this.labelsDirty = true;
+    this.camAt++;
   }
 
   /* The bounding sphere of the arrangement, and the distance that holds it. */
@@ -1050,8 +1068,9 @@ export class Universe {
   /* ------------------------------------------------------ screen mapping */
 
   _project() {
-    if (!this.scrDirty) return;
+    /* the pending camera FIRST -- it is what decides the version */
     if (this.camDirty) this._camera();
+    if (this.scrCamAt === this.camAt && this.scrPosAt === this.posAt) return;
     const { pos, scr, view: v, proj: p, nodes } = this;
     const halfW = this.w / 2, halfH = this.h / 2;
     for (let i = 0; i < nodes.length; i++) {
@@ -1063,10 +1082,12 @@ export class Universe {
       const ey = v[1] * x + v[5] * y + v[9] * z + v[13];
       scr[s] = halfW + p[0] * ex / dist * halfW;
       scr[s + 1] = halfH - p[5] * ey / dist * halfH;
-      scr[s + 2] = Math.max(MIN_PX, nodes[i].size * this.pxScale / dist);
+      /* the radius the star is DRAWN with, ceiling included */
+      scr[s + 2] = starPx(nodes[i].size, dist, this.pxScale);
       scr[s + 3] = dist;
     }
-    this.scrDirty = false;
+    this.scrCamAt = this.camAt;
+    this.scrPosAt = this.posAt;
   }
 
   /* The memory under a pointer, or null. Nearest to the camera wins where two
@@ -1078,7 +1099,9 @@ export class Universe {
     for (let i = 0; i < this.nodes.length; i++) {
       const s = i * 4, dist = scr[s + 3];
       if (dist < 0 || dist >= bestDist) continue;
-      const reach = Math.max(7, scr[s + 2] + 4);
+      /* the visible edge, not the core radius: STAR_EDGE is where the
+         fragment stops drawing the disc */
+      const reach = Math.max(7, scr[s + 2] * STAR_EDGE + 4);
       const dx = scr[s] - cx, dy = scr[s + 1] - cy;
       if (dx * dx + dy * dy <= reach * reach) { best = this.nodes[i]; bestDist = dist; }
     }
@@ -1199,9 +1222,7 @@ export class Universe {
     if (this.pointers.size) return;
     this.orbit = this.panning = null;
     this.cv.classList.remove('grabbing');
-    this.scrDirty = true;
     this.dirty = true;
-    this.labelsDirty = true;
     this._wake();
   }
 
@@ -1518,14 +1539,14 @@ export class Universe {
        unreadable, and the projection they need is the frame's whole cost */
     const quiet = !this.orbit && !this.panning && !this.pinch && this.settled;
     if (!quiet) {
-      if (this.labelsDirty) {
-        this.lx.clearRect(0, 0, this.w, this.h);
-        this.labelsDirty = false;
-      }
+      this.lx.clearRect(0, 0, this.w, this.h);
       return;
     }
-    if (!this.labelsDirty) return;
-    this.labelsDirty = false;
+    /* Redrawn on every painted frame, with no flag deciding whether to skip
+       it. Two dozen plates and a clearRect are cheaper than the class of bug
+       a skipped one buys: the names live on their own canvas, so a frame this
+       pass declines to repaint is a frame of labels sitting over stars that
+       have already moved. */
     const lx = this.lx;
     lx.clearRect(0, 0, this.w, this.h);
     this._project();
@@ -1575,9 +1596,10 @@ export class Universe {
         c.lead ? LABEL_CLIP_LEAD : LABEL_CLIP, Math.floor(room / LABEL_EM))));
       const width = lx.measureText(text).width;
       const y = c.y;
-      let x = c.x + c.r + 8;
+      const edge = c.r * STAR_EDGE;
+      let x = c.x + edge + 8;
       if (x + width > this.w - LABEL_EDGE) {
-        x = Math.max(LABEL_EDGE, c.x - c.r - 8 - width);
+        x = Math.max(LABEL_EDGE, c.x - edge - 8 - width);
       }
       const box = [x - LABEL_PAD_X, y - LABEL_PAD_Y,
                    width + LABEL_PAD_X * 2, LABEL_PAD_Y * 2];
