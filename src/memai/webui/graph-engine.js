@@ -76,6 +76,9 @@ const PAD = 1.5;
    step's lines and the rest. */
 const LINK_HALF = 1.2;
 const LINK_HOT = 1.8;
+/* the breathing space between where a filament stops and the edge of the disc
+   it stopped at, in CSS px */
+const LINK_GAP = 2;
 
 /* The idle life of the universe: a slow, tiny brightness wander. Nothing
    MOVES, which is the point -- the arrangement being read has to hold still,
@@ -173,6 +176,19 @@ function rgb(css, fallback) {
 
 /* --------------------------------------------------------------- shaders */
 
+/* How wide a memory is on screen, in pixels, held between the floor and a
+   ceiling that a leaf gets less of than a hub. Both programs need it -- the
+   star to size its quad, the filament to know where the disc it must stop at
+   ends -- so it is written once and pasted into both. A filament that trimmed
+   by a different rule than the star draws by would either cross the disc or
+   stop short of it, and nothing would fail. Reads `u_px`, which both declare. */
+const GLSL_STAR_PX = `
+float starPx(float size, float dist, float minPx, float maxPx) {
+  float cap = maxPx * mix(${MAX_PX_LEAF.toFixed(2)}, 1.0,
+    clamp((size - ${R_BASE.toFixed(2)}) / ${R_MAX_LINK.toFixed(2)}, 0.0, 1.0));
+  return clamp(size * u_px / dist, minPx, cap);
+}`;
+
 const V_STAR = `#version 300 es
 in vec2 a_corner;
 in vec3 a_center;
@@ -193,18 +209,15 @@ out float v_flags;
 out float v_dim;
 out float v_seed;
 out float v_fade;
+${GLSL_STAR_PX}
 void main() {
   /* billboarding in EYE space: an offset on x and y there always faces the
      camera, with no basis vectors to pass in and nothing to keep in step */
   vec4 eye = u_view * vec4(a_center, 1.0);
   float dist = max(0.001, -eye.z);
-  /* The size in pixels this memory wants, held between the floor and the
-     ceiling: far away it stops shrinking, so a wide shot of the whole store
-     is a sky rather than an empty frame, and close up it stops growing. */
-  float want = a_size * u_px / dist;
-  float cap = u_maxPx * mix(${MAX_PX_LEAF.toFixed(2)}, 1.0,
-    clamp((a_size - ${R_BASE.toFixed(2)}) / ${R_MAX_LINK.toFixed(2)}, 0.0, 1.0));
-  float r = clamp(want, u_minPx, cap) * dist / u_px;
+  /* Far away it stops shrinking, so a wide shot of the whole store is a sky
+     rather than an empty frame; close up it stops growing. */
+  float r = starPx(a_size, dist, u_minPx, u_maxPx) * dist / u_px;
   eye.xy += a_corner * r;
   v_uv = a_corner / ${PAD.toFixed(2)};
   v_color = a_color;
@@ -263,11 +276,13 @@ const V_LINK = `#version 300 es
 in vec2 a_corner;
 in vec3 a_from;
 in vec3 a_to;
-in vec2 a_style;
+in vec4 a_style;
 uniform mat4 u_view;
 uniform mat4 u_proj;
 uniform float u_px;
-uniform vec2 u_width;
+uniform float u_minPx;
+uniform float u_maxPx;
+uniform vec3 u_width;
 uniform vec2 u_fog;
 out float v_t;
 out float v_alpha;
@@ -275,6 +290,7 @@ out float v_hot;
 out float v_fade;
 out float v_edge;
 out float v_half;
+${GLSL_STAR_PX}
 void main() {
   /* A filament is a RIBBON, not a line primitive: gl.lineWidth is clamped to
      one device pixel on every desktop browser, which on a 2x panel is half a
@@ -283,6 +299,19 @@ void main() {
      divide by w and an endpoint behind the camera still clips normally. */
   vec3 ea = (u_view * vec4(a_from, 1.0)).xyz;
   vec3 eb = (u_view * vec4(a_to, 1.0)).xyz;
+  /* A relation joins two memories; it does not cross them. Each end retreats
+     to the edge of its own star's disc, by the same rule the star is drawn
+     with, plus a gap. Capped at a share of the span, or two memories closer
+     together than their own radii would turn the ribbon inside out. */
+  vec3 span = eb - ea;
+  float len = length(span);
+  vec3 u = len > 1e-5 ? span / len : vec3(0.0, 0.0, 1.0);
+  float da = max(0.001, -ea.z), db = max(0.001, -eb.z);
+  float ra = (starPx(a_style.z, da, u_minPx, u_maxPx) + u_width.z) * da / u_px;
+  float rb = (starPx(a_style.w, db, u_minPx, u_maxPx) + u_width.z) * db / u_px;
+  float room = len * 0.42;
+  ea += u * min(ra, room);
+  eb -= u * min(rb, room);
   vec3 e = mix(ea, eb, a_corner.x);
   float dist = max(0.001, -e.z);
   vec3 nrm = cross(eb - ea, e);
@@ -674,10 +703,16 @@ export class Universe {
        side of the ribbon. */
     const m = this.edges.length;
     this.linkPos = new Float32Array(m * 6);
-    /* two floats per relation: how lit the filament is, and whether it is one
-       of the selection's own */
-    this.linkStyle = new Float32Array(m * 2);
-    for (let k = 0; k < m; k++) this.linkStyle[k * 2] = 1;
+    /* four floats per relation: how lit the filament is, whether it is one of
+       the selection's own, and the size of the star at each end -- which is
+       what the ribbon retreats to instead of crossing */
+    this.linkStyle = new Float32Array(m * 4);
+    this.edges.forEach((e, k) => {
+      const o = k * 4;
+      this.linkStyle[o] = 1;
+      this.linkStyle[o + 2] = this.byUid[e.from_uid].size;
+      this.linkStyle[o + 3] = this.byUid[e.to_uid].size;
+    });
 
     const ribbon = gl.createBuffer();
     gl.bindBuffer(gl.ARRAY_BUFFER, ribbon);
@@ -708,7 +743,7 @@ export class Universe {
     }
     gl.bindBuffer(gl.ARRAY_BUFFER, this.linkSBuf);
     gl.enableVertexAttribArray(la('a_style'));
-    gl.vertexAttribPointer(la('a_style'), 2, gl.FLOAT, false, 0, 0);
+    gl.vertexAttribPointer(la('a_style'), 4, gl.FLOAT, false, 0, 0);
     gl.vertexAttribDivisor(la('a_style'), 1);
 
     /* the sky: a fixed shell of far dust, so an orbit has parallax to read */
@@ -805,11 +840,13 @@ export class Universe {
        relations that reach it, so what it is joined to stays visible. One the
        selection owns is hot instead -- both its ends are in the focus, so
        there is nothing dimming it. */
+    /* only the first two of the four move: the sizes at the ends are the
+       arrangement's, not the selection's */
     const st = this.linkStyle, sel = this.selected;
     this.edges.forEach((e, k) => {
       const a = this.byUid[e.from_uid], b = this.byUid[e.to_uid];
-      st[k * 2] = Math.min(this._fade(a), this._fade(b));
-      st[k * 2 + 1] = sel && (a === sel || b === sel) ? 1 : 0;
+      st[k * 4] = Math.min(this._fade(a), this._fade(b));
+      st[k * 4 + 1] = sel && (a === sel || b === sel) ? 1 : 0;
     });
     gl.bindBuffer(gl.ARRAY_BUFFER, this.linkSBuf);
     gl.bufferSubData(gl.ARRAY_BUFFER, 0, st);
@@ -1389,7 +1426,9 @@ export class Universe {
       gl.uniformMatrix4fv(this.pLink.u.u_view, false, this.view);
       gl.uniformMatrix4fv(this.pLink.u.u_proj, false, this.proj);
       gl.uniform1f(this.pLink.u.u_px, this.pxScale);
-      gl.uniform2f(this.pLink.u.u_width, LINK_HALF, LINK_HOT);
+      gl.uniform1f(this.pLink.u.u_minPx, MIN_PX);
+      gl.uniform1f(this.pLink.u.u_maxPx, MAX_PX);
+      gl.uniform3f(this.pLink.u.u_width, LINK_HALF, LINK_HOT, LINK_GAP);
       gl.uniform2fv(this.pLink.u.u_fog, this.fog);
       gl.uniform3fv(this.pLink.u.u_color, this.colors.edge);
       gl.uniform3fv(this.pLink.u.u_accent, this.colors.accent);
