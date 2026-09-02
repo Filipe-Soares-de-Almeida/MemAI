@@ -300,8 +300,12 @@ def test_fonts_css_uses_a_face_once_fetched(client, tmp_path, monkeypatch):
     assert "roboto-700.woff2" not in body
 
 
-def test_graph_is_capped_and_says_so(client):
-    """An uncapped graph freezes the browser: the layout is O(n^2)."""
+def test_graph_hands_over_the_whole_scope_unless_asked_to_cut(client):
+    """No default cap: every memory the filters admit is graphed.
+
+    A `limit` still cuts, and `truncated` is what says the drawing is a
+    part of the store rather than all of it.
+    """
     for i in range(6):
         _create(client, content=f"graph node {i}", domain="proj-1042")
 
@@ -316,7 +320,27 @@ def test_graph_is_capped_and_says_so(client):
     assert capped["truncated"] is True
 
 
-def test_graph_cap_keeps_the_connected_nodes(client):
+def test_graph_node_is_named_by_its_title_and_falls_back_to_the_body(client):
+    """A node carries both, so it is named by one and searchable by both.
+
+    Rows written before the title column have no name of their own; the
+    opening line of the body is what a listing shows for them.
+    """
+    titled = _create(client, title="Cache warmup order",
+                     content="the warmup runs before the first read")
+    with db.connect() as conn:
+        untitled = db.insert_memory(
+            conn, type="note", domain="acme/x100",
+            content="queue drain never retries\nsecond line")
+
+    by_uid = {n["uid"]: n for n in client.get("/api/graph").json()["nodes"]}
+    assert by_uid[titled]["title"] == "Cache warmup order"
+    assert by_uid[titled]["label"] == "the warmup runs before the first read"
+    assert by_uid[untitled]["title"] == ""
+    assert by_uid[untitled]["label"] == "queue drain never retries"
+
+
+def test_graph_cut_keeps_the_connected_nodes(client):
     """If it has to cut, cut the isolated dots -- they graph nothing."""
     lonely = [_create(client, content=f"isolated {i}") for i in range(4)]
     a = _create(client, content="linked one")
