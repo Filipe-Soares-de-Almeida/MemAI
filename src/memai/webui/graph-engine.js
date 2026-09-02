@@ -69,6 +69,14 @@ const MAX_PX_LEAF = .55;
 /* the quad a star is drawn on, in core radii: the halo needs the room */
 const PAD = 1.5;
 
+/* A filament's half-width in CSS px, and what the selection's own are
+   multiplied by. One pixel of that half-width is spent on the feather, so
+   1.2 draws as a hairline with a soft edge and the hot ones come out around
+   twice as wide -- the ratio the diagram canvas uses between a selected
+   step's lines and the rest. */
+const LINK_HALF = 1.2;
+const LINK_HOT = 1.8;
+
 /* The idle life of the universe: a slow, tiny brightness wander. Nothing
    MOVES, which is the point -- the arrangement being read has to hold still,
    and a star field that is perfectly static reads as a screenshot. Off under
@@ -252,23 +260,45 @@ void main() {
 }`;
 
 const V_LINK = `#version 300 es
-in vec3 a_pos;
-in float a_t;
+in vec2 a_corner;
+in vec3 a_from;
+in vec3 a_to;
 in vec2 a_style;
 uniform mat4 u_view;
 uniform mat4 u_proj;
+uniform float u_px;
+uniform vec2 u_width;
 uniform vec2 u_fog;
 out float v_t;
 out float v_alpha;
 out float v_hot;
 out float v_fade;
+out float v_edge;
+out float v_half;
 void main() {
-  vec4 eye = u_view * vec4(a_pos, 1.0);
-  v_fade = 1.0 - smoothstep(u_fog.x, u_fog.y, max(0.001, -eye.z));
-  v_t = a_t;
+  /* A filament is a RIBBON, not a line primitive: gl.lineWidth is clamped to
+     one device pixel on every desktop browser, which on a 2x panel is half a
+     CSS pixel of hard-edged staircase. The ribbon is turned to face the
+     camera in eye space, the same billboard a star uses, so nothing has to
+     divide by w and an endpoint behind the camera still clips normally. */
+  vec3 ea = (u_view * vec4(a_from, 1.0)).xyz;
+  vec3 eb = (u_view * vec4(a_to, 1.0)).xyz;
+  vec3 e = mix(ea, eb, a_corner.x);
+  float dist = max(0.001, -e.z);
+  vec3 nrm = cross(eb - ea, e);
+  float len = length(nrm);
+  /* a filament pointing straight at the camera has no perpendicular to
+     offset along; it is a point, and any direction will do */
+  nrm = len > 1e-5 ? nrm / len : vec3(1.0, 0.0, 0.0);
+  float half_px = u_width.x * mix(1.0, u_width.y, a_style.y);
+  e += nrm * (a_corner.y * half_px * dist / u_px);
+  v_edge = a_corner.y;
+  v_half = half_px;
+  v_t = a_corner.x;
   v_alpha = a_style.x;
   v_hot = a_style.y;
-  gl_Position = u_proj * eye;
+  v_fade = 1.0 - smoothstep(u_fog.x, u_fog.y, dist);
+  gl_Position = u_proj * vec4(e, 1.0);
 }`;
 
 const F_LINK = `#version 300 es
@@ -277,6 +307,8 @@ in float v_t;
 in float v_alpha;
 in float v_hot;
 in float v_fade;
+in float v_edge;
+in float v_half;
 uniform vec3 u_color;
 uniform vec3 u_accent;
 out vec4 frag;
@@ -285,9 +317,13 @@ void main() {
      starts and bright where it points. An arrowhead seen at an angle in
      perspective is three pixels that read as nothing. */
   float a = v_alpha * mix(0.14, 0.85, v_t) * v_fade;
-  /* a relation the selection owns, in the selection colour: a line width is
-     not available here, so brightness and hue carry it */
+  /* a relation the selection owns: the accent colour, brighter, and wider --
+     the same three signals the diagram canvas gives a selected step's lines */
   a *= 1.0 + v_hot * 1.4;
+  /* The antialiasing, and it is the ribbon's own: distance from the edge in
+     PIXELS, so the feather is one pixel wide whatever the width or the zoom.
+     Nothing here needs the framebuffer to have samples to spare. */
+  a *= clamp((1.0 - abs(v_edge)) * v_half, 0.0, 1.0);
   if (a < 0.003) discard;
   frag = vec4(mix(u_color, u_accent, v_hot) * a, a);
 }`;
@@ -433,8 +469,20 @@ export class Universe {
     this._buildGL();
     this._labelPool();
 
+    /* Two triggers, the same pair the diagram canvas uses. The frame changes
+       size without the window ever resizing -- the rail collapses, a
+       scrollbar appears -- and a window-only listener misses it; a missed
+       resize leaves the backing store at its old size, which the stylesheet
+       hides by scaling the image and hit testing does not, because the
+       pointer then arrives in a coordinate space the projection is not in.
+       _local() is the third: it reads the frame anyway, so it is where a
+       divergence is caught for free. */
     this._resize = () => this.resize();
     addEventListener('resize', this._resize);
+    if (typeof ResizeObserver === 'function') {
+      this._ro = new ResizeObserver(this._resize);
+      this._ro.observe(glCanvas.parentElement);
+    }
     this.resize();
 
     /* Pointer events, not mouse events: one path serves a mouse, a pen and a
@@ -473,6 +521,7 @@ export class Universe {
       this.worker = null;
     }
     removeEventListener('resize', this._resize);
+    this._ro?.disconnect();
     removeEventListener('pointerup', this._up);
     removeEventListener('pointercancel', this._up);
     removeEventListener('keydown', this._keyDown);
@@ -619,23 +668,25 @@ export class Universe {
       gl.vertexAttribDivisor(loc, 1);
     }
 
-    /* relations: two vertices each, positions gathered from the arrangement.
-       `t` runs 0 at the source and 1 at the target and never changes; the
-       alpha is what a spotlight rewrites. */
+    /* Relations: one instance each, over a four-vertex strip. `a_corner.x`
+       picks the endpoint -- 0 at the source, 1 at the target, which is also
+       the ramp the fragment reads for direction -- and `a_corner.y` picks the
+       side of the ribbon. */
     const m = this.edges.length;
     this.linkPos = new Float32Array(m * 6);
-    /* two floats per vertex: how lit the filament is, and whether it is one
+    /* two floats per relation: how lit the filament is, and whether it is one
        of the selection's own */
-    this.linkStyle = new Float32Array(m * 4);
-    for (let k = 0; k < m * 2; k++) this.linkStyle[k * 2] = 1;
-    const linkT = new Float32Array(m * 2);
-    for (let k = 0; k < m; k++) linkT[k * 2 + 1] = 1;
+    this.linkStyle = new Float32Array(m * 2);
+    for (let k = 0; k < m; k++) this.linkStyle[k * 2] = 1;
+
+    const ribbon = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, ribbon);
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([
+      0, -1, 0, 1, 1, -1, 1, 1,
+    ]), gl.STATIC_DRAW);
     this.linkPosBuf = gl.createBuffer();
     gl.bindBuffer(gl.ARRAY_BUFFER, this.linkPosBuf);
     gl.bufferData(gl.ARRAY_BUFFER, this.linkPos, gl.DYNAMIC_DRAW);
-    const linkTBuf = gl.createBuffer();
-    gl.bindBuffer(gl.ARRAY_BUFFER, linkTBuf);
-    gl.bufferData(gl.ARRAY_BUFFER, linkT, gl.STATIC_DRAW);
     this.linkSBuf = gl.createBuffer();
     gl.bindBuffer(gl.ARRAY_BUFFER, this.linkSBuf);
     gl.bufferData(gl.ARRAY_BUFFER, this.linkStyle, gl.DYNAMIC_DRAW);
@@ -643,13 +694,22 @@ export class Universe {
     this.linkVAO = gl.createVertexArray();
     gl.bindVertexArray(this.linkVAO);
     const la = name => gl.getAttribLocation(this.pLink.p, name);
-    for (const [buf, name, size] of [[this.linkPosBuf, 'a_pos', 3],
-                                     [linkTBuf, 'a_t', 1],
-                                     [this.linkSBuf, 'a_style', 2]]) {
-      gl.bindBuffer(gl.ARRAY_BUFFER, buf);
-      gl.enableVertexAttribArray(la(name));
-      gl.vertexAttribPointer(la(name), size, gl.FLOAT, false, 0, 0);
+    gl.bindBuffer(gl.ARRAY_BUFFER, ribbon);
+    gl.enableVertexAttribArray(la('a_corner'));
+    gl.vertexAttribPointer(la('a_corner'), 2, gl.FLOAT, false, 0, 0);
+    /* both endpoints out of one buffer: the arrangement writes them as six
+       floats per relation, which is a stride of 24 with the target at 12 */
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.linkPosBuf);
+    for (const [name, at] of [['a_from', 0], ['a_to', 3]]) {
+      const loc = la(name);
+      gl.enableVertexAttribArray(loc);
+      gl.vertexAttribPointer(loc, 3, gl.FLOAT, false, 6 * F, at * F);
+      gl.vertexAttribDivisor(loc, 1);
     }
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.linkSBuf);
+    gl.enableVertexAttribArray(la('a_style'));
+    gl.vertexAttribPointer(la('a_style'), 2, gl.FLOAT, false, 0, 0);
+    gl.vertexAttribDivisor(la('a_style'), 1);
 
     /* the sky: a fixed shell of far dust, so an orbit has parallax to read */
     const dir = new Float32Array(SKY_STARS * 3), seed = new Float32Array(SKY_STARS);
@@ -748,11 +808,8 @@ export class Universe {
     const st = this.linkStyle, sel = this.selected;
     this.edges.forEach((e, k) => {
       const a = this.byUid[e.from_uid], b = this.byUid[e.to_uid];
-      const lit = Math.min(this._fade(a), this._fade(b));
-      const hot = sel && (a === sel || b === sel) ? 1 : 0;
-      const o = k * 4;
-      st[o] = lit; st[o + 1] = hot;
-      st[o + 2] = lit; st[o + 3] = hot;
+      st[k * 2] = Math.min(this._fade(a), this._fade(b));
+      st[k * 2 + 1] = sel && (a === sel || b === sel) ? 1 : 0;
     });
     gl.bindBuffer(gl.ARRAY_BUFFER, this.linkSBuf);
     gl.bufferSubData(gl.ARRAY_BUFFER, 0, st);
@@ -945,8 +1002,16 @@ export class Universe {
     return best;
   }
 
+  /* A pointer in the frame's own coordinates -- and the backstop for a
+     resize that never arrived: the rect is already being read here, so
+     comparing it costs nothing and a stale projection is corrected before it
+     answers a click with the wrong memory. */
   _local(e) {
     const r = this.cv.getBoundingClientRect();
+    if (Math.abs(r.width - this.w) > 1 || Math.abs(r.height - this.h) > 1) {
+      this.resize();
+      this._camera();
+    }
     return [e.clientX - r.left, e.clientY - r.top];
   }
 
@@ -1323,10 +1388,12 @@ export class Universe {
       gl.bindVertexArray(this.linkVAO);
       gl.uniformMatrix4fv(this.pLink.u.u_view, false, this.view);
       gl.uniformMatrix4fv(this.pLink.u.u_proj, false, this.proj);
+      gl.uniform1f(this.pLink.u.u_px, this.pxScale);
+      gl.uniform2f(this.pLink.u.u_width, LINK_HALF, LINK_HOT);
       gl.uniform2fv(this.pLink.u.u_fog, this.fog);
       gl.uniform3fv(this.pLink.u.u_color, this.colors.edge);
       gl.uniform3fv(this.pLink.u.u_accent, this.colors.accent);
-      gl.drawArrays(gl.LINES, 0, this.edges.length * 2);
+      gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, this.edges.length);
     }
 
     if (this.nodes.length) {
