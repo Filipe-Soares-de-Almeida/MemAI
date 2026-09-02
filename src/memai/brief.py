@@ -81,18 +81,21 @@ def _lines(rows, label: str, cap: int, total: int) -> list[str]:
     return out
 
 
-def session_brief(conn, *, domain: str = "", budget: int = DEFAULT_BUDGET) -> str:
+def session_brief(conn, *, domain: str = "", budget: int = DEFAULT_BUDGET,
+                  project: str = "") -> str:
     """What is already known, for a session that has not started working.
 
     No domain, because at session start nobody knows the subject yet: this
     is the store's own state, ordered by recency, and the drill-down is the
     agent's next move. Passing one narrows it the way pulse() does.
+
+    `project` is the name of the project `conn` is on, for the opening line.
     """
     census = db.domain_census(conn, domain)
     if not census["total"]:
         return ""
 
-    scope = domain or "the whole store"
+    scope = domain or (f"project '{project}'" if project else "the whole store")
     parts = [f"MemAI long-term memory: {census['total']} memories in {scope}."]
 
     tree = [d for d in db.list_domains(conn) if not domain or db.in_domain(d["domain"], domain)]

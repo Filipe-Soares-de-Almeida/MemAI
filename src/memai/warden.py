@@ -46,7 +46,7 @@ _DIRNAME = "warden"
 
 def state_dir() -> Path:
     """`<MEMAI_HOME>/warden`, created if needed."""
-    out = db.default_db_path().parent / _DIRNAME
+    out = db.home() / _DIRNAME
     out.mkdir(parents=True, exist_ok=True)
     return out
 
