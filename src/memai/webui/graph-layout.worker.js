@@ -1,8 +1,8 @@
-/* The relations universe arranges itself in here, off the main thread.
+/* The relations graph arranges itself in here, off the main thread.
 
    The arithmetic is all in graph-layout.js -- this file is the driver: it
    slices the settle so a message can still be delivered between passes, and
-   posts positions on a cadence so the engine can draw the universe
+   posts positions on a cadence so the engine can draw the graph
    condensing instead of waiting on a blank frame.
 
    Protocol, both ways:
@@ -27,7 +27,7 @@ const POST_MS = 90;
 /* The wall-clock ceiling on one settle. A store big enough to reach this has
    an arrangement good enough to read long before it is finished polishing
    it, and a worker spinning for a minute behind a bar at 60% is worse than a
-   universe that stops moving. */
+   graph that stops moving. */
 const DEADLINE_MS = 20000;
 
 let layout = null;

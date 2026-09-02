@@ -1,4 +1,4 @@
-/* The 3D arrangement of the relations universe: a force layout that settles
+/* The 3D arrangement of the relations graph: a force layout that settles
    once and then stops.
 
    It runs off the main thread (see graph-layout.worker.js), so the numbers in
@@ -7,7 +7,7 @@
    The engine that draws the result is graph-engine.js, which owns the camera
    and the shaders and nothing about where a node belongs.
 
-   There is no live physics. Nothing in the universe is draggable, so the
+   There is no live physics. Nothing in the graph is draggable, so the
    arrangement is computed once, uploaded to the GPU once, and the render loop
    after that is pure camera. A new relation re-renders the view, which starts
    a new layout.
@@ -160,12 +160,12 @@ export class Layout {
      children fanned into a cone around the direction their parent arrived
      from -- and the sets are packed biggest first over a golden-angle sphere.
      A relation therefore starts near its rest length instead of across the
-     universe, which is what the settle then has passes to polish.
+     graph, which is what the settle then has passes to polish.
 
      What sets a set's distance from the origin is the VOLUME its nodes take,
      counted from the middle of its own share. A tree is mostly empty space,
      so claiming the ball its radius spans pushes every later set outward and
-     leaves the middle of the universe thin. */
+     leaves the middle of the graph thin. */
   seed() {
     const comps = this._components();
     comps.sort((a, b) => b.length - a.length);

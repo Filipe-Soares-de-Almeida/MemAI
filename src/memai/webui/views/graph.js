@@ -1,4 +1,4 @@
-/* The relations universe: the view around the star field.
+/* The relations graph: the view around the node field.
 
    Everything drawn is in graph-engine.js and everything arranged is in
    graph-layout.js. This file owns the chrome -- the filters, the legend, the
@@ -19,7 +19,7 @@ import { domainPickerHTML, wireDomainPicker } from '../core/domain-picker.js';
 import { go, refreshBehind } from '../core/router.js';
 import { onTeardown } from '../core/lifecycle.js';
 import { openRecord } from './record.js';
-import { Universe } from '../graph-engine.js';
+import { ForceGraph } from '../graph-engine.js';
 import { t } from '../i18n.js';
 
 /* How many of a memory's relations the card offers as a journey before it
@@ -30,7 +30,7 @@ import { t } from '../i18n.js';
 const TRAVEL_MAX = 5;
 const TRAVEL_CLIP = 16;
 
-/* Everything that floats over the star field. The engine keeps the names out
+/* Everything that floats over the node field. The engine keeps the names out
    from under these, which it cannot work out for itself: where they sit is a
    stylesheet's decision. */
 const CHROME = ['.graph-controls', '.graph-legend', '.graph-card',
@@ -64,14 +64,14 @@ export async function renderGraph(view, params, ctx) {
       <h2 class="view-title">${t('g.title')}</h2>
       <div class="view-sub">${t('g.sub', { n: fmtInt(data.nodes.length), m: fmtInt(data.edges.length) })}${capNote}</div>
     </div>
-    <div class="graph-wrap sky" id="gWrap">
+    <div class="graph-wrap" id="gWrap">
       <!-- A drawing, and labelled as one. The same records are in Memories as
            a list, which is what the label points at: an arrangement of forces
            has no reading order to expose, so pretending otherwise would be
            worse than saying where the text version lives. -->
       <canvas id="gGl" role="img"
               aria-label="${esc(t('g.canvasAlt', { n: fmtInt(data.nodes.length), m: fmtInt(data.edges.length) }))}"></canvas>
-      <!-- the names, drawn over the star field: a handful of legible labels is
+      <!-- the names, drawn over the node field: a handful of legible labels is
            a typography job and not a shader one -->
       <canvas id="gLabels" aria-hidden="true"></canvas>
       <div class="graph-controls">
@@ -79,7 +79,7 @@ export async function renderGraph(view, params, ctx) {
              answers the most questions. This view exists for the macro read --
              the shape of the store, where the clusters and the loose ends are
              -- so finding one memory must not destroy that shape: matching
-             stars keep their colour and size and everything else fades.
+             nodes keep their colour and size and everything else fades.
              Nothing is removed, no request is made, the arrangement never
              moves. Enter travels to the best match. -->
         <input type="search" id="gFind" class="graph-find" spellcheck="false" autocomplete="off"
@@ -99,7 +99,7 @@ export async function renderGraph(view, params, ctx) {
         <span id="gFindCount" class="graph-find-count" aria-live="polite"></span>
       </div>
       <!-- The arrangement, while it is still arranging. It is a real wait on a
-           large store and the universe visibly condenses through it, so the bar
+           large store and the graph visibly condenses through it, so the bar
            says how much of it is left rather than spinning. -->
       <div class="graph-settle" id="gSettle" hidden>
         <span>${t('g.settling', { n: fmtInt(data.nodes.length) })}</span>
@@ -132,7 +132,7 @@ export async function renderGraph(view, params, ctx) {
 
   let engine;
   try {
-    engine = new Universe($('#gGl'), $('#gLabels'), {
+    engine = new ForceGraph($('#gGl'), $('#gLabels'), {
       nodes: data.nodes,
       edges: data.edges,
       colorOf: typeColor,
@@ -175,7 +175,7 @@ export async function renderGraph(view, params, ctx) {
        and only one of them is the reader's to do anything about. So the
        browser's own words go on screen, and the retry is here because a
        refused context is often a passing state. */
-    console.error('relations universe:', err);
+    console.error('relations graph:', err);
     const wrap = $('#gWrap');
     wrap.innerHTML = `<div class="graph-blocked" role="alert">
       <p>${esc(t('g.startFailed'))}${err?.kind === 'context' ? ` ${esc(t('g.webgl'))}` : ''}</p>

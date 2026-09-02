@@ -1,8 +1,8 @@
-/* The relations universe: memories as stars in three dimensions.
+/* The relations graph, drawn as a force layout in three dimensions.
 
-   Two canvases and one arrangement. The stars, their halos and the relation
-   filaments are drawn by WebGL2 -- one instanced pass for every memory, one
-   line pass for every relation, one point pass for the sky -- so the store's
+   Two canvases and one arrangement. The nodes, their glows and the relation
+   lines are drawn by WebGL2 -- one instanced pass for every memory, one line
+   pass for every relation, one point pass for the backdrop -- so the store's
    size costs the graphics card and not the frame. The names on top are drawn
    by a 2D canvas over it, because a handful of legible labels is a typography
    job and not a shader one.
@@ -18,7 +18,7 @@
    overlap approaches white without reaching it and keeps its type colours.
    Both properties are load-bearing at scale -- addition clips, and a hundred
    thousand depth comparisons per frame buy an occlusion nobody looking at a
-   star field expects. Distance is carried by fog: the far side of the cloud
+   a depth-sorted scene expects. Distance is carried by fog: the far side
    fades toward the page rather than crowding the near side. */
 
 import { cssVar } from './core/dom.js';
@@ -35,7 +35,7 @@ const HOP_DIST = 240;
 const DIST_MIN = 24;
 /* how far past the framed radius a zoom-out may reach */
 const DIST_SPAN = 3.4;
-/* a travel, and the pull-back that frames the whole universe */
+/* a travel, and the pull-back that frames the whole graph */
 const FLY_MS = 720;
 const FIT_MS = 900;
 /* The distance free flight reads its speed and its throttle from. Both answer
@@ -51,7 +51,7 @@ const FLY_REACH = HOP_DIST * 2;
    second. Time constant in ms. */
 const FOLLOW_TAU = 260;
 
-/* Stars. The core radius in world units, by how many relations a memory
+/* Nodes. The core radius in world units, by how many relations a memory
    holds, and the floor in screen pixels that keeps a distant one receding
    rather than vanishing. */
 const R_BASE = 3.2;
@@ -60,49 +60,49 @@ const R_MAX_LINK = 6.5;
 /* The screen size of a core, floor and ceiling, in CSS px. The floor keeps a
    distant memory receding rather than vanishing; the ceiling is what stops
    one from becoming a lamp when the camera arrives next to it -- perspective
-   alone put a hub at 47px across and its halo at 70, which reads as a light
+   alone put a hub at 47px across and its glow at 70, which reads as a light
    leak and not as a memory. Degree still tells inside the ceiling, because a
    leaf is capped tighter than a hub. */
 const MIN_PX = 1.7;
 const MAX_PX = 11;
 const MAX_PX_LEAF = .55;
-/* Every radius below is in starPx units -- one is what starPx() returns, and
+/* Every radius below is in nodePx units -- one is what nodePx() returns, and
    the shader measures its own `d` in the same, so what the drawing calls the
-   edge of a star and what a filament retreats to are the same number.
+   edge of a node and what a link retreats to are the same number.
 
-   STAR_QUAD has to cover the widest of them. It used to be 1.5 while the
+   NODE_QUAD has to cover the widest of them. It used to be 1.5 while the
    fragment normalised `d` by that same 1.5, which put the ring's outer edge
    outside the quad: the ring was clipped to four arcs near the diagonals and
    read as a bracket rather than a ring. */
-const STAR_EDGE = 1.5;        /* the core's outer edge */
-const STAR_SOLID = 1.05;      /* inside this the core is opaque */
-const STAR_HOLE = 1.2;        /* an archived star is a ring around this */
-const STAR_MARK_IN = 1.7;     /* a marked star's ring, inner and outer */
-const STAR_MARK_OUT = 2.13;
-const STAR_HALO = 2.25;       /* where the halo reaches zero */
-const STAR_QUAD = 2.25;
+const NODE_EDGE = 1.5;        /* the core's outer edge */
+const NODE_SOLID = 1.05;      /* inside this the core is opaque */
+const NODE_HOLE = 1.2;        /* an archived node is a ring around this */
+const NODE_MARK_IN = 1.7;     /* a marked node's ring, inner and outer */
+const NODE_MARK_OUT = 2.13;
+const NODE_GLOW = 2.25;       /* where the glow reaches zero */
+const NODE_QUAD = 2.25;
 
-/* A filament's half-width in CSS px, and what the selection's own are
+/* A link's half-width in CSS px, and what the selection's own are
    multiplied by. One pixel of that half-width is spent on the feather, so
    1.2 draws as a hairline with a soft edge and the hot ones come out around
    twice as wide -- the ratio the diagram canvas uses between a selected
    step's lines and the rest. */
 const LINK_HALF = 1.2;
 const LINK_HOT = 1.8;
-/* Where a filament stops, in the same starPx units the shader measures in:
-   clear of the core, and at the inner edge of the ring a marked star wears.
-   Not at the halo's outer edge -- the halo is under a hundredth of an alpha
+/* Where a link stops, in the same nodePx units the shader measures in:
+   clear of the core, and at the inner edge of the ring a marked node wears.
+   Not at the glow's outer edge -- the glow is under a hundredth of an alpha
    out there, so stopping at it leaves a gap with nothing in it. Landing on
-   the ring instead reads as one mark: the ring and the filaments a selection
+   the ring instead reads as one mark: the ring and the links a selection
    owns are the same colour. */
-const LINK_CLEAR = STAR_MARK_IN;
+const LINK_CLEAR = NODE_MARK_IN;
 const LINK_GAP = 1;
 
-/* The idle life of the universe: a slow, tiny brightness wander. Nothing
+/* The idle life of the graph: a slow, tiny brightness wander. Nothing
    MOVES, which is the point -- the arrangement being read has to hold still,
-   and a star field that is perfectly static reads as a screenshot. Off under
+   and a drawing that is perfectly static reads as a screenshot. Off under
    prefers-reduced-motion, and then the loop stops at rest. */
-const TWINKLE_HZ = .55;
+const PULSE_HZ = .55;
 const IDLE_FPS = 30;
 
 /* What a memory fades to, and why there are two levels. The spotlight is a
@@ -136,25 +136,25 @@ const LABEL_PAD_Y = 10;
    is what keeps a narrow canvas from clipping every label mid-word */
 const LABEL_EDGE = 8;
 const LABEL_EM = 6.2;
-/* How far a name sits from the star's visible edge. The plate reaches
+/* How far a name sits from the node's visible edge. The plate reaches
    LABEL_PAD_X back from where the text starts, so the air between the two is
    this minus that -- which is why 8 read as touching. */
 const LABEL_OFF = 14;
 
-const SKY_STARS = 1400;
+const BACK_DOTS = 1400;
 
-/* one instance of the star buffer: r, g, b, size, flags, dim, seed */
+/* one instance of the node buffer: r, g, b, size, flags, dim, seed */
 const STYLE_STRIDE = 7;
 
-/* The same rule as GLSL_STAR_PX, for the pointer and the names; the
+/* The same rule as GLSL_NODE_PX, for the pointer and the names; the
    constants are shared with it and only the language differs.
 
    The JavaScript side used to be `size * px / dist` with the floor and NO
-   ceiling, so a star drawn 16px across answered a pointer 25px away and wore
+   ceiling, so a node drawn 16px across answered a pointer 25px away and wore
    its name 30px out. Both errors grew as 1/dist: the closer the camera came,
    the further from a memory you could hover it. Measured at a middling zoom,
-   a star kept answering across 50px of a row it is drawn 33px wide in. */
-const starPx = (size, dist, px) => {
+   a node kept answering across 50px of a row it is drawn 33px wide in. */
+const nodePx = (size, dist, px) => {
   const cap = MAX_PX * (MAX_PX_LEAF + (1 - MAX_PX_LEAF)
     * Math.min(1, Math.max(0, (size - R_BASE) / R_MAX_LINK)));
   return Math.min(cap, Math.max(MIN_PX, size * px / dist));
@@ -216,18 +216,18 @@ function rgb(css, fallback) {
    receding rather than vanishing, and the ceiling -- which a leaf gets less
    of than a hub -- stops a near one becoming a lamp.
 
-   THREE readers, and they have to agree. Two are shader programs: the star
-   sizes its quad by it, the filament stops at the disc it names. The third is
-   `starPx` in JavaScript below, which the pointer and the labels read. Reads
+   THREE readers, and they have to agree. Two are shader programs: the node
+   sizes its quad by it, the link stops at the disc it names. The third is
+   `nodePx` in JavaScript below, which the pointer and the labels read. Reads
    `u_px`, which both programs declare. */
-const GLSL_STAR_PX = `
-float starPx(float size, float dist, float minPx, float maxPx) {
+const GLSL_NODE_PX = `
+float nodePx(float size, float dist, float minPx, float maxPx) {
   float cap = maxPx * mix(${MAX_PX_LEAF.toFixed(2)}, 1.0,
     clamp((size - ${R_BASE.toFixed(2)}) / ${R_MAX_LINK.toFixed(2)}, 0.0, 1.0));
   return clamp(size * u_px / dist, minPx, cap);
 }`;
 
-const V_STAR = `#version 300 es
+const V_NODE = `#version 300 es
 in vec2 a_corner;
 in vec3 a_center;
 in vec3 a_color;
@@ -247,15 +247,16 @@ out float v_flags;
 out float v_dim;
 out float v_seed;
 out float v_fade;
-${GLSL_STAR_PX}
+${GLSL_NODE_PX}
 void main() {
   /* billboarding in EYE space: an offset on x and y there always faces the
      camera, with no basis vectors to pass in and nothing to keep in step */
   vec4 eye = u_view * vec4(a_center, 1.0);
   float dist = max(0.001, -eye.z);
-  /* Far away it stops shrinking, so a wide shot of the whole store is a sky
-     rather than an empty frame; close up it stops growing. */
-  float r = starPx(a_size, dist, u_minPx, u_maxPx) * dist / u_px;
+  /* Far away it stops shrinking, so a wide shot of the whole store still
+     shows every memory rather than an empty frame; close up it stops
+     growing. */
+  float r = nodePx(a_size, dist, u_minPx, u_maxPx) * dist / u_px;
   eye.xy += a_corner * r;
   v_uv = a_corner;
   v_color = a_color;
@@ -266,7 +267,7 @@ void main() {
   gl_Position = u_proj * eye;
 }`;
 
-const F_STAR = `#version 300 es
+const F_NODE = `#version 300 es
 precision highp float;
 in vec2 v_uv;
 in vec3 v_color;
@@ -275,7 +276,7 @@ in float v_dim;
 in float v_seed;
 in float v_fade;
 uniform float u_time;
-uniform float u_twinkle;
+uniform float u_pulse;
 uniform vec3 u_accent;
 out vec4 frag;
 bool bit(float flags, float b) { return mod(floor(flags / b), 2.0) >= 1.0; }
@@ -289,21 +290,21 @@ void main() {
      type and the green of a handoff are the pair a red-green deficiency
      cannot separate, so one of them is not a disc */
   float d = diamond ? abs(v_uv.x) + abs(v_uv.y) : length(v_uv);
-  float tw = 1.0 + u_twinkle * 0.15 * sin(u_time * (0.7 + fract(v_seed)) + v_seed * 6.2831);
+  float tw = 1.0 + u_pulse * 0.15 * sin(u_time * (0.7 + fract(v_seed)) + v_seed * 6.2831);
   vec3 col = v_color * tw;
   /* archived is a ring: the memory is still there and it is not filled in */
   float core = hollow
-    ? smoothstep(${(STAR_EDGE + 0.05).toFixed(2)}, ${(STAR_EDGE - 0.15).toFixed(2)}, d)
-      * smoothstep(${(STAR_HOLE - 0.3).toFixed(2)}, ${STAR_HOLE.toFixed(2)}, d)
-    : smoothstep(${STAR_EDGE.toFixed(2)}, ${STAR_SOLID.toFixed(2)}, d);
-  float halo = pow(max(0.0, 1.0 - d / ${STAR_HALO.toFixed(2)}), 3.0) * 0.34;
-  /* The halo fades faster than the core -- v_dim twice over. A memory pushed
+    ? smoothstep(${(NODE_EDGE + 0.05).toFixed(2)}, ${(NODE_EDGE - 0.15).toFixed(2)}, d)
+      * smoothstep(${(NODE_HOLE - 0.3).toFixed(2)}, ${NODE_HOLE.toFixed(2)}, d)
+    : smoothstep(${NODE_EDGE.toFixed(2)}, ${NODE_SOLID.toFixed(2)}, d);
+  float glow = pow(max(0.0, 1.0 - d / ${NODE_GLOW.toFixed(2)}), 3.0) * 0.34;
+  /* The glow fades faster than the core -- v_dim twice over. A memory pushed
      to context keeps a legible point and loses its bloom, so a few hundred of
-     them read as a star field behind the focus rather than as a haze over it. */
-  float a = (core + halo * (hollow ? 0.5 : 1.0) * v_dim) * v_dim * v_fade;
+     them read as a backdrop to the focus rather than as a haze over it. */
+  float a = (core + glow * (hollow ? 0.5 : 1.0) * v_dim) * v_dim * v_fade;
   if (marked) {
-    float ring = smoothstep(${STAR_MARK_OUT.toFixed(2)}, ${(STAR_MARK_OUT - 0.18).toFixed(2)}, d)
-      * smoothstep(${STAR_MARK_IN.toFixed(2)}, ${(STAR_MARK_IN + 0.18).toFixed(2)}, d);
+    float ring = smoothstep(${NODE_MARK_OUT.toFixed(2)}, ${(NODE_MARK_OUT - 0.18).toFixed(2)}, d)
+      * smoothstep(${NODE_MARK_IN.toFixed(2)}, ${(NODE_MARK_IN + 0.18).toFixed(2)}, d);
     if (dashed && fract(atan(v_uv.y, v_uv.x) * 2.2) > 0.55) ring = 0.0;
     col = mix(col, u_accent, ring);
     a += ring * 0.95 * v_fade;
@@ -330,29 +331,29 @@ out float v_hot;
 out float v_fade;
 out float v_edge;
 out float v_half;
-${GLSL_STAR_PX}
+${GLSL_NODE_PX}
 void main() {
-  /* A filament is a RIBBON, not a line primitive: gl.lineWidth is clamped to
+  /* A link is a RIBBON, not a line primitive: gl.lineWidth is clamped to
      one device pixel on every desktop browser, which on a 2x panel is half a
      CSS pixel of hard-edged staircase. The ribbon is turned to face the
-     camera in eye space, the same billboard a star uses, so nothing has to
+     camera in eye space, the same billboard a node uses, so nothing has to
      divide by w and an endpoint behind the camera still clips normally. */
   vec3 ea = (u_view * vec4(a_from, 1.0)).xyz;
   vec3 eb = (u_view * vec4(a_to, 1.0)).xyz;
   /* A relation joins two memories; it does not cross them. Each end retreats
-     to the edge of its own star's disc, by the same rule the star is drawn
+     to the edge of its own node's disc, by the same rule the node is drawn
      with, plus a gap.
 
      The retreat is a distance ON SCREEN, and it is spent by travelling along
-     the filament in space -- two different things whenever the filament is
+     the link in space -- two different things whenever the link is
      not broadside to the camera. Only the part of its direction that is
      perpendicular to the view ray moves the projection, so the world distance
      that buys one pixel grows as 1/sin of the angle between them. Without
      that factor a relation clears the disc from one side of an orbit and runs
      straight through it from another, which is the same relation and the same
-     star. The sine is floored, because a filament pointing at the camera
+     node. The sine is floored, because a link pointing at the camera
      cannot be pulled out of the disc by any finite amount -- it is behind the
-     star -- and the cap on room below catches the rest. */
+     node -- and the cap on room below catches the rest. */
   vec3 span = eb - ea;
   float reach = length(span);
   vec3 along = reach > 1e-5 ? span / reach : vec3(0.0, 0.0, 1.0);
@@ -360,9 +361,9 @@ void main() {
   vec3 rayA = ea / da, rayB = eb / db;
   float leanA = max(0.12, length(along - dot(along, rayA) * rayA));
   float leanB = max(0.12, length(along - dot(along, rayB) * rayB));
-  float ra = (starPx(a_style.z, da, u_minPx, u_maxPx) * u_width.w + u_width.z)
+  float ra = (nodePx(a_style.z, da, u_minPx, u_maxPx) * u_width.w + u_width.z)
              * da / u_px / leanA;
-  float rb = (starPx(a_style.w, db, u_minPx, u_maxPx) * u_width.w + u_width.z)
+  float rb = (nodePx(a_style.w, db, u_minPx, u_maxPx) * u_width.w + u_width.z)
              * db / u_px / leanB;
   float room = reach * 0.42;
   ea += along * min(ra, room);
@@ -371,7 +372,7 @@ void main() {
   float dist = max(0.001, -e.z);
   vec3 nrm = cross(eb - ea, e);
   float side = length(nrm);
-  /* a filament pointing straight at the camera has no perpendicular to
+  /* a link pointing straight at the camera has no perpendicular to
      offset along; it is a point, and any direction will do */
   nrm = side > 1e-5 ? nrm / side : vec3(1.0, 0.0, 0.0);
   float half_px = u_width.x * mix(1.0, u_width.y, a_style.y);
@@ -397,7 +398,7 @@ uniform vec3 u_color;
 uniform vec3 u_accent;
 out vec4 frag;
 void main() {
-  /* Direction, without an arrowhead: a filament is faint where the relation
+  /* Direction, without an arrowhead: a link is faint where the relation
      starts and bright where it points. An arrowhead seen at an angle in
      perspective is three pixels that read as nothing. */
   float a = v_alpha * mix(0.14, 0.85, v_t) * v_fade;
@@ -412,36 +413,36 @@ void main() {
   frag = vec4(mix(u_color, u_accent, v_hot) * a, a);
 }`;
 
-const V_SKY = `#version 300 es
+const V_BACK = `#version 300 es
 in vec3 a_dir;
 in float a_seed;
-uniform mat4 u_sky;
+uniform mat4 u_back;
 uniform float u_radius;
 uniform float u_dpr;
 out float v_seed;
 void main() {
-  gl_Position = u_sky * vec4(a_dir * u_radius, 1.0);
+  gl_Position = u_back * vec4(a_dir * u_radius, 1.0);
   gl_PointSize = (1.0 + fract(a_seed * 7.13) * 1.7) * u_dpr;
   v_seed = a_seed;
 }`;
 
-const F_SKY = `#version 300 es
+const F_BACK = `#version 300 es
 precision mediump float;
 in float v_seed;
 uniform float u_time;
-uniform float u_twinkle;
+uniform float u_pulse;
 uniform vec3 u_color;
 out vec4 frag;
 void main() {
   float d = length(gl_PointCoord - 0.5) * 2.0;
   float a = smoothstep(1.0, 0.1, d) * (0.05 + fract(v_seed * 3.71) * 0.14);
-  a *= 1.0 + u_twinkle * 0.35 * sin(u_time * 0.9 + v_seed * 12.9);
+  a *= 1.0 + u_pulse * 0.35 * sin(u_time * 0.9 + v_seed * 12.9);
   frag = vec4(u_color * a, a);
 }`;
 
 /* --------------------------------------------------------------- engine */
 
-export class Universe {
+export class ForceGraph {
   /* `nodes` and `edges` are the /api/graph payload; `colorOf(type)` hands
      back the CSS colour of a memory type, because the type palette belongs to
      the app's shared vocabulary and not to a renderer.
@@ -464,7 +465,7 @@ export class Universe {
     /* No powerPreference. Asking for 'high-performance' asks a machine with
        switchable graphics for its discrete GPU, and a browser that cannot
        hand one over -- on battery, in a power-saving mode, with the card
-       asleep -- answers by creating no context at all. A few hundred stars do
+       asleep -- answers by creating no context at all. A few hundred nodes do
        not need it, and a view that draws on the integrated GPU beats a view
        that does not draw.
 
@@ -518,7 +519,7 @@ export class Universe {
        invalidate anything. Every one of them forgot: a wheel, a pan, an orbit
        and each frame of a flight set camDirty alone, and _project() returned
        on a clean flag before applying the pending camera. What that produces
-       is a pointer answered by where a star USED to be. */
+       is a pointer answered by where a node USED to be. */
     this.camAt = 0; this.posAt = 0;
     this.scrCamAt = -1; this.scrPosAt = -1;
     this.radius = 400;
@@ -526,7 +527,7 @@ export class Universe {
 
     this.target = [0, 0, 0];
     this.yaw = .62; this.pitch = .3; this.dist = 900;
-    this.view = mat4(); this.proj = mat4(); this.sky = mat4(); this.rot = mat4();
+    this.view = mat4(); this.proj = mat4(); this.backProj = mat4(); this.rot = mat4();
     this.fwd = [0, 0, -1]; this.right = [1, 0, 0]; this.up = [0, 1, 0];
     this.eye = [0, 0, 900];
     this.near = 1; this.far = 4000;
@@ -554,13 +555,13 @@ export class Universe {
     this.colors = {
       edge: rgb(cssVar('--canvas-edge'), [1, 1, 1]),
       accent: rgb(cssVar('--accent'), [.73, .53, .99]),
-      sky: rgb(cssVar('--ink-2'), [1, 1, 1]),
+      back: rgb(cssVar('--ink-2'), [1, 1, 1]),
       ink: cssVar('--ink') || 'rgba(255,255,255,.87)',
       lead: cssVar('--accent-hi') || '#d3b1ff',
       font: cssVar('--font-ui') || 'Roboto, sans-serif',
     };
     /* A name sits on a plate of the page's own ground. What is behind it is a
-       star field, which over the middle of a large store is near white: no
+       drawing, which over the middle of a large store is near white: no
        outline around a glyph survives that, only an opaque backing. */
     const ground = rgb(cssVar('--bg'), [.07, .07, .07]).map(v => Math.round(v * 255));
     this.colors.plate = `rgba(${ground.join(', ')}, .8)`;
@@ -639,8 +640,8 @@ export class Universe {
        once, and this view is entered and left often enough that it is worth
        not relying on that. */
     const gl = this.gl;
-    for (const p of [this.pStar, this.pLink, this.pSky]) if (p) gl.deleteProgram(p.p);
-    for (const v of [this.starVAO, this.linkVAO, this.skyVAO]) if (v) gl.deleteVertexArray(v);
+    for (const p of [this.pNode, this.pLink, this.pBack]) if (p) gl.deleteProgram(p.p);
+    for (const v of [this.nodeVAO, this.linkVAO, this.backVAO]) if (v) gl.deleteVertexArray(v);
     for (const b of [this.posBuf, this.styleBuf, this.linkPosBuf, this.linkSBuf]) {
       if (b) gl.deleteBuffer(b);
     }
@@ -685,7 +686,7 @@ export class Universe {
     this.pos.set(msg.pos.subarray(0, this.pos.length));
     this.settled = !!msg.done;
     this._uploadPositions();
-    /* A universe still condensing is framed as it grows: the pull-back and
+    /* A graph still condensing is framed as it grows: the pull-back and
        the arrangement are one movement, which is this view's one authored
        moment. The framing eases rather than snapping, or eleven position
        updates a second would read as eleven jumps. */
@@ -734,15 +735,15 @@ export class Universe {
     gl.disable(gl.DEPTH_TEST);
     gl.enable(gl.BLEND);
     /* Screen, premultiplied: dst + src * (1 - dst). Commutative, so a
-       hundred thousand stars skip the depth sort, and saturating, so a
-       thousand overlapping halos brighten toward white without clamping. */
+       hundred thousand nodes skip the depth sort, and saturating, so a
+       thousand overlapping glows brighten toward white without clamping. */
     gl.blendFuncSeparate(gl.ONE_MINUS_DST_COLOR, gl.ONE,
                          gl.ONE_MINUS_DST_ALPHA, gl.ONE);
     gl.clearColor(0, 0, 0, 0);
 
-    this.pStar = this._program(V_STAR, F_STAR);
+    this.pNode = this._program(V_NODE, F_NODE);
     this.pLink = this._program(V_LINK, F_LINK);
-    this.pSky = this._program(V_SKY, F_SKY);
+    this.pBack = this._program(V_BACK, F_BACK);
 
     const n = this.nodes.length;
     const F = Float32Array.BYTES_PER_ELEMENT;
@@ -751,8 +752,8 @@ export class Universe {
     const quad = gl.createBuffer();
     gl.bindBuffer(gl.ARRAY_BUFFER, quad);
     gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([
-      -STAR_QUAD, -STAR_QUAD, STAR_QUAD, -STAR_QUAD,
-      -STAR_QUAD, STAR_QUAD, STAR_QUAD, STAR_QUAD,
+      -NODE_QUAD, -NODE_QUAD, NODE_QUAD, -NODE_QUAD,
+      -NODE_QUAD, NODE_QUAD, NODE_QUAD, NODE_QUAD,
     ]), gl.STATIC_DRAW);
 
     this.posBuf = gl.createBuffer();
@@ -764,9 +765,9 @@ export class Universe {
     gl.bindBuffer(gl.ARRAY_BUFFER, this.styleBuf);
     gl.bufferData(gl.ARRAY_BUFFER, this.style, gl.DYNAMIC_DRAW);
 
-    this.starVAO = gl.createVertexArray();
-    gl.bindVertexArray(this.starVAO);
-    const sa = name => gl.getAttribLocation(this.pStar.p, name);
+    this.nodeVAO = gl.createVertexArray();
+    gl.bindVertexArray(this.nodeVAO);
+    const sa = name => gl.getAttribLocation(this.pNode.p, name);
     gl.bindBuffer(gl.ARRAY_BUFFER, quad);
     gl.enableVertexAttribArray(sa('a_corner'));
     gl.vertexAttribPointer(sa('a_corner'), 2, gl.FLOAT, false, 0, 0);
@@ -790,8 +791,8 @@ export class Universe {
        side of the ribbon. */
     const m = this.edges.length;
     this.linkPos = new Float32Array(m * 6);
-    /* four floats per relation: how lit the filament is, whether it is one of
-       the selection's own, and the size of the star at each end -- which is
+    /* four floats per relation: how lit the link is, whether it is one of
+       the selection's own, and the size of the node at each end -- which is
        what the ribbon retreats to instead of crossing */
     this.linkStyle = new Float32Array(m * 4);
     this.edges.forEach((e, k) => {
@@ -833,10 +834,10 @@ export class Universe {
     gl.vertexAttribPointer(la('a_style'), 4, gl.FLOAT, false, 0, 0);
     gl.vertexAttribDivisor(la('a_style'), 1);
 
-    /* the sky: a fixed shell of far dust, so an orbit has parallax to read */
-    const dir = new Float32Array(SKY_STARS * 3), seed = new Float32Array(SKY_STARS);
-    for (let i = 0; i < SKY_STARS; i++) {
-      const y = 1 - 2 * (i + .5) / SKY_STARS;
+    /* the backdrop: a fixed shell of far points, so an orbit has parallax */
+    const dir = new Float32Array(BACK_DOTS * 3), seed = new Float32Array(BACK_DOTS);
+    for (let i = 0; i < BACK_DOTS; i++) {
+      const y = 1 - 2 * (i + .5) / BACK_DOTS;
       const ring = Math.sqrt(Math.max(0, 1 - y * y));
       const a = i * 2.399963;
       dir[i * 3] = Math.cos(a) * ring;
@@ -844,13 +845,13 @@ export class Universe {
       dir[i * 3 + 2] = Math.sin(a) * ring;
       seed[i] = (i * 0.6180339887) % 1;
     }
-    this.skyVAO = gl.createVertexArray();
-    gl.bindVertexArray(this.skyVAO);
+    this.backVAO = gl.createVertexArray();
+    gl.bindVertexArray(this.backVAO);
     for (const [data, name, size] of [[dir, 'a_dir', 3], [seed, 'a_seed', 1]]) {
       const buf = gl.createBuffer();
       gl.bindBuffer(gl.ARRAY_BUFFER, buf);
       gl.bufferData(gl.ARRAY_BUFFER, data, gl.STATIC_DRAW);
-      const loc = gl.getAttribLocation(this.pSky.p, name);
+      const loc = gl.getAttribLocation(this.pBack.p, name);
       gl.enableVertexAttribArray(loc);
       gl.vertexAttribPointer(loc, size, gl.FLOAT, false, 0, 0);
     }
@@ -902,7 +903,7 @@ export class Universe {
   }
 
   /* One memory changed state. Hover fires on every pointer move that crosses
-     a star, so rewriting the whole instance buffer for it would put the
+     a node, so rewriting the whole instance buffer for it would put the
      store's size on the cost of moving the mouse. */
   _touch(node) {
     if (!node) return;
@@ -915,7 +916,7 @@ export class Universe {
     this._wake();
   }
 
-  /* Every memory, and every filament's alpha with them: for a spotlight,
+  /* Every memory, and every link's alpha with them: for a spotlight,
      which is a keystroke and not a frame. */
   _uploadStyle() {
     const gl = this.gl;
@@ -923,7 +924,7 @@ export class Universe {
     gl.bindBuffer(gl.ARRAY_BUFFER, this.styleBuf);
     gl.bufferSubData(gl.ARRAY_BUFFER, 0, this.style);
 
-    /* A filament is only as lit as its dimmer end: a match keeps the
+    /* A link is only as lit as its dimmer end: a match keeps the
        relations that reach it, so what it is joined to stays visible. One the
        selection owns is hot instead -- both its ends are in the focus, so
        there is nothing dimming it. */
@@ -986,10 +987,10 @@ export class Universe {
     this.far = this.dist + this.radius * 4 + 400;
     perspective(this.proj, FOV, this.w / this.h, this.near, this.far);
 
-    /* the sky turns with the camera and does not travel with it */
+    /* the backdrop turns with the camera and does not travel with it */
     this.rot.set(v);
     this.rot[12] = this.rot[13] = this.rot[14] = 0;
-    mul(this.sky, this.proj, this.rot);
+    mul(this.backProj, this.proj, this.rot);
 
     /* CSS pixels per world unit at one unit of distance */
     this.pxScale = .5 * this.h / Math.tan(FOV / 2);
@@ -1101,8 +1102,8 @@ export class Universe {
       const ey = v[1] * x + v[5] * y + v[9] * z + v[13];
       scr[s] = halfW + p[0] * ex / dist * halfW;
       scr[s + 1] = halfH - p[5] * ey / dist * halfH;
-      /* the radius the star is DRAWN with, ceiling included */
-      scr[s + 2] = starPx(nodes[i].size, dist, this.pxScale);
+      /* the radius the node is DRAWN with, ceiling included */
+      scr[s + 2] = nodePx(nodes[i].size, dist, this.pxScale);
       scr[s + 3] = dist;
     }
     this.scrCamAt = this.camAt;
@@ -1110,7 +1111,7 @@ export class Universe {
   }
 
   /* The memory under a pointer, or null. Nearest to the camera wins where two
-     overlap, which is what a reader aiming at the star in front expects. */
+     overlap, which is what a reader aiming at the node in front expects. */
   nodeAt(cx, cy) {
     this._project();
     const scr = this.scr;
@@ -1118,9 +1119,9 @@ export class Universe {
     for (let i = 0; i < this.nodes.length; i++) {
       const s = i * 4, dist = scr[s + 3];
       if (dist < 0 || dist >= bestDist) continue;
-      /* the visible edge, not the core radius: STAR_EDGE is where the
+      /* the visible edge, not the core radius: NODE_EDGE is where the
          fragment stops drawing the disc */
-      const reach = Math.max(7, scr[s + 2] * STAR_EDGE + 4);
+      const reach = Math.max(7, scr[s + 2] * NODE_EDGE + 4);
       const dx = scr[s] - cx, dy = scr[s + 1] - cy;
       if (dx * dx + dy * dy <= reach * reach) { best = this.nodes[i]; bestDist = dist; }
     }
@@ -1319,7 +1320,7 @@ export class Universe {
   }
 
   /* Step to the next memory along the selection's relations, and select it.
-     This is how a reader walks the store: land on a star, then move from
+     This is how a reader walks the store: land on a node, then move from
      neighbour to neighbour without going back to a list.
 
      `cameFrom` is where the last step arrived from, so pressing the same key
@@ -1469,7 +1470,7 @@ export class Universe {
   _loop(now) {
     this.raf = 0;
     if (!this.running) return;
-    /* Under reduced motion the universe is not shown condensing: there is
+    /* Under reduced motion the graph is not shown condensing: there is
        nothing to paint until the arrangement is finished, and the worker's
        next message is what wakes the loop back up. */
     if (!this.motion && !this.settled) return;
@@ -1478,7 +1479,7 @@ export class Universe {
     const flying = this._flyStep(ms);
     const live = !!(moving || flying || this.orbit || this.panning
                     || this.pinch || !this.settled);
-    /* At rest the only thing left is the twinkle, and a slow brightness
+    /* At rest the only thing left is the pulse, and a slow brightness
        wander looks the same at 30fps as at 60. */
     if (live || this.dirty || (this.motion && now - this.lastFrame >= 1000 / IDLE_FPS)) {
       this.lastFrame = now;
@@ -1493,18 +1494,18 @@ export class Universe {
     if (this.camDirty) this._camera();
     gl.clear(gl.COLOR_BUFFER_BIT);
 
-    const twinkle = this.motion ? 1 : 0;
-    const time = now * .001 * TWINKLE_HZ;
+    const pulse = this.motion ? 1 : 0;
+    const time = now * .001 * PULSE_HZ;
 
-    gl.useProgram(this.pSky.p);
-    gl.bindVertexArray(this.skyVAO);
-    gl.uniformMatrix4fv(this.pSky.u.u_sky, false, this.sky);
-    gl.uniform1f(this.pSky.u.u_radius, (this.near + this.far) * .35);
-    gl.uniform1f(this.pSky.u.u_dpr, this.dpr);
-    gl.uniform1f(this.pSky.u.u_time, time);
-    gl.uniform1f(this.pSky.u.u_twinkle, twinkle);
-    gl.uniform3fv(this.pSky.u.u_color, this.colors.sky);
-    gl.drawArrays(gl.POINTS, 0, SKY_STARS);
+    gl.useProgram(this.pBack.p);
+    gl.bindVertexArray(this.backVAO);
+    gl.uniformMatrix4fv(this.pBack.u.u_back, false, this.backProj);
+    gl.uniform1f(this.pBack.u.u_radius, (this.near + this.far) * .35);
+    gl.uniform1f(this.pBack.u.u_dpr, this.dpr);
+    gl.uniform1f(this.pBack.u.u_time, time);
+    gl.uniform1f(this.pBack.u.u_pulse, pulse);
+    gl.uniform3fv(this.pBack.u.u_color, this.colors.back);
+    gl.drawArrays(gl.POINTS, 0, BACK_DOTS);
 
     if (this.edges.length) {
       gl.useProgram(this.pLink.p);
@@ -1522,17 +1523,17 @@ export class Universe {
     }
 
     if (this.nodes.length) {
-      gl.useProgram(this.pStar.p);
-      gl.bindVertexArray(this.starVAO);
-      gl.uniformMatrix4fv(this.pStar.u.u_view, false, this.view);
-      gl.uniformMatrix4fv(this.pStar.u.u_proj, false, this.proj);
-      gl.uniform1f(this.pStar.u.u_px, this.pxScale);
-      gl.uniform1f(this.pStar.u.u_minPx, MIN_PX);
-      gl.uniform1f(this.pStar.u.u_maxPx, MAX_PX);
-      gl.uniform2fv(this.pStar.u.u_fog, this.fog);
-      gl.uniform1f(this.pStar.u.u_time, time);
-      gl.uniform1f(this.pStar.u.u_twinkle, twinkle);
-      gl.uniform3fv(this.pStar.u.u_accent, this.colors.accent);
+      gl.useProgram(this.pNode.p);
+      gl.bindVertexArray(this.nodeVAO);
+      gl.uniformMatrix4fv(this.pNode.u.u_view, false, this.view);
+      gl.uniformMatrix4fv(this.pNode.u.u_proj, false, this.proj);
+      gl.uniform1f(this.pNode.u.u_px, this.pxScale);
+      gl.uniform1f(this.pNode.u.u_minPx, MIN_PX);
+      gl.uniform1f(this.pNode.u.u_maxPx, MAX_PX);
+      gl.uniform2fv(this.pNode.u.u_fog, this.fog);
+      gl.uniform1f(this.pNode.u.u_time, time);
+      gl.uniform1f(this.pNode.u.u_pulse, pulse);
+      gl.uniform3fv(this.pNode.u.u_accent, this.colors.accent);
       gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, this.nodes.length);
     }
     gl.bindVertexArray(null);
@@ -1548,7 +1549,7 @@ export class Universe {
       .sort((a, b) => (b.degree || 0) - (a.degree || 0))
       .slice(0, LABEL_POOL);
     /* where a memory stands in that order, so the busiest few can be named
-       from a distance where every star is down at the pixel floor -- a wide
+       from a distance where every node is down at the pixel floor -- a wide
        shot of a large store would otherwise carry no names at all */
     this.pool.forEach((node, at) => { node.rank = at; });
   }
@@ -1564,7 +1565,7 @@ export class Universe {
     /* Redrawn on every painted frame, with no flag deciding whether to skip
        it. Two dozen plates and a clearRect are cheaper than the class of bug
        a skipped one buys: the names live on their own canvas, so a frame this
-       pass declines to repaint is a frame of labels sitting over stars that
+       pass declines to repaint is a frame of labels sitting over nodes that
        have already moved. */
     const lx = this.lx;
     lx.clearRect(0, 0, this.w, this.h);
@@ -1615,7 +1616,7 @@ export class Universe {
         c.lead ? LABEL_CLIP_LEAD : LABEL_CLIP, Math.floor(room / LABEL_EM))));
       const width = lx.measureText(text).width;
       const y = c.y;
-      const edge = c.r * STAR_EDGE;
+      const edge = c.r * NODE_EDGE;
       let x = c.x + edge + LABEL_OFF;
       if (x + width > this.w - LABEL_EDGE) {
         x = Math.max(LABEL_EDGE, c.x - edge - LABEL_OFF - width);
