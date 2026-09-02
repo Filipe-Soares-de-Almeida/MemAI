@@ -91,14 +91,22 @@ export function setPickerValue(btn, { value, label = '', html = '', title = '' }
 
    `search` defaults to a row count -- see SEARCH_FROM. `onPick` gets the
    value; a picker that stands for a form field also repaints the button,
-   which is why the item is handed over with it. */
+   which is why the item is handed over with it.
+
+   `anchor` is a selector for an ANCESTOR of the button, and the panel is then
+   measured and placed against that element instead of the button: a control
+   that is only the right-hand half of a row opens over the whole row, at the
+   row's width. It is resolved when the panel opens, so a repaint of the row
+   leaves no stale element behind. */
 export function wirePicker(root, { id, items, onPick, search = 'auto',
-                                   minWidth = 180, panelCls = '', keepLabel = false }) {
+                                   minWidth = 180, panelCls = '', keepLabel = false,
+                                   anchor = '' }) {
   const btn = root.querySelector(`#${id}`);
   if (!btn) return;
   /* a view swap drops the button but not a panel parented to <body> */
   onTeardown(closePicker);
-  const open = () => openPanel(btn, { items, onPick, search, minWidth, panelCls, keepLabel });
+  const open = () =>
+    openPanel(btn, { items, onPick, search, minWidth, panelCls, keepLabel, anchor });
   btn.addEventListener('click', () => {
     if (live && live.btn === btn) closePicker();
     else open();
@@ -111,7 +119,7 @@ export function wirePicker(root, { id, items, onPick, search = 'auto',
   });
 }
 
-function openPanel(btn, { items, onPick, search, minWidth, panelCls, keepLabel }) {
+function openPanel(btn, { items, onPick, search, minWidth, panelCls, keepLabel, anchor }) {
   closePicker();
   const current = btn.dataset.v || '';
   const all = items('');
@@ -207,7 +215,7 @@ function openPanel(btn, { items, onPick, search, minWidth, panelCls, keepLabel }
      -- the same reason the tip and the context menu do it that way. Below the
      button unless it does not fit and there is more room above. */
   const place = () => {
-    const r = btn.getBoundingClientRect();
+    const r = ((anchor && btn.closest(anchor)) || btn).getBoundingClientRect();
     panel.style.width = `${Math.min(Math.max(r.width, minWidth), innerWidth - 16)}px`;
     const h = panel.offsetHeight;
     const room = innerHeight - r.bottom - 8;

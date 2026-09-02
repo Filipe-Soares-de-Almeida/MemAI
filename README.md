@@ -39,8 +39,10 @@ warden subagent that consults it on a session's behalf.
   what is actually happening.
 - **Curation stays a person's.** Confidence, decay dates, dedup and staged
   suggestions: an agent proposes, a human applies them in the dashboard.
-- **One file holds all of it.** Rows, keyword index, edit history, relations,
-  diagrams. Copy it, back it up, delete it.
+- **One file holds a project.** Rows, keyword index, edit history, relations,
+  diagrams: a project's whole memory in one SQLite file. Keep one for
+  everything, or one per project and switch between them from the dashboard.
+  Copy it, back it up, delete it.
 
 ## What it looks like
 
@@ -198,9 +200,32 @@ that JSON wants its backslashes doubled.
 
 ## Where the data lives
 
-`$MEMAI_HOME/memai.db` if `MEMAI_HOME` is set, otherwise `~/.memai/memai.db`,
-with `backups/`, `renders/` and `warden/` beside it. Not tracked in git — user
-data, created on first run.
+Under `$MEMAI_HOME` if it is set, otherwise `~/.memai`. Not tracked in git —
+user data, created on first run.
+
+| path | what it is |
+|---|---|
+| `memai.db` | the `General` project, the one every install starts with |
+| `projects/<name>.db` | every other project, one file each, named as you named it |
+| `active` | one line naming the project in use; absent means `General` |
+| `backups/` | `VACUUM INTO` copies of `General`, named `General-<stamp>.db`; any other project's go in `backups/<name>/` |
+| `renders/`, `warden/` | generated SVGs, and the warden's per-session state |
+
+A project is one whole memory: its own domains, relations, diagrams and
+settings. Any name that works as a Windows file name works as a project
+name, and two names that differ only in case are one project. The switch is
+on the dashboard's rail, and every MCP server, hook and dashboard on the
+machine opens the active project on its next call — no restart. Every
+write's result and every `pulse()` name the project they touched, and
+`list_projects()` lists them all.
+
+Memories move between projects from the dashboard — a selection in
+Memories, or a whole domain in Domains — with `move_to_project()`, or with
+`memai-store move`. A move copies each memory with its history into the
+target, checks it there and only then removes the original, after a backup
+of the source is written. What the copy cannot carry — a relation to a
+memory outside the selection, a diagram jump across it — is reported before
+anything moves.
 
 ---
 

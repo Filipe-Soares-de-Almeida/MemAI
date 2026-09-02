@@ -310,3 +310,8 @@ export function updateRail(o) {
   $('#dbBadge').textContent = t('badge.active', { n: fmtInt(o.totals.active) });
   $('#dbBadge').title = o.db.path;
 }
+
+/* The rail from /api/overview, for the moments no view is about to hand the
+   payload over itself: the first paint off Overview, a project switch, a
+   move to another project. */
+export const refreshRail = () => api('/api/overview').then(updateRail).catch(() => {});
