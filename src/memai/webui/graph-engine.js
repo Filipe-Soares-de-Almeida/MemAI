@@ -66,8 +66,21 @@ const R_MAX_LINK = 6.5;
 const MIN_PX = 1.7;
 const MAX_PX = 11;
 const MAX_PX_LEAF = .55;
-/* the quad a star is drawn on, in core radii: the halo needs the room */
-const PAD = 1.5;
+/* Every radius below is in starPx units -- one is what starPx() returns, and
+   the shader measures its own `d` in the same, so what the drawing calls the
+   edge of a star and what a filament retreats to are the same number.
+
+   STAR_QUAD has to cover the widest of them. It used to be 1.5 while the
+   fragment normalised `d` by that same 1.5, which put the ring's outer edge
+   outside the quad: the ring was clipped to four arcs near the diagonals and
+   read as a bracket rather than a ring. */
+const STAR_EDGE = 1.5;        /* the core's outer edge */
+const STAR_SOLID = 1.05;      /* inside this the core is opaque */
+const STAR_HOLE = 1.2;        /* an archived star is a ring around this */
+const STAR_MARK_IN = 1.7;     /* a marked star's ring, inner and outer */
+const STAR_MARK_OUT = 2.13;
+const STAR_HALO = 2.25;       /* where the halo reaches zero */
+const STAR_QUAD = 2.25;
 
 /* A filament's half-width in CSS px, and what the selection's own are
    multiplied by. One pixel of that half-width is spent on the feather, so
@@ -76,9 +89,14 @@ const PAD = 1.5;
    step's lines and the rest. */
 const LINK_HALF = 1.2;
 const LINK_HOT = 1.8;
-/* the breathing space between where a filament stops and the edge of the disc
-   it stopped at, in CSS px */
-const LINK_GAP = 2;
+/* Where a filament stops, in the same starPx units the shader measures in:
+   clear of the core, and at the inner edge of the ring a marked star wears.
+   Not at the halo's outer edge -- the halo is under a hundredth of an alpha
+   out there, so stopping at it leaves a gap with nothing in it. Landing on
+   the ring instead reads as one mark: the ring and the filaments a selection
+   owns are the same colour. */
+const LINK_CLEAR = STAR_MARK_IN;
+const LINK_GAP = 1;
 
 /* The idle life of the universe: a slow, tiny brightness wander. Nothing
    MOVES, which is the point -- the arrangement being read has to hold still,
@@ -219,7 +237,7 @@ void main() {
      rather than an empty frame; close up it stops growing. */
   float r = starPx(a_size, dist, u_minPx, u_maxPx) * dist / u_px;
   eye.xy += a_corner * r;
-  v_uv = a_corner / ${PAD.toFixed(2)};
+  v_uv = a_corner;
   v_color = a_color;
   v_flags = a_flags;
   v_dim = a_dim;
@@ -255,15 +273,17 @@ void main() {
   vec3 col = v_color * tw;
   /* archived is a ring: the memory is still there and it is not filled in */
   float core = hollow
-    ? smoothstep(1.03, 0.90, d) * smoothstep(0.58, 0.76, d)
-    : smoothstep(1.0, 0.70, d);
-  float halo = pow(max(0.0, 1.0 - d / ${PAD.toFixed(2)}), 3.0) * 0.34;
+    ? smoothstep(${(STAR_EDGE + 0.05).toFixed(2)}, ${(STAR_EDGE - 0.15).toFixed(2)}, d)
+      * smoothstep(${(STAR_HOLE - 0.3).toFixed(2)}, ${STAR_HOLE.toFixed(2)}, d)
+    : smoothstep(${STAR_EDGE.toFixed(2)}, ${STAR_SOLID.toFixed(2)}, d);
+  float halo = pow(max(0.0, 1.0 - d / ${STAR_HALO.toFixed(2)}), 3.0) * 0.34;
   /* The halo fades faster than the core -- v_dim twice over. A memory pushed
      to context keeps a legible point and loses its bloom, so a few hundred of
      them read as a star field behind the focus rather than as a haze over it. */
   float a = (core + halo * (hollow ? 0.5 : 1.0) * v_dim) * v_dim * v_fade;
   if (marked) {
-    float ring = smoothstep(1.42, 1.30, d) * smoothstep(1.08, 1.20, d);
+    float ring = smoothstep(${STAR_MARK_OUT.toFixed(2)}, ${(STAR_MARK_OUT - 0.18).toFixed(2)}, d)
+      * smoothstep(${STAR_MARK_IN.toFixed(2)}, ${(STAR_MARK_IN + 0.18).toFixed(2)}, d);
     if (dashed && fract(atan(v_uv.y, v_uv.x) * 2.2) > 0.55) ring = 0.0;
     col = mix(col, u_accent, ring);
     a += ring * 0.95 * v_fade;
@@ -282,7 +302,7 @@ uniform mat4 u_proj;
 uniform float u_px;
 uniform float u_minPx;
 uniform float u_maxPx;
-uniform vec3 u_width;
+uniform vec4 u_width;
 uniform vec2 u_fog;
 out float v_t;
 out float v_alpha;
@@ -307,8 +327,8 @@ void main() {
   float reach = length(span);
   vec3 along = reach > 1e-5 ? span / reach : vec3(0.0, 0.0, 1.0);
   float da = max(0.001, -ea.z), db = max(0.001, -eb.z);
-  float ra = (starPx(a_style.z, da, u_minPx, u_maxPx) + u_width.z) * da / u_px;
-  float rb = (starPx(a_style.w, db, u_minPx, u_maxPx) + u_width.z) * db / u_px;
+  float ra = (starPx(a_style.z, da, u_minPx, u_maxPx) * u_width.w + u_width.z) * da / u_px;
+  float rb = (starPx(a_style.w, db, u_minPx, u_maxPx) * u_width.w + u_width.z) * db / u_px;
   float room = reach * 0.42;
   ea += along * min(ra, room);
   eb -= along * min(rb, room);
@@ -690,7 +710,8 @@ export class Universe {
     const quad = gl.createBuffer();
     gl.bindBuffer(gl.ARRAY_BUFFER, quad);
     gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([
-      -PAD, -PAD, PAD, -PAD, -PAD, PAD, PAD, PAD,
+      -STAR_QUAD, -STAR_QUAD, STAR_QUAD, -STAR_QUAD,
+      -STAR_QUAD, STAR_QUAD, STAR_QUAD, STAR_QUAD,
     ]), gl.STATIC_DRAW);
 
     this.posBuf = gl.createBuffer();
@@ -1453,7 +1474,7 @@ export class Universe {
       gl.uniform1f(this.pLink.u.u_px, this.pxScale);
       gl.uniform1f(this.pLink.u.u_minPx, MIN_PX);
       gl.uniform1f(this.pLink.u.u_maxPx, MAX_PX);
-      gl.uniform3f(this.pLink.u.u_width, LINK_HALF, LINK_HOT, LINK_GAP);
+      gl.uniform4f(this.pLink.u.u_width, LINK_HALF, LINK_HOT, LINK_GAP, LINK_CLEAR);
       gl.uniform2fv(this.pLink.u.u_fog, this.fog);
       gl.uniform3fv(this.pLink.u.u_color, this.colors.edge);
       gl.uniform3fv(this.pLink.u.u_accent, this.colors.accent);
