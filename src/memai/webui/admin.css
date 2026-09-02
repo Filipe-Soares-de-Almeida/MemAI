@@ -2071,6 +2071,41 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
   max-width: 190px;
 }
 
+/* The quiet variant, for a picker that IS a row of the rail rather than a
+   control sitting in a toolbar (see core/projects.js): one step of elevation
+   instead of eight, a hairline, the data font of the rows above it, and the
+   accent on one row -- the project that is active. */
+.pick-pop.pick-quiet {
+  background: var(--raised);
+  border-color: var(--line-soft);
+  border-radius: var(--r-sm);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, .45);
+}
+.pick-quiet .pick-row {
+  font-family: var(--font-m);
+  color: var(--ink-2);
+}
+/* the panel is as wide as the rail row and a project name is a free-form
+   file name, so a long one ends in an ellipsis and not in the border */
+.pick-quiet .pick-label {
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+/* two marks, neither of them a colour on its own: full text emphasis, and the
+   accent as the rail's own 2px inset bar */
+.pick-quiet .pick-row[aria-selected="true"],
+.pick-quiet .pick-row[aria-selected="true"] .pick-label { color: var(--ink); }
+.pick-quiet .pick-row[aria-selected="true"] { box-shadow: inset 2px 0 0 var(--accent); }
+/* the action row, set apart by the rule and by the UI font among the
+   monospaced names -- the accent it wears in a dialog would be a second
+   coloured row in a panel that has one */
+.pick-quiet .pick-row.pick-new {
+  margin-top: var(--sp-1); padding-top: var(--sp-2);
+  border-top: 1px solid var(--line-soft);
+}
+.pick-quiet .pick-row.pick-new .pick-label {
+  font-family: var(--font-ui); color: var(--ink-3);
+}
+
 /* The domain variant. The indent is the row's own padding, not a spacer
    inside it: with no twist to hold a column open, a zero-width spacer would
    still leave the flex gap after it and push every level -- a root included
@@ -2366,6 +2401,10 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
    and a fixed set of grid columns leaves an empty track wherever one is absent,
    sliding the close button out of the corner. */
 .toast {
+  /* the first line's box -- the size body sets times the line-height body
+     sets. What the mark centres against, and all of the layout the two
+     buttons beside it claim. */
+  --toast-line: calc(var(--fs-body) * 1.55);
   display: flex; align-items: flex-start; gap: var(--sp-3);
   background: var(--overlay);
   border: 1px solid var(--line);
@@ -2383,7 +2422,7 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
    the type scale moved -- this follows the line box instead of a magic number. */
 .toast-mark {
   display: inline-flex; align-items: center;
-  height: calc(var(--fs-body) * 1.45);
+  height: var(--toast-line);
   --ico: 16px;
 }
 .toast-text { flex: 1; min-width: 0; display: grid; gap: var(--sp-0); }
@@ -2398,6 +2437,13 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
   overflow-wrap: anywhere;
 }
 .toast [data-act] { flex: none; }
+/* Both buttons keep the 30px target every other control has (WCAG 2.5.8) and
+   claim only the first line's height in the layout: at their own height they
+   set the box of a one-line toast, and the message it is about then sits
+   above that box's centre line rather than on it. */
+.toast [data-act], .toast [data-close] {
+  margin-block: calc((var(--toast-line) - var(--ctl-h-sm)) / 2);
+}
 
 /* Three redundant signals, not one of them trim: the mark's SHAPE (a closed,
    an open or a crossed ring), its colour, and -- for a failure only -- the
