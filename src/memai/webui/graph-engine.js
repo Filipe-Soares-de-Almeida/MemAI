@@ -136,6 +136,10 @@ const LABEL_PAD_Y = 10;
    is what keeps a narrow canvas from clipping every label mid-word */
 const LABEL_EDGE = 8;
 const LABEL_EM = 6.2;
+/* How far a name sits from the star's visible edge. The plate reaches
+   LABEL_PAD_X back from where the text starts, so the air between the two is
+   this minus that -- which is why 8 read as touching. */
+const LABEL_OFF = 14;
 
 const SKY_STARS = 1400;
 
@@ -337,14 +341,29 @@ void main() {
   vec3 eb = (u_view * vec4(a_to, 1.0)).xyz;
   /* A relation joins two memories; it does not cross them. Each end retreats
      to the edge of its own star's disc, by the same rule the star is drawn
-     with, plus a gap. Capped at a share of the span, or two memories closer
-     together than their own radii would turn the ribbon inside out. */
+     with, plus a gap.
+
+     The retreat is a distance ON SCREEN, and it is spent by travelling along
+     the filament in space -- two different things whenever the filament is
+     not broadside to the camera. Only the part of its direction that is
+     perpendicular to the view ray moves the projection, so the world distance
+     that buys one pixel grows as 1/sin of the angle between them. Without
+     that factor a relation clears the disc from one side of an orbit and runs
+     straight through it from another, which is the same relation and the same
+     star. The sine is floored, because a filament pointing at the camera
+     cannot be pulled out of the disc by any finite amount -- it is behind the
+     star -- and the cap on room below catches the rest. */
   vec3 span = eb - ea;
   float reach = length(span);
   vec3 along = reach > 1e-5 ? span / reach : vec3(0.0, 0.0, 1.0);
   float da = max(0.001, -ea.z), db = max(0.001, -eb.z);
-  float ra = (starPx(a_style.z, da, u_minPx, u_maxPx) * u_width.w + u_width.z) * da / u_px;
-  float rb = (starPx(a_style.w, db, u_minPx, u_maxPx) * u_width.w + u_width.z) * db / u_px;
+  vec3 rayA = ea / da, rayB = eb / db;
+  float leanA = max(0.12, length(along - dot(along, rayA) * rayA));
+  float leanB = max(0.12, length(along - dot(along, rayB) * rayB));
+  float ra = (starPx(a_style.z, da, u_minPx, u_maxPx) * u_width.w + u_width.z)
+             * da / u_px / leanA;
+  float rb = (starPx(a_style.w, db, u_minPx, u_maxPx) * u_width.w + u_width.z)
+             * db / u_px / leanB;
   float room = reach * 0.42;
   ea += along * min(ra, room);
   eb -= along * min(rb, room);
@@ -1597,9 +1616,9 @@ export class Universe {
       const width = lx.measureText(text).width;
       const y = c.y;
       const edge = c.r * STAR_EDGE;
-      let x = c.x + edge + 8;
+      let x = c.x + edge + LABEL_OFF;
       if (x + width > this.w - LABEL_EDGE) {
-        x = Math.max(LABEL_EDGE, c.x - edge - 8 - width);
+        x = Math.max(LABEL_EDGE, c.x - edge - LABEL_OFF - width);
       }
       const box = [x - LABEL_PAD_X, y - LABEL_PAD_Y,
                    width + LABEL_PAD_X * 2, LABEL_PAD_Y * 2];
