@@ -169,13 +169,23 @@ export async function renderGraph(view, params, ctx) {
       },
     });
   } catch (err) {
-    /* Nothing to fall back to and nothing to pretend: a browser with no
-       WebGL2 cannot draw this, and the same memories are a click away as
-       text. */
-    $('#gWrap').innerHTML = `<div class="graph-blocked">
-      <p>${esc(t('g.webgl'))}</p>
-      <button type="button" class="btn btn-solid" id="gToList">${t('nav.memories')}</button>
+    /* Nothing to fall back to and nothing to pretend. What this must NOT do
+       is blame the browser for every failure: a shader that will not compile
+       and a graphics card that will not give up a context both arrive here,
+       and only one of them is the reader's to do anything about. So the
+       browser's own words go on screen, and the retry is here because a
+       refused context is often a passing state. */
+    console.error('relations universe:', err);
+    const wrap = $('#gWrap');
+    wrap.innerHTML = `<div class="graph-blocked" role="alert">
+      <p>${esc(t('g.startFailed'))}${err?.kind === 'context' ? ` ${esc(t('g.webgl'))}` : ''}</p>
+      ${err?.message ? `<p class="failed-detail">${esc(err.message)}</p>` : ''}
+      <div class="act-row">
+        <button type="button" class="btn btn-solid" id="gRetry">${t('common.retry')}</button>
+        <button type="button" class="btn" id="gToList">${t('nav.memories')}</button>
+      </div>
     </div>`;
+    $('#gRetry').addEventListener('click', () => refreshBehind());
     $('#gToList').addEventListener('click', () => go('memories'));
     return;
   }
