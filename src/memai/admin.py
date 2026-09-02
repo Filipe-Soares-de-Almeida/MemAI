@@ -74,11 +74,13 @@ STATUSES = ("active", "archived")
 # than bulk accepts would be a button that cannot work.
 BULK_MAX = 500
 
-# The relations graph is laid out in the browser by an O(n^2) force
-# simulation, so handing over the whole store freezes the tab rather than
-# drawing anything. Most-connected first, because a graph of unconnected
-# dots is the useless half of a big store.
-GRAPH_NODE_CAP = 400
+# The relations graph hands over the whole scope. The layout settles in a
+# worker and the drawing is one instanced GPU pass, so the node count costs
+# the graphics card rather than the main thread. `limit` still cuts on
+# request -- most-connected first, because a graph of unconnected dots is
+# the useless half of a big store -- and the ceiling is only there so a
+# hand-typed number cannot ask SQLite for a row count it has to think about.
+GRAPH_LIMIT_MAX = 200_000
 
 LOOPBACK_HOSTS = {"localhost", "127.0.0.1", "::1", "[::1]"}
 
@@ -662,7 +664,7 @@ def graph(request, payload) -> dict:
     status = qp.get("status", "active")
     domain = qp.get("domain", "")
     type_ = qp.get("type", "")
-    limit = _int_param(request, "limit", GRAPH_NODE_CAP, 1, 2000)
+    limit = _int_param(request, "limit", 0, 0, GRAPH_LIMIT_MAX)
     with db.connect() as conn:
         scope = _scope_echo(conn, domain)
         where, params = ["1=1"], []
@@ -681,11 +683,12 @@ def graph(request, payload) -> dict:
         # node below counts only edges between nodes that made it in, so
         # what the legend says matches what is drawn.
         rows = conn.execute(
-            f"SELECT uid, type, domain, also_domains, status, confidence, content, tags, "
-            f"       created_at, (SELECT COUNT(*) FROM relations r "
+            f"SELECT uid, type, domain, also_domains, status, confidence, title, content, "
+            f"       tags, created_at, (SELECT COUNT(*) FROM relations r "
             f"        WHERE r.from_uid = memories.uid OR r.to_uid = memories.uid) AS deg "
             f"FROM memories WHERE {' '.join(where)} "
-            f"ORDER BY deg DESC, created_at DESC LIMIT ?", [*params, limit]).fetchall()
+            f"ORDER BY deg DESC, created_at DESC" + (" LIMIT ?" if limit else ""),
+            [*params, limit] if limit else params).fetchall()
         uids = {r["uid"] for r in rows}
         edges = [
             dict(r) for r in conn.execute(
@@ -697,18 +700,24 @@ def graph(request, payload) -> dict:
         degree[e["from_uid"]] = degree.get(e["from_uid"], 0) + 1
         degree[e["to_uid"]] = degree.get(e["to_uid"], 0) + 1
     # `tags` and `also` are here for the graph's spotlight filter, which
-    # matches on what a human would type to find a node again: its opening
-    # line, a domain it belongs to, or a tag. Everything else is already drawn.
+    # matches on what a human would type to find a node again: its name, a
+    # domain it belongs to, or a tag. Everything else is already drawn.
+    #
+    # `title` and `label` both travel, and both have a job. A node is NAMED by
+    # its title and falls back to `label` -- the opening line of the body --
+    # the way a memory row is. The spotlight reads both, so a store whose
+    # titles name and whose bodies carry the detail is findable by either.
     nodes = [_paths({
         "uid": r["uid"], "type": r["type"], "domain": r["domain"],
         "also_domains": r["also_domains"],
         "status": r["status"], "confidence": r["confidence"],
         "tags": r["tags"],
+        "title": r["title"].strip(),
         "label": _snip(r["content"].split("\n", 1)[0], 90),
         "degree": degree.get(r["uid"], 0),
         "created_at": r["created_at"],
     }) for r in rows]
-    # A cap that says nothing reads as "this is everything".
+    # A cut that says nothing reads as "this is everything".
     return {"nodes": nodes, "edges": edges,
             "total": total, "truncated": total > len(nodes), **scope}
 

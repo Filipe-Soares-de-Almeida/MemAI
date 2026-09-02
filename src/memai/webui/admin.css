@@ -1808,11 +1808,19 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
   height: calc(100vh - 200px); min-height: 480px;
   border: 1px solid var(--line-soft);
   border-radius: var(--r-lg);
+  /* Not the dotted well the diagram canvas uses: what is drawn here
+     composites ADDITIVELY over the ground, so the ground has to stay the
+     darkest tone the theme has and the depth cannot come from a lighter
+     surface. Two washes in the primary and secondary hues carry it instead,
+     at an alpha where they read as distance and not as decoration. */
   background:
-    radial-gradient(circle at 1px 1px, rgba(255, 255, 255, .05) 1.1px, transparent 0) 0 0 / 26px 26px,
+    radial-gradient(115% 85% at 50% 42%, rgba(187, 134, 252, .06), transparent 60%),
+    radial-gradient(95% 75% at 82% 90%, rgba(3, 218, 198, .045), transparent 58%),
     var(--bg);
   overflow: hidden;
 }
+/* free flight is a MODE, and a cursor cannot say so: the frame does */
+.graph-wrap.flying { box-shadow: inset 0 0 0 1px rgba(187, 134, 252, .38); }
 /* touch-action: none so a drag on the canvas is a drag ON the canvas and not
    the browser scrolling the page out from under it -- the engines listen on
    pointer events, which covers mouse, pen and finger with one path */
@@ -1835,8 +1843,67 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
   cursor: grab;
   touch-action: none;
 }
-.graph-wrap canvas.dragging { cursor: grabbing; }
+.graph-wrap canvas.grabbing { cursor: grabbing; }
 .graph-wrap canvas.linkmode { cursor: crosshair; }
+/* The names sit on their own canvas over the drawing, and nothing is aimed
+   at them: every gesture belongs to the WebGL canvas underneath. */
+.graph-wrap #gLabels { z-index: 2; pointer-events: none; cursor: default; }
+
+/* The arrangement, while it is still arranging. On a large store this is a
+   real wait and the layout visibly condenses through it, so it reports how
+   much is left rather than spinning. */
+.graph-settle {
+  position: absolute; left: 50%; top: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 4;
+  display: flex; flex-direction: column; align-items: center; gap: var(--sp-2);
+  background: var(--glass);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--r-md);
+  padding: var(--sp-3) var(--sp-4);
+  font-size: var(--fs-sm); color: var(--ink-2);
+}
+.gs-track {
+  width: 172px; height: 3px; border-radius: 2px;
+  background: var(--line); overflow: hidden;
+}
+/* Scaled, not resized: a bar that animates its own width relayouts the strip
+   around it eleven times a second while the arrangement it is reporting on is
+   the thing that needs the frames. */
+.gs-fill {
+  display: block; height: 100%; width: 100%;
+  background: var(--accent);
+  transform: scaleX(0); transform-origin: left center;
+  transition: transform .14s linear;
+}
+
+/* The keys, while they are the ones that do something. A modifier nobody was
+   told about is a feature nobody has; this appears with the mode and leaves
+   with it. */
+.graph-flight {
+  position: absolute; left: 50%; top: 54px;
+  transform: translateX(-50%);
+  z-index: 4; max-width: calc(100% - 24px);
+  background: var(--glass);
+  border: 1px solid rgba(187, 134, 252, .35);
+  border-radius: var(--r-md);
+  padding: var(--sp-2) var(--sp-3);
+  font-size: var(--fs-sm); color: var(--ink-2);
+  text-align: center;
+}
+
+/* No WebGL2, nothing to draw, and nothing to pretend: the same memories are
+   one click away as text. */
+.graph-blocked {
+  position: absolute; inset: 0;
+  display: flex; flex-direction: column;
+  align-items: center; justify-content: center; gap: var(--sp-4);
+  padding: var(--sp-6); text-align: center;
+}
+.graph-blocked p {
+  margin: 0; max-width: 48ch;
+  font-size: var(--fs-read); line-height: 1.6; color: var(--ink-2);
+}
 
 /* A floating strip over the canvas, and the row this app's --ctl-h token was
    first worked out on: every control in it answers to the dense height.
@@ -1880,17 +1947,80 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
   font-size: var(--fs-label); color: var(--ink-2);
 }
 .graph-legend .legend-item { font-size: var(--fs-label); }
+/* Which way a relation points, now that it is a gradient along the line
+   rather than an arrowhead -- three pixels at an angle read as nothing. */
+.graph-legend .legend-note {
+  margin-top: var(--sp-1); padding-top: var(--sp-1);
+  border-top: 1px solid var(--line-soft);
+  color: var(--ink-3); font-size: var(--fs-label);
+}
+/* The card floats over the drawing, so its height is canvas the reader does
+   not get to look at. It answers four things -- what this memory is, what it
+   is called, where it is filed, and where you can go from it -- and stops. */
 .graph-card {
   position: absolute; left: 12px; bottom: 12px; z-index: 4;
-  width: min(420px, calc(100% - 24px));
+  width: min(324px, calc(100% - 24px));
   background: var(--overlay);
   border: 1px solid var(--line);
   border-radius: var(--r-lg);
-  padding: var(--sp-3) var(--sp-4);
+  padding: var(--sp-3);
   box-shadow: var(--shadow-pop);
   animation: rise .2s both;
 }
-.graph-card .snippet { font-size: var(--fs-sm); color: var(--ink-2); margin: var(--sp-2) 0 var(--sp-3); line-height: 1.5; }
+.gc-head { display: flex; align-items: flex-start; gap: var(--sp-2); }
+.gc-head .gc-tags { flex: 1; min-width: 0; }
+/* the close button sits on the first line of the chips beside it, not on the
+   centre of a row its own 30px target defines -- same fix as the toast */
+.gc-head .icon-btn {
+  flex: none;
+  margin-block: calc((var(--fs-sm) * 1.5 - var(--ctl-h-sm)) / 2);
+}
+/* Two lines of the body, clamped: the record is one button away and this is
+   a reminder of which memory the node is, not a place to read it. */
+.graph-card .snippet {
+  font-size: var(--fs-sm); color: var(--ink-2);
+  margin: var(--sp-1) 0 var(--sp-3); line-height: 1.5;
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2;
+  overflow: hidden;
+}
+.gc-tags { display: flex; gap: var(--sp-2); align-items: center; flex-wrap: wrap; }
+/* The memory's own name, which is the first thing the card has to answer.
+   A titled memory shows its title; one written before the column shows the
+   opening line of its body, and then the snippet below would repeat it. */
+.gc-name {
+  margin: var(--sp-2) 0 0;
+  font: 500 var(--fs-md)/1.4 var(--font-ui);
+  color: var(--ink);
+  /* three lines is a title that has stopped naming and started restating;
+     TITLE_MAX is 120 characters and this is where that shows */
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3;
+  overflow: hidden;
+}
+.gc-name + .act-row { margin-top: var(--sp-3); }
+/* Where you can go from here. This is the view's whole traversal: land on a
+   memory, then step along its relations without returning to a list. */
+.gc-travel {
+  margin-top: var(--sp-3); padding-top: var(--sp-2);
+  border-top: 1px solid var(--line-soft);
+}
+.gc-travel-head {
+  display: block; margin-bottom: var(--sp-1);
+  font-size: var(--fs-label); color: var(--ink-3);
+}
+.gc-walk { font-family: var(--font-m); }
+.gc-hops { display: flex; flex-wrap: wrap; gap: var(--sp-1); }
+.gc-hop {
+  display: inline-flex; align-items: center; gap: 5px;
+  max-width: 100%;
+  background: var(--chip-fill);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--r-sm);
+  padding: 3px var(--sp-2);
+  font-size: var(--fs-sm); color: var(--ink-2);
+  white-space: nowrap;
+  cursor: pointer;
+}
+.gc-hop:hover { background: var(--hover-3); border-color: var(--line); color: var(--ink); }
 .link-banner {
   position: absolute; top: 12px; right: 12px; z-index: 4;
   background: var(--accent-dim);
@@ -2592,7 +2722,7 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
   height: calc(100vh - 262px); min-height: 420px;
   border: 1px solid var(--line-soft);
   border-radius: var(--r-lg);
-  /* same dotted well as the relations graph, so the two read as siblings */
+  /* a dotted well: the cards sit ON something, and the dots say where */
   background:
     radial-gradient(circle at 1px 1px, rgba(255, 255, 255, .05) 1.1px, transparent 0) 0 0 / 26px 26px,
     var(--bg);
