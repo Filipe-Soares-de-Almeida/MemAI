@@ -51,7 +51,11 @@ function paint(data) {
     <div class="rh-row rh-project"><span>${t('project.title')}</span>
       ${pickerFor({ id: 'projectSel', value: active, items: list,
                     ariaLabel: t('project.title'), cls: 'project-sel' })}</div>`;
-  wirePicker(document, { id: 'projectSel', items: fixedItems(list), onPick: pick, minWidth: 220 });
+  /* measured and placed against the ROW rather than against the value inside
+     it: the panel is then the width of the rail's 228px column and stays
+     inside it, instead of spilling onto the view beside it */
+  wirePicker(document, { id: 'projectSel', items: fixedItems(list), onPick: pick,
+                         anchor: '.rh-project', minWidth: 0, panelCls: 'pick-quiet' });
 }
 
 /* The button has already repainted itself to the row that was clicked, so a
