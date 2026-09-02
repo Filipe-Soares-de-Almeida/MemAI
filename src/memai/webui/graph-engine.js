@@ -76,9 +76,13 @@ const PAD = 1.5;
 const TWINKLE_HZ = .55;
 const IDLE_FPS = 30;
 
-/* what a memory the spotlight missed fades to. Low enough that the matches
-   read as the figure, high enough that the universe's shape survives. */
+/* What a memory fades to, and why there are two levels. The spotlight is a
+   FILTER -- a miss is not part of the answer, so it goes right down. A
+   selection is a FOCUS: everything more than one relation away is still
+   context, and 0.3 is what the diagram canvas dims an unselected step's lines
+   to, so the two surfaces read the same. Both at once takes the lower. */
 const DIM = .16;
+const FOCUS_DIM = .3;
 
 /* Names. The pool is the most-connected memories, which is what a reader
    scanning a cloud is looking for; the cap is what fits before labels read as
@@ -233,7 +237,10 @@ void main() {
     ? smoothstep(1.03, 0.90, d) * smoothstep(0.58, 0.76, d)
     : smoothstep(1.0, 0.70, d);
   float halo = pow(max(0.0, 1.0 - d / ${PAD.toFixed(2)}), 3.0) * 0.34;
-  float a = (core + halo * (hollow ? 0.5 : 1.0)) * v_dim * v_fade;
+  /* The halo fades faster than the core -- v_dim twice over. A memory pushed
+     to context keeps a legible point and loses its bloom, so a few hundred of
+     them read as a star field behind the focus rather than as a haze over it. */
+  float a = (core + halo * (hollow ? 0.5 : 1.0) * v_dim) * v_dim * v_fade;
   if (marked) {
     float ring = smoothstep(1.42, 1.30, d) * smoothstep(1.08, 1.20, d);
     if (dashed && fract(atan(v_uv.y, v_uv.x) * 2.2) > 0.55) ring = 0.0;
@@ -247,18 +254,20 @@ void main() {
 const V_LINK = `#version 300 es
 in vec3 a_pos;
 in float a_t;
-in float a_alpha;
+in vec2 a_style;
 uniform mat4 u_view;
 uniform mat4 u_proj;
 uniform vec2 u_fog;
 out float v_t;
 out float v_alpha;
+out float v_hot;
 out float v_fade;
 void main() {
   vec4 eye = u_view * vec4(a_pos, 1.0);
   v_fade = 1.0 - smoothstep(u_fog.x, u_fog.y, max(0.001, -eye.z));
   v_t = a_t;
-  v_alpha = a_alpha;
+  v_alpha = a_style.x;
+  v_hot = a_style.y;
   gl_Position = u_proj * eye;
 }`;
 
@@ -266,16 +275,21 @@ const F_LINK = `#version 300 es
 precision mediump float;
 in float v_t;
 in float v_alpha;
+in float v_hot;
 in float v_fade;
 uniform vec3 u_color;
+uniform vec3 u_accent;
 out vec4 frag;
 void main() {
   /* Direction, without an arrowhead: a filament is faint where the relation
      starts and bright where it points. An arrowhead seen at an angle in
      perspective is three pixels that read as nothing. */
   float a = v_alpha * mix(0.14, 0.85, v_t) * v_fade;
+  /* a relation the selection owns, in the selection colour: a line width is
+     not available here, so brightness and hue carry it */
+  a *= 1.0 + v_hot * 1.4;
   if (a < 0.003) discard;
-  frag = vec4(u_color * a, a);
+  frag = vec4(mix(u_color, u_accent, v_hot) * a, a);
 }`;
 
 const V_SKY = `#version 300 es
@@ -345,7 +359,9 @@ export class Universe {
          of the body the way a memory row does */
       name: (n.title || '').trim() || n.label || n.uid,
       size: R_BASE + Math.min(R_MAX_LINK, (n.degree || 0) * R_PER_LINK),
-      dim: false,
+      /* the spotlight's verdict on this memory, kept apart from the
+         selection's focus: see _fade */
+      miss: false,
     }));
     this.byUid = Object.fromEntries(this.nodes.map(n => [n.uid, n]));
     this.edges = edges.filter(e => this.byUid[e.from_uid] && this.byUid[e.to_uid]);
@@ -376,6 +392,9 @@ export class Universe {
     this.camDirty = true;
 
     this.hover = null; this.selected = null; this.cameFrom = null;
+    /* the selection and everything one relation from it, by uid, or null for
+       no selection at all */
+    this.focusSet = null;
     this.linkMode = false; this.linkFrom = null;
     this.orbit = null; this.panning = null; this.moved = false;
     this.pointers = new Map(); this.pinch = null;
@@ -605,7 +624,10 @@ export class Universe {
        alpha is what a spotlight rewrites. */
     const m = this.edges.length;
     this.linkPos = new Float32Array(m * 6);
-    this.linkAlpha = new Float32Array(m * 2).fill(1);
+    /* two floats per vertex: how lit the filament is, and whether it is one
+       of the selection's own */
+    this.linkStyle = new Float32Array(m * 4);
+    for (let k = 0; k < m * 2; k++) this.linkStyle[k * 2] = 1;
     const linkT = new Float32Array(m * 2);
     for (let k = 0; k < m; k++) linkT[k * 2 + 1] = 1;
     this.linkPosBuf = gl.createBuffer();
@@ -614,16 +636,16 @@ export class Universe {
     const linkTBuf = gl.createBuffer();
     gl.bindBuffer(gl.ARRAY_BUFFER, linkTBuf);
     gl.bufferData(gl.ARRAY_BUFFER, linkT, gl.STATIC_DRAW);
-    this.linkABuf = gl.createBuffer();
-    gl.bindBuffer(gl.ARRAY_BUFFER, this.linkABuf);
-    gl.bufferData(gl.ARRAY_BUFFER, this.linkAlpha, gl.DYNAMIC_DRAW);
+    this.linkSBuf = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.linkSBuf);
+    gl.bufferData(gl.ARRAY_BUFFER, this.linkStyle, gl.DYNAMIC_DRAW);
 
     this.linkVAO = gl.createVertexArray();
     gl.bindVertexArray(this.linkVAO);
     const la = name => gl.getAttribLocation(this.pLink.p, name);
     for (const [buf, name, size] of [[this.linkPosBuf, 'a_pos', 3],
                                      [linkTBuf, 'a_t', 1],
-                                     [this.linkABuf, 'a_alpha', 1]]) {
+                                     [this.linkSBuf, 'a_style', 2]]) {
       gl.bindBuffer(gl.ARRAY_BUFFER, buf);
       gl.enableVertexAttribArray(la(name));
       gl.vertexAttribPointer(la(name), size, gl.FLOAT, false, 0, 0);
@@ -669,6 +691,17 @@ export class Universe {
     gl.bufferSubData(gl.ARRAY_BUFFER, 0, lp);
   }
 
+  /* How lit a memory is: 1, or the lower of whatever the spotlight and the
+     selection have to say about it. A selection focuses -- itself and one
+     relation out stay at full strength and the rest of the store drops to
+     context -- and a spotlight miss drops further, because that one is a
+     filter and not a focus. */
+  _fade(node) {
+    let v = node.miss ? DIM : 1;
+    if (this.focusSet && !this.focusSet.has(node.uid)) v = Math.min(v, FOCUS_DIM);
+    return v;
+  }
+
   /* One memory's colour, size and state bits. The bits are: 1 diamond
      (anti-pattern), 2 hollow (archived), 4 marked (hovered, selected, or the
      source of a link), 8 dashed (that source specifically). */
@@ -681,7 +714,7 @@ export class Universe {
       + (node.status === 'archived' ? 2 : 0)
       + (node === this.selected || node === this.hover || node === this.linkFrom ? 4 : 0)
       + (node === this.linkFrom ? 8 : 0);
-    s[o + 5] = node.dim ? DIM : 1;
+    s[o + 5] = this._fade(node);
     s[o + 6] = (node.i * 0.6180339887) % 1;
   }
 
@@ -708,15 +741,21 @@ export class Universe {
     gl.bindBuffer(gl.ARRAY_BUFFER, this.styleBuf);
     gl.bufferSubData(gl.ARRAY_BUFFER, 0, this.style);
 
-    /* a filament is only as bright as its dimmer end: a match keeps the
-       relations that reach it, so what it is joined to stays visible */
-    const a = this.linkAlpha;
+    /* A filament is only as lit as its dimmer end: a match keeps the
+       relations that reach it, so what it is joined to stays visible. One the
+       selection owns is hot instead -- both its ends are in the focus, so
+       there is nothing dimming it. */
+    const st = this.linkStyle, sel = this.selected;
     this.edges.forEach((e, k) => {
-      const v = (this.byUid[e.from_uid].dim || this.byUid[e.to_uid].dim) ? DIM : 1;
-      a[k * 2] = v; a[k * 2 + 1] = v;
+      const a = this.byUid[e.from_uid], b = this.byUid[e.to_uid];
+      const lit = Math.min(this._fade(a), this._fade(b));
+      const hot = sel && (a === sel || b === sel) ? 1 : 0;
+      const o = k * 4;
+      st[o] = lit; st[o + 1] = hot;
+      st[o + 2] = lit; st[o + 3] = hot;
     });
-    gl.bindBuffer(gl.ARRAY_BUFFER, this.linkABuf);
-    gl.bufferSubData(gl.ARRAY_BUFFER, 0, a);
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.linkSBuf);
+    gl.bufferSubData(gl.ARRAY_BUFFER, 0, st);
     this.dirty = true;
     this.labelsDirty = true;
     this._wake();
@@ -1074,13 +1113,21 @@ export class Universe {
      leaves the camera where it is -- dismissing a card is not a journey. */
   select(uid, { fly = true } = {}) {
     const node = uid ? this.byUid[uid] : null;
-    const was = this.selected;
     this.selected = node;
     this.cameFrom = null;
-    this._touch(was);
-    this._touch(node);
+    this._focus(node);
     if (node && fly) this.flyTo(node.uid);
     this.cb.onSelect(node);
+  }
+
+  /* Everything one relation from `node`, as the set the drawing reads to
+     decide what is still at full strength. Rewrites every memory's style,
+     which is a click and not a frame. */
+  _focus(node) {
+    this.focusSet = node
+      ? new Set([node.uid, ...this.neighbours(node.uid).map(p => p.uid)])
+      : null;
+    this._uploadStyle();
   }
 
   /* Step to the next memory along the selection's relations, and select it.
@@ -1099,8 +1146,7 @@ export class Universe {
     const node = peers[((at + step) % peers.length + peers.length) % peers.length];
     this.selected = node;
     this.cameFrom = from.uid;
-    this._touch(from);
-    this._touch(node);
+    this._focus(node);
     this.flyTo(node.uid);
     this.cb.onSelect(node);
     return node;
@@ -1195,13 +1241,13 @@ export class Universe {
     const terms = String(raw || '').toLowerCase().split(/\s+/).filter(Boolean);
     let count = 0, first = null;
     for (const node of this.nodes) {
-      if (!terms.length) { node.dim = false; count++; continue; }
+      if (!terms.length) { node.miss = false; count++; continue; }
       /* the name AND the opening line of the body, plus every domain it
          belongs to and its tags -- whichever of those a reader would type */
       const hay = `${node.name} ${node.label || ''} ${node.domain || ''} `
         + `${(node.also || []).join(' ')} ${node.tags || ''}`;
-      node.dim = !terms.every(w => hay.toLowerCase().includes(w));
-      if (!node.dim) {
+      node.miss = !terms.every(w => hay.toLowerCase().includes(w));
+      if (!node.miss) {
         count++;
         if (!first || (node.degree || 0) > (first.degree || 0)) first = node;
       }
@@ -1279,6 +1325,7 @@ export class Universe {
       gl.uniformMatrix4fv(this.pLink.u.u_proj, false, this.proj);
       gl.uniform2fv(this.pLink.u.u_fog, this.fog);
       gl.uniform3fv(this.pLink.u.u_color, this.colors.edge);
+      gl.uniform3fv(this.pLink.u.u_accent, this.colors.accent);
       gl.drawArrays(gl.LINES, 0, this.edges.length * 2);
     }
 
@@ -1336,7 +1383,9 @@ export class Universe {
       Math.round(LABEL_MAX * HOP_DIST * 2 / Math.max(1, this.dist))));
     const cands = [];
     const push = node => {
-      if (!node || node.dim) return;
+      /* a memory the spotlight missed or the selection pushed to context is
+         not named: what is at full strength is what the reader is reading */
+      if (!node || this._fade(node) < 1) return;
       const s = node.i * 4, dist = this.scr[s + 3];
       if (dist < 0) return;
       const x = this.scr[s], y = this.scr[s + 1];
