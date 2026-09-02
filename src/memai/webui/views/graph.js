@@ -22,9 +22,13 @@ import { openRecord } from './record.js';
 import { Universe } from '../graph-engine.js';
 import { t } from '../i18n.js';
 
-/* how many of a memory's relations the card offers as a journey before it
-   stops listing them */
-const TRAVEL_MAX = 8;
+/* How many of a memory's relations the card offers as a journey before it
+   stops listing them, and how much of a name one of those chips carries. The
+   card floats over the drawing, so what it costs is canvas -- and with the
+   selection focused, its neighbours are named on the canvas itself, which is
+   where a reader is already looking. */
+const TRAVEL_MAX = 5;
+const TRAVEL_CLIP = 16;
 
 /* Everything that floats over the star field. The engine keeps the names out
    from under these, which it cannot work out for itself: where they sit is a
@@ -231,29 +235,42 @@ export async function renderGraph(view, params, ctx) {
        an untitled memory is named BY that line, and printing it twice says
        nothing the second time */
     const body = node.label && node.label !== node.name ? node.label : '';
+    const also = (node.also || []).length;
     card.innerHTML = `
-      <div class="gc-tags">
-        ${typeTag(node.type)} ${uidChip(node.uid)} ${statusTag(node.status)} ${confPill(node.confidence)}
+      <div class="gc-head">
+        <div class="gc-tags">
+          ${typeTag(node.type)} ${uidChip(node.uid)} ${statusTag(node.status)} ${confPill(node.confidence)}
+        </div>
+        <!-- Clicking empty space also clears the selection, but nothing on
+             screen says so, and the selection is what is dimming the rest of
+             the store. -->
+        <button type="button" class="icon-btn" data-shut
+                aria-label="${t('common.close')}" title="${t('common.close')}">${
+          icon('close', { title: t('common.close') })}</button>
       </div>
       <div class="gc-name">${esc(node.name)}</div>
       ${body ? `<div class="snippet">${esc(body)}</div>` : ''}
       <div class="act-row">
         <button class="btn btn-sm btn-solid" data-openrec>${t('common.openRecord')}</button>
         ${node.domain ? `<span class="chip">${esc(node.domain)}</span>` : ''}
-        ${(node.also || []).map(p => `<span class="chip">${esc(p)}</span>`).join('')}
+        <!-- the paths it is cross-listed into, counted rather than listed: a
+             memory in four subjects was four chips and two more lines -->
+        ${also ? `<span class="chip" title="${esc((node.also || []).join(' · '))}">${
+          t('g.alsoIn', { n: also })}</span>` : ''}
       </div>
       ${shown.length ? `<div class="gc-travel">
         <span class="gc-travel-head">${t('g.travel')} <span class="gc-walk">${t('g.walk')}</span></span>
         <div class="gc-hops">
           ${shown.map(p => `<button type="button" class="gc-hop" data-hop="${esc(p.uid)}"
                   title="${esc(p.name)}"><span class="dot" style="--c:${typeColor(p.type)}"></span>${
-            esc(clip(p.name, 26))}</button>`).join('')}
+            esc(clip(p.name, TRAVEL_CLIP))}</button>`).join('')}
           ${peers.length > shown.length
             ? `<span class="chip">${t('g.travelMore', { n: peers.length - shown.length })}</span>` : ''}
         </div>
       </div>` : `<div class="gc-travel"><span class="gc-travel-head">${t('g.noLinks')}</span></div>`}`;
     wireCopyChips(card);
     card.querySelector('[data-openrec]').addEventListener('click', () => openRecord(node.uid));
+    card.querySelector('[data-shut]').addEventListener('click', () => engine.select(null));
     card.querySelectorAll('[data-hop]').forEach(b =>
       b.addEventListener('click', () => engine.select(b.dataset.hop)));
   }

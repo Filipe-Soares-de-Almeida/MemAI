@@ -408,6 +408,7 @@
     "g.travelMore": "+{n} more",
     "g.walk": "← → walks them",
     "g.webgl": "This view draws with WebGL2, which this browser did not provide. The same memories are listed in the Memories section.",
+    "g.alsoIn": "in {n} more",
     "lang.busy": "Close the open dialog before switching language",
     "lang.title": "Language",
     "lookup.aria": "Lookup results",

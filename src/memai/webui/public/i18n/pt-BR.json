@@ -408,6 +408,7 @@
     "g.travelMore": "+{n} restantes",
     "g.walk": "← → percorre os vínculos",
     "g.webgl": "Esta visualização desenha com WebGL2, que este navegador não forneceu. As mesmas memórias estão listadas na seção Memórias.",
+    "g.alsoIn": "em {n} outros",
     "lang.busy": "Feche a caixa de diálogo aberta antes de trocar o idioma",
     "lang.title": "Idioma",
     "lookup.aria": "Resultados da busca",
