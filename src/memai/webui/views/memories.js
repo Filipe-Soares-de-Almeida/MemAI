@@ -23,7 +23,7 @@ import { typeTag, statusTag, confPill, CONF, getDomains, inDomainPath,
 import { pickerFor, wirePicker, fixedItems } from '../core/pick.js';
 import { domainPickerHTML, wireDomainPicker } from '../core/domain-picker.js';
 import { moveToProjectModal } from '../core/projects.js';
-import { go, refreshBehind } from '../core/router.js';
+import { go, refreshBehind, parseHash } from '../core/router.js';
 import { onTeardown } from '../core/lifecycle.js';
 import { openRecord, setRecordSequence } from './record.js';
 import { t } from '../i18n.js';
@@ -149,7 +149,7 @@ export async function renderMemories(view, params, ctx) {
          title="${esc(t('mem.defect.off'))}">${t(`mem.defect.${k}`)}${icon('close')}</button>`)
     .join('');
 
-  view.innerHTML = `<div class="anim mem-shell">
+  view.innerHTML = `<div class="mem-shell">
     <div class="view-head">
       <h2 class="view-title">${t('mem.title')}</h2>
       <div class="view-sub">${t('mem.sub')}</div>
@@ -267,10 +267,15 @@ export async function renderMemories(view, params, ctx) {
   const rows = [...list.querySelectorAll('.mem-row')];
 
   /* What the record steps through when it is opened from here: this page, in
-     the order it is shown. Cleared on the way out, so a record opened from
-     somewhere else does not inherit a list that is no longer on screen. */
+     the order it is shown.
+
+     Cleared on the way out so a record opened from somewhere else does not
+     inherit a list that is no longer on screen -- EXCEPT on the way into the
+     record itself, which is a navigation now and tears this view down as it
+     goes. Clearing there would hand the record an empty list every single
+     time it was opened from one. */
   setRecordSequence(rows.map(r => r.dataset.uid));
-  onTeardown(() => setRecordSequence([]));
+  onTeardown(() => { if (parseHash().name !== 'memory') setRecordSequence([]); });
 
   /* Roving tabindex: the list is ONE tab stop and the arrows move inside it.
      `cursor` is which row currently holds that stop. */

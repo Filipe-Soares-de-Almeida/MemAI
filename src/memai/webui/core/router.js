@@ -24,7 +24,7 @@ let onRecord = null;
 /* The views laid out as panes that fill the window instead of as a page
    that scrolls. Named here rather than by each view, because it is the
    shell's box they are filling and the shell is what has to be told. */
-const FILLS = new Set(['memories', 'domains']);
+const FILLS = new Set(['memories', 'domains', 'memory']);
 
 export function registerViews(map, { onRecord: recordHook = null } = {}) {
   VIEWS = map;
@@ -42,8 +42,25 @@ export function go(view, params = {}) {
   location.hash = `#/${view}${qs ? '?' + qs : ''}`;
 }
 
+/* The hash the last route ran on. Kept so a view can go BACK to the one it
+   came from with whatever that one was filtered and paged to -- which
+   go(view) cannot do, because it would land on an unfiltered first page. */
+let previous = '';
+
+/* Back to `view`, keeping its state when that is where you came from.
+   history.back() replays the exact URL, filters and page included; when the
+   previous entry is something else -- a record opened from a link, a reload
+   straight onto one -- there is nothing to replay and this opens the view
+   fresh. */
+export function backTo(view, params = {}) {
+  const [name] = previous.replace(/^#\/?/, '').split('?');
+  if (name === view) history.back();
+  else go(view, params);
+}
+
 let generation = 0;
 let currentView = '';
+let lastHash = '';
 
 export const activeView = () => currentView;
 
@@ -54,6 +71,10 @@ export const activeView = () => currentView;
 export async function route({ focus = true } = {}) {
   const mine = ++generation;
   const { name, params } = parseHash();
+  /* only a real navigation moves the trail: refreshBehind() re-runs this
+     on the same hash, and treating that as a step would make Back return to
+     the record you are already on */
+  if (location.hash !== lastHash) { previous = lastHash; lastHash = location.hash; }
   currentView = name;
   document.querySelectorAll('.nav a').forEach(a => {
     /* aria-current is also the styling hook (see admin.css): one attribute,
@@ -96,7 +117,9 @@ export async function route({ focus = true } = {}) {
      straight back. A view that has aimed the caret has aimed it better. */
   if (focus && !modalOpen() && !view.contains(document.activeElement))
     view.focus({ preventScroll: true });
-  /* deep link: #/any-view?record=<uid> opens the record dialog on top */
+  /* The record used to open as a dialog over whatever was showing, so a deep
+     link to one was a param on the covered view. It has an address of its own
+     now; the param is kept as a redirect so a bookmark still lands on it. */
   if (params.get('record')) onRecord?.(params.get('record'));
 }
 

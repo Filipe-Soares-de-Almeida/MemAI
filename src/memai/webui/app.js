@@ -34,7 +34,7 @@ import { renderDiagram } from './views/diagram.js';
 import { renderDomains } from './views/domains.js';
 import { renderMaintenance } from './views/maintenance.js';
 import { renderOptimization } from './views/optimization.js';
-import { openRecord } from './views/record.js';
+import { renderRecord, openRecord } from './views/record.js';
 import { openNewMemory } from './views/new-memory.js';
 
 registerViews({
@@ -46,6 +46,7 @@ registerViews({
   domains: renderDomains,
   maintenance: renderMaintenance,
   optimization: renderOptimization,
+  memory: renderRecord,
 }, { onRecord: openRecord });
 
 /* draw the shell's icons before the first route, so the app bar is never

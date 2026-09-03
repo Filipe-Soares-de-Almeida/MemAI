@@ -79,7 +79,7 @@ export async function renderDomains(view, params, ctx) {
   const roots = domains.filter(d => !d.parent).length;
   const archived = domains.filter(isArchived).length;
 
-  view.innerHTML = `<div class="anim dom-shell">
+  view.innerHTML = `<div class="dom-shell">
     <div class="dom-bar">
       <h2 class="view-title">${t('do.title')}</h2>
       ${crumbHTML(path)}

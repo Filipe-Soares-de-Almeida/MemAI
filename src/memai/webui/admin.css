@@ -100,7 +100,7 @@
      #CF6679 is Material's dark-theme error and it is the right colour for a
      BORDER or a FILL, where the bar is 3:1 for non-text. As TEXT it failed
      AA in every place it was used: 4.36:1 on --raised (.btn-danger, the
-     danger-zone summary), 3.99:1 on its own tinted pill (contradicted
+     danger zone), 3.99:1 on its own tinted pill (contradicted
      confidence, ten per list page) and 3.86:1 on the deletion tint
      (.dz-type code). A red that cannot be read is the wrong red for words.
 
@@ -202,8 +202,9 @@
   --sp-6: 32px;
   --sp-7: 48px;   /* the air an empty state or a loading block needs */
 
-  /* the app bar's floor. One band, one number: a view that fills the window
-     measures itself against it instead of guessing how tall the chrome is. */
+  /* the app bar's floor. Its HEIGHT is not a token: the bar wraps to two
+     rows on a narrow window, and the body is a flex column so nothing has
+     to know how tall the chrome came out. */
   --head-h: 60px;
   --shadow-pop: 0 8px 28px rgba(0, 0, 0, .55);
 
@@ -252,6 +253,10 @@ body {
   font: 400 var(--fs-body)/1.55 var(--font-ui);
   -webkit-font-smoothing: antialiased;
   overflow: hidden;
+  /* the bar, then everything else. A flex column rather than a fixed bar
+     over an absolutely-placed frame, so the bar can grow to two rows
+     without a magic number following it around. */
+  display: flex; flex-direction: column;
 }
 
 ::selection { background: rgba(187, 134, 252, .32); color: var(--ink); }
@@ -264,7 +269,7 @@ body {
    something every browser paints the same way. */
 .mem-row:focus-visible,
 .table tbody tr:focus-visible,
-.rel-row:focus-visible,
+.rs-rel:focus-visible,
 .picker-item:focus-visible {
   outline-offset: -2px;
   border-radius: 0;
@@ -307,7 +312,7 @@ kbd {
 /* ── the two text voices ──────────────────────────────────────────────────
    There were eleven implementations of "small uppercase label" here:
    .field>label, .status-tag, .match-badge, .panel-title, .tile-label,
-   .table th, .section-label, .mg-label, .danger-zone summary, .opt-label and
+   .table th, .mg-label, .opt-label and
    .dg-panel>h3 -- across five sizes (9.5 / 10 / 10.5 / 11 / 12px) and four
    trackings (.06 / .07 / .08 / .09em). Eleven ways to say one thing, no two
    agreeing. And because uppercase-tracked was the ONLY label voice, nothing on
@@ -329,15 +334,13 @@ kbd {
 .opt-label,
 .table th,
 .status-tag,
-.match-badge,
-.danger-zone summary {
+.match-badge {
   font: 500 var(--fs-label)/1.4 var(--font-ui);
   letter-spacing: .08em;
   text-transform: uppercase;
 }
 
 .panel-title,
-.section-label,
 .dg-panel > h3 {
   font: 500 var(--fs-md)/1.3 var(--font-ui);
   letter-spacing: 0;
@@ -353,7 +356,7 @@ kbd {
    Three of this dashboard's working views are a list beside an inspector,
    and a fixed column down the left was 228px those two panes never got. */
 .appbar {
-  position: fixed; inset: 0 0 auto 0;
+  flex: none;
   min-height: var(--head-h);
   display: flex; align-items: center; gap: var(--sp-6);
   padding: 0 var(--sp-6);
@@ -363,7 +366,7 @@ kbd {
 }
 
 .frame {
-  position: absolute; inset: var(--head-h) 0 0 0;
+  flex: 1; min-height: 0;
   display: flex; flex-direction: column;
   z-index: 1;
 }
@@ -417,6 +420,10 @@ kbd {
   .view.fill > * { flex: 1; min-height: 0; width: 100%; display: flex; flex-direction: column; }
 }
 
+/* The entrance, for the views that are a STACK of panels. The three that
+   fill the window -- memories, domains, the record -- opt out: they
+   re-render in place whenever something is ticked, dropped or saved, and an
+   entrance replayed on every one of those is a flash, not an arrival. */
 .anim > * { animation: rise .32s cubic-bezier(.2, .7, .3, 1) both; }
 .anim > *:nth-child(1) { animation-delay: .02s; }
 .anim > *:nth-child(2) { animation-delay: .05s; }
@@ -1335,7 +1342,7 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
 .table .actions { text-align: right; white-space: nowrap; }
 /* a row that goes somewhere when clicked. The views used to write this as an
    inline style from JS, one row at a time. */
-.table tr.clickable, .rel-row.clickable { cursor: pointer; }
+.table tr.clickable { cursor: pointer; }
 
 /* A table has a minimum width its own columns need, and at 375px the domains
    table wanted 508px inside a 313px column -- so it pushed 281px past its
@@ -1531,9 +1538,8 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
 .mem-row {
   display: grid; grid-template-columns: var(--tap) 150px minmax(0, 1fr) auto;
   gap: var(--sp-3); align-items: center;
-  /* --sp-2 vertical, the same as .rel-row: the app already had a dense
-     memory row and it lived in a side panel on Overview at 44px while this
-     one owned the view whose only job is listing memories */
+  /* --sp-2 vertical: dense enough that a page of fifty is a page and
+     not six screens */
   padding: var(--sp-2) var(--sp-4);
   border-bottom: 1px solid var(--line-soft);
   cursor: pointer;
@@ -1697,99 +1703,279 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
 
 
 
-/* ── memory record (a dialog in the modal stack) ───────────────────────
-   This was a 760px drawer down the right edge with everything in one
-   column: the content of a memory, and then five panels ABOUT that memory
-   queued below the fold -- on windows with 500 unused pixels beside them.
+/* ── the memory record ────────────────────────────────────────────────────
+   A view with an address of its own, not a dialog over one. The memory on
+   the left, everything ABOUT the memory on the right, and a bar across the
+   top carrying where you came from, where you are in the list, and the two
+   controls that act on the whole record.
 
-   It is a wide centred dialog now (see .modal-wide / .modal-tall), and the
-   two columns are the point of the change: the memory on one side and
-   everything that curates it on the other, both on screen at once. */
+   Both columns scroll inside themselves. A record with forty relations and
+   a long history used to make the page as tall as the LONGER of the two, so
+   reading the body meant scrolling past the metadata that explains it. */
 
-.record-head {
-  display: flex; align-items: center; gap: var(--sp-3); flex-wrap: wrap;
+.rec-shell { gap: 0; }
+
+.rec-bar {
+  flex: none;
+  display: flex; align-items: center; gap: var(--sp-2);
+  padding-bottom: var(--sp-3);
+  margin-bottom: var(--sp-3);
+  border-bottom: 1px solid var(--line-soft);
+  min-width: 0;
 }
-.record-head .spacer { flex: 1; }
-/* The record's name, under the chips that identify it and above everything
-   the panels below do to it. Sits in the head, so it stays while the body
-   scrolls. */
-.record-title {
-  margin: var(--sp-2) 0 0;
-  font: 600 var(--fs-lg)/1.35 var(--font-ui);
-  color: var(--ink);
+.rec-back {
+  display: inline-flex; align-items: center; gap: var(--sp-1);
+  --ico: 13px;
+  background: none; border: 0; padding: 0;
+  font: 400 var(--fs-sm) var(--font-ui); color: var(--ink-2); cursor: pointer;
 }
-/* The way back to the memory you opened this one FROM. Named rather than a
-   bare arrow, and capped rather than allowed to push the head's chips onto
-   a second line. */
-.record-back { max-width: 260px; }
-.record-back .record-back-text {
+.rec-back:hover { color: var(--ink); }
+.rec-crumb-sep { color: var(--ink-3); }
+.rec-crumb {
+  background: none; border: 0; padding: 0;
+  font: 400 var(--fs-sm) var(--font-m); color: var(--ink-2); cursor: pointer;
   min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
+.rec-crumb:hover { color: var(--accent); }
+.rec-bar-end { margin-left: auto; display: flex; align-items: center; gap: var(--sp-2); }
+.rec-bar-end .btn { --ico: 12px; display: inline-flex; align-items: center; gap: var(--sp-1); }
 
-/* Position in the list that opened this record, with the way to either side
-   of it. It sits beside Close rather than in the body: it is navigation, not
-   something you do to the memory. */
-.record-step { display: flex; align-items: center; gap: var(--sp-1); --ico: 13px; }
-.record-step-at {
-  font-family: var(--font-m); font-size: var(--fs-label); color: var(--ink-3);
-  min-width: 56px; text-align: center;
+.rec-step {
+  display: inline-flex; align-items: center; gap: var(--sp-1);
+  border: 1px solid var(--line); border-radius: var(--r-md);
+  padding: 0 var(--sp-1);
+}
+.rec-step-at {
+  font: 400 var(--fs-label) var(--font-m); color: var(--ink-2);
+  font-variant-numeric: tabular-nums; white-space: nowrap;
 }
 
-.record-grid {
-  display: grid;
-  grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr);
-  gap: var(--sp-5);
-  align-items: start;
-  /* the bottom padding is the toast stack's reserved space -- core/ui.js
-     publishes --toast-h, so a toast lands on padding you can scroll past
-     instead of on a control. It is 0 whenever nothing is on screen. */
-  padding-bottom: var(--toast-h, 0px);
+.rec-work {
+  flex: 1; min-height: 0;
+  display: grid; grid-template-columns: minmax(0, 1fr) 368px;
+  gap: var(--sp-4);
 }
-.record-col { min-width: 0; }
-.record-col > .section:last-child { margin-bottom: 0; }
-
-/* One column again below this, in the order that reads: the memory itself,
-   then the record of it. */
-@media (max-width: 980px) {
-  .record-grid { grid-template-columns: 1fr; gap: 0; }
+.rec-main {
+  min-width: 0; min-height: 0; overflow-y: auto;
+  display: flex; flex-direction: column; gap: var(--sp-3);
+  padding-right: var(--sp-1);
 }
 
-/* Each section is a CARD, not a stretch of the dialog.
-
-   Down one 760px drawer, the heading voice and the space around it were
-   enough: there was a single reading order and each heading claimed
-   everything under it until the next. A 1120px dialog with two columns has
-   no single reading order, and whitespace alone left six panels floating on
-   one flat sheet of --overlay grey with no edge saying where any of them
-   began or ended -- least of all which column a heading belonged to.
-
-   --surface under --overlay is the ladder at the top of this file: a
-   content card recessed below the floating chrome it sits in, hence the
-   well edge. The reading pane inside stays at --inset, one step down
-   again, so the three tones still rank. */
-.section {
-  background: var(--surface);
-  border: 1px solid var(--line-soft);
-  border-radius: var(--r-lg);
-  padding: var(--sp-4);
-  margin-bottom: var(--sp-4);
+/* The name, edited where it is read. The dashed rule is the whole
+   affordance: a field that looks like a field would make the loudest thing
+   on the page a form control. */
+.rec-title { margin: 0; }
+.rec-title input {
+  width: 100%;
+  background: none; border: 0;
+  border-bottom: 1px dashed rgba(187, 134, 252, .35);
+  border-radius: 0; padding: 0 0 var(--sp-1);
+  font: 500 var(--fs-xl)/1.3 var(--font-ui); color: var(--ink);
+  height: auto;
 }
-/* the danger zone draws its own red edge; a card around it is two borders
-   saying one thing */
-.section-bare {
-  background: none; border: none; border-radius: 0; padding: 0;
+.rec-title input:hover { border-bottom-color: rgba(187, 134, 252, .6); }
+.rec-title input:focus { outline: none; border-bottom-color: var(--accent); }
+
+/* Two fields to a row, and the one being edited takes the whole width: the
+   source and its rendering need the same measure, and half a column each
+   is not enough for either. */
+.rec-fields { display: grid; grid-template-columns: 1fr 1fr; gap: var(--sp-3); align-items: start; }
+.rec-fields:has(.rf:only-child) { grid-template-columns: 1fr; }
+
+.rf {
+  min-width: 0;
+  border: 1px solid var(--line); border-radius: var(--r-lg);
+  overflow: hidden;
 }
-.section-label {
-  margin-bottom: var(--sp-3);
+.rf.is-open {
+  grid-column: 1 / -1;
+  border-color: rgba(187, 134, 252, .5);
+  background: rgba(187, 134, 252, .05);
+}
+.rf-head {
   display: flex; align-items: center; gap: var(--sp-2);
+  padding: var(--sp-2) var(--sp-3);
+  border-bottom: 1px solid var(--line-soft);
 }
-/* The count belongs to the heading it counts, and the button to the edge.
-   `justify-content: space-between` decided that by CHILD COUNT instead:
-   with three children it parked the count in the middle of the row, with
-   two it threw it to the far edge -- so "Relations (2)" and "Edit history
-   (0)" put their own counts in different places, and no two buttons in a
-   column started at the same x. */
-.section-label > .btn { margin-left: auto; }
+.rf.is-open .rf-head { background: rgba(187, 134, 252, .1); }
+.rf-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); flex: none; }
+.rf-label {
+  font: 500 var(--fs-label) var(--font-ui);
+  letter-spacing: .1em; text-transform: uppercase; color: var(--ink-3);
+}
+.rf.is-open .rf-label { color: var(--accent); }
+.rf-count { font: 400 var(--fs-label) var(--font-m); color: var(--ink-3); }
+.rf-count.over { color: var(--bad-ink); }
+.rf-edit {
+  margin-left: auto; display: inline-flex; align-items: center; gap: var(--sp-1);
+  --ico: 12px;
+  background: none; border: 0; padding: 0;
+  font: 500 var(--fs-sm) var(--font-ui); color: var(--accent); cursor: pointer;
+}
+.rf-edit:hover { color: var(--accent-hi); }
+.rf-keys { margin-left: auto; display: flex; gap: var(--sp-1); }
+.rf-keys kbd {
+  font: 400 var(--fs-label) var(--font-m); color: var(--ink-3);
+  border: 1px solid var(--line); border-radius: var(--r-sm); padding: 1px var(--sp-1);
+}
+.rf-body { padding: var(--sp-3); }
+.rf .sec-absent { margin: var(--sp-3); }
+
+.rf-split { display: grid; grid-template-columns: 1fr 1fr; }
+.rf-split.rf-solo { grid-template-columns: 1fr; }
+.rf-pane {
+  min-width: 0; padding: var(--sp-3);
+  display: flex; flex-direction: column; gap: var(--sp-2);
+}
+.rf-pane + .rf-pane { border-left: 1px solid var(--line-soft); }
+.rf-sub {
+  font: 500 var(--fs-label) var(--font-ui);
+  letter-spacing: .1em; text-transform: uppercase; color: var(--ink-3);
+}
+/* the source keeps the data font and the preview does not: the point of the
+   pair is that they do not look alike */
+.rf-pane textarea {
+  min-height: 200px; resize: vertical;
+  font: 400 var(--fs-sm)/1.7 var(--font-m);
+  border-color: rgba(187, 134, 252, .45);
+}
+.rf-preview {
+  background: var(--inset); border: 1px solid var(--line-soft);
+  border-radius: var(--r-md); padding: var(--sp-3);
+  min-height: 200px; overflow: auto;
+}
+
+.rf-save {
+  display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap;
+  padding: var(--sp-2) var(--sp-3);
+  border-top: 1px solid var(--line-soft);
+  background: var(--hover-1);
+}
+.rf-save input { flex: 1 1 200px; max-width: 340px; }
+/* the shared bar in `Edit all` mode is a sibling of the grid, not of a card */
+.rec-main > .rf-save { border: 1px solid var(--line); border-radius: var(--r-lg); }
+
+/* ── the side ── */
+
+.rec-side {
+  min-height: 0;
+  background: var(--surface); border-radius: var(--r-lg);
+  display: flex; flex-direction: column; overflow: hidden;
+}
+.rs-head {
+  flex: none; padding: var(--sp-4);
+  border-bottom: 1px solid var(--line-soft);
+  display: flex; flex-direction: column; gap: var(--sp-3);
+}
+.rs-head-row { display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; }
+.rs-status { margin-left: auto; font-size: var(--fs-label); color: var(--ink-3); }
+.rs-conf { width: 100%; }
+.rs-conf button { flex: 1; justify-content: center; }
+
+.rs-body {
+  flex: 1; min-height: 0; overflow-y: auto;
+  padding: var(--sp-4);
+  display: flex; flex-direction: column; gap: var(--sp-4);
+}
+.rs-field { display: flex; flex-direction: column; gap: var(--sp-2); }
+.rs-field-head { display: flex; align-items: baseline; gap: var(--sp-2); }
+.rs-n { font: 400 var(--fs-label) var(--font-m); color: var(--ink-3); }
+.rs-more {
+  margin-left: auto;
+  background: none; border: 0; padding: 0;
+  font: 500 var(--fs-label) var(--font-ui); color: var(--accent); cursor: pointer;
+}
+.rs-more:hover { color: var(--accent-hi); }
+.rs-value {
+  display: block; width: 100%; text-align: left;
+  background: var(--inset); border: 1px solid var(--line); border-radius: var(--r-md);
+  padding: var(--sp-2) var(--sp-3);
+  font: 400 var(--fs-sm) var(--font-m); color: var(--ink); cursor: pointer;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.rs-value:hover:not(:disabled) { border-color: var(--accent); }
+.rs-value:disabled { color: var(--ink-3); cursor: default; }
+
+/* One card per membership, removable where it is read. They were a
+   comma-joined string in a metadata grid and a text field in a modal. */
+.rs-chips { display: flex; flex-wrap: wrap; gap: var(--sp-1); }
+.rs-chip {
+  display: inline-flex; align-items: center; gap: var(--sp-1);
+  background: var(--inset); border: 1px solid var(--line); border-radius: var(--r-md);
+  padding: var(--sp-1) var(--sp-1) var(--sp-1) var(--sp-2);
+  font: 400 var(--fs-label) var(--font-m); color: var(--ink);
+  max-width: 100%;
+}
+.rs-chip-x {
+  --ico: 10px;
+  display: inline-flex; align-items: center;
+  background: none; border: 0; padding: 0 var(--sp-0);
+  color: var(--ink-3); cursor: pointer;
+}
+.rs-chip-x:hover { color: var(--bad-ink); }
+
+.rs-rows { display: flex; flex-direction: column; gap: var(--sp-1); }
+.rs-rows > div {
+  display: flex; justify-content: space-between; align-items: baseline; gap: var(--sp-3);
+  font-size: var(--fs-label); color: var(--ink-3);
+}
+.rs-mono {
+  font: 400 var(--fs-label) var(--font-m); font-weight: 400; color: var(--ink);
+  background: none; border: 0; padding: 0; cursor: pointer;
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+button.rs-mono:hover { color: var(--accent); }
+
+.rs-rel {
+  display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap;
+  padding: var(--sp-1) 0;
+  border-bottom: 1px solid var(--line-soft);
+  min-width: 0;
+}
+/* why these two belong together, on a line of its own: the peer's own name
+   already fills the 368px this column has */
+.rs-rel-note {
+  flex-basis: 100%;
+  padding-left: calc(18px + var(--sp-2));
+  font-size: var(--fs-label); color: var(--ink-3);
+}
+.rs-rel:last-child { border-bottom: 0; }
+.rs-rel .snippet {
+  flex: 1; min-width: 0; text-align: left;
+  background: none; border: 0; padding: 0;
+  font-size: var(--fs-label); color: var(--ink-2); cursor: pointer;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.rs-rel button.snippet:hover { color: var(--accent); }
+.rs-rel .icon-btn { --ico: 11px; }
+
+.rs-hist { padding: var(--sp-1) 0; border-bottom: 1px solid var(--line-soft); }
+.rs-hist:last-child { border-bottom: 0; }
+.rs-hist-when { font: 400 var(--fs-label) var(--font-m); color: var(--ink-3); margin-right: var(--sp-2); }
+.rs-hist-note { font-size: var(--fs-label); color: var(--ink-2); }
+.rs-hist-diff {
+  display: block; margin-top: var(--sp-1);
+  background: none; border: 0; padding: 0;
+  font: 500 var(--fs-label) var(--font-ui); color: var(--accent); cursor: pointer;
+}
+
+.rs-foot {
+  flex: none; display: flex; gap: var(--sp-2);
+  padding: var(--sp-3) var(--sp-4);
+  border-top: 1px solid var(--line-soft);
+}
+.rs-foot .btn { --ico: 12px; display: inline-flex; align-items: center; gap: var(--sp-1); }
+.rs-foot .btn-danger { margin-left: auto; }
+
+/* Below this the side goes under the record and the page scrolls as one. */
+@media (max-width: 1180px), (max-height: 619px) {
+  .rec-work { grid-template-columns: 1fr; }
+  .rec-main, .rs-body { overflow: visible; }
+  .rec-fields { grid-template-columns: 1fr; }
+  .rf-split { grid-template-columns: 1fr; }
+  .rf-pane + .rf-pane { border-left: 0; border-top: 1px solid var(--line-soft); }
+}
+
 .content-pre {
   font: 400 var(--fs-sm)/1.65 var(--font-m);
   color: var(--ink);
@@ -1963,18 +2149,12 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
 
 .rt-url { color: var(--accent); word-break: break-word; }
 
-.meta-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: var(--sp-3) var(--sp-5); }
 .mg-label { color: var(--ink-3); }
-.mg-val { font-size: var(--fs-sm); color: var(--ink-2); margin-top: var(--sp-0); word-break: break-word; }
-.mg-val .chip { max-width: 100%; }
 
 .act-row { display: flex; flex-wrap: wrap; gap: var(--sp-2); align-items: center; }
 
-.rel-row {
-  display: flex; align-items: center; gap: var(--sp-3);
-  padding: var(--sp-2) var(--sp-1);
-  border-bottom: 1px solid var(--line-soft);
-}
+/* The marks a relation row wears, wherever it is drawn: which way it
+   points, what kind of tie it is, and that the other end is gone. */
 .rel-dir { color: var(--ink-3); flex: none; width: 18px; display: inline-flex; justify-content: center; --ico: 14px; }
 .rel-type-chip {
   font: 500 var(--fs-label) var(--font-m);
@@ -1983,45 +2163,8 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
   border-radius: var(--r-sm); padding: var(--sp-0) var(--sp-2);
   white-space: nowrap; flex: none;
 }
-.rel-peer {
-  flex: 1; min-width: 0;
-  display: flex; align-items: center; gap: var(--sp-2);
-  cursor: pointer; border-radius: var(--r-md); padding: var(--sp-1) var(--sp-2);
-  transition: background .12s;
-  /* a cell paints inside itself: whatever cannot fit here is this cell's
-     problem to clip, never the next cell's to be covered by */
-  overflow: hidden;
-}
-.rel-peer:hover { background: var(--hover-2); }
-.rel-peer .snippet { color: var(--ink-2); font-size: var(--fs-sm); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.rel-peer .type-tag { flex: none; }
 /* the other end of this relation is gone from the store */
 .rel-gone { color: var(--bad-ink); }
-/* the relative time on a recent-memories row: it must not be squeezed by a
-   long snippet, which is what the inline flex:none used to say */
-.rel-row > .hint-sm { flex: none; }
-
-/* A relation row is five cells -- direction, type, peer, note, remove --
-   and five do not fit a 356px dialog: the peer was squeezed to 49px, its
-   snippet to nothing, and its archived seal clipped away with it. The peer
-   takes a line of its own down here, because the identity of the other end
-   is the one cell on the row nothing else can stand in for.
-
-   Below .rel-peer rather than up with the record's own breakpoint: `flex: 1`
-   above expands to a flex-basis of 0%, so a basis declared earlier in the
-   file loses to it at equal specificity no matter what the media query says. */
-@media (max-width: 980px) {
-  .rel-row { flex-wrap: wrap; }
-  .rel-peer { flex-basis: 100%; }
-}
-/* The note on a relation, on the page. It used to be a title on a span
-   dressed as a button: unreachable by keyboard, invisible on touch, and
-   announced by nothing. Text that matters is text. */
-.rel-note {
-  flex: none; max-width: 28%;
-  font-size: var(--fs-label); color: var(--ink-3);
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-}
 
 /* ── result rows for the memory picker ─────────────────────────────────
    Shared by the picker dialog (.lp, below). They were the rows of a popover
@@ -2188,18 +2331,6 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
 .rel-type-custom { flex: 1; min-width: 140px; }
 .lp-note { flex: 1; min-width: 140px; }
 
-.hist-item { position: relative; padding: 0 0 var(--sp-4) var(--sp-5); }
-.hist-item::before {
-  content: ""; position: absolute; left: 5px; top: 5px;
-  width: 7px; height: 7px; border-radius: 50%;
-  background: var(--chip-fill); border: 1.5px solid var(--ink-3);
-}
-.hist-item:not(:last-child)::after {
-  content: ""; position: absolute; left: 8px; top: 16px; bottom: 2px;
-  width: 1px; background: var(--line-soft);
-}
-.hist-when { font: 400 var(--fs-label) var(--font-m); color: var(--ink-3); }
-.hist-note { font-size: var(--fs-sm); color: var(--ink-2); margin-top: var(--sp-0); }
 .hist-diff {
   margin-top: var(--sp-2); font: 400 var(--fs-sm)/1.55 var(--font-m);
   background: var(--inset); border: 1px solid var(--line-soft); border-radius: var(--r-md);
@@ -2209,25 +2340,6 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
 .diff-add { background: var(--diff-add-bg); color: var(--diff-add-ink); display: block; }
 .diff-ctx { color: var(--ink-3); display: block; }
 
-/* A card like every other section now, and pointedly not like them:
-   --bad-tint is this file's token for "a whole box the eye should treat as
-   risky", and it is what keeps this from reading as one more panel of
-   metadata now that every panel has an edge of its own. */
-.danger-zone {
-  background: var(--bad-tint);
-  border: 1px solid var(--bad-line);
-  border-radius: var(--r-lg);
-}
-.danger-zone summary {
-  cursor: pointer; padding: var(--sp-3) var(--sp-4);
-  color: var(--bad-ink);
-  list-style: none;
-}
-.danger-zone summary:hover { text-decoration: underline; }
-.danger-zone summary::-webkit-details-marker { display: none; }
-/* the rule appears only while it is open, so a closed zone is one quiet bar */
-.danger-zone[open] summary { border-bottom: 1px solid var(--bad-line); }
-.danger-zone .dz-body { padding: var(--sp-3) var(--sp-4) var(--sp-4); display: grid; gap: var(--sp-3); }
 .dz-hint, .dz-type { font-size: var(--fs-sm); color: var(--ink-2); }
 .dz-row { display: flex; flex-wrap: wrap; gap: var(--sp-2); align-items: center; }
 /* the phrase is 23 characters and the button's label is long: the field
@@ -2756,8 +2868,6 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
 /* The label carries the separation, so the panes stack with no rule between
    them: four boxed fields read as four things to compare rather than as one
    memory, which is what the body actually is. */
-.sec-field { margin-bottom: var(--sp-3); }
-.sec-field:last-child { margin-bottom: 0; }
 .sec-label {
   font: 500 var(--fs-label) var(--font-m);
   letter-spacing: .06em; text-transform: uppercase;
@@ -2766,18 +2876,20 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
 /* the field's name in the reader's language; its title carries the label
    written in the body, which is English wherever it is stored */
 .sec-label-text { cursor: help; }
-.sec-text { margin: 0; }
 .sec-absent { font-size: var(--fs-sm); color: var(--warn); font-style: italic; }
-.sec-edit { display: grid; gap: var(--sp-1); }
 /* how much of a field's ceiling is used. Quiet until it is passed, because
    until then it is a fact about the draft and not a problem with it. */
 .sec-count { float: right; text-transform: none; letter-spacing: 0; color: var(--ink-3); }
 .sec-count.over { color: var(--bad); }
+/* The body did not read back into the fields its type is supposed to
+   have. A thin edge all the way round rather than a thick one down the
+   left: the warning is about the whole box, and a coloured tab on one
+   side of a card is decoration wearing a severity. */
 .sec-problem {
   font-size: var(--fs-sm); color: var(--warn); line-height: 1.5;
-  background: var(--inset); border-left: 3px solid var(--warn);
-  border-radius: var(--r-sm);
-  padding: var(--sp-2) var(--sp-3); margin-bottom: var(--sp-3);
+  background: var(--inset); border: 1px solid rgba(255, 213, 79, .35);
+  border-radius: var(--r-md);
+  padding: var(--sp-2) var(--sp-3);
 }
 
 .dedup-pair {
@@ -3530,8 +3642,33 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
    value is one tap away elsewhere step aside -- the active count is the
    first tile on Overview, and the shortcut hint is for a keyboard this
    window probably does not have. */
+/* Below this the bar is two rows: identity and the controls on the first,
+   the sections on the second, scrolling sideways if even the icons do not
+   fit. One row here meant the project switch sitting on top of the nav. */
+@media (max-width: 720px) {
+  .appbar { flex-wrap: wrap; padding: var(--sp-2) var(--sp-3); gap: var(--sp-2); }
+  /* The seal goes. Two controls, a button and seven sections do not leave
+     it a row to share, and a row holding nothing but a 22px mark is worse
+     than no mark -- the nav's first section is the same destination. */
+  .brand { display: none; }
+  .nav {
+    order: 3; flex-basis: 100%;
+    overflow-x: auto; overflow-y: hidden;
+    padding-bottom: var(--sp-1);
+    scrollbar-width: none;
+  }
+  .nav::-webkit-scrollbar { display: none; }
+  .nav a { padding: var(--sp-2) var(--sp-3); }
+  /* the controls take the rest of the first row rather than being pushed to
+     one of their own -- the wordmark is a 22px seal by here */
+  .appbar-right { flex: 1 1 auto; min-width: 0; justify-content: flex-end; margin-left: 0; }
+  /* a project name and a language are both long and neither is worth a line */
+  .project-sel.pick, .lang-sel.pick { max-width: 96px; min-width: 0; }
+  .appbar-right .btn-solid { white-space: nowrap; }
+}
+
 @media (max-width: 640px) {
-  .appbar { padding: 0 var(--sp-3); gap: var(--sp-3); }
+  .appbar { padding: var(--sp-2) var(--sp-3); gap: var(--sp-2); }
   /* a keyboard hint is for a window that probably has one */
   .toolbar-kbd { display: none; }
   .db-badge { display: none; }
