@@ -211,6 +211,25 @@ def test_bulk_refuses_a_bad_value_before_touching_anything(client):
     assert client.get("/api/memories?confidence=unverified").json()["total"] == 3
 
 
+def test_domain_detail_separates_what_is_filed_from_what_belongs(client):
+    """The pane beside the columns shows two different facts, and running
+    them together would claim the cross-listed rows are filed here."""
+    mine = _create(client, domain="acme/x100/p200", content="filed here")
+    _create(client, domain="acme/x100/p200/p210", content="one level down")
+    guest = _create(client, domain="zeta/x300", also="acme/x100/p200",
+                    content="belongs here, lives elsewhere")
+
+    data = client.get("/api/domains/detail?domain=acme/x100/p200").json()
+    assert [m["uid"] for m in data["filed"]] == [mine]
+    assert data["filed_total"] == 1
+    assert [m["uid"] for m in data["crossing"]] == [guest]
+    assert data["crossing"][0]["domain"] == "zeta/x300"
+
+
+def test_domain_detail_needs_a_domain(client):
+    assert client.get("/api/domains/detail").status_code == 400
+
+
 def test_domains_rename_and_collision(client):
     _create(client, domain="PROJ-1")
     _create(client, domain="proj-1")

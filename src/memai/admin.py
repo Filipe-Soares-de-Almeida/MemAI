@@ -1164,6 +1164,46 @@ def domains(request, payload) -> dict:
     return {"domains": result}
 
 
+def domain_detail(request, payload) -> dict:
+    """What one level of the tree holds, for the pane beside the columns.
+
+    Two lists, because they are two different facts and a pane that ran
+    them together would claim the second is filed where it is not:
+
+      filed     the memories whose OWN domain is exactly this path. Not the
+                subtree -- the columns are how you walk into a child.
+      crossing  the memories cross-listed here that live somewhere else.
+                memory_domains never holds a memory's own path or an
+                ancestor of it (see the schema), so every row it returns
+                for this path is filed outside it, and each carries the
+                branch it does live in.
+
+    Both are capped: this is a preview under a set of columns, and the
+    memory list is where a whole scope is read.
+    """
+    domain = db.normalize_domain(request.query_params.get("domain", ""))
+    if not domain:
+        raise ValueError("domain is required")
+    limit = _int_param(request, "limit", 6, 1, 30)
+    with db.connect() as conn:
+        filed = conn.execute(
+            """SELECT * FROM memories WHERE domain = ? AND status = 'active'
+               ORDER BY created_at DESC LIMIT ?""", (domain, limit)).fetchall()
+        filed_total = conn.execute(
+            "SELECT COUNT(*) FROM memories WHERE domain = ? AND status = 'active'",
+            (domain,)).fetchone()[0]
+        crossing = conn.execute(
+            """SELECT m.* FROM memory_domains dl JOIN memories m ON m.uid = dl.memory_uid
+               WHERE dl.domain = ? AND m.status = 'active'
+               ORDER BY m.created_at DESC LIMIT ?""", (domain, limit)).fetchall()
+    return {
+        "domain": domain,
+        "filed": [_summary(r, 160) for r in filed],
+        "filed_total": filed_total,
+        "crossing": [_summary(r, 160) for r in crossing],
+    }
+
+
 def rename_domain(request, payload) -> dict:
     """Rename, re-home or merge a domain, subdomains included.
 
@@ -1953,6 +1993,7 @@ routes = [
     Route("/api/config", api(get_config), methods=["GET"]),
     Route("/api/config", api(set_config), methods=["POST"]),
     Route("/api/domains", api(domains)),
+    Route("/api/domains/detail", api(domain_detail)),
     Route("/api/domains/rename", api(rename_domain), methods=["POST"]),
     Route("/api/domains/normalize", api(normalize_domains), methods=["POST"]),
     Route("/api/domains/status", api(domain_status), methods=["POST"]),

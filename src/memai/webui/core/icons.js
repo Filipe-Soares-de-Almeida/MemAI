@@ -197,6 +197,13 @@ const ICONS = {
     body: `<path d="M6 3.2L10.8 8 6 12.8"/>`,
   },
 
+  /* the handle a domain level is dragged by: two columns of dots, the
+     convention for "this can be picked up and moved" */
+  'grip': {
+    viewBox: '0 0 16 16',
+    body: `<path d="M5.5 4h.01M10.5 4h.01M5.5 8h.01M10.5 8h.01M5.5 12h.01M10.5 12h.01"/>`,
+  },
+
   /* free flight in the relations graph: a body and the path around it,
      tilted, so it reads as depth rather than as a target */
   'orbit': {

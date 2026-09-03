@@ -24,7 +24,7 @@ let onRecord = null;
 /* The views laid out as panes that fill the window instead of as a page
    that scrolls. Named here rather than by each view, because it is the
    shell's box they are filling and the shell is what has to be told. */
-const FILLS = new Set(['memories']);
+const FILLS = new Set(['memories', 'domains']);
 
 export function registerViews(map, { onRecord: recordHook = null } = {}) {
   VIEWS = map;

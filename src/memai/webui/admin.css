@@ -411,7 +411,10 @@ kbd {
     padding-bottom: var(--sp-5);
     display: flex; flex-direction: column;
   }
-  .view.fill > * { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+  /* width, not just max-width: the auto margins that centre a capped view
+     make a flex child shrink to its content, and a column layout has an
+     intrinsic width to shrink to -- see the same note on .view.wide */
+  .view.fill > * { flex: 1; min-height: 0; width: 100%; display: flex; flex-direction: column; }
 }
 
 .anim > * { animation: rise .32s cubic-bezier(.2, .7, .3, 1) both; }
@@ -1097,6 +1100,222 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
   .hx-grid { grid-template-columns: 84px repeat(7, minmax(0, 1fr)); }
   .hx-scale { padding-left: 84px; }
   .hx-dow { width: 100%; }
+}
+
+/* ── domains, as columns ──────────────────────────────────────────────────
+   A path is read left to right: each column holds the levels inside the one
+   picked in the column before it, and the pane on the right is the level
+   that is picked. Depth is POSITION here rather than indentation, so the
+   ninth level down sits where the first one did.
+
+   The columns lighten as they go, one elevation step each, so the eye can
+   see how deep the path already runs without counting the columns. */
+
+.dom-shell { gap: 0; }
+
+.dom-bar {
+  flex: none;
+  display: flex; align-items: baseline; gap: var(--sp-3);
+  flex-wrap: wrap;
+  padding-bottom: var(--sp-3);
+  margin-bottom: var(--sp-3);
+  border-bottom: 1px solid var(--line-soft);
+}
+.dom-bar-sub { font-size: var(--fs-sm); color: var(--ink-3); }
+.dom-bar-end { margin-left: auto; display: flex; align-items: center; gap: var(--sp-2); }
+
+.dom-crumb {
+  display: flex; align-items: baseline; gap: var(--sp-1);
+  font: 400 var(--fs-body) var(--font-m);
+  min-width: 0; flex-wrap: wrap;
+}
+.dom-crumb-none { color: var(--ink-3); }
+.dom-crumb-sep { color: var(--ink-3); }
+.dom-crumb-seg {
+  background: none; border: 0; padding: 0;
+  font: inherit; color: var(--ink-2); cursor: pointer;
+}
+.dom-crumb-seg:hover { color: var(--ink); }
+.dom-crumb-seg.on { color: var(--accent); }
+
+.dom-cols {
+  flex: 1; min-height: 0;
+  display: flex; align-items: stretch;
+  background: var(--bg);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--r-lg);
+  overflow: hidden;
+}
+/* The columns take what is left after the pane, and scroll sideways inside
+   it. A path nine levels deep otherwise squeezes the pane to a gutter, and
+   the pane is where the level is actually read. */
+.dom-strip {
+  flex: 1; min-width: 0;
+  display: flex; align-items: stretch;
+  overflow-x: auto; overflow-y: hidden;
+  scroll-behavior: smooth;
+}
+.dom-col {
+  width: 250px; flex: none;
+  display: flex; flex-direction: column; min-width: 0;
+  border-right: 1px solid var(--line-soft);
+  background: rgba(255, 255, 255, calc(.02 * var(--depth, 0)));
+}
+.dom-col-head {
+  flex: none;
+  padding: var(--sp-2) var(--sp-4);
+  border-bottom: 1px solid var(--line-soft);
+  font: 500 var(--fs-label) var(--font-ui);
+  letter-spacing: .08em; text-transform: uppercase; color: var(--ink-3);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.dom-col-body {
+  flex: 1; min-height: 0; overflow-y: auto;
+  padding: var(--sp-2);
+  display: flex; flex-direction: column; gap: var(--sp-0);
+}
+/* the drop target that means "a sibling of these", which at the roots
+   column means the top level. It has to be able to receive a drop, so it
+   takes whatever height is left rather than collapsing to nothing. */
+.dom-col-rest { flex: 1; min-height: var(--sp-6); border-radius: var(--r-md); }
+.dom-col-hint {
+  flex: none; margin-top: var(--sp-2); padding: var(--sp-2) var(--sp-2) 0;
+  border-top: 1px solid var(--line-soft);
+  font-size: var(--fs-label); color: var(--ink-3);
+}
+
+.dom-level {
+  display: flex; align-items: center; gap: var(--sp-2);
+  padding: var(--sp-2) var(--sp-2);
+  border-radius: var(--r-md);
+  cursor: pointer;
+  transition: background .13s;
+}
+.dom-level:hover { background: var(--hover-2); }
+.dom-level.on { background: var(--accent-dim); }
+.dom-level.on .dom-name { color: var(--accent); font-weight: 500; }
+.dom-level.is-dragged { opacity: .4; }
+/* a level with a move waiting on it: dashed, and it says where it is going */
+.dom-level.queued {
+  border: 1px dashed rgba(187, 134, 252, .5);
+  padding: calc(var(--sp-2) - 1px) calc(var(--sp-2) - 1px);
+}
+/* the whole column is a target while something is in the air, so the empty
+   space below the rows has to look like one */
+.dom-cols.dragging .dom-col-rest { outline: 1px dashed var(--line); outline-offset: -4px; }
+.drop-on { background: rgba(187, 134, 252, .1); outline: 1px solid rgba(187, 134, 252, .55) !important; outline-offset: -1px; }
+
+.dom-grip {
+  --ico: 11px; color: var(--ink-3); flex: none;
+  display: flex; opacity: 0; cursor: grab;
+}
+.dom-level:hover .dom-grip, .dom-level.on .dom-grip { opacity: 1; }
+.dom-level.on .dom-grip { color: var(--accent); }
+.dom-name {
+  flex: 1; min-width: 0;
+  font: 400 var(--fs-sm) var(--font-m); color: var(--ink);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+/* a level nobody wrote to: it exists because something deeper is filed
+   under it, which is a different kind of thing from a domain somebody named */
+.dom-name.implicit { color: var(--ink-3); font-style: italic; }
+.dom-arrow { font: 400 var(--fs-label) var(--font-m); color: var(--accent); white-space: nowrap; }
+.dom-count {
+  font: 400 var(--fs-label) var(--font-m); color: var(--ink-3);
+  font-variant-numeric: tabular-nums;
+}
+.dom-count.crossing { color: var(--secondary); }
+.dom-into { --ico: 11px; color: var(--ink-3); flex: none; }
+.dom-level.on .dom-into { color: var(--accent); }
+
+/* ── the level's own pane ── */
+
+.dom-detail {
+  width: 440px; flex: none;
+  display: flex; flex-direction: column; overflow: hidden;
+  background: var(--surface);
+  border-left: 1px solid var(--line-soft);
+}
+.dom-detail-empty {
+  margin: auto; padding: var(--sp-5); text-align: center; max-width: 320px;
+}
+.dom-detail-head {
+  flex: none; padding: var(--sp-4) var(--sp-5);
+  border-bottom: 1px solid var(--line-soft);
+  display: flex; flex-direction: column; gap: var(--sp-2);
+}
+.dom-detail-name { display: flex; align-items: baseline; gap: var(--sp-3); flex-wrap: wrap; }
+.dom-detail-leaf { font: 500 var(--fs-lg) var(--font-m); color: var(--ink); }
+.dom-detail-path { font-size: var(--fs-sm); color: var(--ink-3); }
+.dom-detail-facts {
+  display: flex; flex-wrap: wrap; gap: var(--sp-1) var(--sp-4);
+  font-size: var(--fs-sm); color: var(--ink-2);
+}
+.dom-detail-facts b { font: 500 var(--fs-body) var(--font-m); color: var(--ink); }
+.dom-detail-facts .crossing b { color: var(--secondary); }
+
+.dom-detail-body {
+  flex: 1; min-height: 0; overflow-y: auto;
+  padding: var(--sp-4) var(--sp-5);
+  display: flex; flex-direction: column; gap: var(--sp-2);
+}
+.dom-mems { display: flex; flex-direction: column; }
+.dom-mem, .dom-cross {
+  display: grid; grid-template-columns: 108px minmax(0, 1fr) auto;
+  gap: var(--sp-3); align-items: center;
+  width: 100%; padding: var(--sp-2) var(--sp-2);
+  margin: 0 calc(-1 * var(--sp-2));
+  background: none; border: 0; border-radius: var(--r-md);
+  text-align: left; cursor: pointer;
+}
+.dom-mem:hover, .dom-cross:hover { background: var(--hover-1); }
+.dom-mem-title {
+  font-size: var(--fs-sm); color: var(--ink);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.dom-mem-age { font: 400 var(--fs-label) var(--font-m); color: var(--ink-3); }
+.dom-mem-more {
+  align-self: flex-start; margin-top: var(--sp-1);
+  background: none; border: 0; padding: 0;
+  font-size: var(--fs-sm); color: var(--accent); cursor: pointer;
+}
+.dom-crossing {
+  margin-top: auto; padding: var(--sp-3);
+  background: var(--inset); border-radius: var(--r-md);
+}
+.dom-cross { grid-template-columns: 150px minmax(0, 1fr); }
+.dom-cross-home {
+  font: 400 var(--fs-label) var(--font-m); color: var(--ink-2);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+
+/* ── the queue ──
+   A re-home reindexes every memory in the subtree, so a drop stages the
+   move and this is what commits it. */
+.dom-queue {
+  flex: none; margin-top: var(--sp-3);
+  display: flex; align-items: center; gap: var(--sp-4); flex-wrap: wrap;
+  padding: var(--sp-2) var(--sp-4);
+  background: var(--raised); border-radius: var(--r-lg);
+  font-size: var(--fs-sm); color: var(--ink-2);
+}
+.dom-queue-text b { color: var(--ink); font-weight: 500; }
+.dom-queue-list { display: flex; flex-wrap: wrap; gap: var(--sp-1) var(--sp-3); min-width: 0; }
+.dom-queue-item { font-size: var(--fs-label); color: var(--ink-3); }
+.dom-queue-item code { font-family: var(--font-m); color: var(--ink-2); }
+.dom-queue-end { margin-left: auto; display: flex; gap: var(--sp-2); }
+
+/* Below this the columns stop fitting side by side. They scroll sideways
+   rather than wrapping -- a wrapped Miller column is not a column any more
+   -- and the pane goes under them. */
+@media (max-width: 1180px), (max-height: 619px) {
+  .dom-cols { flex-direction: column; overflow: auto; }
+  .dom-strip { flex: none; }
+  .dom-col { width: 250px; border-right: 1px solid var(--line-soft); }
+  .dom-col-body { max-height: 260px; }
+  .dom-col-rest { display: none; }
+  .dom-detail { width: auto; border-left: 0; border-top: 1px solid var(--line-soft); overflow: visible; }
+  .dom-detail-body { overflow: visible; }
 }
 
 /* ── tables ──────────────────────────────────────────────────────────── */
