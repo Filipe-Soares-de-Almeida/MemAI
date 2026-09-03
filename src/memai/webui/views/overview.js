@@ -349,7 +349,7 @@ function byTypePanel(o) {
     return `<button type="button" class="hx-type" data-type="${esc(tp)}"
               title="${esc(t('ov.byType.open', { type: tp }))}">
       <span class="hx-type-head">
-        <span class="type-tag ${typeClass(tp)}"><span class="dot"></span>${esc(tp)}</span>
+        <span class="type-tag ${typeClass(tp)}">${esc(tp)}</span>
         <span class="hx-type-n">${fmtInt(o.by_type[tp])}</span>
       </span>
       <span class="hx-type-bar">${segs}</span>

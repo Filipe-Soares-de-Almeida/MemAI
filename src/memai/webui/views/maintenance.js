@@ -359,7 +359,11 @@ export async function renderMaintenance(view) {
         <tbody>${r.entries.map(e => `
           <tr class="clickable" data-uid="${esc(e.memory_uid)}">
             <td style="white-space:nowrap" title="${esc(e.edited_at)}">${fmtDate(e.edited_at)}</td>
-            <td><button type="button" class="type-tag ${typeClass(e.type)}"
+            <!-- The uid IS the row's control here, and the dot in front of
+                 it is the memory's type. Not a .type-tag: that chip says a
+                 TYPE, and colouring a uid as if it were one would name the
+                 row after the wrong thing. -->
+            <td><button type="button" class="au-open ${typeClass(e.type)}"
                         aria-label="${esc(t('a11y.openRecord', { uid: e.memory_uid }))}"><span class="dot"></span>${esc(e.memory_uid)}</button></td>
             <td style="max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(e.domain || '—')}</td>
             <td style="max-width:340px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(e.note)}">${esc(e.note || '') || t('mn.au.contentEdit')}</td>

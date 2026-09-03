@@ -87,8 +87,11 @@ export function wireRelTypeField(root, { selId, customId, options, onPick }) {
 export const typeColor = tp => (TYPES[tp] || {}).color || '#9e9e9e';
 export const typeClass = tp => TYPES[tp] ? `t-${tp}` : '';
 
+/* The chip carries the colour itself (see .type-tag), so there is no dot
+   in front of it any more. `.dot` stays for the places that are a MARK
+   beside something else: a legend, a picker row, a graph card. */
 export const typeTag = tp =>
-  `<span class="type-tag ${typeClass(tp)}"><span class="dot"></span>${esc(tp)}</span>`;
+  `<span class="type-tag ${typeClass(tp)}">${esc(tp)}</span>`;
 
 /* `compact` drops the word and keeps the mark, for a dense list row where the
    same three states repeat fifty times: the ring shape and the colour carry
@@ -142,7 +145,7 @@ export const typeItems = ({ any = '' } = {}) => [
   ...TYPE_ORDER.map(tp => ({
     value: tp,
     label: TYPE_LABEL[tp],
-    html: `<span class="type-tag ${typeClass(tp)}"><span class="dot"></span>${esc(TYPE_LABEL[tp])}</span>`,
+    html: `<span class="type-tag ${typeClass(tp)}">${esc(TYPE_LABEL[tp])}</span>`,
   })),
 ];
 

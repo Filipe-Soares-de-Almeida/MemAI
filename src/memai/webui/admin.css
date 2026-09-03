@@ -86,13 +86,27 @@
      against its parent, so it is right on all of them. */
   --chip-fill: rgba(255, 255, 255, .05);
 
-  /* memory-type palette (categorical, validated all-pairs on #1E1E1E) */
+  /* memory-type palette (categorical, validated all-pairs on #1E1E1E).
+     These are the FILL colours: a dot in a legend, a node on the relations
+     canvas, a segment of a bar. They are the 500/800 steps, which is where
+     a filled shape reads on this ground and where a letterform does not. */
   --t-note:         #e86a00;
   --t-checkpoint:   #2196f3;
   --t-anti_pattern: #e53935;
   --t-reasoning:    #ab47bc;
   --t-handoff:      #2e7d32;
   --t-diagram:      #009688;   /* Teal 500 — the sixth hue of the same check */
+
+  /* ...and the 200 step of each of the same six ramps, for the type worn as
+     a WORD. The fills above are 3.0-4.4:1 as text on --surface; these are
+     6.8-9.5:1, and the chip stays legible with the colour ignored because
+     it says the type's name inside it. */
+  --t-note-ink:         #ffb877;
+  --t-checkpoint-ink:   #90caf9;
+  --t-anti_pattern-ink: #ef9a9a;
+  --t-reasoning-ink:    #ce93d8;
+  --t-handoff-ink:      #a5d6a7;
+  --t-diagram-ink:      #80cbc4;
 
   /* status scale (fixed, reserved; always icon + label).
 
@@ -383,11 +397,17 @@ kbd {
   padding: var(--sp-5) var(--sp-6) calc(var(--sp-5) + var(--toast-h, 0px));
   outline: none;
 }
-/* No cap, and no centring. A reading measure belongs to PROSE -- and the
-   prose in this app has one (.content-prose is capped at 68ch) -- not to a
-   list beside its inspector or a row of columns, which were pinched into
-   1340px with the rest of a 2560px monitor left grey on either side. */
-.view.wide > * { margin-left: 0; margin-right: 0; }
+/* Centred, and never narrower than it used to be. `max()` is what makes
+   those two one rule: 1340px is the floor, and past about 1675px the view
+   tracks 80% of the WINDOW instead -- so a wide monitor gets the width and
+   a laptop is not made narrower to pay for it. vw and not %, because the
+   80% is of the screen and the view's own gutters are not part of it.
+
+   A canvas is worth every pixel it can get, so the diagram editor opts out
+   of the cap -- and the auto margins that centre a capped view would, in
+   the flex column below, shrink it back to its content width. */
+.view > * { max-width: max(1340px, 80vw); margin-left: auto; margin-right: auto; }
+.view.wide > * { max-width: none; margin-left: 0; margin-right: 0; }
 @media (min-width: 1181px) {
   .view.wide {
     padding-bottom: var(--sp-4);
@@ -721,20 +741,41 @@ input[aria-invalid="true"], .pick[aria-invalid="true"], textarea[aria-invalid="t
 
 .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--c, var(--ink-3)); flex: none; }
 
+/* A type is a chip in its own colour, not a grey word with a coloured dot
+   in front of it. The dot was 9px of hue carrying the whole distinction
+   while the name it belonged to was --ink-2 like everything else on the
+   row; at fifty rows the eye had to land on the dot to read the type.
+
+   The tint and the outline are mixed from the one ink token, so a type has
+   ONE colour on file and the chip cannot drift from the dot beside it in a
+   legend. A browser without color-mix() gets the coloured name on no
+   fill -- still legible, still distinct. */
 .type-tag {
-  display: inline-flex; align-items: center; gap: var(--sp-2);
-  font: 500 var(--fs-sm) var(--font-m);
-  color: var(--ink-2);
+  display: inline-flex; align-items: center;
+  font: 500 var(--fs-label) var(--font-m);
+  color: var(--tc, var(--ink-2));
+  background: color-mix(in srgb, var(--tc, var(--ink-3)) 14%, transparent);
+  border: 1px solid color-mix(in srgb, var(--tc, var(--ink-3)) 35%, transparent);
+  border-radius: var(--r-pill);
+  padding: 2px var(--sp-2);
   white-space: nowrap;
 }
-/* the audit table uses one as its row's own control */
 button.type-tag { cursor: pointer; min-height: var(--tap); }
-.t-note         { --c: var(--t-note); }
-.t-checkpoint   { --c: var(--t-checkpoint); }
-.t-anti_pattern { --c: var(--t-anti_pattern); }
-.t-reasoning    { --c: var(--t-reasoning); }
-.t-handoff      { --c: var(--t-handoff); }
-.t-diagram      { --c: var(--t-diagram); }
+/* the audit row opens its memory by its uid, with the type as a mark in
+   front of it -- see the note in views/maintenance.js */
+.au-open {
+  display: inline-flex; align-items: center; gap: var(--sp-2);
+  min-height: var(--tap);
+  font: 500 var(--fs-label) var(--font-m);
+  color: var(--ink-2); cursor: pointer;
+}
+.au-open:hover { color: var(--ink); }
+.t-note         { --c: var(--t-note);         --tc: var(--t-note-ink); }
+.t-checkpoint   { --c: var(--t-checkpoint);   --tc: var(--t-checkpoint-ink); }
+.t-anti_pattern { --c: var(--t-anti_pattern); --tc: var(--t-anti_pattern-ink); }
+.t-reasoning    { --c: var(--t-reasoning);    --tc: var(--t-reasoning-ink); }
+.t-handoff      { --c: var(--t-handoff);      --tc: var(--t-handoff-ink); }
+.t-diagram      { --c: var(--t-diagram);      --tc: var(--t-diagram-ink); }
 
 .uid-chip {
   display: inline-flex; align-items: center;
