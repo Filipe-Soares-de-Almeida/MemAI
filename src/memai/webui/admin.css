@@ -741,17 +741,23 @@ input[aria-invalid="true"], .pick[aria-invalid="true"], textarea[aria-invalid="t
 
 .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--c, var(--ink-3)); flex: none; }
 
-/* A type is a chip in its own colour, not a grey word with a coloured dot
-   in front of it. The dot was 9px of hue carrying the whole distinction
-   while the name it belonged to was --ink-2 like everything else on the
-   row; at fifty rows the eye had to land on the dot to read the type.
+/* A type is a chip wearing BOTH steps of its ramp: the name in the pastel
+   ink, over a tint and inside an outline mixed from it, with the strong
+   fill as a dot at the head of the chip.
 
-   The tint and the outline are mixed from the one ink token, so a type has
-   ONE colour on file and the chip cannot drift from the dot beside it in a
-   legend. A browser without color-mix() gets the coloured name on no
-   fill -- still legible, still distinct. */
+   The dot is what makes the column work. Chips are wildly different widths
+   -- `note` against `anti_pattern` -- and a stack of them left-aligned is a
+   ragged edge whichever end you pin; the dot puts a mark at the same x on
+   every row, so the eye has a column to run down and the ragged edge stops
+   mattering. It used to be the ONLY colour, next to a name at --ink-2 like
+   everything else on the row, which is the opposite failure.
+
+   Tint and outline are mixed from the one ink token, so a type has one
+   colour on file and the chip cannot drift from the dot beside it in a
+   legend. A browser without color-mix() gets the coloured name and the dot
+   on no fill -- still legible, still distinct. */
 .type-tag {
-  display: inline-flex; align-items: center;
+  display: inline-flex; align-items: center; gap: var(--sp-1);
   font: 500 var(--fs-label) var(--font-m);
   color: var(--tc, var(--ink-2));
   background: color-mix(in srgb, var(--tc, var(--ink-3)) 14%, transparent);
@@ -760,6 +766,9 @@ input[aria-invalid="true"], .pick[aria-invalid="true"], textarea[aria-invalid="t
   padding: 2px var(--sp-2);
   white-space: nowrap;
 }
+/* smaller than a legend's: it is riding inside 11px of text, not standing
+   on its own beside a line of it */
+.type-tag .dot { width: 7px; height: 7px; }
 button.type-tag { cursor: pointer; min-height: var(--tap); }
 /* the audit row opens its memory by its uid, with the type as a mark in
    front of it -- see the note in views/maintenance.js */
@@ -1132,7 +1141,7 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
   text-align: left; cursor: pointer;
 }
 .hx-type:hover { background: var(--hover-1); }
-.hx-type .type-tag { justify-self: end; }
+.hx-type .type-tag { justify-self: start; }
 .hx-type-n {
   font: 500 var(--fs-sm) var(--font-m); color: var(--ink-2);
   text-align: right; font-variant-numeric: tabular-nums;
@@ -1364,7 +1373,6 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
   text-align: left; cursor: pointer;
 }
 .dom-mem:hover, .dom-cross:hover { background: var(--hover-1); }
-.dom-mem .type-tag { justify-self: end; }
 .dom-mem-title {
   font-size: var(--fs-sm); color: var(--ink);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
@@ -1639,18 +1647,13 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
 .mem-row.selected { background: var(--accent-dim); }
 .mem-check { display: flex; justify-content: center; }
 .mem-check input { cursor: pointer; }
-/* Fixed width and clipped rather than wrapping: a row that grows because
-   its type has a longer name is a row that broke the column.
-
-   The chip is pushed to the RIGHT of that slot, so it ends where the title
-   begins instead of leaving a gap that is as wide as the difference between
-   `note` and `anti_pattern`. The confidence mark stays at the left edge,
-   which is what keeps it a column of its own. */
+/* fixed width and clipped rather than wrapping: a row that grows because
+   its type has a longer name is a row that broke the column. The chips are
+   left-aligned and their own dots are the column -- see .type-tag. */
 .mem-col-type {
   display: flex; align-items: center; gap: var(--sp-2);
   min-width: 0; overflow: hidden;
 }
-.mem-col-type .type-tag { margin-left: auto; }
 .mem-main { min-width: 0; }
 /* also a .row-open button -- the clamp works the same on one */
 /* --ink, not --ink-2: this is the memory, and it was two tiers quieter than the

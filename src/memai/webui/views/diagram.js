@@ -716,7 +716,7 @@ export async function renderDiagram(view, params, ctx) {
         <div class="dg-links">
           ${links.map(l => `
             <div class="dg-link">
-              <span class="type-tag ${typeClass(l.peer.type)}" style="flex:none">${esc(l.peer.type || '?')}</span>
+              <span class="type-tag ${typeClass(l.peer.type)}" style="flex:none"><span class="dot"></span>${esc(l.peer.type || '?')}</span>
               <span class="snippet clickable" data-open="${esc(l.target_uid)}"
                     title="${esc(l.peer.snippet || l.target_uid)}">${esc(l.peer.snippet || l.target_uid)}</span>
               ${editing ? `<button class="icon-btn danger" data-dellink="${esc(l.target_uid)}"

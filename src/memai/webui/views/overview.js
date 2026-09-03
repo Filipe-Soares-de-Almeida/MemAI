@@ -15,7 +15,7 @@
 import { esc, fmtInt, fmtDay } from '../core/dom.js';
 import { api } from '../core/api.js';
 import { tipShow, tipHide } from '../core/ui.js';
-import { typeClass, CONF, TYPE_ORDER } from '../core/shared.js';
+import { typeTag, CONF, TYPE_ORDER } from '../core/shared.js';
 import { go } from '../core/router.js';
 import { I18N, t } from '../i18n.js';
 
@@ -345,7 +345,7 @@ function byTypePanel(o) {
               title="${esc(CONF[c].label)}: ${fmtInt(split[c])}"></div>` : '').join('');
     return `<button type="button" class="hx-type" data-type="${esc(tp)}"
               title="${esc(t('ov.byType.open', { type: tp }))}">
-      <span class="type-tag ${typeClass(tp)}">${esc(tp)}</span>
+      ${typeTag(tp)}
       <span class="hx-type-bar">${segs}</span>
       <span class="hx-type-n">${fmtInt(o.by_type[tp])}</span>
     </button>`;

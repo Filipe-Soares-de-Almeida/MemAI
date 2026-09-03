@@ -75,7 +75,7 @@ const rowHTML = (it, { picked, linked }) => {
    to leave out, and the whole content rather than its first 280 chars. */
 const previewHTML = m => `
   <div class="lp-prev-head">
-    <span class="type-tag ${typeClass(m.type)}">${esc(m.type)}</span>
+    <span class="type-tag ${typeClass(m.type)}"><span class="dot"></span>${esc(m.type)}</span>
     ${confPill(m.confidence)}
     ${statusTag(m.status)}
     ${uidChip(m.uid)}
