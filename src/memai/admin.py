@@ -36,7 +36,7 @@ import signal
 import socket
 import sqlite3
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -83,6 +83,12 @@ BULK_MAX = 500
 GRAPH_LIMIT_MAX = 200_000
 
 LOOPBACK_HOSTS = {"localhost", "127.0.0.1", "::1", "[::1]"}
+
+# How far back the health index compares itself. The store keeps no history
+# of a confidence or a relation, so the comparison is against a SNAPSHOT the
+# dashboard wrote on an earlier day (db.health_daily) -- and there is no
+# delta at all until one that old exists.
+HEALTH_DELTA_DAYS = 30
 
 
 # ---------------------------------------------------------------- helpers
@@ -232,6 +238,64 @@ def api(handler):
 
 # ---------------------------------------------------------------- overview
 
+# What pulls the health index down, as one countable defect each. `where` is
+# the predicate over active memories; `params` is the memory-list filter that
+# shows exactly those rows, so the number on the dashboard and the list the
+# button opens are the same set by construction. Order is the order they are
+# shown in: worst first, then by how much of the store each one covers.
+_SYMPTOMS: tuple[tuple[str, str, str, dict], ...] = (
+    ("contradicted", "bad",
+     "confidence = 'contradicted' AND (superseded_by IS NULL OR superseded_by = '')",
+     {"confidence": "contradicted"}),
+    ("stale", "warn",
+     "confidence = 'unverified' AND updated_at < :stale",
+     {"stale": "1", "sort": "updated_at", "dir": "asc"}),
+    ("due", "warn",
+     "review_after <> '' AND review_after <= :today",
+     {"due": "1"}),
+    ("unlinked", "warn",
+     "uid NOT IN (SELECT from_uid FROM relations UNION SELECT to_uid FROM relations)",
+     {"linked": "no"}),
+    ("untitled", "info",
+     "TRIM(title) = ''",
+     {"untitled": "1"}),
+)
+
+
+def _symptoms(conn: sqlite3.Connection, active: int) -> list[dict]:
+    """One row per countable defect, with the filter that lists it.
+
+    Deliberately NOT here: likely duplicates. Finding them is an O(n^2)
+    difflib sweep (db.dedup_candidates), which is a scan the operator asks
+    for -- /api/maintenance/dedup -- and not something a landing page runs
+    on every paint. The dashboard shows that row without a count until it
+    has been scanned.
+    """
+    today = db.today_iso()
+    stale = (datetime.fromisoformat(today)
+             - timedelta(days=db.STALE_DAYS)).isoformat()
+    out = []
+    for key, severity, clause, params in _SYMPTOMS:
+        count = conn.execute(
+            f"SELECT COUNT(*) FROM memories WHERE status = 'active' AND ({clause})",
+            {"today": today, "stale": stale}).fetchone()[0]
+        out.append({
+            "key": key, "severity": severity, "count": count,
+            "share": round(count / active, 4) if active else 0.0,
+            "params": {"status": "active", **params},
+        })
+    # A flow whose shape is broken is a defect of the same kind, counted in
+    # diagrams rather than in memories -- so it carries its own denominator
+    # and no share of the store.
+    flows = db.diagram_overview(conn)
+    broken = sum(1 for d in flows if d["issues"])
+    out.append({
+        "key": "diagrams", "severity": "info", "count": broken,
+        "of": len(flows), "share": 0.0, "params": {},
+    })
+    return out
+
+
 def overview(request, payload) -> dict:
     dbfile = db.default_db_path()
     with db.connect() as conn:
@@ -252,6 +316,21 @@ def overview(request, payload) -> dict:
                 """SELECT substr(created_at, 1, 10) AS day, COUNT(*)
                    FROM memories GROUP BY day ORDER BY day DESC LIMIT 45""").fetchall())
         ]
+        # Confidence within each type, which is what says WHERE the vetting
+        # is behind: a store can be 58% confirmed overall and have every
+        # anti_pattern in it unread.
+        by_type_conf: dict[str, dict[str, int]] = {}
+        for tp, conf, n in conn.execute(
+                """SELECT type, confidence, COUNT(*) FROM memories
+                   WHERE status = 'active' GROUP BY type, confidence"""):
+            by_type_conf.setdefault(tp, {})[conf] = n
+        health = db.health_axes(conn)
+        db.health_snapshot(conn, health)
+        was = db.health_since(conn, HEALTH_DELTA_DAYS)
+        health["delta"] = health["score"] - was["score"] if was else None
+        health["delta_days"] = HEALTH_DELTA_DAYS
+        health["since"] = was["day"] if was else None
+        symptoms = _symptoms(conn, health["active"])
         domains = db.list_domains(conn)
         recent = [_summary(r, 150) for r in db.list_recent(conn, limit=8)]
     return {
@@ -269,6 +348,9 @@ def overview(request, payload) -> dict:
         },
         "by_type": by_type,
         "by_confidence": by_confidence,
+        "by_type_confidence": by_type_conf,
+        "health": health,
+        "symptoms": symptoms,
         "activity": activity,
         "domains": domains[:10],
         "recent": recent,
@@ -330,6 +412,32 @@ def project_move(request, payload) -> dict:
 
 # ---------------------------------------------------------------- memories
 
+def _defect_clauses(qp) -> tuple[list[str], list]:
+    """The defect filters a health symptom hands over, as SQL and its params.
+
+    One predicate per symptom that names a set of MEMORIES, worded exactly
+    as _SYMPTOMS words it -- the number on the dashboard and the list its
+    button opens have to be the same rows, and two spellings of "stale" is
+    how they stop being.
+    """
+    today = db.today_iso()
+    stale = (datetime.fromisoformat(today) - timedelta(days=db.STALE_DAYS)).isoformat()
+    clauses: list[str] = []
+    params: list = []
+    if qp.get("linked") == "no":
+        clauses.append("AND uid NOT IN (SELECT from_uid FROM relations "
+                       "UNION SELECT to_uid FROM relations)")
+    if qp.get("due") == "1":
+        clauses.append("AND review_after <> '' AND review_after <= ?")
+        params.append(today)
+    if qp.get("stale") == "1":
+        clauses.append("AND confidence = 'unverified' AND updated_at < ?")
+        params.append(stale)
+    if qp.get("untitled") == "1":
+        clauses.append("AND TRIM(title) = ''")
+    return clauses, params
+
+
 def list_memories(request, payload) -> dict:
     qp = request.query_params
     q = qp.get("q", "").strip()
@@ -338,6 +446,8 @@ def list_memories(request, payload) -> dict:
     status = qp.get("status", "")           # "" = all
     confidence = qp.get("confidence", "")
     session = qp.get("session", "")
+    # 'linked=no', 'due=1', 'stale=1', 'untitled=1' -- see _defect_clauses
+    defects, defect_params = _defect_clauses(qp)
     sort = qp.get("sort", "created_at")
     if sort not in _MEMORY_SORTS:
         sort = "created_at"
@@ -355,6 +465,11 @@ def list_memories(request, payload) -> dict:
                 hits = [h for h in hits if h["confidence"] == confidence]
             if session:
                 hits = [h for h in hits if h["session"] == session]
+            if defects:
+                keep = {r["uid"] for r in conn.execute(
+                    "SELECT uid FROM memories WHERE 1=1 " + " ".join(defects),
+                    defect_params)}
+                hits = [h for h in hits if h["uid"] in keep]
             # A pasted uid names one row, and nothing in the keyword index
             # matches on it: a uid appears in OTHER bodies as [[uid]], so the
             # search answers "what points at this" and never "this". Both are
@@ -380,6 +495,8 @@ def list_memories(request, payload) -> dict:
             if value:
                 where.append(f"AND {field} = ?")
                 params.append(value)
+        where.extend(defects)
+        params.extend(defect_params)
         clause = " ".join(where)
         total = conn.execute(f"SELECT COUNT(*) FROM memories WHERE {clause}", params).fetchone()[0]
         # The join is what makes 'recalls' sortable; the filters above name

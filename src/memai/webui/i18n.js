@@ -60,12 +60,15 @@ const applyStatic = () => {
      catalogs and the registry below; who draws the switch is not its call. */
 };
 
-/* month names and the number locale fall back per-key like strings do: a
-   new catalog that ships `strings` and forgets `months` degrades to
-   English month names instead of rendering every date as undefined */
+/* month names, weekday names and the number locale fall back per-key like
+   strings do: a new catalog that ships `strings` and forgets `months`
+   degrades to English month names instead of rendering every date as
+   undefined. `weekdays` is Monday-first -- the calendar on Health reads
+   that way, and so does every locale this dashboard ships. */
 const I18N = {
   t, set, applyStatic, locale, locales: LOCALES,
   months: active.months || en.months,
+  weekdays: active.weekdays || en.weekdays,
   numberLocale: active.numberLocale || en.numberLocale,
 };
 

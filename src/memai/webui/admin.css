@@ -885,24 +885,178 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
 .grid-3232 { grid-template-columns: 3fr 2fr; }
 @media (max-width: 1080px) { .grid-2, .grid-3232 { grid-template-columns: 1fr; } }
 
-/* ── stat tiles ──────────────────────────────────────────────────────── */
+/* ── health ───────────────────────────────────────────────────────────────
+   The landing view: the ring, the index and its axes, the symptom list, the
+   calendar, and confidence split by type. Everything here is a reading of
+   the store's condition, which is why the numbers are set in the data font
+   and the labels are not. */
 
-.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(148px, 1fr)); gap: var(--sp-4); margin-bottom: var(--sp-4); }
-.tile {
-  background: var(--surface);
-  border-radius: var(--r-lg);
-  padding: var(--sp-4) var(--sp-4) var(--sp-3);
+/* the ring's column against everything else. 380px is the ring at the size
+   the figure inside it stays a headline rather than a caption. */
+.hx-top {
+  display: grid; grid-template-columns: 380px minmax(0, 1fr);
+  gap: var(--sp-4); margin-bottom: var(--sp-4);
 }
-.tile-label { color: var(--ink-2); }
-.tile-value { font: 500 var(--fs-num)/1.3 var(--font-ui); margin-top: var(--sp-1); color: var(--ink); }
-.tile-sub { font-size: var(--fs-label); color: var(--ink-3); margin-top: var(--sp-0); }
-/* the one tile that leads a view. It used to be marked by an accent outline;
-   with the outlines gone it is marked by standing one step forward instead,
-   which is what the ladder is for. */
-.tile-hero { background: var(--raised); }
-.tile-hero .tile-value { font-size: var(--fs-hero); font-weight: 500; color: var(--accent); }
+.hx-right { display: grid; grid-template-rows: auto 1fr; gap: var(--sp-4); min-width: 0; }
 
-/* ── charts ──────────────────────────────────────────────────────────── */
+/* ── the confidence ring ── */
+
+.hx-ring-panel { display: flex; flex-direction: column; }
+.hx-ring { position: relative; align-self: center; width: 228px; height: 228px; margin: var(--sp-2) 0; }
+/* -90deg so the first segment starts at twelve o'clock, which is where a
+   reader starts looking */
+.hx-ring svg { width: 100%; height: 100%; transform: rotate(-90deg); }
+.hx-ring-mid {
+  position: absolute; inset: 0;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+}
+.hx-ring-pct { font: 500 var(--fs-hero)/1 var(--font-ui); color: var(--accent); }
+.hx-ring-cap { font-size: var(--fs-sm); color: var(--ink-2); margin-top: var(--sp-0); }
+
+.hx-legend { display: flex; flex-direction: column; gap: var(--sp-2); margin-top: var(--sp-2); }
+/* a real button: each row lists the memories in that state, which is a
+   navigation and not a caption */
+.hx-legend-row {
+  display: flex; align-items: center; gap: var(--sp-3);
+  width: 100%; padding: var(--sp-1) var(--sp-2); margin: 0 calc(-1 * var(--sp-2));
+  background: none; border: 0; border-radius: var(--r-md);
+  font: 400 var(--fs-sm) var(--font-ui); color: var(--ink-2);
+  text-align: left; cursor: pointer;
+}
+.hx-legend-row:hover { background: var(--hover-1); color: var(--ink); }
+.hx-legend-row b {
+  margin-left: auto; font: 500 var(--fs-body) var(--font-m); color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+.hx-legend-row b.hx-bad { color: var(--bad-ink); }
+.hx-swatch { width: 9px; height: 9px; border-radius: 50%; flex: none; }
+
+/* ── the index and its axes ── */
+
+/* --raised: this card wants a decision. It is the one number the view exists
+   to state, and the ladder is what says so -- see the note on the tokens. */
+.hx-index {
+  background: var(--raised);
+  display: flex; align-items: center; gap: var(--sp-6);
+  flex-wrap: wrap;
+}
+.hx-index-num { flex: none; }
+.hx-score-row { display: flex; align-items: baseline; gap: var(--sp-2); margin-top: var(--sp-1); }
+.hx-score { font: 500 var(--fs-hero)/1 var(--font-ui); color: var(--ink); font-variant-numeric: tabular-nums; }
+.hx-of { font-size: var(--fs-read); color: var(--ink-3); }
+.hx-delta {
+  margin-left: var(--sp-1);
+  font: 500 var(--fs-sm) var(--font-m); color: var(--ok);
+}
+.hx-delta.down { color: var(--bad-ink); }
+
+.hx-axes { flex: 1; min-width: 240px; display: flex; flex-direction: column; gap: var(--sp-2); }
+.hx-axis { display: grid; grid-template-columns: 132px 1fr 28px; align-items: center; gap: var(--sp-3); }
+.hx-axis-name { font-size: var(--fs-sm); color: var(--ink-2); }
+/* an axis bar is thinner than a chart bar: it is a reading, not the subject */
+.hx-axis .bar-track { height: 6px; border-radius: var(--r-pill); }
+.hx-axis-val {
+  font: 400 var(--fs-label) var(--font-m); color: var(--ink-2);
+  text-align: right; font-variant-numeric: tabular-nums;
+}
+
+/* ── the symptom list ── */
+
+.hx-symptoms { display: flex; flex-direction: column; }
+.hx-syms { display: flex; flex-direction: column; }
+.hx-sym {
+  display: grid;
+  grid-template-columns: 6px minmax(0, 1fr) 64px 74px 92px;
+  align-items: center; gap: var(--sp-3);
+  padding: var(--sp-2) 0;
+  border-bottom: 1px solid var(--line-soft);
+}
+.hx-sym:last-child { border-bottom: 0; }
+/* the severity mark: a drawn bar in the row, not a border on the card. It is
+   6px wide and 22 tall, so it reads as a mark and not as an edge. */
+.hx-sev { height: 22px; border-radius: var(--r-sm); background: var(--ink-3); }
+.hx-sev.sev-bad { background: var(--bad); }
+.hx-sev.sev-warn { background: var(--warn); }
+.hx-sev.sev-info { background: var(--secondary); }
+.hx-sym-name {
+  font-size: var(--fs-body); color: var(--ink);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.hx-sym-n {
+  font: 500 var(--fs-md) var(--font-m); color: var(--ink);
+  text-align: right; font-variant-numeric: tabular-nums;
+}
+.hx-sym-share {
+  font: 400 var(--fs-label) var(--font-m); color: var(--ink-3);
+  text-align: right; font-variant-numeric: tabular-nums;
+}
+.hx-sym .btn { width: 100%; justify-content: center; }
+
+/* ── the calendar ── */
+
+.hx-cal { display: flex; gap: var(--sp-6); flex-wrap: wrap; align-items: flex-start; }
+.hx-grid {
+  display: grid; grid-template-columns: 96px repeat(7, 30px);
+  gap: 3px; align-items: center;
+}
+.hx-cal-dow, .hx-cal-week {
+  font: 400 var(--fs-label) var(--font-m); color: var(--ink-3);
+}
+.hx-cal-dow { text-align: center; }
+.hx-cal-week { text-align: right; padding-right: var(--sp-2); white-space: nowrap; }
+/* Five steps of one hue, the first of which is the empty cell. Quartiles of
+   the peak, so a single busy day cannot flatten the rest of the month. */
+.hx-cell { height: 22px; border-radius: var(--r-sm); background: var(--inset); }
+.hx-cell.l1 { background: rgba(187, 134, 252, .22); }
+.hx-cell.l2 { background: rgba(187, 134, 252, .40); }
+.hx-cell.l3 { background: rgba(187, 134, 252, .62); }
+.hx-cell.l4 { background: var(--accent); }
+/* a day that has not happened is not a day with nothing on it */
+.hx-cell.future { background: rgba(255, 255, 255, .02); }
+.hx-cell[data-day] { cursor: default; }
+.hx-cell.today { outline: 2px solid var(--accent-hi); outline-offset: 1px; }
+
+.hx-scale {
+  display: flex; align-items: center; gap: var(--sp-1);
+  margin-top: var(--sp-2); padding-left: 96px;
+  font: 400 var(--fs-label) var(--font-m); color: var(--ink-3);
+}
+.hx-scale .hx-cell { width: 16px; height: 10px; }
+
+.hx-dow { width: 208px; flex: none; display: flex; flex-direction: column; gap: var(--sp-1); }
+.hx-dow .mg-label { margin-bottom: var(--sp-1); }
+.hx-dow-row {
+  display: grid; grid-template-columns: 30px 1fr 30px; align-items: center; gap: var(--sp-2);
+  font: 400 var(--fs-label) var(--font-m); color: var(--ink-2);
+}
+.hx-dow .bar-track { height: 6px; border-radius: var(--r-pill); }
+.hx-dow-n { text-align: right; font-variant-numeric: tabular-nums; }
+
+.hx-cal-stats { display: flex; flex-direction: column; gap: var(--sp-4); }
+
+/* ── confidence by type ── */
+
+.hx-types { display: flex; flex-direction: column; gap: var(--sp-3); }
+.hx-type {
+  display: flex; flex-direction: column; gap: var(--sp-1);
+  width: 100%; padding: var(--sp-1) var(--sp-2); margin: 0 calc(-1 * var(--sp-2));
+  background: none; border: 0; border-radius: var(--r-md);
+  text-align: left; cursor: pointer;
+}
+.hx-type:hover { background: var(--hover-1); }
+.hx-type-head { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-3); }
+.hx-type-n {
+  font: 500 var(--fs-sm) var(--font-m); color: var(--ink-2);
+  font-variant-numeric: tabular-nums;
+}
+/* the 2px gaps let the surface through, so the three states read as three
+   quantities rather than as one bar with colour changes in it */
+.hx-type-bar {
+  display: flex; gap: 1px; height: 8px;
+  border-radius: var(--r-pill); overflow: hidden; background: var(--inset);
+}
+
+/* ── charts shared with other views ──────────────────────────────────── */
 
 /* confidence meter: stacked 100% bar, 2px surface gaps */
 .meter { display: flex; gap: var(--sp-0); height: 12px; border-radius: var(--r-md); overflow: hidden; background: var(--inset); }
@@ -917,9 +1071,6 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
    entry carries its own c-* class now and the mark colours itself. */
 .legend-item { --ico: 12px; }
 
-/* per-type horizontal bars */
-.bars { display: flex; flex-direction: column; gap: var(--sp-2); }
-.bar-row { display: grid; grid-template-columns: 128px 1fr 48px; align-items: center; gap: var(--sp-3); }
 .bar-track { height: 10px; background: var(--inset); border-radius: 0 var(--r-md) var(--r-md) 0; position: relative; overflow: hidden; }
 /* scaleX rather than width: animating width is a layout animation, and the
    track is what clips to the rounded shape, so the fill needs no radius of
@@ -932,29 +1083,24 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
   transform-origin: left center; transform: scaleX(var(--v, 0));
   transition: transform .6s cubic-bezier(.25, .9, .3, 1);
 }
-.bar-val { font: 400 var(--fs-sm) var(--font-m); color: var(--ink-2); text-align: right; font-variant-numeric: tabular-nums; }
 
-/* activity sparkbars */
-.spark { display: flex; align-items: flex-end; gap: var(--sp-0); height: 62px; padding-bottom: var(--sp-0); border-bottom: 1px solid var(--line); }
-.spark-bar {
-  /* .38, not .30: these bars ARE the data, so they answer to the 3:1 floor
-     for meaningful graphics (WCAG 1.4.11) and .30 measured 2.65:1 on the
-     panel. min-width gives the pointer something to land on. */
-  flex: 1; min-width: 5px; max-width: 22px;
-  background: rgba(255, 255, 255, .38);
-  border-radius: var(--r-sm) var(--r-sm) 0 0;
-  cursor: default;
-  transition: background .12s;
-}
-.spark-bar:hover { background: var(--accent-hi); }
-.spark-bar.today { background: var(--accent); }
-.spark-foot { display: flex; justify-content: space-between; font-size: var(--fs-label); color: var(--ink-3); margin-top: var(--sp-1); }
-.spark-stats {
-  display: grid; grid-template-columns: repeat(3, 1fr); gap: var(--sp-3);
-  margin-top: var(--sp-4); padding-top: var(--sp-3);
-  border-top: 1px solid var(--line-soft);
-}
 .spark-stat { font: 500 var(--fs-lg) var(--font-ui); margin-top: var(--sp-0); color: var(--ink); }
+
+/* The ring column folds under the rest before the axes do: at this width the
+   ring is still legible beside nothing else, and the symptom list is the
+   half of the view somebody came to read. */
+@media (max-width: 1180px) {
+  .hx-top { grid-template-columns: 1fr; }
+  .hx-ring-panel { align-items: center; }
+  .hx-legend { width: 100%; max-width: 380px; }
+}
+@media (max-width: 860px) {
+  .hx-sym { grid-template-columns: 6px minmax(0, 1fr) 56px 92px; }
+  .hx-sym-share { display: none; }
+  .hx-grid { grid-template-columns: 84px repeat(7, minmax(0, 1fr)); }
+  .hx-scale { padding-left: 84px; }
+  .hx-dow { width: 100%; }
+}
 
 /* ── tables ──────────────────────────────────────────────────────────── */
 

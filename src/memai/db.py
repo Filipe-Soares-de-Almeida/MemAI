@@ -338,6 +338,21 @@ CREATE TABLE IF NOT EXISTS optimization_suggestions (
 
 CREATE INDEX IF NOT EXISTS idx_optsug_run ON optimization_suggestions(run_id);
 CREATE INDEX IF NOT EXISTS idx_optsug_status ON optimization_suggestions(status);
+
+-- One row per day the dashboard was opened, holding that day's health index
+-- and its four axes. The store keeps no history of a confidence or a
+-- relation, so "is this getting better" cannot be reconstructed after the
+-- fact -- it has to be written down as it happens. The writer is
+-- health_snapshot(); a day already written is left alone, so the number is
+-- the first reading of the day and not the last.
+CREATE TABLE IF NOT EXISTS health_daily (
+    day            TEXT PRIMARY KEY,          -- YYYY-MM-DD, UTC
+    score          INTEGER NOT NULL,
+    curation       INTEGER NOT NULL,
+    connectivity   INTEGER NOT NULL,
+    freshness      INTEGER NOT NULL,
+    organization   INTEGER NOT NULL
+);
 """
 
 
@@ -800,6 +815,86 @@ def due_for_review(
     sql.append("ORDER BY review_after ASC LIMIT ?")
     params.append(limit)
     return conn.execute(" ".join(sql), params).fetchall()
+
+
+# ---------------------------------------------------------------- health
+
+# How long a memory nobody has vetted may sit before it counts as stale.
+# Deliberately the same span the writing tools suggest for review_after.
+STALE_DAYS = 90
+
+# The four axes of the health index, each a percentage of the ACTIVE
+# memories that satisfy it. Every one is a fact the store can check today,
+# and the SQL is written out here rather than assembled, so what an axis
+# measures can be read off it.
+#
+#   curation      vetted by a human. A contradicted memory is not confirmed,
+#                 so it weighs exactly like an unverified one until it is
+#                 superseded or archived -- it is not penalised twice.
+#   connectivity  reachable from something else. An island is a memory only
+#                 an exact query finds.
+#   freshness     not overdue: no review date in the past, and not left
+#                 unvetted for STALE_DAYS.
+#   organization  findable by something other than its own wording -- a
+#                 title, tags that are not just the type, and a domain.
+_HEALTH_AXES: tuple[tuple[str, str], ...] = (
+    ("curation", "confidence = 'confirmed'"),
+    ("connectivity",
+     "uid IN (SELECT from_uid FROM relations UNION SELECT to_uid FROM relations)"),
+    ("freshness",
+     "(review_after = '' OR review_after > :today) "
+     "AND NOT (confidence = 'unverified' AND updated_at < :stale)"),
+    ("organization",
+     "TRIM(title) <> '' AND TRIM(tags) <> '' AND TRIM(tags) <> type "
+     "AND TRIM(domain) <> ''"),
+)
+
+
+def health_axes(conn: sqlite3.Connection, *, at: str | None = None) -> dict:
+    """The four axes and the index over them, each 0-100 over active memories.
+
+    `at` is the day the spans are measured from (YYYY-MM-DD), defaulting to
+    today. An empty store scores 100 on every axis: nothing is wrong with
+    it, and 0 would read as a store in trouble on the day it is created.
+    """
+    today = at or today_iso()
+    stale = (datetime.fromisoformat(today) - timedelta(days=STALE_DAYS)).isoformat()
+    active = conn.execute(
+        "SELECT COUNT(*) FROM memories WHERE status = 'active'").fetchone()[0]
+    axes = {}
+    for name, clause in _HEALTH_AXES:
+        if not active:
+            axes[name] = 100
+            continue
+        met = conn.execute(
+            f"SELECT COUNT(*) FROM memories WHERE status = 'active' AND ({clause})",
+            {"today": today, "stale": stale}).fetchone()[0]
+        axes[name] = round(met * 100 / active)
+    return {"score": round(sum(axes.values()) / len(axes)), "axes": axes, "active": active}
+
+
+def health_snapshot(conn: sqlite3.Connection, health: dict, *, day: str = "") -> None:
+    """Record today's index, once. A day already written is left as it was."""
+    conn.execute(
+        """INSERT OR IGNORE INTO health_daily
+           (day, score, curation, connectivity, freshness, organization)
+           VALUES (?, ?, ?, ?, ?, ?)""",
+        (day or today_iso(), health["score"], health["axes"]["curation"],
+         health["axes"]["connectivity"], health["axes"]["freshness"],
+         health["axes"]["organization"]))
+
+
+def health_since(conn: sqlite3.Connection, days: int = 30) -> sqlite3.Row | None:
+    """The newest snapshot at least `days` old, or None if none is that old.
+
+    A delta against a younger reading would say "over the {days} days" about
+    a shorter window, so a store the dashboard has not been open on for long
+    enough reports no delta rather than a misdated one.
+    """
+    cutoff = (datetime.fromisoformat(today_iso()) - timedelta(days=days)).date().isoformat()
+    return conn.execute(
+        "SELECT * FROM health_daily WHERE day <= ? ORDER BY day DESC LIMIT 1",
+        (cutoff,)).fetchone()
 
 
 def new_uid() -> str:
