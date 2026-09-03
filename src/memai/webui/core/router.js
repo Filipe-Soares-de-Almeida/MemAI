@@ -21,6 +21,11 @@ import { failedHTML } from './shared.js';
 let VIEWS = {};
 let onRecord = null;
 
+/* The views laid out as panes that fill the window instead of as a page
+   that scrolls. Named here rather than by each view, because it is the
+   shell's box they are filling and the shell is what has to be told. */
+const FILLS = new Set(['memories']);
+
 export function registerViews(map, { onRecord: recordHook = null } = {}) {
   VIEWS = map;
   onRecord = recordHook;
@@ -63,6 +68,9 @@ export async function route({ focus = true } = {}) {
   const view = $('#view');
   /* the diagram editor runs full-bleed: see .view.wide */
   view.classList.toggle('wide', name === 'diagram');
+  /* a list beside its inspector fills the window and scrolls inside its own
+     panes rather than as a page: see .view.fill */
+  view.classList.toggle('fill', FILLS.has(name));
   view.innerHTML = '<div class="loading"><span class="spin"></span></div>';
   const ctx = { stale: () => mine !== generation };
   try {

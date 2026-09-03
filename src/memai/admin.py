@@ -733,13 +733,17 @@ def bulk(request, payload) -> dict:
     if len(uids) > BULK_MAX:
         raise ValueError(f"at most {BULK_MAX} uids per operation")
     reason = (payload.get("reason") or "").strip()
+    value = str(payload.get("value") or "").strip()
+    # Validated once, before the loop: an action that would fail on every row
+    # must not archive the first forty and then raise on the forty-first.
+    if action == "confidence" and value not in CONFIDENCES:
+        raise ValueError(f"value must be one of {CONFIDENCES}")
+    if action in ("tag", "rehome") and not value:
+        raise ValueError(f"{action} needs a value")
     done = 0
     with db.connect() as conn:
         for uid in uids:
             if action == "confidence":
-                value = payload.get("value", "")
-                if value not in CONFIDENCES:
-                    raise ValueError(f"value must be one of {CONFIDENCES}")
                 done += 1 if db.set_confidence(conn, uid, value) else 0
             elif action == "archive":
                 done += 1 if db.set_status(
@@ -749,8 +753,21 @@ def bulk(request, payload) -> dict:
                 done += 1 if db.set_status(
                     conn, uid, "active",
                     note=f"restored: {reason}" if reason else "") else 0
+            elif action == "tag":
+                # ADDS. Replacing the field over a selection would wipe every
+                # synonym those rows already carry, which is the half of the
+                # index a keyword search runs on.
+                row = db.get_memory(conn, uid)
+                if row is None:
+                    continue
+                merged = db.merge_tags(row["tags"], value)
+                if merged != row["tags"]:
+                    done += 1 if db.set_tags(conn, uid, merged, note="bulk") else 0
+            elif action == "rehome":
+                done += 1 if db.set_domain(conn, uid, value, note="bulk") else 0
             else:
-                raise ValueError("action must be confidence|archive|restore")
+                raise ValueError(
+                    "action must be confidence|archive|restore|tag|rehome")
     return {"ok": True, "affected": done}
 
 

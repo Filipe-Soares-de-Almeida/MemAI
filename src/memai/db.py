@@ -4114,6 +4114,60 @@ def set_domain_links(
     return paths
 
 
+def set_domain(conn: sqlite3.Connection, uid: str, domain: str, note: str = "") -> bool:
+    """Re-home a memory: change the path it is FILED at, and audit it.
+
+    The cross-listings are re-run afterwards even when the caller named
+    none, because the policy that drops a redundant one reads the domain
+    the memory ends up with -- a membership the old path needed can be
+    covered by the new path's own prefix (apply_link_policy).
+
+    Returns whether the row exists. Filing it where it already is is not a
+    change and writes nothing.
+    """
+    row = get_memory(conn, uid)
+    if row is None:
+        return False
+    domain = apply_domain_policy(conn, domain)
+    if domain == row["domain"]:
+        return True
+    conn.execute(
+        "UPDATE memories SET domain = ?, updated_at = ? WHERE uid = ?",
+        (domain, now_iso(), uid))
+    audit = f"meta: domain '{row['domain']}' -> '{domain}'"
+    conn.execute(
+        "INSERT INTO edits (memory_uid, edited_at, prev_content, new_content, note) "
+        "VALUES (?, ?, ?, ?, ?)",
+        (uid, now_iso(), row["content"], row["content"],
+         f"{audit} ({note})" if note else audit))
+    links = get_domain_links(conn, uid)
+    if links:
+        set_domain_links(conn, uid, links)
+    return True
+
+
+TAG_SEP = ", "
+
+
+def merge_tags(existing: str, added: str) -> str:
+    """`existing` with `added` appended, keeping order and dropping repeats.
+
+    Case-insensitive on the comparison and case-preserving on the value: a
+    store that already says 'F100_TOTAL' does not gain 'f100_total' beside
+    it. Tags are free text separated by commas, which is what BM25 indexes,
+    so nothing here reshapes a tag beyond trimming it.
+    """
+    out: list[str] = []
+    seen: set[str] = set()
+    for tag in (*existing.split(","), *added.split(",")):
+        tag = tag.strip()
+        if not tag or tag.casefold() in seen:
+            continue
+        seen.add(tag.casefold())
+        out.append(tag)
+    return TAG_SEP.join(out)
+
+
 def add_domain_link(conn: sqlite3.Connection, uid: str, domain: str) -> list[str]:
     """Cross-list a memory into one more domain. Returns the resulting set."""
     if not normalize_domain(domain):

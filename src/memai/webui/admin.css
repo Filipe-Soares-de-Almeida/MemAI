@@ -374,13 +374,10 @@ kbd {
   /* The bottom padding is clearance, not rhythm: whatever the floating bulk
      bar and the toast stack are currently taking, over the normal gutter.
 
-     It was a flat 90px on all seven views for a bar that appears on ONE, and
-     views.memories already publishes --bulk-h (its own measured height, and
-     0px on teardown) precisely so the stylesheet would not have to guess.
-     Nothing read it. At 200% zoom that dead 90px was 27% of a 328px work
-     area, on views that could never show the bar it was reserved for. */
-  padding: var(--sp-5) var(--sp-6)
-           calc(var(--sp-5) + var(--bulk-h, 0px) + var(--toast-h, 0px));
+     It was a flat 90px on all seven views for a bar that only ever appeared
+     on ONE. At 200% zoom that dead 90px was 27% of a 328px work area, on
+     views that could never show the bar it was reserved for. */
+  padding: var(--sp-5) var(--sp-6) calc(var(--sp-5) + var(--toast-h, 0px));
   outline: none;
 }
 .view > * { max-width: 1340px; margin-left: auto; margin-right: auto; }
@@ -1279,7 +1276,24 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
    in three fixed colours, named on hover and in the drawer. The column stays
    a FIXED width so the snippet's left edge does not jitter from row to row,
    which is the whole point of a list. */
-.mem-list { border-radius: var(--r-lg); background: var(--surface); overflow: hidden; }
+/* The view is the list beside the pane that acts on it. Both scroll inside
+   themselves, so the toolbar, the select-all strip and the pager stay where
+   the eye left them however far down the rows you are. */
+.mem-shell { gap: 0; }
+.mem-work {
+  display: grid; grid-template-columns: minmax(0, 1fr) 396px;
+  gap: var(--sp-4);
+  flex: 1; min-height: 0;
+}
+.mem-pane { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+.mem-pane .list-toolbar { flex: none; }
+.mem-pane .list-foot { flex: none; }
+
+.mem-list {
+  border-radius: var(--r-lg); background: var(--surface); overflow: hidden;
+  flex: 1; min-height: 0; display: flex; flex-direction: column;
+}
+.mem-list #memList { flex: 1; min-height: 0; overflow-y: auto; }
 /* The select-all strip. Its first column is the row's first column to the
    pixel -- a header tick that does not line up under the ticks it commands
    reads as a filter, not as a select-all. */
@@ -1296,7 +1310,7 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
    because it teaches something the pointer does not need. */
 .mem-head-keys { color: var(--ink-3); font-family: var(--font-m); }
 .mem-row {
-  display: grid; grid-template-columns: var(--tap) 150px 1fr auto;
+  display: grid; grid-template-columns: var(--tap) 150px minmax(0, 1fr) auto;
   gap: var(--sp-3); align-items: center;
   /* --sp-2 vertical, the same as .rel-row: the app already had a dense
      memory row and it lived in a side panel on Overview at 44px while this
@@ -1341,6 +1355,119 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
 .mem-right { display: flex; align-items: center; gap: var(--sp-2); font-size: var(--fs-label); color: var(--ink-3); white-space: nowrap; }
 .mem-right .chip { max-width: 150px; }
 
+/* ── the inspector ────────────────────────────────────────────────────────
+   One memory when one row is ticked, a batch editor when several are, and
+   an explanation of both when none is. It is --surface like the list beside
+   it, and its own footer is the only thing in it that does not scroll --
+   Apply must never be the control you have to hunt for. */
+.mem-inspect {
+  background: var(--surface); border-radius: var(--r-lg);
+  display: flex; flex-direction: column;
+  min-height: 0; overflow: hidden;
+}
+.mem-inspect.is-empty { justify-content: center; }
+
+.mi-empty { padding: var(--sp-5) var(--sp-5); text-align: center; }
+.mi-empty-title { font: 500 var(--fs-md) var(--font-ui); color: var(--ink-2); margin-bottom: var(--sp-2); }
+.mi-keys {
+  list-style: none; margin: var(--sp-4) 0 0; padding: 0;
+  display: flex; flex-direction: column; gap: var(--sp-2);
+  font-size: var(--fs-label); color: var(--ink-3);
+}
+.mi-keys kbd {
+  font: 500 var(--fs-label) var(--font-m);
+  border: 1px solid var(--line); border-radius: var(--r-sm);
+  padding: 1px var(--sp-1); margin-right: var(--sp-2); color: var(--ink-2);
+}
+
+.mi-head {
+  flex: none; padding: var(--sp-4) var(--sp-4);
+  border-bottom: 1px solid var(--line-soft);
+  display: flex; flex-direction: column; gap: var(--sp-2); align-items: flex-start;
+}
+.mi-head-row { display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; }
+.mi-title { font: 500 var(--fs-md)/1.35 var(--font-ui); color: var(--ink); }
+.mi-count { font: 500 var(--fs-num)/1.2 var(--font-ui); color: var(--accent); }
+.mi-facts {
+  display: flex; flex-wrap: wrap; gap: var(--sp-1) var(--sp-3);
+  font-size: var(--fs-label); color: var(--ink-3);
+}
+.mi-facts > span:not(:last-child)::after { content: ' ·'; }
+
+.mi-body {
+  flex: 1; min-height: 0; overflow-y: auto;
+  padding: var(--sp-4);
+  display: flex; flex-direction: column; gap: var(--sp-5);
+}
+.mi-field { display: flex; flex-direction: column; gap: var(--sp-2); }
+.mi-field .pick { width: 100%; max-width: none; }
+
+/* Each confidence is a row you press, not an option in a list: the count
+   beside it says how much of the selection it would actually change, and
+   that is the number the choice is made on. */
+.mi-confs { display: flex; flex-direction: column; gap: var(--sp-2); }
+.mi-conf {
+  display: flex; align-items: center; gap: var(--sp-3);
+  padding: var(--sp-2) var(--sp-3);
+  background: none; border: 1px solid var(--line); border-radius: var(--r-md);
+  cursor: pointer; text-align: left;
+  transition: background .13s, border-color .13s;
+}
+.mi-conf:hover { background: var(--hover-1); }
+.mi-radio {
+  width: 13px; height: 13px; border-radius: 50%; flex: none;
+  border: 1px solid var(--ink-3);
+}
+.mi-conf.on .mi-radio { border: 4px solid currentColor; background: var(--bg); }
+.mi-conf.on.c-confirmed    { border-color: var(--ok);   background: rgba(129, 199, 132, .12); color: var(--ok); }
+.mi-conf.on.c-unverified   { border-color: var(--warn); background: rgba(255, 213, 79, .12);  color: var(--warn); }
+.mi-conf.on.c-contradicted { border-color: var(--bad);  background: var(--bad-wash);          color: var(--bad-ink); }
+.mi-conf-n {
+  margin-left: auto; font: 400 var(--fs-label) var(--font-m); color: var(--ink-3);
+  white-space: nowrap;
+}
+
+/* the chips and the field are one control: the chips are what has been
+   typed, the field is where the next one goes */
+.mi-tagbox {
+  display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-1);
+  background: var(--inset); border: 1px solid var(--line); border-radius: var(--r-md);
+  padding: var(--sp-1) var(--sp-2); min-height: var(--ctl-h);
+}
+.mi-tagbox input {
+  flex: 1 1 90px; min-width: 90px;
+  background: none; border: 0; padding: 0; height: auto;
+  color: var(--ink); font: 400 var(--fs-sm) var(--font-ui);
+}
+.mi-tagbox input:focus { outline: none; }
+
+.mi-actions { display: flex; flex-direction: column; gap: var(--sp-2); }
+.mi-actions .btn { justify-content: flex-start; width: 100%; }
+.mi-actions .btn .hint-sm { margin-left: auto; }
+
+.mi-plan {
+  background: var(--inset); border-radius: var(--r-md);
+  padding: var(--sp-3);
+  display: flex; flex-direction: column; gap: var(--sp-1);
+  font-size: var(--fs-sm); color: var(--ink-2);
+}
+.mi-plan b { color: var(--ink); font-weight: 500; }
+
+.mi-foot {
+  flex: none; display: flex; gap: var(--sp-2);
+  padding: var(--sp-3) var(--sp-4);
+  border-top: 1px solid var(--line-soft);
+}
+.mi-foot .btn-solid { flex: 1; justify-content: center; }
+
+/* Below this the two panes stop being two panes: the inspector goes under
+   the list and the list scrolls with the page again. */
+@media (max-width: 1180px), (max-height: 619px) {
+  .mem-work { grid-template-columns: 1fr; }
+  .mem-list #memList { overflow: visible; }
+  .mem-inspect { max-height: none; }
+}
+
 .list-foot { display: flex; justify-content: space-between; align-items: center; margin-top: var(--sp-3); font-size: var(--fs-sm); color: var(--ink-2); }
 .list-foot b { font-family: var(--font-m); }
 .pager { display: flex; gap: var(--sp-2); align-items: center; }
@@ -1349,32 +1476,7 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
   display: inline-flex; align-items: center; gap: var(--sp-1); --ico: 12px;
 }
 
-.bulkbar {
-  /* a floating strip, dense like the other two */
-  --ctl-h: var(--ctl-h-sm);
-  /* Centred on the window, which is where the content is centred too: the
-     bar runs the full width and nothing holds the left edge any more. */
-  position: fixed; bottom: 22px;
-  left: 50%; transform: translateX(-50%);
-  display: flex; align-items: center; gap: var(--sp-3);
-  background: var(--overlay);
-  border: 1px solid var(--line);
-  border-radius: var(--r-pill);
-  padding: var(--sp-2) var(--sp-3) var(--sp-2) var(--sp-4);
-  box-shadow: var(--shadow-pop);
-  z-index: 30;
-  /* Its own entrance keyframe, because `rise` sets `transform` and this is the
-     one element whose transform is load-bearing: it is what centres the bar.
-     Animating with `rise` replaced translateX(-50%) with translateY(6px) for
-     the length of the animation, so the bar flew in sideways from 114px off
-     centre and only landed once the animation finished. */
-  animation: bulk-rise .25s both;
-  font-size: var(--fs-sm);
-}
-@keyframes bulk-rise {
-  from { opacity: 0; transform: translateX(-50%) translateY(var(--rise-y, 6px)); }
-}
-.bulkbar b { color: var(--accent); font-family: var(--font-m); }
+
 
 /* ── memory record (a dialog in the modal stack) ───────────────────────
    This was a 760px drawer down the right edge with everything in one
@@ -2648,15 +2750,11 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
 .toasts {
   position: fixed; z-index: 90;
   right: var(--sp-5);
-  /* Lifted clear of the bulk bar. At 375px the toast landed exactly on top of
-     it -- z-index 90 against the bar's 30 -- covering Archive, Restore and the
-     clear button outright. syncBulkbar() publishes --bulk-h; there is no bar
-     most of the time and the fallback is 0.
-     Right-anchored deliberately, and NOT centred on the content: a centred
+  /* Right-anchored deliberately, and NOT centred on the content: a centred
      stack would land on the middle of the dialog the toast is usually ABOUT.
      Down here it clears a centred record's own bottom corner, and the record
      reserves this much padding for it (see --toast-h on .record-grid). */
-  bottom: calc(var(--sp-5) + var(--bulk-h, 0px));
+  bottom: var(--sp-5);
   /* max-width, never width: a fixed width made "uid copied" as wide as the
      longest error the API can return. align-items so each toast hugs the right
      edge at its own size -- the stack is right-anchored, so they line up on the
@@ -3204,8 +3302,7 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
 
 @media (max-width: 940px) {
   .view {
-    padding: var(--sp-4) var(--sp-4)
-             calc(var(--sp-4) + var(--bulk-h, 0px) + var(--toast-h, 0px));
+    padding: var(--sp-4) var(--sp-4) calc(var(--sp-4) + var(--toast-h, 0px));
   }
 }
 
@@ -3221,8 +3318,7 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
   .db-badge { display: none; }
   .appbar-right { gap: var(--sp-2); }
   .view {
-    padding: var(--sp-4) var(--sp-3)
-             calc(var(--sp-4) + var(--bulk-h, 0px) + var(--toast-h, 0px));
+    padding: var(--sp-4) var(--sp-3) calc(var(--sp-4) + var(--toast-h, 0px));
   }
   /* The memory takes the width; its annotations go under it. The four-column
      grid had no narrow override, so at 375px the fixed metadata column plus

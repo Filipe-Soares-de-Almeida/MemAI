@@ -14,7 +14,6 @@
 
 import { esc, fmtInt, fmtBytes, fmtDay } from '../core/dom.js';
 import { api } from '../core/api.js';
-import { icon } from '../core/icons.js';
 import { tipShow, tipHide } from '../core/ui.js';
 import { typeClass, CONF, TYPE_ORDER, updateShellStats } from '../core/shared.js';
 import { go } from '../core/router.js';
