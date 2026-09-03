@@ -21,7 +21,7 @@ import { $ } from './core/dom.js';
 import { paintIcons } from './core/icons.js';
 import { modalOpen, closeModal, toast } from './core/ui.js';
 import { pickerFor, setPickerValue, wirePicker, fixedItems } from './core/pick.js';
-import { refreshRail } from './core/shared.js';
+import { refreshShellStats } from './core/shared.js';
 import { mountProjectPicker } from './core/projects.js';
 import { registerViews, route, go, parseHash } from './core/router.js';
 import { I18N, t } from './i18n.js';
@@ -48,10 +48,10 @@ registerViews({
   optimization: renderOptimization,
 }, { onRecord: openRecord });
 
-/* draw the shell's icons before the first route, so the rail is never
+/* draw the shell's icons before the first route, so the app bar is never
    shown mid-assembly (i18n does the same for its text, at import time) */
 paintIcons();
-/* the project switch on the rail needs a fetch of its own, so it fills in
+/* the project switch in the bar needs a fetch of its own, so it fills in
    when that lands */
 mountProjectPicker();
 
@@ -104,7 +104,7 @@ document.addEventListener('keydown', e => {
 /* wrapped, so the hashchange Event is not read as route's options */
 addEventListener('hashchange', () => route());
 route();
-/* Rail health on first paint. Overview renders from /api/overview and hands
-   the same payload to updateRail itself, so asking for it here as well put
-   two copies of one request in flight on the landing view. */
-if (parseHash().name !== 'overview') refreshRail();
+/* The bar's badge on first paint. Health renders from /api/overview and
+   hands the same payload to updateShellStats itself, so asking for it here
+   as well put two copies of one request in flight on the landing view. */
+if (parseHash().name !== 'overview') refreshShellStats();

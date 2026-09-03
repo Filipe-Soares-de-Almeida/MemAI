@@ -20,28 +20,29 @@
 </head>
 <body>
 
-<aside class="rail">
+<!-- One band across the top: identity, the sections, and the two controls
+     that belong to the whole app rather than to a view. It replaced a
+     228px rail, and the width it gives back is what lets a list and its
+     inspector sit side by side. -->
+<header class="appbar">
   <!-- Icons are drawn from webui/core/icons.js into these empty <svg>
        elements at boot. They ship empty rather than absent so admin.css
        sizes the box from first paint and filling it cannot shift the
        layout -- same reason data-i18n swaps text in place. -->
-  <div class="brand">
+  <a class="brand" href="#/overview" data-i18n-title="brand.sub">
     <svg class="brand-seal" data-icon="brand-seal"></svg>
-    <div class="brand-text">
-      <!-- the page's h1. It was a span, which left the document with no
-           level-one heading and every view's title starting at h2. -->
-      <h1 class="brand-name">MemAI</h1>
-      <span class="brand-sub" data-i18n="brand.sub">memory administration</span>
-    </div>
-  </div>
+    <!-- the page's h1. It was a span, which left the document with no
+         level-one heading and every view's title starting at h2. -->
+    <h1 class="brand-name">MemAI</h1>
+  </a>
 
-  <!-- data-i18n-title as well as the label: below 940px the rail collapses
-       and the labels are sized to nothing, so the tooltip is the only thing
-       naming an icon for a sighted user. -->
+  <!-- data-i18n-title as well as the label: below 1180px the labels are
+       sized to nothing and the icon is the only thing naming a section for
+       a sighted user. -->
   <nav class="nav" aria-label="Sections" data-i18n-aria="nav.aria">
     <a href="#/overview" data-view="overview" data-i18n-title="nav.overview">
       <svg data-icon="overview"></svg>
-      <span data-i18n="nav.overview">Overview</span></a>
+      <span data-i18n="nav.overview">Health</span></a>
     <a href="#/memories" data-view="memories" data-i18n-title="nav.memories">
       <svg data-icon="memories"></svg>
       <span data-i18n="nav.memories">Memories</span></a>
@@ -62,28 +63,22 @@
       <span data-i18n="nav.optimization">Optimization</span></a>
   </nav>
 
-  <div class="rail-foot">
-    <!-- which project the dashboard, and every MCP server on this machine,
-         reads and writes right now; built and wired in core/projects.js -->
-    <div id="railProject" class="rail-health"></div>
-    <div id="railHealth" class="rail-health"></div>
-  </div>
-</aside>
-
-<div class="frame">
   <!-- No search field here. It was a shortcut to the Memories tab and nothing
        else: Enter navigated there, cleared itself on the way, and on that tab
        it sat above a second search field that actually filters and actually
        keeps what you typed. `/` still reaches the search -- it focuses the
        real field now (see app.js). -->
-  <header class="topbar">
-    <div class="topbar-right">
-      <span id="dbBadge" class="db-badge" title=""></span>
-      <span id="langHost"></span>
-      <button id="btnNew" class="btn btn-solid" data-i18n="topbar.newMemory">+ New memory</button>
-    </div>
-  </header>
+  <div class="appbar-right">
+    <span id="dbBadge" class="db-badge" title=""></span>
+    <!-- which project the dashboard, and every MCP server on this machine,
+         reads and writes right now; built and wired in core/projects.js -->
+    <span id="projectHost"></span>
+    <span id="langHost"></span>
+    <button id="btnNew" class="btn btn-solid" data-i18n="topbar.newMemory">+ New memory</button>
+  </div>
+</header>
 
+<div class="frame">
   <!-- the spinner ships in the markup: the modules are fetched, and a shell
        with an empty middle reads as "nothing here" rather than as loading -->
   <main id="view" class="view" tabindex="-1">

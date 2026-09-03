@@ -23,7 +23,6 @@
     "ago.hour": "{n} h",
     "ago.min": "{n} min",
     "ago.now": "now",
-    "badge.active": "{n} active",
     "badge.uidMatch": "Pasted uid",
     "badge.uidMatchWhy": "In this list because its uid was pasted into the search, not because the words matched",
     "brand.sub": "Memory administration",
@@ -572,7 +571,7 @@
     "nav.maintenance": "Maintenance",
     "nav.memories": "Memories",
     "nav.optimization": "Optimization",
-    "nav.overview": "Overview",
+    "nav.overview": "Health",
     "nm.also": "Also in (optional)",
     "nm.conf": "Confidence",
     "nm.content": "Content",
@@ -672,13 +671,11 @@
     "ov.tile.relations": "Relations",
     "ov.tile.sessions": "Sessions",
     "ov.tip.onDay": "<b>{n}</b> on {day}",
-    "ov.title": "Overview",
+    "ov.title": "Health",
     "ov.types.empty": "No active memories",
     "ov.types.title": "Types",
     "pick.filter": "Filter…",
     "pick.none": "Nothing matches",
-    "rail.active": "Active",
-    "rail.db": "DB",
     "rel.contradicts": "Contradicts",
     "rel.duplicates": "Duplicates",
     "rel.explains": "Explains",
@@ -741,6 +738,7 @@
     "project.create.ok": "Create and switch",
     "project.created": "Project {name} created and active",
     "err.project": "The project operation did not go through.",
-    "do.act.toProject": "Send to project…"
+    "do.act.toProject": "Send to project…",
+    "badge.store": "{n} active · {size}"
   }
 }

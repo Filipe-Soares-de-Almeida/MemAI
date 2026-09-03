@@ -23,7 +23,6 @@
     "ago.hour": "{n} h",
     "ago.min": "{n} min",
     "ago.now": "agora",
-    "badge.active": "{n} ativas",
     "badge.uidMatch": "uid colado",
     "badge.uidMatchWhy": "Está nesta lista porque o uid foi colado na busca, não porque as palavras casaram",
     "brand.sub": "Administração de memórias",
@@ -572,7 +571,7 @@
     "nav.maintenance": "Manutenção",
     "nav.memories": "Memórias",
     "nav.optimization": "Otimização",
-    "nav.overview": "Visão geral",
+    "nav.overview": "Saúde",
     "nm.also": "Também em (opcional)",
     "nm.conf": "Confiança",
     "nm.content": "Conteúdo",
@@ -672,13 +671,11 @@
     "ov.tile.relations": "Relações",
     "ov.tile.sessions": "Sessões",
     "ov.tip.onDay": "<b>{n}</b> em {day}",
-    "ov.title": "Visão geral",
+    "ov.title": "Saúde",
     "ov.types.empty": "Nenhuma memória ativa",
     "ov.types.title": "Tipos",
     "pick.filter": "Filtrar…",
     "pick.none": "Nada corresponde",
-    "rail.active": "Ativas",
-    "rail.db": "BD",
     "rel.contradicts": "Contradiz",
     "rel.duplicates": "Duplica",
     "rel.explains": "Explica",
@@ -741,6 +738,7 @@
     "project.create.ok": "Criar e ativar",
     "project.created": "Projeto {name} criado e ativo",
     "err.project": "A operação no projeto não foi concluída.",
-    "do.act.toProject": "Enviar para projeto…"
+    "do.act.toProject": "Enviar para projeto…",
+    "badge.store": "{n} ativas · {size}"
   }
 }

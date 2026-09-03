@@ -4,7 +4,7 @@ import { esc, fmtInt, fmtBytes, fmtAgo, fmtDay } from '../core/dom.js';
 import { api } from '../core/api.js';
 import { icon } from '../core/icons.js';
 import { tipShow, tipHide } from '../core/ui.js';
-import { typeClass, CONF, TYPE_ORDER, updateRail } from '../core/shared.js';
+import { typeClass, CONF, TYPE_ORDER, updateShellStats } from '../core/shared.js';
 import { go } from '../core/router.js';
 import { openRecord } from './record.js';
 import { t } from '../i18n.js';
@@ -16,7 +16,7 @@ const confColor = c =>
 export async function renderOverview(view, params, ctx) {
   const o = await api('/api/overview');
   if (ctx.stale()) return;
-  updateRail(o);
+  updateShellStats(o);
 
   const tot = o.totals;
   const confSeg = CONF_ORDER.map(c => {

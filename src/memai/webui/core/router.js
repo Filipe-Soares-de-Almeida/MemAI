@@ -52,7 +52,7 @@ export async function route({ focus = true } = {}) {
   currentView = name;
   document.querySelectorAll('.nav a').forEach(a => {
     /* aria-current is also the styling hook (see admin.css): one attribute,
-       so the rail cannot show one section and announce another */
+       so the bar cannot show one section and announce another */
     if (a.dataset.view === name) a.setAttribute('aria-current', 'page');
     else a.removeAttribute('aria-current');
   });

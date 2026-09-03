@@ -202,12 +202,9 @@
   --sp-6: 32px;
   --sp-7: 48px;   /* the air an empty state or a loading block needs */
 
-  --rail-w: 228px;
-  /* The rail's brand block and the topbar are one horizontal band across the
-     window, and each of them draws the bottom border that ends it. They were
-     sized independently -- 66px against 58px -- so the two rules met at the
-     rail's edge eight pixels apart. One floor, and they cannot drift. */
-  --head-h: 66px;
+  /* the app bar's floor. One band, one number: a view that fills the window
+     measures itself against it instead of guessing how tall the chrome is. */
+  --head-h: 60px;
   --shadow-pop: 0 8px 28px rgba(0, 0, 0, .55);
 
   /* --surface with alpha, for the strips that float ON a canvas and have to
@@ -348,19 +345,25 @@ kbd {
   color: var(--ink);
 }
 
-/* ── layout ──────────────────────────────────────────────────────────── */
+/* ── layout ───────────────────────────────────────────────────────────────────── */
 
-.rail {
-  position: fixed; inset: 0 auto 0 0;
-  width: var(--rail-w);
-  display: flex; flex-direction: column;
-  border-right: 1px solid var(--line-soft);
+/* The app bar: identity, the sections, and the controls that belong to the
+   whole app rather than to one view -- across the top, in one band.
+
+   Three of this dashboard's working views are a list beside an inspector,
+   and a fixed column down the left was 228px those two panes never got. */
+.appbar {
+  position: fixed; inset: 0 0 auto 0;
+  min-height: var(--head-h);
+  display: flex; align-items: center; gap: var(--sp-6);
+  padding: 0 var(--sp-6);
+  border-bottom: 1px solid var(--line-soft);
   background: var(--bg);
   z-index: 10;
 }
 
 .frame {
-  position: absolute; inset: 0 0 0 var(--rail-w);
+  position: absolute; inset: var(--head-h) 0 0 0;
   display: flex; flex-direction: column;
   z-index: 1;
 }
@@ -400,6 +403,20 @@ kbd {
   .view.wide .dg-stage { height: auto; min-height: 320px; }
 }
 
+/* A view that fills the window instead of scrolling as a page: a list beside
+   its inspector, the domain columns. They scroll INSIDE their own panes,
+   which is what keeps a toolbar and a footer where the eye left them.
+   Below --fill-floor the panes stop fitting and the view scrolls as a page
+   again -- see the squeeze at the end of this file. */
+@media (min-height: 620px) and (min-width: 1024px) {
+  .view.fill {
+    overflow: hidden;
+    padding-bottom: var(--sp-5);
+    display: flex; flex-direction: column;
+  }
+  .view.fill > * { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+}
+
 .anim > * { animation: rise .32s cubic-bezier(.2, .7, .3, 1) both; }
 .anim > *:nth-child(1) { animation-delay: .02s; }
 .anim > *:nth-child(2) { animation-delay: .05s; }
@@ -427,44 +444,34 @@ kbd {
 }
 @keyframes breathe { 50% { opacity: .25; } }
 
-/* ── brand ───────────────────────────────────────────────────────────── */
+/* ── brand ────────────────────────────────────────────────────────────────── */
 
-.brand {
-  display: flex; align-items: center; gap: var(--sp-3);
-  min-height: var(--head-h);
-  padding: var(--sp-4) var(--sp-4) var(--sp-4);
-  border-bottom: 1px solid var(--line-soft);
-}
-.brand-seal { width: 30px; height: 30px; color: var(--accent); flex: none; }
+.brand { display: flex; align-items: center; gap: var(--sp-2); flex: none; }
+.brand-seal { width: 22px; height: 22px; color: var(--accent); flex: none; }
 /* the wordmark, not the page's loudest heading -- the view title is, and at
    --fs-xl it stays louder than this on purpose */
-.brand-name {
-  font: 500 var(--fs-md)/1.2 var(--font-ui);
-  letter-spacing: .01em;
-  display: block;
-}
-.brand-sub {
-  font: 400 var(--fs-label)/1.5 var(--font-ui);
-  color: var(--ink-3);
-  display: block;
-}
+.brand-name { font: 500 var(--fs-md)/1.2 var(--font-ui); letter-spacing: .01em; }
 
-/* ── nav ─────────────────────────────────────────────────────────────── */
+/* ── nav ──────────────────────────────────────────────────────────────────── */
 
-.nav { padding: var(--sp-3) var(--sp-3); display: flex; flex-direction: column; gap: var(--sp-0); }
+.nav { display: flex; align-items: center; gap: var(--sp-1); min-width: 0; }
 .nav a {
-  display: flex; align-items: center; gap: var(--sp-3);
+  display: flex; align-items: center; gap: var(--sp-2);
   padding: var(--sp-2) var(--sp-3);
   border-radius: var(--r-md);
   color: var(--ink-2);
-  font-size: var(--fs-body);
+  font-size: var(--fs-sm);
   font-weight: 500;
   letter-spacing: .01em;
-  position: relative;
+  white-space: nowrap;
   transition: background .15s, color .15s;
 }
 .nav a svg {
-  width: 16px; height: 16px; flex: none;
+  /* The icon is the label's understudy, not its companion: seven glyphs
+     beside seven words in one row is twice the ink for one meaning. It comes
+     back at the width where the words go. */
+  display: none;
+  width: 17px; height: 17px; flex: none;
   fill: none; stroke: currentColor;
   stroke-width: 1.4; stroke-linecap: round; stroke-linejoin: round;
   opacity: .85;
@@ -475,37 +482,24 @@ kbd {
    one attribute for the router to set */
 .nav a[aria-current="page"] { background: var(--accent-dim); color: var(--accent); }
 
-/* ── rail foot / health capsule ──────────────────────────────────────── */
+/* ── the bar's right-hand end ──────────────────────────────────────────────── */
 
-.rail-foot { margin-top: auto; padding: var(--sp-4) var(--sp-4) var(--sp-4); border-top: 1px solid var(--line-soft); }
-.rail-health { display: flex; flex-direction: column; gap: var(--sp-2); font-size: var(--fs-label); color: var(--ink-3); }
-.rh-row { display: flex; justify-content: space-between; align-items: baseline; gap: var(--sp-2); }
-.rh-row b { color: var(--ink-2); font-weight: 500; font-family: var(--font-m); }
-/* ── topbar ──────────────────────────────────────────────────────────── */
-
-.topbar {
-  /* It still wraps, but it no longer has to: the ~430px search field that
-     made this row unshrinkable is gone (it only forwarded to the Memories
-     tab), so what is left -- the count, the language picker and the
-     new-memory button -- fits a 375px window without collapsing to
-     min-content. The wrap stays as the floor for a longer localized label. */
-  display: flex; align-items: center; justify-content: flex-end;
-  flex-wrap: wrap; gap: var(--sp-2) var(--sp-4);
-  min-height: var(--head-h);
-  padding: var(--sp-3) var(--sp-6);
-  border-bottom: 1px solid var(--line-soft);
-  background: var(--bg);
-  z-index: 5;
+.appbar-right {
+  margin-left: auto;
+  display: flex; align-items: center; gap: var(--sp-3);
+  flex: none;
 }
-.topbar-right { display: flex; align-items: center; gap: var(--sp-4); }
-.db-badge { font-size: var(--fs-sm); color: var(--ink-3); }
+/* what the rail's foot used to say, in one line: how much of the store is
+   live, and how much disk it costs. The path is the title. */
+.db-badge {
+  font: 500 var(--fs-label) var(--font-m);
+  color: var(--ink-2);
+  white-space: nowrap;
+}
 .lang-sel { font-size: var(--fs-sm); padding-left: var(--sp-2); padding-right: var(--sp-5); }
 
-/* The project switch is a rail row like the two under it: the label on the
-   left and the value on the right, in the data font -- except that here the
-   value is the control. So the box, the fill and the border of a .pick go,
-   and the caret stays as the one hint that this row opens. */
-.rh-project { align-items: center; }
+/* The project switch wears no box: the name in the data font and a caret, so
+   the bar reads as a statement of where you are rather than as a form. */
 /* two classes, so this outranks the .pick rules that come later in the file */
 .pick.project-sel {
   font: 500 var(--fs-label)/1.4 var(--font-m);
@@ -1212,13 +1206,10 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
 .bulkbar {
   /* a floating strip, dense like the other two */
   --ctl-h: var(--ctl-h-sm);
-  /* Centred on the CONTENT, which is half a rail to the right of the middle
-     of the window -- not a whole one. `--rail-w + 50%` put the bar 114px
-     right of where it belonged at every window size, and the narrow
-     breakpoint then corrected it to a plain 50%, which was 31px off the
-     other way. One formula, and it follows --rail-w through the breakpoint. */
+  /* Centred on the window, which is where the content is centred too: the
+     bar runs the full width and nothing holds the left edge any more. */
   position: fixed; bottom: 22px;
-  left: calc(50% + var(--rail-w) / 2); transform: translateX(-50%);
+  left: 50%; transform: translateX(-50%);
   display: flex; align-items: center; gap: var(--sp-3);
   background: var(--overlay);
   border: 1px solid var(--line);
@@ -3052,24 +3043,24 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
 
 /* ── responsive squeeze ──────────────────────────────────────────────── */
 
+/* Seven labels, a wordmark, a project and two controls stop fitting one row
+   before the window is narrow: the labels go first and the icons that were
+   waiting behind them take over. font-size: 0 on the link, because a nav
+   label is a bare text node -- and the wordmark is NOT, so it is hidden by
+   display instead (its own --fs-md overrode the 0 it was meant to inherit,
+   and 72px of wrapped text broke the band open). */
+@media (max-width: 1180px) {
+  .appbar { gap: var(--sp-5); padding: 0 var(--sp-4); }
+  .brand-name { display: none; }
+  .nav a { font-size: 0; gap: 0; padding: var(--sp-2); }
+  .nav a svg { display: block; }
+}
+
 @media (max-width: 940px) {
-  :root { --rail-w: 62px; }
-  /* display, not font-size: 0. The wordmark's two lines set their own sizes
-     (--fs-md and --fs-label), so they overrode the 0 they were supposed to
-     inherit and went on rendering -- 72px of text inside a 62px rail, wrapped,
-     which pushed the brand block to 83px and broke it out of the header band.
-     A nav label IS a bare text node, so there the 0 does work. */
-  .brand-text { display: none; }
-  .nav a { font-size: 0; }
-  .nav a { justify-content: center; padding: var(--sp-3); gap: 0; }
-  .nav a svg { width: 17px; height: 17px; }
-  .rail-foot { display: none; }
-  .brand { justify-content: center; padding: var(--sp-4) var(--sp-2); }
   .view {
     padding: var(--sp-4) var(--sp-4)
              calc(var(--sp-4) + var(--bulk-h, 0px) + var(--toast-h, 0px));
   }
-  .topbar { padding: var(--sp-3) var(--sp-4); }
 }
 
 /* One window narrow enough that the header cannot hold a row: the search
@@ -3078,11 +3069,11 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
    first tile on Overview, and the shortcut hint is for a keyboard this
    window probably does not have. */
 @media (max-width: 640px) {
-  .topbar { padding: var(--sp-2) var(--sp-3); }
+  .appbar { padding: 0 var(--sp-3); gap: var(--sp-3); }
   /* a keyboard hint is for a window that probably has one */
   .toolbar-kbd { display: none; }
   .db-badge { display: none; }
-  .topbar-right { flex: 1; justify-content: flex-end; gap: var(--sp-3); }
+  .appbar-right { gap: var(--sp-2); }
   .view {
     padding: var(--sp-4) var(--sp-3)
              calc(var(--sp-4) + var(--bulk-h, 0px) + var(--toast-h, 0px));

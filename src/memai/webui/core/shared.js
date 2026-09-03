@@ -301,17 +301,22 @@ export const invalidateDomains = () => { cache = null; };
    a convenience -- an empty one is not worth blocking a modal on. */
 export const cachedDomains = () => cache || [];
 
-/* ─── rail ───────────────────────────────────────────────────────────── */
+/* ─── the app bar's own badge ─────────────────────────────────────────── */
 
-export function updateRail(o) {
-  $('#railHealth').innerHTML = `
-    <div class="rh-row"><span>${t('rail.db')}</span><b>${fmtBytes(o.db.size)}</b></div>
-    <div class="rh-row"><span>${t('rail.active')}</span><b>${fmtInt(o.totals.active)}</b></div>`;
-  $('#dbBadge').textContent = t('badge.active', { n: fmtInt(o.totals.active) });
-  $('#dbBadge').title = o.db.path;
+/* What the rail's foot used to hold, in the one line the bar has room for:
+   how much of the store is live, and what it costs on disk. The path is the
+   title, because it is the answer to "which file am I looking at" and not
+   something anybody reads at a glance. */
+export function updateShellStats(o) {
+  const badge = $('#dbBadge');
+  badge.textContent = t('badge.store', {
+    n: fmtInt(o.totals.active), size: fmtBytes(o.db.size),
+  });
+  badge.title = o.db.path;
 }
 
-/* The rail from /api/overview, for the moments no view is about to hand the
-   payload over itself: the first paint off Overview, a project switch, a
-   move to another project. */
-export const refreshRail = () => api('/api/overview').then(updateRail).catch(() => {});
+/* The badge from /api/overview, for the moments no view is about to hand the
+   payload over itself: the first paint off Health, a project switch, a move
+   to another project. */
+export const refreshShellStats = () =>
+  api('/api/overview').then(updateShellStats).catch(() => {});
