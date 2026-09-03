@@ -974,10 +974,10 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
 .hx-right { display: grid; gap: var(--sp-4); min-width: 0; }
 
 /* ── the rings ──
-   Two, and the bigger one is the index: it is the figure the view exists to
-   state, and the confidence split is one of the four things that go into
-   it. They were the other way round because the mock was drawn before the
-   index existed. */
+   Two of them, and SIZE goes to the one with something to show at size.
+   The index is a single arc in a single colour -- it reads the same at
+   104px as at 228 -- while confidence is three segments whose proportions
+   are the whole point of drawing it as a ring at all. */
 
 .hx-ring-panel { display: flex; flex-direction: column; }
 .hx-ring {
@@ -995,11 +995,13 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
 /* white, not accent: it is a reading, and the arc around it is already
    carrying the colour that says how the reading went */
 .hx-ring-pct { font: 500 var(--fs-hero)/1 var(--font-ui); color: var(--ink); }
+/* what the percentage in the middle IS a percentage of */
+.hx-ring-cap { font-size: var(--fs-sm); color: var(--ink-2); margin-top: var(--sp-0); }
 .hx-ring-of { font: 400 var(--fs-read) var(--font-ui); color: var(--ink-3); }
 
-/* the secondary ring: the same drawing at half the size, laid beside its
-   own legend instead of above it. `margin-top: auto` puts it at the foot of
-   the card whatever the axes above it come out to. */
+/* the secondary ring: the same drawing at half the size, laid beside the
+   four readings it is the mean of. `margin-top: auto` puts it at the foot
+   of the card whatever the legend above it comes out to. */
 .hx-second {
   margin-top: auto; padding-top: var(--sp-4);
   border-top: 1px solid var(--line-soft);
@@ -1011,7 +1013,7 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
 .hx-second-body { display: flex; align-items: center; gap: var(--sp-4); }
 .hx-second .hx-ring { --ring: 104px; flex: none; margin: 0; }
 .hx-second .hx-ring-pct { font-size: var(--fs-lg); }
-.hx-second .hx-legend { flex: 1; min-width: 0; margin-top: 0; }
+.hx-second .hx-ring-of { font-size: var(--fs-sm); }
 
 .hx-legend { display: flex; flex-direction: column; gap: var(--sp-2); margin-top: var(--sp-2); }
 /* a real button: each row lists the memories in that state, which is a
@@ -1036,14 +1038,16 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
 /* --raised: this card wants a decision. It is the one number the view
    exists to state, and the ladder is what says so -- see the note on the
    tokens. */
-.hx-index { background: var(--raised); display: flex; flex-direction: column; }
+.hx-ring-panel { background: var(--raised); }
 .hx-delta {
   font: 500 var(--fs-sm) var(--font-m); color: var(--ok);
 }
 .hx-delta.down { color: var(--bad-ink); }
 
-.hx-axes { display: flex; flex-direction: column; gap: var(--sp-2); margin-bottom: var(--sp-4); }
-.hx-axis { display: grid; grid-template-columns: 112px 1fr 28px; align-items: center; gap: var(--sp-3); }
+/* Beside a 104px ring rather than across the card, so the label column and
+   the gaps come in to leave the bar something to be. */
+.hx-axes { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: var(--sp-1); }
+.hx-axis { display: grid; grid-template-columns: 88px minmax(0, 1fr) 24px; align-items: center; gap: var(--sp-2); }
 .hx-axis-name { font-size: var(--fs-sm); color: var(--ink-2); }
 /* an axis bar is thinner than a chart bar: it is a reading, not the subject */
 .hx-axis .bar-track { height: 6px; border-radius: var(--r-pill); }

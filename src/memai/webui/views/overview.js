@@ -66,7 +66,7 @@ export async function renderOverview(view, params, ctx) {
       edits: fmtInt(tot.edits), sessions: fmtInt(tot.sessions) })}</div>
 
     <div class="hx-top">
-      ${indexPanel(h, o)}
+      ${ringsPanel(h, o)}
       <div class="hx-right">
         ${symptomsPanel(o.symptoms, h.active)}
       </div>
@@ -133,9 +133,44 @@ function ringHTML(parts, total, midHTML, { label = '' } = {}) {
   </div>`;
 }
 
-/* ─── the index, and everything under it ──────────────────────────────── */
+/* ─── the card the two rings share ────────────────────────────────────────
+   Confidence takes the big ring and the index takes the small one, and it
+   is the DRAWING that decides which: the index is one arc in one colour,
+   which says everything it has to say at any size, while confidence is
+   three segments whose proportions are the point. Size goes to the figure
+   that has something to show at size. */
 
-function indexPanel(h, o) {
+function ringsPanel(h, o) {
+  const total = CONF_ORDER.reduce((a, c) => a + (o.by_confidence[c] || 0), 0);
+  const pct = total ? Math.round((o.by_confidence.confirmed || 0) * 100 / total) : 0;
+
+  const ring = ringHTML(
+    CONF_ORDER.map(c => ({ value: o.by_confidence[c] || 0, color: confColor(c) })),
+    total,
+    `<div class="hx-ring-pct">${pct}%</div>
+     <div class="hx-ring-cap">${esc(CONF.confirmed.label)}</div>`,
+    { label: t('ov.conf.ringLabel', { pct, label: CONF.confirmed.label }) });
+
+  const legend = CONF_ORDER.map(c => `
+    <button type="button" class="hx-legend-row" data-conf="${c}"
+            title="${esc(t('ov.conf.open', { label: CONF[c].label }))}">
+      <span class="hx-swatch" style="background:${confColor(c)}"></span>
+      <span>${esc(CONF[c].label)}</span>
+      <b class="${c === 'contradicted' ? 'hx-bad' : ''}">${fmtInt(o.by_confidence[c] || 0)}</b>
+    </button>`).join('');
+
+  return `<div class="panel hx-ring-panel">
+    <h3 class="panel-title">${t('ov.conf.title')}
+      <span class="panel-aside">${t('ov.aside.activeN', { n: fmtInt(total) })}</span></h3>
+    ${ring}
+    <div class="hx-legend">${legend}</div>
+    ${indexHTML(h)}
+  </div>`;
+}
+
+/* ─── the index, at the foot of the same card ─────────────────────────── */
+
+function indexHTML(h) {
   /* The delta is shown only once a snapshot that old exists
      (db.health_since). A store the dashboard has not been opened on for a
      month has no earlier reading to compare against, and a delta against a
@@ -145,8 +180,11 @@ function indexPanel(h, o) {
 
   const ring = ringHTML(
     [{ value: h.score, color: band(h.score) }], 100,
-    `<div class="hx-ring-pct">${h.score}<span class="hx-ring-of">/100</span></div>`);
+    `<div class="hx-ring-pct">${h.score}<span class="hx-ring-of">/100</span></div>`,
+    { label: t('ov.hx.ringLabel', { n: h.score }) });
 
+  /* The axes are to the index what the legend is to the ring above: the
+     four readings the one figure is the mean of. */
   const axes = AXES.map(a => `
     <div class="hx-axis">
       <span class="hx-axis-name" title="${esc(t(`ov.axis.${a}.why`))}">${t(`ov.axis.${a}`)}</span>
@@ -155,39 +193,14 @@ function indexPanel(h, o) {
       <span class="hx-axis-val">${h.axes[a]}</span>
     </div>`).join('');
 
-  return `<div class="panel hx-index hx-ring-panel">
-    <h3 class="panel-title">${t('ov.hx.title')}${delta}</h3>
-    ${ring}
-    <div class="hx-axes">${axes}</div>
-    ${confidenceHTML(o)}
-  </div>`;
-}
-
-/* ─── the confidence split, as the second ring ────────────────────────── */
-
-function confidenceHTML(o) {
-  const total = CONF_ORDER.reduce((a, c) => a + (o.by_confidence[c] || 0), 0);
-  const pct = total ? Math.round((o.by_confidence.confirmed || 0) * 100 / total) : 0;
-  const ring = ringHTML(
-    CONF_ORDER.map(c => ({ value: o.by_confidence[c] || 0, color: confColor(c) })),
-    total,
-    `<div class="hx-ring-pct">${pct}%</div>`,
-    { label: t('ov.conf.ringLabel', { pct, label: CONF.confirmed.label }) });
-
   return `<div class="hx-second">
     <div class="hx-second-head">
-      <span class="mg-label">${t('ov.conf.title')}</span>
-      <span class="hint-sm">${t('ov.aside.activeN', { n: fmtInt(total) })}</span>
+      <span class="mg-label">${t('ov.hx.title')}</span>
+      ${delta}
     </div>
     <div class="hx-second-body">
       ${ring}
-      <div class="hx-legend">${CONF_ORDER.map(c => `
-        <button type="button" class="hx-legend-row" data-conf="${c}"
-                title="${esc(t('ov.conf.open', { label: CONF[c].label }))}">
-          <span class="hx-swatch" style="background:${confColor(c)}"></span>
-          <span>${esc(CONF[c].label)}</span>
-          <b class="${c === 'contradicted' ? 'hx-bad' : ''}">${fmtInt(o.by_confidence[c] || 0)}</b>
-        </button>`).join('')}</div>
+      <div class="hx-axes">${axes}</div>
     </div>
   </div>`;
 }

@@ -813,6 +813,7 @@
     "mem.noTags": "No tags",
     "do.find": "Go to a path…",
     "ov.conf.ringLabel": "{pct}% {label}",
-    "do.det.archived": "archived"
+    "do.det.archived": "archived",
+    "ov.hx.ringLabel": "{n} out of 100"
   }
 }
