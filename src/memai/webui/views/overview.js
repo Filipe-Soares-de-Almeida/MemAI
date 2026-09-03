@@ -145,8 +145,7 @@ function indexPanel(h, o) {
 
   const ring = ringHTML(
     [{ value: h.score, color: band(h.score) }], 100,
-    `<div class="hx-ring-pct">${h.score}<span class="hx-ring-of">/100</span></div>
-     <div class="hx-ring-cap">${t('ov.hx.title').toLowerCase()}</div>`);
+    `<div class="hx-ring-pct">${h.score}<span class="hx-ring-of">/100</span></div>`);
 
   const axes = AXES.map(a => `
     <div class="hx-axis">

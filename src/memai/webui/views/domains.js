@@ -249,7 +249,7 @@ function detailHTML(d, data) {
     <div class="dom-detail-facts">
       <span><b>${fmtInt(d.active)}</b> ${t('do.det.here')}</span>
       <span><b>${fmtInt(d.subtree_active - d.active)}</b> ${t('do.det.below')}</span>
-      <span><b>${fmtInt(d.archived)}</b> ${t('common.archived').toLowerCase()}</span>
+      <span><b>${fmtInt(d.archived)}</b> ${t('do.det.archived')}</span>
       <span class="crossing"><b>${fmtInt(d.also)}</b> ${t('do.det.alsoHere')}</span>
       <span>${t('do.det.last', { when: fmtAgo(d.latest_at || d.subtree_latest_at) })}</span>
     </div>

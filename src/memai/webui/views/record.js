@@ -324,7 +324,7 @@ function sideHTML(m, uid) {
       <div class="rs-head-row">
         ${typeTag(m.type)}${uidChip(m.uid)}
         <span class="rs-status">${m.status === 'archived'
-          ? statusTag('archived') : t('common.active').toLowerCase()}</span>
+          ? statusTag('archived') : t('common.active')}</span>
       </div>
       <div class="seg rs-conf" id="dConf" role="group" aria-label="${t('dr.curation')}">
         ${Object.keys(CONF).map(c => `<button type="button" data-c="${c}"

@@ -986,7 +986,6 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
 /* white, not accent: it is a reading, and the arc around it is already
    carrying the colour that says how the reading went */
 .hx-ring-pct { font: 500 var(--fs-hero)/1 var(--font-ui); color: var(--ink); }
-.hx-ring-cap { font-size: var(--fs-sm); color: var(--ink-2); margin-top: var(--sp-0); }
 .hx-ring-of { font: 400 var(--fs-read) var(--font-ui); color: var(--ink-3); }
 
 /* the secondary ring: the same drawing at half the size, laid beside its
@@ -1003,7 +1002,6 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
 .hx-second-body { display: flex; align-items: center; gap: var(--sp-4); }
 .hx-second .hx-ring { --ring: 104px; flex: none; margin: 0; }
 .hx-second .hx-ring-pct { font-size: var(--fs-lg); }
-.hx-second .hx-ring-cap { display: none; }
 .hx-second .hx-legend { flex: 1; min-width: 0; margin-top: 0; }
 
 .hx-legend { display: flex; flex-direction: column; gap: var(--sp-2); margin-top: var(--sp-2); }
@@ -1134,7 +1132,7 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
   text-align: left; cursor: pointer;
 }
 .hx-type:hover { background: var(--hover-1); }
-.hx-type .type-tag { justify-self: start; }
+.hx-type .type-tag { justify-self: end; }
 .hx-type-n {
   font: 500 var(--fs-sm) var(--font-m); color: var(--ink-2);
   text-align: right; font-variant-numeric: tabular-nums;
@@ -1366,6 +1364,7 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
   text-align: left; cursor: pointer;
 }
 .dom-mem:hover, .dom-cross:hover { background: var(--hover-1); }
+.dom-mem .type-tag { justify-self: end; }
 .dom-mem-title {
   font-size: var(--fs-sm); color: var(--ink);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
@@ -1640,12 +1639,18 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
 .mem-row.selected { background: var(--accent-dim); }
 .mem-check { display: flex; justify-content: center; }
 .mem-check input { cursor: pointer; }
-/* fixed width and clipped rather than wrapping: a row that grows because its
-   type has a longer name is a row that broke the column */
+/* Fixed width and clipped rather than wrapping: a row that grows because
+   its type has a longer name is a row that broke the column.
+
+   The chip is pushed to the RIGHT of that slot, so it ends where the title
+   begins instead of leaving a gap that is as wide as the difference between
+   `note` and `anti_pattern`. The confidence mark stays at the left edge,
+   which is what keeps it a column of its own. */
 .mem-col-type {
   display: flex; align-items: center; gap: var(--sp-2);
   min-width: 0; overflow: hidden;
 }
+.mem-col-type .type-tag { margin-left: auto; }
 .mem-main { min-width: 0; }
 /* also a .row-open button -- the clamp works the same on one */
 /* --ink, not --ink-2: this is the memory, and it was two tiers quieter than the
