@@ -151,7 +151,8 @@ export async function renderRecord(view, params, ctx) {
           ? `<div class="sec-problem">${t('dr.sections.problem',
                { detail: esc(m.section_problem) })}</div>` : ''}
         ${isDiagram ? diagramHTML(m, uid) : `
-        <div class="rec-fields">${fields.map(f => fieldHTML(f, m)).join('')}</div>
+        <div class="rec-fields${editing.key !== null || editing.all ? ' is-editing' : ''}"
+             >${fields.map(f => fieldHTML(f, m)).join('')}</div>
         ${editing.all ? saveBarHTML(t('dr.saveAll'), 'dSaveAll') : ''}`}
         ${refsHTML(m)}
       </div>

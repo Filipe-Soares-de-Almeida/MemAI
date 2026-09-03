@@ -698,7 +698,6 @@
     "project.created": "Projeto {name} criado e ativo",
     "err.project": "A operação no projeto não foi concluída.",
     "do.act.toProject": "Enviar para projeto…",
-    "badge.store": "{n} ativas · {size}",
     "ov.sub.store": "{domains} domínios · {relations} relações · {edits} edições · {sessions} sessões",
     "ov.aside.activeN": "{n} ativas",
     "ov.hx.title": "Índice de saúde",
@@ -813,6 +812,8 @@
     "dr.meta.dropTag": "Remover esta tag",
     "dr.meta.noAlso": "Arquivada em um lugar só.",
     "common.add": "Acrescentar",
-    "mem.noTags": "Sem tags"
+    "mem.noTags": "Sem tags",
+    "do.find": "Ir para um caminho…",
+    "ov.conf.ringLabel": "{pct}% {label}"
   }
 }

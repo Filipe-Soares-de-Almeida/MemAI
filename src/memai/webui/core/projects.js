@@ -15,8 +15,7 @@ import { $, esc, fmtInt, debounce } from './dom.js';
 import { api } from './api.js';
 import { toast, failed, modalOpen, openModal, closeModal, promptModal } from './ui.js';
 import { pickerFor, pickerValue, setPickerValue, wirePicker, fixedItems } from './pick.js';
-import { route, parseHash } from './router.js';
-import { refreshShellStats } from './shared.js';
+import { route } from './router.js';
 import { t } from '../i18n.js';
 
 /* The row that is an action rather than a project. A project name is a file
@@ -86,11 +85,11 @@ async function create() {
   } catch (err) { failed('err.project', err); }
 }
 
-/* The view repaints against the project that is active now. Health hands its
-   own payload to the badge; every other view needs it fetched apart. */
+/* The view repaints against the project that is active now, and every view
+   fetches what it shows -- so re-rendering it IS reading the other
+   project. */
 function reread() {
   route();
-  if (parseHash().name !== 'overview') refreshShellStats();
 }
 
 /* ─── sending memories to another project ────────────────────────────────
@@ -163,9 +162,6 @@ export async function moveToProjectModal({ uids = [], domain = '' }) {
         const r = await api('/api/projects/move', { body: body(false) });
         toast(t('mv.done', { n: fmtInt(r.moved), target: esc(r.target) }), 'ok',
               r.backup ? { detail: t('mv.backup', { name: r.backup.split(/[\\/]/).pop() }) } : {});
-        /* the caller repaints its view; the badge's counts are this
-           project's and just changed too */
-        if (r.moved > 0) refreshShellStats();
         done(r.moved > 0);
       } catch (err) { okBtn.disabled = false; failed('err.move', err); }
     };

@@ -6,7 +6,7 @@
    Display labels bake once per page load -- t() is resolved at import
    time, which is safe because a language switch reloads the page. */
 
-import { $, esc, cssVar, fmtBytes, fmtInt } from './dom.js';
+import { $, esc, cssVar } from './dom.js';
 import { api } from './api.js';
 import { icon } from './icons.js';
 import { fixedItems, pickerFor, wirePicker } from './pick.js';
@@ -301,22 +301,7 @@ export const invalidateDomains = () => { cache = null; };
    a convenience -- an empty one is not worth blocking a modal on. */
 export const cachedDomains = () => cache || [];
 
-/* ─── the app bar's own badge ─────────────────────────────────────────── */
-
-/* What the rail's foot used to hold, in the one line the bar has room for:
-   how much of the store is live, and what it costs on disk. The path is the
-   title, because it is the answer to "which file am I looking at" and not
-   something anybody reads at a glance. */
-export function updateShellStats(o) {
-  const badge = $('#dbBadge');
-  badge.textContent = t('badge.store', {
-    n: fmtInt(o.totals.active), size: fmtBytes(o.db.size),
-  });
-  badge.title = o.db.path;
-}
-
-/* The badge from /api/overview, for the moments no view is about to hand the
-   payload over itself: the first paint off Health, a project switch, a move
-   to another project. */
-export const refreshShellStats = () =>
-  api('/api/overview').then(updateShellStats).catch(() => {});
+/* The app bar carries the active project and nothing else about the store.
+   The rail's foot used to hold the active count and the file size, and both
+   said again what Health says in the view whose job is saying it -- so
+   every navigation was paying for an /api/overview nobody read. */

@@ -698,7 +698,6 @@
     "project.created": "Project {name} created and active",
     "err.project": "The project operation did not go through.",
     "do.act.toProject": "Send to project…",
-    "badge.store": "{n} active · {size}",
     "ov.sub.store": "{domains} domains · {relations} relations · {edits} edits · {sessions} sessions",
     "ov.aside.activeN": "{n} active",
     "ov.hx.title": "Health index",
@@ -813,6 +812,8 @@
     "dr.meta.dropTag": "Remove this tag",
     "dr.meta.noAlso": "Filed in one place only.",
     "common.add": "Add",
-    "mem.noTags": "No tags"
+    "mem.noTags": "No tags",
+    "do.find": "Go to a path…",
+    "ov.conf.ringLabel": "{pct}% {label}"
   }
 }

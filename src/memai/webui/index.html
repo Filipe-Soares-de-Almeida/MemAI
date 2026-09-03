@@ -69,9 +69,10 @@
        keeps what you typed. `/` still reaches the search -- it focuses the
        real field now (see app.js). -->
   <div class="appbar-right">
-    <span id="dbBadge" class="db-badge" title=""></span>
     <!-- which project the dashboard, and every MCP server on this machine,
-         reads and writes right now; built and wired in core/projects.js -->
+         reads and writes right now; built and wired in core/projects.js.
+         The active count and the file size were here too and are not any
+         more: both are on Health, in the view whose job is saying them. -->
     <span id="projectHost"></span>
     <span id="langHost"></span>
     <button id="btnNew" class="btn btn-solid" data-i18n="topbar.newMemory">+ New memory</button>

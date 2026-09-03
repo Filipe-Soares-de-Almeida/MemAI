@@ -15,7 +15,7 @@
 import { esc, fmtInt, fmtBytes, fmtDay } from '../core/dom.js';
 import { api } from '../core/api.js';
 import { tipShow, tipHide } from '../core/ui.js';
-import { typeClass, CONF, TYPE_ORDER, updateShellStats } from '../core/shared.js';
+import { typeClass, CONF, TYPE_ORDER } from '../core/shared.js';
 import { go } from '../core/router.js';
 import { I18N, t } from '../i18n.js';
 
@@ -29,11 +29,12 @@ const confColor = c =>
    catalog's, so it says the same thing in both languages. */
 const AXES = ['curation', 'connectivity', 'freshness', 'organization'];
 
-/* Under this an axis is failing rather than lagging. Two steps, because a
-   third would be a colour nobody could name: green is fine, amber wants
-   work, and there is no red on an axis -- a red axis is a symptom, and the
-   symptoms have their own list. */
-const axisColor = v => (v >= 75 ? 'var(--ok)' : 'var(--warn)');
+/* How a reading out of 100 is coloured, and the same three steps for the
+   index and for each of its axes -- the index IS their mean, so a scale
+   that changed between them would make the ring disagree with the bars
+   under it. Green is fine, amber wants work, red is the thing to go and
+   fix. */
+const band = v => (v >= 75 ? 'var(--ok)' : v >= 50 ? 'var(--warn)' : 'var(--bad)');
 
 /* Where a symptom's button goes. Everything that names a set of memories
    hands its own filter over, so the list that opens is the set that was
@@ -46,7 +47,6 @@ const SYMPTOM_ROUTE = {
 export async function renderOverview(view, params, ctx) {
   const o = await api('/api/overview');
   if (ctx.stale()) return;
-  updateShellStats(o);
 
   const tot = o.totals;
   const h = o.health;
@@ -68,9 +68,8 @@ export async function renderOverview(view, params, ctx) {
     </div>
 
     <div class="hx-top">
-      ${donutPanel(o)}
+      ${indexPanel(h, o)}
       <div class="hx-right">
-        ${indexPanel(h)}
         ${symptomsPanel(o.symptoms, h.active)}
       </div>
     </div>
@@ -100,77 +99,99 @@ export async function renderOverview(view, params, ctx) {
   wire(view, o);
 }
 
-/* ─── the ring ────────────────────────────────────────────────────────────
-   Three arcs of one circle, drawn as dash patterns on the same path so the
-   segments cannot drift apart the way three separate arcs would. The centre
-   carries the one figure the ring exists to state. */
+/* ─── the rings ───────────────────────────────────────────────────────────
+   One drawing, two readings. The big one is the index -- the figure the
+   view exists to state -- and the small one under it is the confidence
+   split, which is one of the four things that go INTO the index. They were
+   the other way round because the mock was drawn before the index existed.
+
+   Segments are dash patterns on ONE circle rather than separate arcs, so
+   they cannot drift apart, and the centre carries the figure in plain
+   white: the arc is already saying how the reading went. */
 
 const R = 90;
 const C = 2 * Math.PI * R;
 
-function donutPanel(o) {
-  const total = CONF_ORDER.reduce((a, c) => a + (o.by_confidence[c] || 0), 0);
+const track = () =>
+  `<circle cx="100" cy="100" r="${R}" fill="none" stroke="var(--inset)" stroke-width="20"></circle>`;
+
+/* `parts` is [{ value, color }] in drawing order, summing to `total`. */
+function ringHTML(parts, total, midHTML, { label = '' } = {}) {
   let at = 0;
-  const arcs = CONF_ORDER.map(c => {
-    const n = o.by_confidence[c] || 0;
-    if (!n) return '';
-    const len = (n / total) * C;
-    const arc = `<circle cx="100" cy="100" r="${R}" fill="none" stroke="${confColor(c)}"
+  const arcs = parts.map(({ value, color }) => {
+    if (!value || !total) return '';
+    const len = (value / total) * C;
+    const arc = `<circle cx="100" cy="100" r="${R}" fill="none" stroke="${color}"
       stroke-width="20" stroke-dasharray="${len.toFixed(1)} ${(C - len).toFixed(1)}"
       stroke-dashoffset="${(-at).toFixed(1)}"></circle>`;
     at += len;
     return arc;
   }).join('');
-  const pct = total ? Math.round((o.by_confidence.confirmed || 0) * 100 / total) : 0;
-
-  return `<div class="panel hx-ring-panel">
-    <h3 class="panel-title">${t('ov.conf.title')}
-      <span class="panel-aside">${t('ov.aside.activeN', { n: fmtInt(total) })}</span></h3>
-    <!-- the ring is one figure drawn three ways; the legend under it is what
-         a screen reader is given, so the graphic itself is decorative -->
-    <div class="hx-ring">
-      <svg viewBox="0 0 200 200" aria-hidden="true">
-        <circle cx="100" cy="100" r="${R}" fill="none" stroke="var(--inset)" stroke-width="20"></circle>
-        ${arcs || `<circle cx="100" cy="100" r="${R}" fill="none" stroke="var(--inset)" stroke-width="20"></circle>`}
-      </svg>
-      <div class="hx-ring-mid">
-        <div class="hx-ring-pct">${pct}%</div>
-        <div class="hx-ring-cap">${esc(CONF.confirmed.label.toLowerCase())}</div>
-      </div>
-    </div>
-    <div class="hx-legend">${CONF_ORDER.map(c => `
-      <button type="button" class="hx-legend-row" data-conf="${c}"
-              title="${esc(t('ov.conf.open', { label: CONF[c].label }))}">
-        <span class="hx-swatch" style="background:${confColor(c)}"></span>
-        <span>${esc(CONF[c].label)}</span>
-        <b class="${c === 'contradicted' ? 'hx-bad' : ''}">${fmtInt(o.by_confidence[c] || 0)}</b>
-      </button>`).join('')}</div>
+  /* the graphic is decorative: what a screen reader gets is the figure in
+     the middle and the legend beside it, both of them real text */
+  return `<div class="hx-ring"${label ? ` title="${esc(label)}"` : ''}>
+    <svg viewBox="0 0 200 200" aria-hidden="true">${track()}${arcs}</svg>
+    <div class="hx-ring-mid">${midHTML}</div>
   </div>`;
 }
 
-/* ─── the index ───────────────────────────────────────────────────────── */
+/* ─── the index, and everything under it ──────────────────────────────── */
 
-function indexPanel(h) {
-  /* Shown only once a snapshot that old exists (db.health_since). A store
-     the dashboard has not been opened on for a month has no earlier reading
-     to compare against, and a delta against a younger one would misdate the
-     window it claims to cover. */
+function indexPanel(h, o) {
+  /* The delta is shown only once a snapshot that old exists
+     (db.health_since). A store the dashboard has not been opened on for a
+     month has no earlier reading to compare against, and a delta against a
+     younger one would misdate the window it claims to cover. */
   const delta = h.delta == null ? '' : `<span class="hx-delta ${h.delta < 0 ? 'down' : ''}">${
     h.delta > 0 ? '+' : ''}${h.delta} ${t('ov.hx.inDays', { n: h.delta_days })}</span>`;
-  return `<div class="panel raised hx-index">
-    <div class="hx-index-num">
-      <div class="mg-label">${t('ov.hx.title')}</div>
-      <div class="hx-score-row">
-        <span class="hx-score">${h.score}</span><span class="hx-of">/100</span>${delta}
-      </div>
+
+  const ring = ringHTML(
+    [{ value: h.score, color: band(h.score) }], 100,
+    `<div class="hx-ring-pct">${h.score}<span class="hx-ring-of">/100</span></div>
+     <div class="hx-ring-cap">${t('ov.hx.title').toLowerCase()}</div>`);
+
+  const axes = AXES.map(a => `
+    <div class="hx-axis">
+      <span class="hx-axis-name" title="${esc(t(`ov.axis.${a}.why`))}">${t(`ov.axis.${a}`)}</span>
+      <div class="bar-track"><div class="bar-fill"
+           style="--v:${(h.axes[a] / 100).toFixed(4)};background:${band(h.axes[a])}"></div></div>
+      <span class="hx-axis-val">${h.axes[a]}</span>
+    </div>`).join('');
+
+  return `<div class="panel hx-index hx-ring-panel">
+    <h3 class="panel-title">${t('ov.hx.title')}${delta}</h3>
+    ${ring}
+    <div class="hx-axes">${axes}</div>
+    ${confidenceHTML(o)}
+  </div>`;
+}
+
+/* ─── the confidence split, as the second ring ────────────────────────── */
+
+function confidenceHTML(o) {
+  const total = CONF_ORDER.reduce((a, c) => a + (o.by_confidence[c] || 0), 0);
+  const pct = total ? Math.round((o.by_confidence.confirmed || 0) * 100 / total) : 0;
+  const ring = ringHTML(
+    CONF_ORDER.map(c => ({ value: o.by_confidence[c] || 0, color: confColor(c) })),
+    total,
+    `<div class="hx-ring-pct">${pct}%</div>`,
+    { label: t('ov.conf.ringLabel', { pct, label: CONF.confirmed.label }) });
+
+  return `<div class="hx-second">
+    <div class="hx-second-head">
+      <span class="mg-label">${t('ov.conf.title')}</span>
+      <span class="hint-sm">${t('ov.aside.activeN', { n: fmtInt(total) })}</span>
     </div>
-    <div class="hx-axes">${AXES.map(a => `
-      <div class="hx-axis">
-        <span class="hx-axis-name" title="${esc(t(`ov.axis.${a}.why`))}">${t(`ov.axis.${a}`)}</span>
-        <div class="bar-track"><div class="bar-fill"
-             style="--v:${(h.axes[a] / 100).toFixed(4)};background:${axisColor(h.axes[a])}"></div></div>
-        <span class="hx-axis-val">${h.axes[a]}</span>
-      </div>`).join('')}</div>
+    <div class="hx-second-body">
+      ${ring}
+      <div class="hx-legend">${CONF_ORDER.map(c => `
+        <button type="button" class="hx-legend-row" data-conf="${c}"
+                title="${esc(t('ov.conf.open', { label: CONF[c].label }))}">
+          <span class="hx-swatch" style="background:${confColor(c)}"></span>
+          <span>${esc(CONF[c].label)}</span>
+          <b class="${c === 'contradicted' ? 'hx-bad' : ''}">${fmtInt(o.by_confidence[c] || 0)}</b>
+        </button>`).join('')}</div>
+    </div>
   </div>`;
 }
 

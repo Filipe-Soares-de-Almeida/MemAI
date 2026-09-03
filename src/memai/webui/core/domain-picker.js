@@ -26,11 +26,12 @@ export { closePicker as closeDomainPicker };
 /* `anyLabel` is what the empty value says. It is "All domains" for a filter
    and something else wherever '' does not mean "no filter" -- the bulk
    re-home field, where it means "leave each memory where it is". */
-export const domainPickerHTML = ({ id, value = '', ariaLabel, anyLabel = '' }) => {
+export const domainPickerHTML = ({ id, value = '', ariaLabel, anyLabel = '', cls = '' }) => {
   const none = anyLabel || t('common.allDomains');
   return pickerHTML({
     id,
     value,
+    cls,
     label: value || none,
     ariaLabel: ariaLabel || none,
     title: value || none,

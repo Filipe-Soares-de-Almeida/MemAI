@@ -25,6 +25,7 @@ import { toast, failed, openModal, closeModal, confirmModal, promptModal,
 import { typeTag, getDomains, invalidateDomains, byDomainPath, domainLeaf,
          domainDatalist, domainSegments, inDomainPath, DOMAIN_SEP } from '../core/shared.js';
 import { pickerFor, pickerValue, wirePicker, fixedItems } from '../core/pick.js';
+import { domainPickerHTML, wireDomainPicker } from '../core/domain-picker.js';
 import { moveToProjectModal } from '../core/projects.js';
 import { go, refreshBehind } from '../core/router.js';
 import { openRecord } from './record.js';
@@ -86,6 +87,11 @@ export async function renderDomains(view, params, ctx) {
       <span class="dom-bar-sub">${t('do.sub.count', { n: fmtInt(named) })} · ${
         t('do.sub.roots', { n: fmtInt(roots) })}</span>
       <span class="dom-bar-end">
+        <!-- 293 domains is not a tree anybody walks to find one. The picker
+             filters as you type and draws the same rails the columns do;
+             picking a row is a navigation to that level. -->
+        ${domainPickerHTML({ id: 'domFind', value: '', cls: 'dom-find',
+                             anyLabel: t('do.find'), ariaLabel: t('do.find') })}
         ${archived ? `<button class="btn btn-sm" id="domArchived"></button>` : ''}
         <button type="button" class="icon-btn" id="domMore" title="${t('do.storeMenu')}"
                 aria-label="${t('do.storeMenu')}">${icon('maintenance')}</button>
@@ -105,6 +111,10 @@ export async function renderDomains(view, params, ctx) {
 
   drawQueue();
   wireColumns(view, domains, path);
+  wireDomainPicker(view, {
+    id: 'domFind', domains, anyLabel: t('do.find'),
+    onPick: to => go('domains', to ? { path: to } : {}),
+  });
   /* the deepest column is the one being worked in, so it is the one the
      strip is scrolled to -- walking in should not leave you looking at the
      roots you have already passed */

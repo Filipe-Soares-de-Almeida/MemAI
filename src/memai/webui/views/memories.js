@@ -433,6 +433,12 @@ function renderRows(items, scope = '') {
         ${match}
         ${statusTag(m.status)}
         ${away ? `<span class="chip" title="${esc(t('mem.alsoWhy', { domain: m.domain }))}">${t('mem.also')}</span>` : ''}
+        <!-- Only on a window wide enough to have room for it (see the media
+             query in admin.css). Uncapping the page left a run of empty
+             pixels between a short title and its age, and where a memory is
+             filed is the one thing worth putting there -- it is what tells
+             two rows with similar titles apart. -->
+        ${m.domain ? `<span class="mem-domain">${esc(m.domain)}</span>` : ''}
         <span title="${esc(m.created_at)}">${fmtAgo(m.created_at)}</span>
       </div>
     </div>`;
