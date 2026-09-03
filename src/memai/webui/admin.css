@@ -765,6 +765,11 @@ input[aria-invalid="true"], .pick[aria-invalid="true"], textarea[aria-invalid="t
   border-radius: var(--r-pill);
   padding: 2px var(--sp-2);
   white-space: nowrap;
+  /* A pill is the size of what it says. Dropped into a grid cell it would
+     take the whole track instead -- `stretch` is a grid item's default --
+     and `note` came out as wide as `anti_pattern`, which is the one thing a
+     chip must never do. */
+  justify-self: start;
 }
 /* smaller than a legend's: it is riding inside 11px of text, not standing
    on its own beside a line of it */
@@ -1145,7 +1150,6 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
   text-align: left; cursor: pointer;
 }
 .hx-type:hover { background: var(--hover-1); }
-.hx-type .type-tag { justify-self: start; }
 .hx-type-n {
   font: 500 var(--fs-sm) var(--font-m); color: var(--ink-2);
   text-align: right; font-variant-numeric: tabular-nums;
