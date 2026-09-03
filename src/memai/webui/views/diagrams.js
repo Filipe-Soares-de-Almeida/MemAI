@@ -70,9 +70,8 @@ export async function renderDiagrams(view, params, ctx) {
   if (ctx.stale()) return;
 
   view.innerHTML = `<div class="anim">
-    <div class="view-head">
-      <h2 class="view-title">${t('dgl.title')}</h2>
-      <div class="view-sub">${t('dgl.sub', { n: fmtInt(data.total) })}${
+    <h2 class="sr-only">${t('dgl.title')}</h2>
+    <div class="view-note">${t('dgl.sub', { n: fmtInt(data.total) })}${
         data.with_issues
           ? ` · <span style="color:var(--warn)">${t('dgl.subIssues', { n: data.with_issues })}</span>`
           : (data.total ? ` · <span style="color:var(--ok)">${t('dgl.allSound')}</span>` : '')}</div>

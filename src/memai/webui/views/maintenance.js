@@ -58,10 +58,7 @@ export async function renderMaintenance(view) {
     n => ({ value: String(n), label: t('mn.wd.mins', { n }) }));
   const types = typeItems({ any: t('common.allTypes') });
   view.innerHTML = `<div class="anim">
-    <div class="view-head">
-      <h2 class="view-title">${t('mn.title')}</h2>
-      <div class="view-sub">${t('mn.sub')}</div>
-    </div>
+    <h2 class="sr-only">${t('mn.title')}</h2>
     <div class="grid grid-2" style="margin-bottom:14px">
       <div class="panel">
         <h3 class="panel-title">${t('mn.health')} <button class="btn btn-sm" id="hRefresh">${t('mn.rerun')}</button></h3>

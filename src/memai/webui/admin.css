@@ -810,9 +810,17 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
 .chip.clickable:hover { border-color: rgba(187, 134, 252, .4); color: var(--accent); }
 
 .conf-pill { display: inline-flex; align-items: center; gap: var(--sp-1); font-size: var(--fs-label); color: var(--ink-2); white-space: nowrap; --ico: 12px; }
-/* mark only, for a list row. Slightly larger, because it is now carrying the
-   state on its own and 12px of ring is small to read at a glance. */
-.conf-pill.compact { gap: 0; --ico: 14px; }
+/* Mark only, for a list row. Slightly larger, because it is carrying the
+   state on its own and 12px of ring is small to read at a glance -- and a
+   FIXED box, because one of the three has a fill (below) and the padding
+   that fill needs was pushing that row's type chip 16px right of every
+   other row's. A column that moves is not a column. */
+.conf-pill.compact {
+  gap: 0; --ico: 14px;
+  width: 22px; height: 22px; flex: none;
+  justify-content: center;
+  border-radius: 50%;
+}
 
 /* These three rules used to target `<i>`. There is no `<i>` anywhere in the JS
    tree -- confPill() in core/shared.js and the drawer's curation row both emit
@@ -828,13 +836,16 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
 /* Only one of the three gets a fill. A contradicted memory is the state you
    must not scroll past, so it is loud enough to catch you at fifty rows;
    `confirmed` stays quiet because a good default should never shout, and
-   `unverified` stays neutral because it is a question, not a problem. */
+   `unverified` stays neutral because it is a question, not a problem.
+
+   The padding is on the LABELLED pill only: the compact one is already a
+   fixed round box, and adding to it would move the row it sits in. */
 .conf-pill.c-contradicted {
   color: var(--bad-ink);
   background: var(--bad-wash);
   border-radius: var(--r-pill);
-  padding: var(--sp-0) var(--sp-2);
 }
+.conf-pill.c-contradicted:not(.compact) { padding: var(--sp-0) var(--sp-2); }
 
 /* A seal, so it never shrinks and never wraps -- and never grows either:
    as a flex child with the default `flex: 0 1 auto` it could not shrink
@@ -861,6 +872,22 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
 
 /* ── view head ───────────────────────────────────────────────────────── */
 
+/* Named for assistive tech, drawn for nobody. Every view used to open with
+   its own name in 22px over the nav pill that already said the same word,
+   and on Health with the database's absolute path under it. What a heading
+   is FOR -- a document outline, and a screen reader's way of announcing
+   what just loaded -- does not need pixels. */
+.sr-only {
+  position: absolute; width: 1px; height: 1px;
+  margin: -1px; padding: 0; overflow: hidden;
+  clip-path: inset(50%); white-space: nowrap; border: 0;
+}
+/* The line of live figures where a heading used to be: what the view holds,
+   not what it is called. */
+.view-note {
+  margin-bottom: var(--sp-4);
+  font-size: var(--fs-sm); color: var(--ink-3);
+}
 .view-head { margin-bottom: var(--sp-5); }
 .view-title {
   font: 500 var(--fs-xl)/1.25 var(--font-ui);
@@ -1095,18 +1122,22 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
 
 /* ── confidence by type ── */
 
-.hx-types { display: flex; flex-direction: column; gap: var(--sp-3); }
+.hx-types { display: flex; flex-direction: column; gap: var(--sp-1); }
+/* The type, then its bar, then its count -- one line each, so the six read
+   as a chart. They were stacked, chip over bar, which made six rows of two
+   things that had to be paired up by eye. */
 .hx-type {
-  display: flex; flex-direction: column; gap: var(--sp-1);
+  display: grid; grid-template-columns: 118px minmax(0, 1fr) 44px;
+  align-items: center; gap: var(--sp-3);
   width: 100%; padding: var(--sp-1) var(--sp-2); margin: 0 calc(-1 * var(--sp-2));
   background: none; border: 0; border-radius: var(--r-md);
   text-align: left; cursor: pointer;
 }
 .hx-type:hover { background: var(--hover-1); }
-.hx-type-head { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-3); }
+.hx-type .type-tag { justify-self: start; }
 .hx-type-n {
   font: 500 var(--fs-sm) var(--font-m); color: var(--ink-2);
-  font-variant-numeric: tabular-nums;
+  text-align: right; font-variant-numeric: tabular-nums;
 }
 /* the 2px gaps let the surface through, so the three states read as three
    quantities rather than as one bar with colour changes in it */

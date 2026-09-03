@@ -150,15 +150,15 @@ export async function renderMemories(view, params, ctx) {
     .join('');
 
   view.innerHTML = `<div class="mem-shell">
-    <div class="view-head">
-      <h2 class="view-title">${t('mem.title')}</h2>
-      <div class="view-sub">${t('mem.sub')}</div>
-    </div>
+    <h2 class="sr-only">${t('mem.title')}</h2>
 
     <div class="mem-work">
       <div class="mem-pane">
         <div class="list-toolbar">
-          <input id="fQ" type="search" placeholder="${t('mem.search.placeholder')}" value="${esc(state.q)}" spellcheck="false">
+          <!-- how the search behaves, on the field it behaves on. It was a
+               line of prose under the view's title, three inches away. -->
+          <input id="fQ" type="search" placeholder="${t('mem.search.placeholder')}"
+                 title="${esc(t('mem.sub'))}" value="${esc(state.q)}" spellcheck="false">
           <!-- the app's one remaining accelerator, taught where it lands -->
           <kbd class="toolbar-kbd" aria-hidden="true">/</kbd>
           <!-- Pickers, not selects (core/pick.js): a type keeps its colour and a

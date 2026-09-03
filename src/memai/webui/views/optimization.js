@@ -225,10 +225,7 @@ function optRunCard(r) {
 
 function renderOptRunList(view, runs) {
   view.innerHTML = `<div class="anim">
-    <div class="view-head">
-      <h2 class="view-title">${t('op.title')}</h2>
-      <div class="view-sub">${t('op.sub')}</div>
-    </div>
+    <h2 class="sr-only">${t('op.title')}</h2>
     ${runs.length ? `
     <div class="list-toolbar">
       <input type="search" id="optSearch" placeholder="${t('op.searchRuns')}" aria-label="${t('op.searchRuns')}">

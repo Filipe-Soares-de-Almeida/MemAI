@@ -82,7 +82,7 @@ export async function renderDomains(view, params, ctx) {
 
   view.innerHTML = `<div class="dom-shell">
     <div class="dom-bar">
-      <h2 class="view-title">${t('do.title')}</h2>
+      <h2 class="sr-only">${t('do.title')}</h2>
       ${crumbHTML(path)}
       <span class="dom-bar-sub">${t('do.sub.count', { n: fmtInt(named) })} · ${
         t('do.sub.roots', { n: fmtInt(roots) })}</span>

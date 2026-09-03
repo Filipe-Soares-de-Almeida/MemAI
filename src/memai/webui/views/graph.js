@@ -60,10 +60,8 @@ export async function renderGraph(view, params, ctx) {
     : '';
 
   view.innerHTML = `<div class="anim">
-    <div class="view-head">
-      <h2 class="view-title">${t('g.title')}</h2>
-      <div class="view-sub">${t('g.sub', { n: fmtInt(data.nodes.length), m: fmtInt(data.edges.length) })}${capNote}</div>
-    </div>
+    <h2 class="sr-only">${t('g.title')}</h2>
+    <div class="view-note">${t('g.sub', { n: fmtInt(data.nodes.length), m: fmtInt(data.edges.length) })}${capNote}</div>
     <div class="graph-wrap" id="gWrap">
       <!-- A drawing, and labelled as one. The same records are in Memories as
            a list, which is what the label points at: an arrangement of forces

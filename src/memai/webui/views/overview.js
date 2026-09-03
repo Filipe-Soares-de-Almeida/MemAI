@@ -12,7 +12,7 @@
    not already done, apart from the calendar, which is a reshaping of the
    activity rows and not a second count. */
 
-import { esc, fmtInt, fmtBytes, fmtDay } from '../core/dom.js';
+import { esc, fmtInt, fmtDay } from '../core/dom.js';
 import { api } from '../core/api.js';
 import { tipShow, tipHide } from '../core/ui.js';
 import { typeClass, CONF, TYPE_ORDER } from '../core/shared.js';
@@ -57,15 +57,13 @@ export async function renderOverview(view, params, ctx) {
   const activeDays = days.filter(d => d.count > 0).length;
 
   view.innerHTML = `<div class="anim">
-    <div class="view-head">
-      <h2 class="view-title">${t('ov.title')}</h2>
-      <!-- every store-wide number that is not one of the four axes: what
-           file this is, and the four counts the old tile row carried -->
-      <div class="view-sub">${esc(o.db.path)} · ${fmtBytes(o.db.size)}${
-        o.db.wal_size ? ` (+${fmtBytes(o.db.wal_size)} WAL)` : ''} · ${
-        t('ov.sub.store', { domains: fmtInt(tot.domains), relations: fmtInt(tot.relations),
-                            edits: fmtInt(tot.edits), sessions: fmtInt(tot.sessions) })}</div>
-    </div>
+    <h2 class="sr-only">${t('ov.title')}</h2>
+    <!-- The store-wide counts that are not one of the four axes. The file's
+         path and size were here too and are on Maintenance, which is the
+         view about the file. -->
+    <div class="view-note">${t('ov.sub.store', {
+      domains: fmtInt(tot.domains), relations: fmtInt(tot.relations),
+      edits: fmtInt(tot.edits), sessions: fmtInt(tot.sessions) })}</div>
 
     <div class="hx-top">
       ${indexPanel(h, o)}
@@ -348,11 +346,9 @@ function byTypePanel(o) {
               title="${esc(CONF[c].label)}: ${fmtInt(split[c])}"></div>` : '').join('');
     return `<button type="button" class="hx-type" data-type="${esc(tp)}"
               title="${esc(t('ov.byType.open', { type: tp }))}">
-      <span class="hx-type-head">
-        <span class="type-tag ${typeClass(tp)}">${esc(tp)}</span>
-        <span class="hx-type-n">${fmtInt(o.by_type[tp])}</span>
-      </span>
+      <span class="type-tag ${typeClass(tp)}">${esc(tp)}</span>
       <span class="hx-type-bar">${segs}</span>
+      <span class="hx-type-n">${fmtInt(o.by_type[tp])}</span>
     </button>`;
   }).join('') || `<div class="empty">${t('ov.types.empty')}</div>`;
 
