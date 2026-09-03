@@ -47,14 +47,22 @@ export function go(view, params = {}) {
    go(view) cannot do, because it would land on an unfiltered first page. */
 let previous = '';
 
+/* The route the last navigation came FROM, as {name, hash}. `name` is ''
+   when there is nothing behind this one -- a reload straight onto a view,
+   or the first paint. A view uses it to offer its own way back instead of
+   leaving the browser button as the only one. */
+export function previousRoute() {
+  const [name, qs] = previous.replace(/^#\/?/, '').split('?');
+  return { name: VIEWS[name] ? name : '', hash: previous, qs: qs || '' };
+}
+
 /* Back to `view`, keeping its state when that is where you came from.
    history.back() replays the exact URL, filters and page included; when the
    previous entry is something else -- a record opened from a link, a reload
    straight onto one -- there is nothing to replay and this opens the view
    fresh. */
 export function backTo(view, params = {}) {
-  const [name] = previous.replace(/^#\/?/, '').split('?');
-  if (name === view) history.back();
+  if (previousRoute().name === view) history.back();
   else go(view, params);
 }
 

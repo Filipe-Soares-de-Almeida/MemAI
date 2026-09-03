@@ -31,7 +31,7 @@ import { typeTag, uidChip, statusTag, wireCopyChips,
          cachedDomains, invalidateDomains, domainDatalist } from '../core/shared.js';
 import { pickerFor, pickerValue, wirePicker, fixedItems } from '../core/pick.js';
 import { pickMemories } from '../core/link-picker.js';
-import { go, refreshBehind, backTo } from '../core/router.js';
+import { go, refreshBehind, previousRoute } from '../core/router.js';
 import { renderRich, wireRich } from '../core/richtext.js';
 import { highlightIn } from '../core/highlight.js';
 import { DiagramEditor } from '../diagram-engine.js';
@@ -104,6 +104,36 @@ const relink = (uid, rel) => api('/api/relations', {
   },
 });
 
+/* Where you have been inside the record, oldest first, and the route the
+   walk started from.
+
+   Following a relation replaces what is on screen, and without a trail that
+   costs you the memory you were reading it FROM: checking a link meant
+   losing the record the link was on, which is the whole reason you followed
+   it. Browser Back does the same job, but a page that can only be left
+   through the browser's chrome is a page with no way out of its own.
+
+   `origin` is the view the first record was opened from -- Memories, the
+   graph, an optimization run -- so the bottom of the trail goes back THERE
+   rather than always to the memory list.
+
+   Entries are {uid, label}; the label is filled in once that record has
+   rendered, so the button naming it can name it. */
+let trail = [];
+let origin = null;
+
+/* One step of the walk. Three cases have to be told apart, and the uid is
+   what tells them: the same record re-rendering after a write (nothing
+   moves), the record BELOW this one on the trail (the reader went back, by
+   this button or by the browser's), and anything else (a step forward). */
+function walk(uid) {
+  const from = previousRoute();
+  if (from.name && from.name !== 'memory') { trail = []; origin = from; }
+  if (trail[trail.length - 1]?.uid === uid) return;
+  if (trail[trail.length - 2]?.uid === uid) { trail.pop(); return; }
+  trail.push({ uid });
+}
+
 /* Which field is open for editing, by section key -- '' for the body of a
    type that has no fields, and null for none. `all` is the rewrite mode:
    every field open at once, sharing one save bar.
@@ -119,9 +149,14 @@ export async function renderRecord(view, params, ctx) {
   if (!uid) { go('memories'); return; }
   if (editing.uid !== uid) resetEditing(uid);
 
+  walk(uid);
   endRecordCanvas();
   const m = await api(`/api/memories/${seg(uid)}`);
   if (ctx.stale()) return;
+  /* named now that it has been read, so the record one step further in can
+     put its name on the button that comes back here */
+  const here = trail[trail.length - 1];
+  if (here?.uid === uid) here.label = (m.title || m.content.split('\n', 1)[0]).slice(0, 60);
 
   /* a diagram's content is generated from its graph, so the record shows it
      read-only and sends editing to the canvas; every other type gets the
@@ -178,10 +213,12 @@ function barHTML(m, uid) {
       <button type="button" class="icon-btn" id="dNext" ${pos.next >= seq.length ? 'disabled' : ''}
               title="${esc(t('dr.step.next'))}" aria-label="${esc(t('dr.step.next'))}">${icon('chevron-right')}</button>
     </span>`;
+  const back = backTarget();
   return `<div class="rec-bar">
-    <button type="button" class="rec-back" id="dBack">${icon('chevron-left')}${t('nav.memories')}</button>
-    ${m.domain ? `<span class="rec-crumb-sep">/</span>
-      <button type="button" class="rec-crumb" data-fdomain="${esc(m.domain)}"
+    <button type="button" class="rec-back" id="dBack"
+            title="${esc(t('dr.back.title', { label: back.label }))}"
+            >${icon('chevron-left')}<span class="rec-back-text">${esc(back.label)}</span></button>
+    ${m.domain ? `<button type="button" class="rec-crumb" data-fdomain="${esc(m.domain)}"
         aria-label="${esc(t('a11y.filterDomain', { domain: m.domain }))}">${esc(m.domain)}</button>` : ''}
     <span class="rec-bar-end">
       ${stepper}
@@ -191,6 +228,29 @@ function barHTML(m, uid) {
               aria-label="${t('dr.more')}">${icon('maintenance')}</button>
     </span>
   </div>`;
+}
+
+/* The one view whose nav entry is not named after it: the diagram EDITOR is
+   reached from the Diagrams list and has no section of its own. */
+const NAV_LABEL = { diagram: 'nav.diagrams' };
+
+/* Where the back button goes, and what it is called. A record reached by
+   following a relation goes back to the record it was followed from, by
+   name; the first record of a walk goes back to whatever opened it. */
+function backTarget() {
+  const under = trail[trail.length - 2];
+  if (under) return { label: under.label || under.uid, hash: '' };
+  if (origin?.name) return { label: t(NAV_LABEL[origin.name] || `nav.${origin.name}`), hash: origin.hash };
+  return { label: t('nav.memories'), hash: '' };
+}
+
+function goBack() {
+  const under = trail[trail.length - 2];
+  if (under) { trail.pop(); openRecord(under.uid); return; }
+  /* the exact URL, so a list comes back on the page and under the filters
+     it was left on */
+  if (origin?.hash) { location.hash = origin.hash; return; }
+  go('memories');
 }
 
 /* ─── one field ───────────────────────────────────────────────────────── */
@@ -409,7 +469,7 @@ function wire(view, m, uid, fields, isDiagram) {
   /* the text is on screen already; colour arrives when the grammar does */
   highlightIn(view).catch(() => {});
 
-  q('#dBack').addEventListener('click', () => backTo('memories'));
+  q('#dBack').addEventListener('click', goBack);
   q('#dPrev')?.addEventListener('click', () => step(uid, -1));
   q('#dNext')?.addEventListener('click', () => step(uid, 1));
   view.querySelectorAll('[data-open]').forEach(el =>

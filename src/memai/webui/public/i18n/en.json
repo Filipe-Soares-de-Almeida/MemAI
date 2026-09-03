@@ -413,7 +413,7 @@
     "mem.alsoWhy": "Filed under {domain}; in this filter because it is cross-listed into it",
     "mem.conf.all": "Confidence: all",
     "mem.empty": "Nothing found with these filters",
-    "mem.keys.hint": "↑↓ move · Space selects · Shift extends · Enter opens",
+    "mem.keys.hint": "↑↓ move · Click picks · Shift extends · Double click or Enter opens",
     "mem.next": "Next",
     "mem.prev": "Previous",
     "mem.range": "{a}–{b} of {c}",
@@ -814,6 +814,7 @@
     "do.find": "Go to a path…",
     "ov.conf.ringLabel": "{pct}% {label}",
     "do.det.archived": "archived",
-    "ov.hx.ringLabel": "{n} out of 100"
+    "ov.hx.ringLabel": "{n} out of 100",
+    "dr.back.title": "Back to {label}"
   }
 }

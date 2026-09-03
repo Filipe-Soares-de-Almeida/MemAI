@@ -1836,17 +1836,28 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
   border-bottom: 1px solid var(--line-soft);
   min-width: 0;
 }
+/* The way out is a CONTROL and the path is a FACT, and they were a slash
+   apart in the same size, weight and colour -- one run of grey text where
+   only half of it did anything. The button gets an edge and the UI font;
+   the path stays plain, in the data font, a step quieter, with air between
+   the two. Its label can be a memory's title (see backTarget), so it is
+   capped rather than allowed to push the path off the bar. */
 .rec-back {
+  flex: none;
   display: inline-flex; align-items: center; gap: var(--sp-1);
   --ico: 13px;
-  background: none; border: 0; padding: 0;
-  font: 400 var(--fs-sm) var(--font-ui); color: var(--ink-2); cursor: pointer;
+  max-width: 260px;
+  background: none; border: 1px solid var(--line); border-radius: var(--r-md);
+  padding: var(--sp-1) var(--sp-3) var(--sp-1) var(--sp-2);
+  font: 500 var(--fs-sm) var(--font-ui); color: var(--ink-2); cursor: pointer;
+  transition: background .13s, color .13s;
 }
-.rec-back:hover { color: var(--ink); }
-.rec-crumb-sep { color: var(--ink-3); }
+.rec-back:hover { color: var(--ink); background: var(--hover-2); }
+.rec-back-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .rec-crumb {
+  margin-left: var(--sp-2);
   background: none; border: 0; padding: 0;
-  font: 400 var(--fs-sm) var(--font-m); color: var(--ink-2); cursor: pointer;
+  font: 400 var(--fs-sm) var(--font-m); color: var(--ink-3); cursor: pointer;
   min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .rec-crumb:hover { color: var(--accent); }

@@ -324,7 +324,14 @@ export async function renderMemories(view, params, ctx) {
   if (memAll) memAll.addEventListener('change', () => setAll(memAll.checked));
 
   rows.forEach((row, i) => {
-    row.addEventListener('click', () => openRecord(row.dataset.uid));
+    /* A click PICKS the row. `e.detail` is the click count, so the second
+       click of a double click does not undo what the first one ticked --
+       the row stays picked and dblclick opens it. */
+    row.addEventListener('click', e => {
+      if (e.detail > 1 || e.target.closest('input[type=checkbox]')) return;
+      if (e.shiftKey) { selectRow(rows[i], true); range(i, true); } else toggle(i);
+    });
+    row.addEventListener('dblclick', () => openRecord(row.dataset.uid));
     const cb = row.querySelector('input[type=checkbox]');
     cb.addEventListener('click', e => {
       e.stopPropagation();
@@ -423,11 +430,14 @@ function renderRows(items, scope = '') {
       <div class="mem-main" role="gridcell">
         <!-- A titled row shows its title alone, with the body on hover.
              A row with no title is the body: it is what names the memory
-             when nothing else does. -->
-        <button type="button" class="row-open mem-snippet${m.title ? ' mem-named' : ''}"
-                tabindex="-1"${m.title ? ` title="${esc(m.content)}"` : ''}
-                aria-label="${esc(t('a11y.openRecord', { uid: m.uid }))}"
-                >${esc(m.title || m.content)}</button>
+             when nothing else does.
+
+             Plain text and not a button any more: a click on the row PICKS
+             the memory now, and the two ways to open one -- a double click,
+             or Enter -- both belong to the row rather than to one cell of
+             it. The pane on the right carries the visible Open control. -->
+        <span class="mem-snippet${m.title ? ' mem-named' : ''}"${
+          m.title ? ` title="${esc(m.content)}"` : ''}>${esc(m.title || m.content)}</span>
       </div>
       <div class="mem-right" role="gridcell">
         ${match}

@@ -413,7 +413,7 @@
     "mem.alsoWhy": "Guardada em {domain}; está neste filtro porque foi vinculada a ele",
     "mem.conf.all": "Confiança: todas",
     "mem.empty": "Nada encontrado com esses filtros",
-    "mem.keys.hint": "↑↓ move · Espaço seleciona · Shift estende · Enter abre",
+    "mem.keys.hint": "↑↓ move · Clique marca · Shift estende · Duplo clique ou Enter abre",
     "mem.next": "Próxima",
     "mem.prev": "Anterior",
     "mem.range": "{a}–{b} de {c}",
@@ -814,6 +814,7 @@
     "do.find": "Ir para um caminho…",
     "ov.conf.ringLabel": "{pct}% {label}",
     "do.det.archived": "arquivadas",
-    "ov.hx.ringLabel": "{n} de 100"
+    "ov.hx.ringLabel": "{n} de 100",
+    "dr.back.title": "Voltar para {label}"
   }
 }
