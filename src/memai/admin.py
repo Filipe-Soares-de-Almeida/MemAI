@@ -9,11 +9,12 @@ make sense for a human curator -- bulk confidence triage, domain
 renames/merges, relation pruning, dedup review, FTS rebuilds,
 VACUUM/backup, and an audit trail over the edits table.
 
-Handlers do blocking SQLite work directly inside async endpoints; this
-is deliberate. The server is a single-user localhost tool, requests
-are short (the store is a few MB), and staying synchronous end-to-end
-preserves db.py's one-transaction-per-connect model: an exception
-before the context manager exits means nothing is committed.
+Handlers are written synchronously against db.py, and `api` runs each
+one in a worker thread. The whole handler -- connect, work, commit --
+stays on one thread, which preserves both db.py's
+one-transaction-per-connect model and sqlite3's same-thread rule. It
+also keeps a slow handler off the event loop, so a scan does not stop
+the server from answering anything else (see maintenance/dedup).
 
 Destructive parity with the MCP tools is kept: archive (forget) is the
 default "delete", and purge demands the literal confirmation phrase
@@ -42,6 +43,7 @@ from urllib.parse import urlsplit
 
 import uvicorn
 from starlette.applications import Starlette
+from starlette.concurrency import run_in_threadpool
 from starlette.middleware import Middleware
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import FileResponse, JSONResponse, Response
@@ -217,6 +219,17 @@ def _backup(kind: str = "") -> Path:
 def api(handler):
     """Wrap a sync (request, payload) handler into an async JSON endpoint.
 
+    The handler runs in a worker thread, so a long one leaves the event
+    loop free to accept and route everything else. Its whole body --
+    including the db.connect block -- runs on that one thread, which is
+    what sqlite3's same-thread connections require.
+
+    A CPU-bound handler still slows a concurrent one down through the
+    GIL, but it does not stop the server. Handlers therefore reach the
+    store concurrently: writes serialize on SQLite itself, and
+    db.connect opens WAL with a 30s busy timeout, so a writer waits for
+    a writer rather than failing.
+
     ValueError -> 400 with the message (validation/guardrail failures);
     anything else -> 500. Body is parsed as JSON for mutating methods.
     """
@@ -228,7 +241,7 @@ def api(handler):
             except Exception:
                 payload = {}
         try:
-            return JSONResponse(handler(request, payload))
+            return JSONResponse(await run_in_threadpool(handler, request, payload))
         except ValueError as exc:
             return JSONResponse({"error": str(exc)}, status_code=400)
         except Exception as exc:  # pragma: no cover - defensive

@@ -8,8 +8,11 @@ endpoint opens its own db.connect() against default_db_path().
 from __future__ import annotations
 
 import re
+import threading
 
 import pytest
+from starlette.applications import Starlette
+from starlette.routing import Route
 from starlette.testclient import TestClient
 
 from conftest import unmigrated
@@ -778,3 +781,31 @@ def test_a_query_that_is_not_a_uid_is_unchanged(client):
     _create(client, content="database tuning guide")
     hits = client.get("/api/memories?q=database tuning").json()
     assert hits["searched"] is True and hits["total"] >= 1
+
+
+def test_handlers_run_off_the_event_loop():
+    """A slow handler leaves the loop free to answer another request.
+
+    The slow handler blocks on an Event only a second request can set, so
+    it returns at all only if that second request was routed while it was
+    still running. A handler called inside the event loop would hold the
+    loop and time out waiting.
+    """
+    entered, released = threading.Event(), threading.Event()
+
+    def slow(request, payload):
+        entered.set()
+        assert released.wait(timeout=10), "the second request never arrived"
+        return {"slow": True}
+
+    app = Starlette(routes=[Route("/slow", admin.api(slow)),
+                            Route("/quick", admin.api(lambda req, pay: {"quick": True}))])
+    with TestClient(app) as c:
+        answered: dict = {}
+        worker = threading.Thread(target=lambda: answered.update(c.get("/slow").json()))
+        worker.start()
+        assert entered.wait(timeout=10), "the slow handler never started"
+        assert c.get("/quick").json() == {"quick": True}
+        released.set()
+        worker.join(timeout=10)
+    assert answered == {"slow": True}
