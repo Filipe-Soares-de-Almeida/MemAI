@@ -20,6 +20,7 @@ carrying them, since a restore is a copy into place and nothing else.
 
 from __future__ import annotations
 
+import difflib
 import json
 import os
 import re
@@ -3514,8 +3515,86 @@ def search_ranked(
     return results
 
 
-# Above this difflib ratio two results are the same text, not two takes on
-# one subject. Near-identity on purpose: this drops copies of one fact, it
+# -------------------------------------------------------------- similarity
+
+# Similarity between two memories is measured over WORD tokens. difflib's
+# quick_ratio is a character-multiset bound, not a text measure: on prose
+# in one language it reads high for every pair, duplicate or not.
+_WORD_RE = re.compile(r"\w+", re.UNICODE)
+
+
+def _tokens(text: str) -> list[str]:
+    """The lowercased word tokens a similarity measure runs over."""
+    return _WORD_RE.findall(text.lower())
+
+
+class _Prepared:
+    """One memory's text, tokenized once for repeated comparison.
+
+    A sweep is quadratic in the rows and compares each text against many
+    others; tokenizing inside the loop would redo that work n times per
+    row. `counts` is the token multiset the ratio's upper bound needs.
+    """
+
+    __slots__ = ("tokens", "counts")
+
+    def __init__(self, text: str) -> None:
+        self.tokens = _tokens(text)
+        self.counts: dict[str, int] = {}
+        for token in self.tokens:
+            self.counts[token] = self.counts.get(token, 0) + 1
+
+
+def _ratio_bound(a: _Prepared, b: _Prepared) -> float:
+    """The highest ratio two prepared texts could have, 0..1.
+
+    difflib matches each token at most once, so the size of the token
+    MULTISET intersection caps the number of matches an alignment can
+    find, whatever order the tokens appear in. Costs one dict lookup per
+    distinct token against the ratio's own quadratic cost, and reads far
+    lower than the same bound over characters: an alphabet is shared by
+    every text in a language, a vocabulary is not.
+
+    At least one of the two has to hold a token.
+    """
+    smaller, larger = (a.counts, b.counts) if len(a.counts) <= len(b.counts) else (b.counts, a.counts)
+    matches = 0
+    for token, count in smaller.items():
+        other = larger.get(token)
+        if other is not None:
+            matches += count if count < other else other
+    return 2.0 * matches / (len(a.tokens) + len(b.tokens))
+
+
+def _pair_ratio(a: _Prepared, b: _Prepared, threshold: float) -> float:
+    """How much of two prepared texts is the same word sequence, 0..1.
+
+    Returns 0.0 for a pair ruled out by a bound instead of scored, so a
+    caller compares the result against `threshold` and nothing else. No
+    pair that would reach `threshold` is ruled out: both gates are upper
+    bounds on the ratio -- token counts too far apart for any alignment
+    to reach it, then the multiset bound of _ratio_bound.
+
+    1.0 is the same text, and it is the same sequence being compared in
+    any language, so one threshold holds across a mixed store.
+    """
+    la, lb = len(a.tokens), len(b.tokens)
+    if not la or not lb:
+        return 0.0
+    if 2.0 * (la if la < lb else lb) < threshold * (la + lb):
+        return 0.0
+    if _ratio_bound(a, b) < threshold:
+        return 0.0
+    return difflib.SequenceMatcher(None, a.tokens, b.tokens).ratio()
+
+
+def text_ratio(a: str, b: str) -> float:
+    """The word-sequence ratio of two raw strings, with no gate in front."""
+    return difflib.SequenceMatcher(None, _tokens(a), _tokens(b)).ratio()
+
+
+# Above this ratio two results are the same text, not two takes on one
+# subject. Near-identity on purpose: this drops copies of one fact, it
 # does not judge whether two related memories are each worth a slot.
 _COPY_RATIO = 0.92
 
@@ -3523,21 +3602,19 @@ _COPY_RATIO = 0.92
 def _collapse_near_copies(ranked: list[dict]) -> list[dict]:
     """Drop a result that repeats one already kept, and say so on the keeper.
 
-    Lexical, the same measure dedup_candidates uses: it matches
-    near-identical text, not paraphrases.
+    Lexical, the same measure dedup_candidates uses (see _pair_ratio): it
+    matches near-identical text, not paraphrases.
     """
-    import difflib
-
-    kept: list[dict] = []
+    kept: list[tuple[dict, _Prepared]] = []
     for d in ranked:
-        content = d.get("content") or ""
-        for k in kept:
-            if difflib.SequenceMatcher(None, content, k.get("content") or "").quick_ratio() >= _COPY_RATIO:
-                k.setdefault("collapsed", []).append(d["uid"])
+        prepared = _Prepared(d.get("content") or "")
+        for keeper, kept_prepared in kept:
+            if _pair_ratio(prepared, kept_prepared, _COPY_RATIO) >= _COPY_RATIO:
+                keeper.setdefault("collapsed", []).append(d["uid"])
                 break
         else:
-            kept.append(d)
-    return kept
+            kept.append((d, prepared))
+    return [d for d, _ in kept]
 
 
 def _attach_succession(conn: sqlite3.Connection, results: list[dict]) -> None:
@@ -4198,10 +4275,10 @@ def latest_by_type(
 def _timeline_pair(a: sqlite3.Row, b: sqlite3.Row) -> bool:
     """Checkpoint x checkpoint inside the same effort is a timeline, not a dup.
 
-    Consecutive checkpoints of one ticket/session share the same skeleton
-    (intent/established/next-steps) and score high on any similarity
-    measure while narrating different moments -- the dominant source of
-    dedup false positives in the field.
+    True for two checkpoints sharing a domain or a session, whatever they
+    score: consecutive checkpoints of one effort narrate different
+    moments through the same skeleton, and a later one extending an
+    earlier one is a bearing being kept, not a memory to merge.
     """
     if a["type"] != "checkpoint" or b["type"] != "checkpoint":
         return False
@@ -4242,17 +4319,16 @@ def similar_memories(
     if row is None or row["type"] == DIAGRAM_TYPE:
         return []
 
-    import difflib
-
     # A scan, so it stays inside the scope the memory was filed under -- a
     # write must not get slower as the store grows in branches it has
     # nothing to do with.
+    prepared = _Prepared(row["content"])
     scored: list[tuple[sqlite3.Row, float, str]] = []
     clause, params = domain_clause(row["domain"], alias="") if row["domain"] else ("", [])
     for other in conn.execute(
         f"SELECT * FROM memories WHERE uid <> ? {clause}", [uid, *params]
     ).fetchall():
-        ratio = difflib.SequenceMatcher(None, row["content"], other["content"]).quick_ratio()
+        ratio = _pair_ratio(prepared, _Prepared(other["content"]), threshold)
         if ratio >= threshold:
             scored.append((other, ratio, "lexical"))
 
@@ -4279,11 +4355,12 @@ def dedup_candidates(
 ) -> list[tuple[sqlite3.Row, sqlite3.Row, float, str]]:
     """Surface likely-duplicate/contradictory pairs for the agent to review.
 
-    Candidate pairs come from lexical difflib overlap (method 'lexical'),
-    which `threshold` applies to. It matches near-identical text, not
-    paraphrases: two takes on one subject in different words do not surface
-    here. Not a merge, just a candidate list -- the agent judges whether
-    pairs are actually duplicates, the same split search uses.
+    Candidate pairs come from lexical overlap of the word sequence
+    (method 'lexical'), which `threshold` applies to -- see _pair_ratio.
+    It matches near-identical text, not paraphrases: two takes on one
+    subject in different words do not surface here. Not a merge, just a
+    candidate list -- the agent judges whether pairs are actually
+    duplicates, the same split search uses.
 
     `since` makes the hints directional for incremental runs: at least
     one side of every pair is new (created/updated at/after `since`),
@@ -4315,7 +4392,9 @@ def dedup_candidates(
     rows = conn.execute(" ".join(sql), params).fetchall()
     is_new = (lambda r: r["updated_at"] >= since) if since else (lambda r: True)
 
-    import difflib
+    # Tokenized once per row, not once per pair: the sweep is quadratic in
+    # the rows and would otherwise redo this work n times for each.
+    prepared = [_Prepared(r["content"]) for r in rows]
 
     pairs: list[tuple[sqlite3.Row, sqlite3.Row, float, str]] = []
     for i in range(len(rows)):
@@ -4323,7 +4402,7 @@ def dedup_candidates(
             a, b = rows[i], rows[j]
             if not (is_new(a) or is_new(b)):
                 continue
-            ratio = difflib.SequenceMatcher(None, a["content"], b["content"]).quick_ratio()
+            ratio = _pair_ratio(prepared[i], prepared[j], threshold)
             if ratio >= threshold:
                 pairs.append((a, b, ratio, "lexical"))
 
