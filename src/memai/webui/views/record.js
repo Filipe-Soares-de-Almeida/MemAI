@@ -27,12 +27,13 @@ import { icon } from '../core/icons.js';
 import { toast, failed, openModal, closeModal, confirmModal, promptModal,
          openCtxMenu, copyCode, copyUid } from '../core/ui.js';
 import { typeTag, uidChip, statusTag, wireCopyChips,
-         CONF, REL_SUGGEST, typeItems, sectionLabel, sectionLabelHTML,
+         CONF, REL_SUGGEST, typeItems, sectionLabel, sectionLabelHTML, sectionHue,
          cachedDomains, invalidateDomains, domainDatalist } from '../core/shared.js';
 import { pickerFor, pickerValue, wirePicker, fixedItems } from '../core/pick.js';
 import { pickMemories } from '../core/link-picker.js';
 import { go, refreshBehind, previousRoute } from '../core/router.js';
-import { renderRich, wireRich } from '../core/richtext.js';
+import { onTeardown } from '../core/lifecycle.js';
+import { renderRich, wireRich, headings } from '../core/richtext.js';
 import { highlightIn } from '../core/highlight.js';
 import { DiagramEditor } from '../diagram-engine.js';
 import { t } from '../i18n.js';
@@ -49,6 +50,16 @@ let recEngine = null;
 const endRecordCanvas = () => {
   try { recEngine?.destroy(); } catch (err) { console.error(err); }
   recEngine = null;
+};
+
+/* The title's height is measured from its content, so it has to be measured
+   again whenever the column changes width -- a height computed at 1400px
+   clips the same text at 375px. Held here and ended by hand for the same
+   reason as the canvas: dropping the subtree does not stop an observer. */
+let titleWatch = null;
+const endTitleWatch = () => {
+  try { titleWatch?.disconnect(); } catch (err) { console.error(err); }
+  titleWatch = null;
 };
 
 /* The list this record can step through, in the order it was shown.
@@ -122,14 +133,24 @@ const relink = (uid, rel) => api('/api/relations', {
 let trail = [];
 let origin = null;
 
-/* One step of the walk. Three cases have to be told apart, and the uid is
-   what tells them: the same record re-rendering after a write (nothing
-   moves), the record BELOW this one on the trail (the reader went back, by
-   this button or by the browser's), and anything else (a step forward). */
+/* Raised by step() for the one navigation it starts and consumed by the walk
+   that navigation runs. The arrows move ACROSS the list, not INTO a relation:
+   the record they land on takes the slot of the one it replaced, so the trail
+   keeps its depth and the way out stays the way out. */
+let stepped = false;
+
+/* One step of the walk. Four cases have to be told apart, and the uid plus
+   that flag is what tells them: the same record re-rendering after a write
+   (nothing moves), a step across the list (the top of the trail is replaced),
+   the record BELOW this one on the trail (the reader went back, by this
+   button or by the browser's), and anything else (a step forward). */
 function walk(uid) {
+  const across = stepped;
+  stepped = false;
   const from = previousRoute();
   if (from.name && from.name !== 'memory') { trail = []; origin = from; }
   if (trail[trail.length - 1]?.uid === uid) return;
+  if (across && trail.length) { trail[trail.length - 1] = { uid }; return; }
   if (trail[trail.length - 2]?.uid === uid) { trail.pop(); return; }
   trail.push({ uid });
 }
@@ -144,13 +165,30 @@ function walk(uid) {
 let editing = { uid: null, key: null, all: false };
 const resetEditing = uid => { editing = { uid, key: null, all: false }; };
 
+/* Which block the panel SHOWS, by section key. One block is on screen at a
+   time and the index picks it; module-level and reset per uid, like
+   `editing`, so a save comes back on the block it was made from and
+   stepping to another memory opens at its first.
+
+   A key the memory does not have -- stepping from a checkpoint to a note --
+   falls back to the first block rather than showing nothing. */
+let picked = { uid: null, key: null };
+const resetPicked = uid => { picked = { uid, key: null }; };
+
+/* The opening of a block, for its row in the index. Whitespace is collapsed
+   because a body's own line breaks would make a two-line clamp show one
+   word and a blank line. */
+const peekOf = text => String(text || '').replace(/\s+/g, ' ').trim().slice(0, 180);
+
 export async function renderRecord(view, params, ctx) {
   const uid = params.get('uid') || '';
   if (!uid) { go('memories'); return; }
   if (editing.uid !== uid) resetEditing(uid);
+  if (picked.uid !== uid) resetPicked(uid);
 
   walk(uid);
   endRecordCanvas();
+  endTitleWatch();
   const m = await api(`/api/memories/${seg(uid)}`);
   if (ctx.stale()) return;
   /* named now that it has been read, so the record one step further in can
@@ -175,20 +213,29 @@ export async function renderRecord(view, params, ctx) {
     : [{ key: '', max: 0, labelHTML: t('dr.content'), label: t('dr.content'),
          text: m.content, present: true }];
 
+  /* Which block is on screen. `Edit all` is the one mode that shows them
+     all at once, so it has no selection and no index. */
+  let sel = fields.findIndex(f => f.key === picked.key);
+  if (sel < 0) { sel = 0; picked = { uid, key: fields[0].key }; }
+
   view.innerHTML = `<div class="rec-shell">
     ${barHTML(m, uid)}
     <div class="rec-work">
       <div class="rec-main">
-        <h2 class="rec-title"><input id="dTitle" value="${esc(m.title || '')}"
+        <h2 class="rec-title"><textarea id="dTitle" rows="1"
               placeholder="${esc(t('dr.title.placeholder'))}"
-              aria-label="${esc(t('mm.name.label'))}" spellcheck="false"></h2>
+              aria-label="${esc(t('mm.name.label'))}" spellcheck="false"
+              >${esc(m.title || '')}</textarea></h2>
         ${m.section_problem
           ? `<div class="sec-problem">${t('dr.sections.problem',
                { detail: esc(m.section_problem) })}</div>` : ''}
-        ${isDiagram ? diagramHTML(m, uid) : `
-        <div class="rec-fields${editing.key !== null || editing.all ? ' is-editing' : ''}"
-             >${fields.map(f => fieldHTML(f, m)).join('')}</div>
-        ${editing.all ? saveBarHTML(t('dr.saveAll'), 'dSaveAll') : ''}`}
+        ${isDiagram ? diagramHTML(m, uid) : editing.all
+          ? `<div class="rec-stack">${fields.map(f => fieldHTML(f, m)).join('')}</div>
+             ${saveBarHTML(t('dr.saveAll'), 'dSaveAll')}`
+          : `<div class="rec-stage">
+               ${indexHTML(fields, m, sel)}
+               ${fieldHTML(fields[sel], m)}
+             </div>`}
         ${refsHTML(m)}
       </div>
       ${sideHTML(m, uid)}
@@ -215,7 +262,7 @@ function barHTML(m, uid) {
     </span>`;
   const back = backTarget();
   return `<div class="rec-bar">
-    <button type="button" class="rec-back" id="dBack"
+    <button type="button" class="btn btn-sm rec-back" id="dBack"
             title="${esc(t('dr.back.title', { label: back.label }))}"
             >${icon('chevron-left')}<span class="rec-back-text">${esc(back.label)}</span></button>
     ${m.domain ? `<button type="button" class="rec-crumb" data-fdomain="${esc(m.domain)}"
@@ -253,6 +300,42 @@ function goBack() {
   go('memories');
 }
 
+/* ─── the index ───────────────────────────────────────────────────────── */
+
+/* The blocks a memory is made of, as a column beside the one on screen:
+   each row names a block, and under the SELECTED row come the headings its
+   own body opens, which is the only navigation a 19.000-character block
+   has. A body with no heading adds no row.
+
+   The row and its headings are grouped in the markup because together they
+   are one card -- the row is its head, the headings its body -- and a
+   continuous fill and radius cannot be drawn by siblings each carrying
+   their own. */
+function indexHTML(fields, m, sel) {
+  const marks = headings(fields[sel].text);
+  const row = (f, i) => `
+    <button type="button" class="rec-pick" role="tab" data-pick="${esc(f.key)}"
+            style="${sectionHue(m.type, f.key)}"
+            aria-selected="${i === sel}" tabindex="${i === sel ? 0 : -1}">
+      <span class="rf-dot" aria-hidden="true"></span>
+      <span class="rec-pick-text">
+        <span class="rec-pick-name">${f.labelHTML}</span>
+        <span class="rec-peek">${esc(peekOf(f.text))}</span>
+      </span>
+    </button>`;
+  return `<div class="rec-index" role="tablist" aria-label="${esc(t('dr.blocks.aria'))}">
+    ${fields.map((f, i) => {
+      if (i !== sel || !marks.length) return row(f, i);
+      return `<div class="rec-group" style="${sectionHue(m.type, f.key)}">${row(f, i)}
+        ${marks.map((h, j) => `
+        <button type="button" class="rec-mark" data-mark="${j}" title="${esc(h)}">
+          <span class="rec-bullet" aria-hidden="true"></span>
+          <span class="rec-mark-text">${esc(h)}</span>
+        </button>`).join('')}</div>`;
+    }).join('')}
+  </div>`;
+}
+
 /* ─── one field ───────────────────────────────────────────────────────── */
 
 const countHTML = f => (f.max
@@ -262,14 +345,20 @@ const countHTML = f => (f.max
 function fieldHTML(f, m) {
   const open = editing.all || editing.key === f.key;
   if (!open) {
-    return `<section class="rf" data-field="${esc(f.key)}">
+    return `<section class="rf" data-field="${esc(f.key)}"
+                     style="${sectionHue(m.type, f.key)}">
       <header class="rf-head">
+        <span class="rf-dot" aria-hidden="true"></span>
         <span class="rf-label">${f.labelHTML}</span>
         ${countHTML(f)}
         <button type="button" class="rf-edit" data-edit="${esc(f.key)}">${icon('pencil')}${t('common.edit')}</button>
       </header>
       ${f.present
-        ? `<div class="rf-body content-prose rt">${renderRich(f.text, m.body_links)}</div>`
+        /* The box that SCROLLS and the box that holds the reading measure
+           are two: with both on one element the scrollbar is drawn where
+           the measure ends, which on a panel wider than 68ch leaves it
+           floating in the middle of the card. */
+        ? `<div class="rf-body"><div class="content-prose rt">${renderRich(f.text, m.body_links)}</div></div>`
         : `<div class="sec-absent">${t('dr.sections.missing')}</div>`}
     </section>`;
   }
@@ -277,7 +366,8 @@ function fieldHTML(f, m) {
      attached to the pair. In `all` mode there is no preview -- every field
      is open at once and one save bar serves them all, so the column has no
      room to double each of them. */
-  return `<section class="rf is-open" data-field="${esc(f.key)}">
+  return `<section class="rf is-open" data-field="${esc(f.key)}"
+                   style="${sectionHue(m.type, f.key)}">
     <header class="rf-head">
       <span class="rf-dot" aria-hidden="true"></span>
       <span class="rf-label">${f.labelHTML}</span>
@@ -481,6 +571,26 @@ function wire(view, m, uid, fields, isDiagram) {
 
   /* ── the title, edited where it is read ── */
   const title = q('#dTitle');
+  /* It is a box that GROWS, not a one-line field: half the titles in a
+     store this size are longer than the column, and what does not fit in an
+     input is simply off screen. Measured after it is in the document, and
+     again on every keystroke. */
+  const growTitle = () => {
+    title.style.height = 'auto';
+    title.style.height = `${title.scrollHeight}px`;
+  };
+  growTitle();
+  title.addEventListener('input', growTitle);
+  /* Only a change of WIDTH re-measures: setting the height fires the
+     observer again, and re-measuring on that is the loop. */
+  let titleWidth = title.clientWidth;
+  titleWatch = new ResizeObserver(() => {
+    if (title.clientWidth === titleWidth) return;
+    titleWidth = title.clientWidth;
+    growTitle();
+  });
+  titleWatch.observe(title);
+  onTeardown(endTitleWatch);
   const saveTitle = async () => {
     const value = title.value.trim();
     if (value === (m.title || '')) return;
@@ -496,6 +606,29 @@ function wire(view, m, uid, fields, isDiagram) {
     if (e.key === 'Enter') { e.preventDefault(); title.blur(); }
     if (e.key === 'Escape') { title.value = m.title || ''; title.blur(); }
   });
+
+  /* ── the index ── */
+  const picks = [...view.querySelectorAll('[data-pick]')];
+  const pick = key => { picked = { uid, key }; resetEditing(uid); refreshBehind(); };
+  picks.forEach(b => b.addEventListener('click', () => pick(b.dataset.pick)));
+  /* A tablist is walked with the arrows, and the roving tabindex in the
+     markup is what makes Tab leave the group instead of stepping through
+     every block in it. */
+  picks.forEach((b, i) => b.addEventListener('keydown', e => {
+    const to = e.key === 'ArrowDown' ? i + 1 : e.key === 'ArrowUp' ? i - 1 : -1;
+    if (to < 0 || to >= picks.length) return;
+    e.preventDefault();
+    pick(picks[to].dataset.pick);
+  }));
+  /* A heading in the index scrolls the body to the nth `.rt-h`, which is
+     the same order headings() listed them in. */
+  view.querySelectorAll('[data-mark]').forEach(b => b.addEventListener('click', () => {
+    const body = view.querySelector('.rf-body');
+    const mark = body?.querySelectorAll('.rt-h')[+b.dataset.mark];
+    if (!mark) return;
+    body.scrollTop += mark.getBoundingClientRect().top
+      - body.getBoundingClientRect().top - 8;
+  }));
 
   /* ── the fields ── */
   view.querySelectorAll('[data-edit]').forEach(b => b.addEventListener('click', () => {
@@ -698,6 +831,7 @@ function step(uid, delta) {
   if (!pos) return;
   const to = delta < 0 ? pos.prev : pos.next;
   if (to < 0 || to >= seq.length) return;
+  stepped = true;
   openRecord(seq[to]);
 }
 

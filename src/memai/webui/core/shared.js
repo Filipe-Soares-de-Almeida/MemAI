@@ -130,6 +130,31 @@ export const sectionLabelHTML = (type, section) =>
   `<span class="sec-label-text" title="${esc(section.label)}">`
   + `${esc(sectionLabel(type, section))}</span>`;
 
+/* What a field DOES, keyed by the section key it is written under. The type
+   palette says what a memory IS; this says what one of its blocks is for,
+   and the meaning is the same across types: what not to do, what to do
+   instead, what is settled, what is still in flight, what is waiting on a
+   decision, what is left for next time.
+   The twelve keys of SECTION_SPEC do not collide between types, so one flat
+   map covers all of them. A type with no sections has no key and falls back
+   to its own colour. */
+const SECTION_ROLE = {
+  pattern: 'stop', why_wrong: 'hold', instead: 'go',
+  intent: 'aim', established: 'go', pursuing: 'hold', open_questions: 'ask',
+  hypothesis: 'hold', reasoning: 'aim', result: 'go',
+  revised_belief: 'ask', next_time: 'next',
+};
+
+/* The pair of custom properties a block's mark and label are drawn from:
+   --h is the fill (the dot), --h-ink the letter. Both steps, because one
+   colour cannot do both jobs on this ground -- see the note on --t-*. */
+export const sectionHue = (type, key) => {
+  const role = SECTION_ROLE[key];
+  return role
+    ? `--h: var(--f-${role}); --h-ink: var(--f-${role}-ink)`
+    : `--h: var(--t-${type}); --h-ink: var(--t-${type}-ink)`;
+};
+
 /* ─── the two closed vocabularies, as picker rows ────────────────────────
    A type and a confidence are identified everywhere else in this UI by a
    mark -- a coloured dot, a ringed glyph -- and a native <option> could

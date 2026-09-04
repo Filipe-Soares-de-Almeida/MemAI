@@ -61,6 +61,11 @@ let domainTree = [];
    nothing it shows costs a request. */
 let rowData = new Map();
 
+/* The uid the caret sits on. The inspector reads the ticked rows first and
+   falls back to this one, so a single memory is inspected by selecting its
+   row and a tick is only ever needed to build a batch. */
+let caretUid = '';
+
 /* The one place that writes a row's selected-ness. The tick, the row's own
    wash, the state a screen reader reads off the row, and the set the
    inspector acts on are four faces of one fact, and four call sites used to
@@ -108,6 +113,7 @@ export async function renderMemories(view, params, ctx) {
   };
   selection.clear();
   clearStaged();
+  caretUid = '';
 
   const domains = await getDomains().catch(() => []);
   domainTree = domains;
@@ -280,11 +286,22 @@ export async function renderMemories(view, params, ctx) {
   /* Roving tabindex: the list is ONE tab stop and the arrows move inside it.
      `cursor` is which row currently holds that stop. */
   let cursor = 0;
+  /* The caret is DRAWN as a class rather than left to :focus-visible: a
+     pointer does not raise that pseudo-class, and the caret has to stay on
+     the row it landed on while the hands move to the pane on the right. */
   const setCursor = i => {
-    if (i < 0 || i >= rows.length || i === cursor) return;
+    if (i < 0 || i >= rows.length) return;
     rows[cursor].tabIndex = -1;
     cursor = i;
     rows[i].tabIndex = 0;
+    rows.forEach((row, n) => row.classList.toggle('is-cursor', n === i));
+    if (rows[i].dataset.uid === caretUid) return;
+    caretUid = rows[i].dataset.uid;
+    /* The pane follows the caret only while nothing is ticked -- a batch the
+       user assembled is not something moving the caret takes apart. The
+       staged edits go with the target: they were prepared for the row the
+       pane was showing, and the next row starts clean. */
+    if (!selection.size) { clearStaged(); paintInspector(); }
   };
   const moveTo = i => {
     if (i < 0 || i >= rows.length) return;
@@ -324,12 +341,15 @@ export async function renderMemories(view, params, ctx) {
   if (memAll) memAll.addEventListener('change', () => setAll(memAll.checked));
 
   rows.forEach((row, i) => {
-    /* A click PICKS the row. `e.detail` is the click count, so the second
-       click of a double click does not undo what the first one ticked --
-       the row stays picked and dblclick opens it. */
+    /* A click moves the CARET to the row; ticking belongs to the box and to
+       Space. `e.detail` is the click count, so the second click of a double
+       click is left to dblclick. */
     row.addEventListener('click', e => {
       if (e.detail > 1 || e.target.closest('input[type=checkbox]')) return;
-      if (e.shiftKey) { selectRow(rows[i], true); range(i, true); } else toggle(i);
+      /* Shift keeps its meaning on the pointer: it ticks the run from the
+         anchor to here, and a plain click is what plants that anchor. */
+      if (e.shiftKey) range(i, true); else anchor = i;
+      moveTo(i);
     });
     row.addEventListener('dblclick', () => openRecord(row.dataset.uid));
     const cb = row.querySelector('input[type=checkbox]');
@@ -411,12 +431,9 @@ function renderRows(items, scope = '') {
     /* bm25 on the row, not in a column of its own: a per-row diagnostic,
        read on hover when a result looks out of place. */
     const rank = m.fts_rank != null ? ` title="bm25 ${Number(m.fts_rank).toFixed(2)}"` : '';
-    /* The row keeps its click for the mouse, but the thing that OPENS the
-       record is a real button around the snippet -- the row itself cannot be
-       one, because it already contains a checkbox and a control inside a
-       control is a control neither the keyboard nor a screen reader can make
-       sense of. Enter on the button bubbles a click to the row, so there is
-       still exactly one handler. */
+    /* The row is not a button of its own: it holds a checkbox, and a control
+       inside a control is one neither the keyboard nor a screen reader can
+       make sense of. Opening a record is the row's dblclick and Enter. */
     return `<div class="mem-row" role="row" aria-selected="false" tabindex="-1" data-uid="${esc(m.uid)}"${rank}>
       <!-- The controls in the row are reachable by pointer and by the row's
            own keys (Space ticks, Enter opens), and they are OUT of the tab
@@ -432,10 +449,10 @@ function renderRows(items, scope = '') {
              A row with no title is the body: it is what names the memory
              when nothing else does.
 
-             Plain text and not a button any more: a click on the row PICKS
-             the memory now, and the two ways to open one -- a double click,
-             or Enter -- both belong to the row rather than to one cell of
-             it. The pane on the right carries the visible Open control. -->
+             Plain text and not a button: the two ways to open a memory --
+             a double click, or Enter -- belong to the row rather than to one
+             cell of it. The pane on the right carries the visible Open
+             control. -->
         <span class="mem-snippet${m.title ? ' mem-named' : ''}"${
           m.title ? ` title="${esc(m.content)}"` : ''}>${esc(m.title || m.content)}</span>
       </div>
@@ -461,13 +478,21 @@ function paintInspector() {
   syncSelectAll();
   const host = document.getElementById('memInspect');
   if (!host) return;
-  const picked = [...selection].map(uid => rowData.get(uid)).filter(Boolean);
+  const ticked = [...selection].map(uid => rowData.get(uid)).filter(Boolean);
+  /* A tick is how a BATCH is assembled; the caret is the one row being read.
+     Ticks win when there are any, and the row under the caret is what the
+     pane shows when there are none. */
+  const caret = rowData.get(caretUid);
+  const picked = ticked.length ? ticked : (caret ? [caret] : []);
   const label = document.querySelector('[data-selcount]');
-  /* innerHTML: both strings mark their number up, and textContent printed
-     the <b> tags as text on every toggle */
+  /* The count over the list reports TICKS, never the caret: it is the label
+     of the select-all box beside it.
+
+     innerHTML: both strings mark their number up, and textContent printed
+     the <b> tags as text on every toggle. */
   if (label) {
-    label.innerHTML = picked.length
-      ? t('mem.selectedOf', { n: picked.length, all: rowData.size })
+    label.innerHTML = ticked.length
+      ? t('mem.selectedOf', { n: ticked.length, all: rowData.size })
       : t('mem.selectAll', { n: rowData.size });
   }
   host.innerHTML = picked.length ? editorHTML(picked) : emptyHTML();

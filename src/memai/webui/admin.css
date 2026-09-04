@@ -108,6 +108,22 @@
   --t-handoff-ink:      #a5d6a7;
   --t-diagram-ink:      #80cbc4;
 
+  /* field palette, by ROLE. The six above say what a memory IS; these say
+     what one of its blocks is FOR, and the meaning holds across types: the
+     temptation of an anti-pattern and the hypothesis of a reasoning are
+     both "not proven yet", the way out and the established facts are both
+     "settled". core/shared.js maps a section key to one of these.
+
+     Two steps for the same reason the type palette has two -- the fill is
+     the dot, the ink is the letter -- and both are steps of ramps the theme
+     already uses, so a block's colour cannot drift from the scale. */
+  --f-stop: #e53935;  --f-stop-ink: #ef9a9a;   /* the temptation, the mistake */
+  --f-go:   #43a047;  --f-go-ink:   #a5d6a7;   /* the way out, what is settled */
+  --f-hold: #fb8c00;  --f-hold-ink: #ffcc80;   /* in flight, not proven */
+  --f-aim:  #1e88e5;  --f-aim-ink:  #90caf9;   /* the bearing, the reasoning */
+  --f-ask:  #8e24aa;  --f-ask-ink:  #ce93d8;   /* waiting on a decision */
+  --f-next: #00897b;  --f-next-ink: #80cbc4;   /* left for next time */
+
   /* status scale (fixed, reserved; always icon + label).
 
      Two reds, by role, because one cannot do both jobs on a dark theme.
@@ -1652,6 +1668,15 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
 }
 .mem-row:last-child { border-bottom: none; }
 .mem-row:hover { background: var(--hover-1); }
+/* The caret the arrows and a click both move. Written by the view as a class
+   (see setCursor) so a pointer draws it too, and inset like the focus ring
+   beside it because the list clips. Ordered before .selected: a row that is
+   both keeps the ticked wash and takes the ring on top of it. */
+.mem-row.is-cursor {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+  background: var(--hover-2);
+}
 .mem-row.selected { background: var(--accent-dim); }
 .mem-check { display: flex; justify-content: center; }
 .mem-check input { cursor: pointer; }
@@ -1840,23 +1865,11 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
   border-bottom: 1px solid var(--line-soft);
   min-width: 0;
 }
-/* The way out is a CONTROL and the path is a FACT, and they were a slash
-   apart in the same size, weight and colour -- one run of grey text where
-   only half of it did anything. The button gets an edge and the UI font;
-   the path stays plain, in the data font, a step quieter, with air between
-   the two. Its label can be a memory's title (see backTarget), so it is
-   capped rather than allowed to push the path off the bar. */
-.rec-back {
-  flex: none;
-  display: inline-flex; align-items: center; gap: var(--sp-1);
-  --ico: 13px;
-  max-width: 260px;
-  background: none; border: 1px solid var(--line); border-radius: var(--r-md);
-  padding: var(--sp-1) var(--sp-3) var(--sp-1) var(--sp-2);
-  font: 500 var(--fs-sm) var(--font-ui); color: var(--ink-2); cursor: pointer;
-  transition: background .13s, color .13s;
-}
-.rec-back:hover { color: var(--ink); background: var(--hover-2); }
+/* The way out is a CONTROL and the path beside it is a FACT: the button is
+   a .btn like the rest of the bar, the path stays plain text in the data
+   font, a step quieter. The label can be a memory's title (see backTarget),
+   so it is capped and clipped rather than allowed to push the path off. */
+.rec-back { flex: none; max-width: 260px; }
 .rec-back-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .rec-crumb {
   margin-left: var(--sp-2);
@@ -1866,7 +1879,9 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
 }
 .rec-crumb:hover { color: var(--accent); }
 .rec-bar-end { margin-left: auto; display: flex; align-items: center; gap: var(--sp-2); }
-.rec-bar-end .btn { --ico: 12px; display: inline-flex; align-items: center; gap: var(--sp-1); }
+/* Every button on this bar, the way out included, carries its icon at the
+   same size and sits as tight to its label. */
+.rec-bar .btn { --ico: 12px; display: inline-flex; align-items: center; gap: var(--sp-1); }
 
 .rec-step {
   display: inline-flex; align-items: center; gap: var(--sp-1);
@@ -1891,37 +1906,120 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
 
 /* The name, edited where it is read. The dashed rule is the whole
    affordance: a field that looks like a field would make the loudest thing
-   on the page a form control. */
-.rec-title { margin: 0; }
-.rec-title input {
-  width: 100%;
+   on the page a form control.
+
+   A box that GROWS, not a one-line field: over half the titles in a store
+   of a few hundred memories are wider than this column, and an input puts
+   what does not fit off screen without so much as an ellipsis. views/
+   record.js sets the height from the content.
+
+   More air above than below, so it reads as the head of the column rather
+   than a sibling of the stage under it. */
+.rec-title { margin: 0; margin-top: var(--sp-1); }
+.rec-title textarea {
+  display: block; width: 100%;
   background: none; border: 0;
   border-bottom: 1px dashed rgba(187, 134, 252, .35);
-  border-radius: 0; padding: 0 0 var(--sp-1);
+  border-radius: 0; padding: 0 0 var(--sp-2);
   font: 500 var(--fs-xl)/1.3 var(--font-ui); color: var(--ink);
-  height: auto;
+  resize: none; overflow: hidden;
+  /* the `textarea` rule above sets a 110px floor, and a floor is a height
+     the content cannot measure its way below */
+  min-height: 0;
 }
-.rec-title input:hover { border-bottom-color: rgba(187, 134, 252, .6); }
-.rec-title input:focus { outline: none; border-bottom-color: var(--accent); }
+.rec-title textarea:hover { border-bottom-color: rgba(187, 134, 252, .6); }
+.rec-title textarea:focus { outline: none; border-bottom-color: var(--accent); }
 
-/* Fields are wildly uneven -- one line under INTENT and nine under
-   ESTABLISHED -- and a grid lines their TOPS up, so the short one leaves a
-   hole as tall as the difference. Columns pack instead: a field starts
-   where the one above it ended, and the two columns come out roughly the
-   same height whatever the memory says.
+/* Blocks are wildly uneven: measured over a few hundred memories, half of
+   them fill less than 62% of a panel this tall and a third run past it, and
+   the largest single block is 19.600 characters. Two of them sharing a
+   capped row meant the short one was mostly empty and the long one was a
+   porthole, and a type with ONE block left half the column blank.
 
-   The reading order is down one column and then down the next, which is
-   what a packed layout can promise; a grid promised left-to-right and paid
-   for it in empty space. */
-.rec-fields { columns: 2; column-gap: var(--sp-3); }
-.rec-fields > .rf { break-inside: avoid; margin-bottom: var(--sp-3); }
-/* An open field is the whole width -- source and rendering side by side
-   need the same measure, and half a column is not enough for either -- so
-   while one is open the column stops being a column. */
-.rec-fields.is-editing { columns: 1; }
+   So one block is on screen at a time, filling the stage, and the index
+   beside it says what the others are. */
+.rec-stage {
+  flex: 1; min-height: 0;
+  display: grid; grid-template-columns: 244px minmax(0, 1fr);
+  gap: var(--sp-3);
+}
+.rec-index {
+  min-height: 0; overflow-y: auto;
+  display: flex; flex-direction: column; gap: var(--sp-1);
+}
+/* Marks in one column, text in the next: a name and its dot line up down
+   the list whatever the label's width. */
+.rec-pick {
+  display: grid; grid-template-columns: 7px minmax(0, 1fr); gap: var(--sp-2);
+  align-items: start; text-align: left;
+  background: none; border: 0; cursor: pointer;
+  padding: var(--sp-2) var(--sp-3); border-radius: var(--r-md);
+  transition: background .12s;
+}
+.rec-pick:hover { background: var(--hover-2); }
+.rec-pick[aria-selected="true"] { background: color-mix(in srgb, var(--h-ink) 12%, transparent); }
+.rec-pick[aria-selected="true"] .rec-pick-name { color: var(--h-ink); }
+.rec-pick .rf-dot { margin-top: 5px; }
+.rec-pick-text { display: grid; gap: var(--sp-0); min-width: 0; }
+.rec-pick-name {
+  font: 500 var(--fs-label) var(--font-ui);
+  letter-spacing: .08em; text-transform: uppercase; color: var(--ink-2);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+/* The opening of the block, two lines of it. It is what makes the index a
+   thing you choose FROM rather than a list of names. */
+.rec-peek {
+  font-size: var(--fs-sm); color: var(--ink-3); min-width: 0; line-height: 1.4;
+  overflow: hidden;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+}
+
+/* The selected block and the headings of its body are ONE card: the row is
+   the head, the headings are the body, tinted a step of the block's own
+   colour between the page and the head -- the same relation .rf-head has
+   with .rf-body. 8% measures 1,15 against the page, which is the --bg to
+   --surface step; at 12% the index starts competing with the panel. */
+.rec-group {
+  display: flex; flex-direction: column;
+  background: color-mix(in srgb, var(--h-ink) 8%, var(--bg));
+  border-radius: var(--r-md);
+  overflow: hidden;
+}
+.rec-group > .rec-pick,
+.rec-group > .rec-mark { border-radius: 0; }
+.rec-group > .rec-mark:last-child { padding-bottom: var(--sp-2); }
+/* One heading of the body. The bullet is the indent -- it sits in the same
+   track as the block's dot, so a heading's text falls under the block's own
+   text, and the hierarchy is carried by the mark rather than by a margin. */
+.rec-mark {
+  display: grid; grid-template-columns: 7px minmax(0, 1fr); gap: var(--sp-2);
+  align-items: start; text-align: left;
+  background: none; border: 0; cursor: pointer;
+  padding: var(--sp-1) var(--sp-3) var(--sp-1) calc(var(--sp-3) + 7px + var(--sp-2));
+  border-radius: var(--r-md); min-height: var(--tap);
+  font: 400 var(--fs-sm)/1.35 var(--font-ui); color: var(--ink-2);
+}
+.rec-mark:hover { background: var(--hover-2); color: var(--ink); }
+.rec-bullet {
+  width: 5px; height: 5px; border-radius: 50%; margin-top: 6px;
+  justify-self: center;
+  background: color-mix(in srgb, var(--h-ink) 60%, transparent);
+}
+.rec-mark:hover .rec-bullet { background: var(--h-ink); }
+/* A heading in this store is a sentence, not a word: one line of 244px cuts
+   off what tells two of them apart. */
+.rec-mark-text {
+  min-width: 0; overflow: hidden;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+}
+
+/* `Edit all` is the one mode with no selection: every field open, stacked,
+   sharing one save bar, and the column scrolls. */
+.rec-stack { display: flex; flex-direction: column; gap: var(--sp-3); }
 
 .rf {
-  min-width: 0;
+  min-width: 0; min-height: 0;
+  display: flex; flex-direction: column;
   background: var(--surface);
   border-radius: var(--r-lg);
   overflow: hidden;
@@ -1936,17 +2034,33 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
    round either. It was a 12%-white hairline on the page ground, and on a
    column of four fields you could not see where one ended. */
 .rf-head {
+  flex: none;
   display: flex; align-items: center; gap: var(--sp-2);
   padding: var(--sp-2) var(--sp-3);
   background: var(--raised);
   border-bottom: 1px solid var(--line);
 }
 .rf.is-open .rf-head { background: rgba(187, 134, 252, .14); }
-.rf-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); flex: none; }
+/* The block's own colour, from the pair core/shared.js sets on the card and
+   on its row in the index -- so the mark in front of a name is the same in
+   both places. It falls back to the accent for a card with no block. */
+.rf-dot {
+  width: 7px; height: 7px; border-radius: 50%; flex: none;
+  background: var(--h, var(--accent));
+}
 .rf-label {
   font: 500 var(--fs-label) var(--font-ui);
   letter-spacing: .1em; text-transform: uppercase; color: var(--ink);
 }
+/* On the stage the panel is the document and the index is its table of
+   contents, so the name here is a title and not a micro-label -- the
+   uppercase 11px stays in the index and in the `Edit all` stack. */
+.rec-stage .rf-head { padding: var(--sp-3) var(--sp-4); }
+.rec-stage .rf-label {
+  font-size: var(--fs-md); letter-spacing: 0; text-transform: none;
+  color: var(--h-ink, var(--ink));
+}
+.rec-stage .rf-body { padding: var(--sp-4) var(--sp-5); }
 .rf.is-open .rf-label { color: var(--accent); }
 .rf-count { font: 400 var(--fs-label) var(--font-m); color: var(--ink-3); }
 .rf-count.over { color: var(--bad-ink); }
@@ -1962,11 +2076,23 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
   font: 400 var(--fs-label) var(--font-m); color: var(--ink-3);
   border: 1px solid var(--line); border-radius: var(--r-sm); padding: 1px var(--sp-1);
 }
-.rf-body { padding: var(--sp-3); }
+/* the part of the card that moves when the row it sits in is capped */
+.rf-body { flex: 1; min-height: 0; overflow-y: auto; padding: var(--sp-3); }
 .rf .sec-absent { margin: var(--sp-3); }
 
 .rf-split { display: grid; grid-template-columns: 1fr 1fr; }
 .rf-split.rf-solo { grid-template-columns: 1fr; }
+/* Editing on the stage keeps the card at the height it already had, and
+   each side of the pair scrolls inside it. The rule that made the old grid
+   drop its row cap -- a box you type into does not scroll inside a box --
+   is about the BOX: the textarea is the scroller here and it is on screen
+   whole. Letting the card grow instead put a 19.600-character block in a
+   card 14.612px tall, because the preview has no ceiling of its own. */
+.rec-stage .rf-split { flex: 1; min-height: 0; }
+.rec-stage .rf-pane { min-height: 0; }
+.rec-stage .rf-pane textarea { flex: 1; min-height: 0; resize: none; }
+.rec-stage .rf-preview { flex: 1; min-height: 0; }
+.rec-stage .rf-save { flex: none; }
 .rf-pane {
   min-width: 0; padding: var(--sp-3);
   display: flex; flex-direction: column; gap: var(--sp-2);
@@ -2115,7 +2241,14 @@ button.rs-mono:hover { color: var(--accent); }
 @media (max-width: 1180px), (max-height: 619px) {
   .rec-work { grid-template-columns: 1fr; }
   .rec-main, .rs-body { overflow: visible; }
-  .rec-fields { grid-template-columns: 1fr; }
+  /* one column, and nothing with a height of its own: the page is the thing
+     that scrolls here, and a box scrolling inside a scrolling page traps
+     the wheel */
+  .rec-stage { grid-template-columns: 1fr; flex: none; }
+  .rec-index { overflow: visible; }
+  .rec-stage .rf-body,
+  .rec-stage .rf-preview { overflow: visible; }
+  .rec-stage .rf-pane textarea { min-height: 200px; }
   .rf-split { grid-template-columns: 1fr; }
   .rf-pane + .rf-pane { border-left: 0; border-top: 1px solid var(--line-soft); }
 }
@@ -2962,6 +3095,62 @@ button.rs-mono:hover { color: var(--accent); }
 }
 
 /* ── maintenance ─────────────────────────────────────────────────────── */
+
+/* The rail carries what the file IS -- its checks and the operations over
+   it -- and the wide column carries the work: the bodies that could not be
+   read, the pairs that look alike, the edits the store has taken. Below
+   --fill-floor the grid is one column and the page scrolls, so the boxes
+   only get their fixed heights inside the window-filling layout
+   (see .view.fill). */
+.mnt-grid, .mnt-rail, .mnt-work { display: grid; gap: var(--sp-3); }
+/* a heading inside a panel body, under the block it follows */
+.mnt-sub { margin-top: var(--sp-5); }
+
+@media (min-height: 620px) and (min-width: 1024px) {
+  .mnt-grid {
+    flex: 1; min-height: 0;
+    /* 420px is what a check's sentence needs to stop at two lines; six of
+       them wrapping to three fill the rail on their own. */
+    grid-template-columns: minmax(320px, 420px) minmax(0, 1fr);
+  }
+  .mnt-rail, .mnt-work { display: flex; flex-direction: column; min-height: 0; }
+
+  /* A panel is a heading that stays and a body that moves. The toolbar of
+     the scan sits between them and stays too: it is what you set before you
+     press Run, and it cannot scroll away from its own results. */
+  .mnt-grid .panel { min-height: 0; display: flex; flex-direction: column; }
+  .mnt-grid .panel-body { flex: 1; min-height: 0; overflow-y: auto; }
+  /* The checks are as tall as their rows; the operations take what is left
+     of the rail. Their basis is zero so that a window too short for both
+     shrinks the panel that scrolls and not the six checks. */
+  .mnt-fit { flex: 0 1 auto; }
+  .mnt-fill { flex: 1 1 0; }
+  /* A queue of bodies to settle is usually one line saying there are none,
+     and never worth a third of the column. */
+  .mnt-work > .mnt-fit { max-height: 30%; }
+  /* The log always has rows in it and the scan is empty until you run one,
+     so the log holds the larger share -- until a scan comes back with pairs
+     to rule on, which is when the room moves to the panel being worked in
+     (maintenance.js toggles .mnt-open). */
+  .mnt-dedup { flex: 1 1 0; }
+  .mnt-audit { flex: 1.6 1 0; }
+  .mnt-dedup.mnt-open { flex: 3 1 0; }
+
+  /* A sentence saying there is nothing here centres in the box it is left
+     with. Its own padding is generous enough to overflow a short panel and
+     raise a scrollbar over six pixels of nothing. */
+  .mnt-grid .panel-body > .empty,
+  .mnt-grid .panel-body > .loading {
+    height: 100%; padding: var(--sp-4);
+    display: grid; place-content: center;
+  }
+
+  /* A log scrolled inside a box loses its column names on the first row. */
+  .mnt-audit .table th {
+    position: sticky; top: 0; z-index: 1;
+    background: var(--surface);
+  }
+}
 
 .check-row {
   display: flex; align-items: baseline; gap: var(--sp-3);

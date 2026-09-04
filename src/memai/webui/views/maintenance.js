@@ -57,82 +57,94 @@ export async function renderMaintenance(view) {
   const everyItems = WARDEN_MINUTES.map(
     n => ({ value: String(n), label: t('mn.wd.mins', { n }) }));
   const types = typeItems({ any: t('common.allTypes') });
+  /* The rail holds what the file IS -- its checks and the operations over
+     it -- and the wide column holds what you work THROUGH: the bodies it
+     could not read, the pairs that look alike, the edits it has taken.
+     Every panel scrolls in its own box, so the toolbar of a scan and the
+     header of a log stay where the eye left them. */
   view.innerHTML = `<div class="anim">
     <h2 class="sr-only">${t('mn.title')}</h2>
-    <div class="grid grid-2" style="margin-bottom:14px">
-      <div class="panel">
-        <h3 class="panel-title">${t('mn.health')} <button class="btn btn-sm" id="hRefresh">${t('mn.rerun')}</button></h3>
-        <div id="healthBody"><div class="loading"><span class="spin"></span></div></div>
+    <div class="mnt-grid">
+      <div class="mnt-rail">
+        <section class="panel mnt-fit">
+          <h3 class="panel-title">${t('mn.health')} <button class="btn btn-sm" id="hRefresh">${t('mn.rerun')}</button></h3>
+          <div class="panel-body" id="healthBody"><div class="loading"><span class="spin"></span></div></div>
+        </section>
+
+        <section class="panel mnt-fill">
+          <h3 class="panel-title">${t('mn.ops')}</h3>
+          <div class="panel-body">
+            <div class="mnt-actions">
+              <button class="btn" data-op="fts">${t('mn.op.fts')}</button>
+              <button class="btn" data-op="orphans">${t('mn.op.orphans')}</button>
+              <button class="btn" data-op="vacuum">${t('mn.op.vacuum')}</button>
+              <button class="btn btn-solid" data-op="backup">${t('mn.op.backup')}</button>
+            </div>
+            <!-- the project's name beside the heading: the list is the active
+                 project's own backups, and another project's are listed when it is -->
+            <h3 class="panel-title mnt-sub">${t('mn.backups')}
+              <span class="panel-aside" id="backupsProject"></span></h3>
+            <div id="backupsBody" class="hint">—</div>
+
+            <!-- Renders are the one thing here that accumulates on disk without
+                 anyone asking, so the setting sits next to what it affects
+                 rather than in a settings page nobody opens. -->
+            <h3 class="panel-title mnt-sub">${t('mn.rn.title')}
+              <span class="panel-aside">${t('mn.rn.aside')}</span></h3>
+            <div class="list-toolbar toolbar-sm" style="margin-bottom:6px">
+              <label class="inline-label">${t('mn.rn.keep')}
+                ${pickerFor({ id: 'rnKeep', items: keepItems, ariaLabel: t('mn.rn.keep') })}</label>
+              <button class="btn btn-sm" data-op="prune-renders">${t('mn.rn.now')}</button>
+              <button class="btn btn-sm" data-op="prune-renders-all">${t('mn.rn.all')}</button>
+            </div>
+            <div id="rnBody" class="hint">—</div>
+
+            <!-- The warden is the one thing here that spends TOKENS rather than
+                 disk, and it spends them whether or not it finds anything, so the
+                 switch belongs where the other running costs are read. -->
+            <h3 class="panel-title mnt-sub">${t('mn.wd.title')}
+              <span class="panel-aside">${t('mn.wd.aside')}</span></h3>
+            <div class="list-toolbar toolbar-sm" style="margin-bottom:6px">
+              <label class="inline-label">${t('mn.wd.state')}
+                ${pickerFor({ id: 'wdOn', items: onOffItems, ariaLabel: t('mn.wd.state') })}</label>
+              <label class="inline-label">${t('mn.wd.every')}
+                ${pickerFor({ id: 'wdEvery', items: everyItems, ariaLabel: t('mn.wd.every') })}</label>
+            </div>
+            <div class="hint">${t('mn.wd.body')}</div>
+          </div>
+        </section>
       </div>
-      <div class="panel">
-        <h3 class="panel-title">${t('mn.ops')}</h3>
-        <div class="mnt-actions">
-          <button class="btn" data-op="fts">${t('mn.op.fts')}</button>
-          <button class="btn" data-op="orphans">${t('mn.op.orphans')}</button>
-          <button class="btn" data-op="vacuum">${t('mn.op.vacuum')}</button>
-          <button class="btn btn-solid" data-op="backup">${t('mn.op.backup')}</button>
-        </div>
-        <!-- the project's name beside the heading: the list is the active
-             project's own backups, and another project's are listed when it is -->
-        <h3 class="panel-title" style="margin-top:20px">${t('mn.backups')}
-          <span class="panel-aside" id="backupsProject"></span></h3>
-        <div id="backupsBody" class="hint">—</div>
 
-        <!-- Renders are the one thing here that accumulates on disk without
-             anyone asking, so the setting sits next to what it affects
-             rather than in a settings page nobody opens. -->
-        <h3 class="panel-title" style="margin-top:20px">${t('mn.rn.title')}
-          <span class="panel-aside">${t('mn.rn.aside')}</span></h3>
-        <div class="list-toolbar toolbar-sm" style="margin-bottom:6px">
-          <label class="inline-label">${t('mn.rn.keep')}
-            ${pickerFor({ id: 'rnKeep', items: keepItems, ariaLabel: t('mn.rn.keep') })}</label>
-          <button class="btn btn-sm" data-op="prune-renders">${t('mn.rn.now')}</button>
-          <button class="btn btn-sm" data-op="prune-renders-all">${t('mn.rn.all')}</button>
-        </div>
-        <div id="rnBody" class="hint">—</div>
+      <div class="mnt-work">
+        <section class="panel mnt-fit">
+          <h3 class="panel-title">${t('mn.sc.title')}
+            <span class="panel-aside">${t('mn.sc.aside')}</span>
+            <button class="btn btn-sm" data-op="sectionize">${t('mn.sc.run')}</button></h3>
+          <div class="panel-body" id="scBody"><div class="loading"><span class="spin"></span></div></div>
+        </section>
 
-        <!-- The warden is the one thing here that spends TOKENS rather than
-             disk, and it spends them whether or not it finds anything, so the
-             switch belongs where the other running costs are read. -->
-        <h3 class="panel-title" style="margin-top:20px">${t('mn.wd.title')}
-          <span class="panel-aside">${t('mn.wd.aside')}</span></h3>
-        <div class="list-toolbar toolbar-sm" style="margin-bottom:6px">
-          <label class="inline-label">${t('mn.wd.state')}
-            ${pickerFor({ id: 'wdOn', items: onOffItems, ariaLabel: t('mn.wd.state') })}</label>
-          <label class="inline-label">${t('mn.wd.every')}
-            ${pickerFor({ id: 'wdEvery', items: everyItems, ariaLabel: t('mn.wd.every') })}</label>
-        </div>
-        <div class="hint">${t('mn.wd.body')}</div>
+        <section class="panel mnt-dedup">
+          <h3 class="panel-title">${t('mn.dd.title')}
+            <span class="panel-aside">${t('mn.dd.aside')}</span></h3>
+          <div class="list-toolbar toolbar-sm" style="margin-bottom:6px">
+            <label class="inline-label">
+              ${t('mn.dd.threshold')} <input type="range" id="ddThr" min="0.45" max="0.95" step="0.05" value="0.60">
+              <b id="ddThrVal">0.60</b></label>
+            ${pickerFor({ id: 'ddType', items: types, ariaLabel: t('common.allTypes') })}
+            <input type="text" id="ddDomain" placeholder="${t('mn.dd.domainPh')}"
+                   aria-label="${t('mn.dd.domainPh')}" list="ddDomainsDL" style="max-width:200px">
+            <datalist id="ddDomainsDL"></datalist>
+            <button class="btn btn-solid btn-sm" id="ddRun">${t('mn.dd.run')}</button>
+          </div>
+          <div class="panel-body" id="ddBody"><div class="empty">${t('mn.dd.hint')}</div></div>
+        </section>
+
+        <section class="panel mnt-audit">
+          <h3 class="panel-title">${t('mn.au.title')} <span class="panel-aside">${t('mn.au.aside')}</span>
+            <button class="btn btn-sm" id="auRefresh">${t('common.refresh')}</button></h3>
+          <div class="panel-body table-scroll" id="auditBody"><div class="loading"><span class="spin"></span></div></div>
+        </section>
       </div>
-    </div>
-
-    <div class="panel" style="margin-bottom:14px">
-      <h3 class="panel-title">${t('mn.dd.title')}
-        <span class="panel-aside">${t('mn.dd.aside')}</span></h3>
-      <div class="list-toolbar toolbar-sm" style="margin-bottom:6px">
-        <label class="inline-label">
-          ${t('mn.dd.threshold')} <input type="range" id="ddThr" min="0.45" max="0.95" step="0.05" value="0.60">
-          <b id="ddThrVal">0.60</b></label>
-        ${pickerFor({ id: 'ddType', items: types, ariaLabel: t('common.allTypes') })}
-        <input type="text" id="ddDomain" placeholder="${t('mn.dd.domainPh')}"
-               aria-label="${t('mn.dd.domainPh')}" list="ddDomainsDL" style="max-width:200px">
-        <datalist id="ddDomainsDL"></datalist>
-        <button class="btn btn-solid btn-sm" id="ddRun">${t('mn.dd.run')}</button>
-      </div>
-      <div id="ddBody"><div class="empty">${t('mn.dd.hint')}</div></div>
-    </div>
-
-    <div class="panel" style="margin-bottom:14px">
-      <h3 class="panel-title">${t('mn.sc.title')}
-        <span class="panel-aside">${t('mn.sc.aside')}</span>
-        <button class="btn btn-sm" data-op="sectionize">${t('mn.sc.run')}</button></h3>
-      <div id="scBody"><div class="loading"><span class="spin"></span></div></div>
-    </div>
-
-    <div class="panel">
-      <h3 class="panel-title">${t('mn.au.title')} <span class="panel-aside">${t('mn.au.aside')}</span>
-        <button class="btn btn-sm" id="auRefresh">${t('common.refresh')}</button></h3>
-      <div id="auditBody"><div class="loading"><span class="spin"></span></div></div>
     </div>
   </div>`;
 
@@ -279,13 +291,21 @@ export async function renderMaintenance(view) {
   });
   $('#ddRun').addEventListener('click', async () => {
     const body = $('#ddBody');
+    /* pairs to rule on are what the panel is for, and they need the room the
+       change log has while there are none: see .mnt-dedup.mnt-open */
+    const panel = body.closest('.panel');
     body.innerHTML = '<div class="loading"><span class="spin"></span></div>';
     try {
       const qs = new URLSearchParams({ threshold: $('#ddThr').value });
       if (pickerValue(view, 'ddType')) qs.set('type', pickerValue(view, 'ddType'));
       if ($('#ddDomain').value.trim()) qs.set('domain', $('#ddDomain').value.trim());
       const r = await api(`/api/maintenance/dedup?${qs}`);
-      if (!r.pairs.length) { body.innerHTML = `<div class="empty">${t('mn.dd.none')}</div>`; return; }
+      if (!r.pairs.length) {
+        panel.classList.remove('mnt-open');
+        body.innerHTML = `<div class="empty">${t('mn.dd.none')}</div>`;
+        return;
+      }
+      panel.classList.add('mnt-open');
       body.innerHTML = r.pairs.map((p, i) => `
         <div class="dedup-pair">
           <div style="display:flex;justify-content:space-between;align-items:baseline">
@@ -337,6 +357,7 @@ export async function renderMaintenance(view) {
           } catch (err) { failed('err.relation', err); }
         }));
     } catch (err) {
+      panel.classList.remove('mnt-open');
       body.innerHTML = failedHTML(err);
       /* the scan's inputs are untouched and still on screen, so retrying is
          literally pressing the button that started it */
@@ -350,7 +371,6 @@ export async function renderMaintenance(view) {
     const host = $('#auditBody');
     if (!host) return;
     host.innerHTML = r.entries.length ? `
-      <div class="table-scroll">
       <table class="table">
         <thead><tr><th>${t('mn.au.th.when')}</th><th>${t('mn.au.th.memory')}</th><th>${t('common.domain')}</th><th>${t('mn.au.th.event')}</th><th class="num">${t('mn.au.th.delta')}</th></tr></thead>
         <tbody>${r.entries.map(e => `
@@ -366,8 +386,7 @@ export async function renderMaintenance(view) {
             <td style="max-width:340px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(e.note)}">${esc(e.note || '') || t('mn.au.contentEdit')}</td>
             <td class="num">${e.content_changed ? `${e.prev_len} → ${e.new_len}` : '<span style="color:var(--ink-3)">—</span>'}</td>
           </tr>`).join('')}</tbody>
-      </table>
-      </div>` : `<div class="empty">${t('mn.au.empty')}</div>`;
+      </table>` : `<div class="empty">${t('mn.au.empty')}</div>`;
     host.querySelectorAll('[data-uid]').forEach(tr =>
       tr.addEventListener('click', () => openRecord(tr.dataset.uid)));
   });
