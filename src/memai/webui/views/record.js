@@ -25,7 +25,7 @@ import { esc, fmtDate, fmtInt, debounce } from '../core/dom.js';
 import { api, seg } from '../core/api.js';
 import { icon } from '../core/icons.js';
 import { toast, failed, openModal, closeModal, confirmModal, promptModal,
-         openCtxMenu, copyCode, copyUid } from '../core/ui.js';
+         openCtxMenu, copyCode, copyUid, modalOpen } from '../core/ui.js';
 import { typeTag, uidChip, statusTag, wireCopyChips,
          CONF, REL_SUGGEST, typeItems, sectionLabel, sectionLabelHTML, sectionHue,
          cachedDomains, invalidateDomains, domainDatalist } from '../core/shared.js';
@@ -562,6 +562,29 @@ function wire(view, m, uid, fields, isDiagram) {
   q('#dBack').addEventListener('click', goBack);
   q('#dPrev')?.addEventListener('click', () => step(uid, -1));
   q('#dNext')?.addEventListener('click', () => step(uid, 1));
+
+  /* The same two steps from the keyboard, which is what the arrows in those
+     two tooltips name: Left goes back through the list, Right goes on.
+
+     The listener is on the document, so the keys reach the record from
+     anywhere in it, and it stands down wherever an arrow already means
+     something else: in a form control the caret walks the text, a modifier
+     belongs to another shortcut (Alt+Left is browser Back), a modal over
+     the record is what is being read, and an open field editor holds text
+     no version has yet -- a click on the button is aimed at it, a key
+     pressed with the caret parked anywhere is not. */
+  const stepKeys = e => {
+    const delta = { ArrowLeft: -1, ArrowRight: 1 }[e.key];
+    if (delta === undefined) return;
+    if (e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return;
+    if (modalOpen() || editing.all || editing.key !== null) return;
+    const el = document.activeElement;
+    if (el && (/^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName) || el.isContentEditable)) return;
+    e.preventDefault();
+    step(uid, delta);
+  };
+  document.addEventListener('keydown', stepKeys);
+  onTeardown(() => document.removeEventListener('keydown', stepKeys));
   view.querySelectorAll('[data-open]').forEach(el =>
     el.addEventListener('click', () => openRecord(el.dataset.open)));
   view.querySelectorAll('[data-fdomain]').forEach(el =>
