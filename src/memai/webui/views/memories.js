@@ -107,6 +107,7 @@ export async function renderMemories(view, params, ctx) {
     due: params.get('due') || '',
     stale: params.get('stale') || '',
     untitled: params.get('untitled') || '',
+    untagged: params.get('untagged') || '',
     sort: params.get('sort') || 'created_at',
     dir: params.get('dir') || 'desc',
     page: parseInt(params.get('page') || '0', 10) || 0,
@@ -120,7 +121,8 @@ export async function renderMemories(view, params, ctx) {
   const qs = query({
     q: state.q, domain: state.domain, type: state.type, status: state.status,
     confidence: state.confidence, session: state.session, sort: state.sort, dir: state.dir,
-    linked: state.linked, due: state.due, stale: state.stale, untitled: state.untitled,
+    linked: state.linked, due: state.due, stale: state.stale,
+    untitled: state.untitled, untagged: state.untagged,
     subtree: state.exact ? '0' : '',
     limit: PAGE, offset: state.page * PAGE,
   });
@@ -149,7 +151,7 @@ export async function renderMemories(view, params, ctx) {
   const activeSort = sorts.some(s => s.value === sortPair) ? sortPair : sorts[0].value;
 
   /* one chip per defect filter in the URL, each one its own way off */
-  const defects = ['linked', 'due', 'stale', 'untitled']
+  const defects = ['linked', 'due', 'stale', 'untitled', 'untagged']
     .filter(k => state[k])
     .map(k => `<button type="button" class="chip clickable" data-undefect="${k}"
          title="${esc(t('mem.defect.off'))}">${t(`mem.defect.${k}`)}${icon('close')}</button>`)

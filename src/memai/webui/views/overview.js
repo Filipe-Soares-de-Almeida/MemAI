@@ -31,7 +31,7 @@ const AXES = ['curation', 'connectivity', 'freshness', 'organization'];
 
 /* How a reading out of 100 is coloured, and the same three steps for the
    index and for each of its axes -- the index IS their mean, so a scale
-   that changed between them would make the ring disagree with the bars
+   that changed between them would make the figure disagree with the bars
    under it. Green is fine, amber wants work, red is the thing to go and
    fix. */
 const band = v => (v >= 75 ? 'var(--ok)' : v >= 50 ? 'var(--warn)' : 'var(--bad)');
@@ -41,7 +41,13 @@ const band = v => (v >= 75 ? 'var(--ok)' : v >= 50 ? 'var(--warn)' : 'var(--bad)
    counted; the two that do not are a view of their own. */
 const SYMPTOM_ROUTE = {
   contradicted: 'memories', stale: 'memories', due: 'memories',
-  unlinked: 'memories', untitled: 'memories', diagrams: 'diagrams',
+  unlinked: 'memories', untitled: 'memories', untagged: 'memories',
+  diagrams: 'diagrams',
+  /* The only one that counts something other than memories AND has no list
+     of its own: both endpoints of a broken edge are the defect, so there is
+     nothing to open. The button goes to the operation that clears them,
+     which is why this entry carries its own params instead of the server's. */
+  orphans: ['maintenance', { tab: 'storage' }],
 };
 
 export async function renderOverview(view, params, ctx) {
@@ -97,12 +103,7 @@ export async function renderOverview(view, params, ctx) {
   wire(view, o);
 }
 
-/* ─── the rings ───────────────────────────────────────────────────────────
-   One drawing, two readings. The big one is the index -- the figure the
-   view exists to state -- and the small one under it is the confidence
-   split, which is one of the four things that go INTO the index. They were
-   the other way round because the mock was drawn before the index existed.
-
+/* ─── the ring ────────────────────────────────────────────────────────────
    Segments are dash patterns on ONE circle rather than separate arcs, so
    they cannot drift apart, and the centre carries the figure in plain
    white: the arc is already saying how the reading went. */
@@ -133,12 +134,12 @@ function ringHTML(parts, total, midHTML, { label = '' } = {}) {
   </div>`;
 }
 
-/* ─── the card the two rings share ────────────────────────────────────────
-   Confidence takes the big ring and the index takes the small one, and it
-   is the DRAWING that decides which: the index is one arc in one colour,
-   which says everything it has to say at any size, while confidence is
-   three segments whose proportions are the point. Size goes to the figure
-   that has something to show at size. */
+/* ─── the card the ring and the index share ───────────────────────────────
+   The ring is the confidence split: three segments whose proportions are
+   the point. The index below it is one figure over four bars.
+
+   The ring's percentage and the `curation` axis (db._HEALTH_AXES) are the
+   same reading -- confirmed over active -- so the two always agree. */
 
 function ringsPanel(h, o) {
   const total = CONF_ORDER.reduce((a, c) => a + (o.by_confidence[c] || 0), 0);
@@ -178,11 +179,6 @@ function indexHTML(h) {
   const delta = h.delta == null ? '' : `<span class="hx-delta ${h.delta < 0 ? 'down' : ''}">${
     h.delta > 0 ? '+' : ''}${h.delta} ${t('ov.hx.inDays', { n: h.delta_days })}</span>`;
 
-  const ring = ringHTML(
-    [{ value: h.score, color: band(h.score) }], 100,
-    `<div class="hx-ring-pct">${h.score}<span class="hx-ring-of">/100</span></div>`,
-    { label: t('ov.hx.ringLabel', { n: h.score }) });
-
   /* The axes are to the index what the legend is to the ring above: the
      four readings the one figure is the mean of. */
   const axes = AXES.map(a => `
@@ -195,21 +191,27 @@ function indexHTML(h) {
 
   return `<div class="hx-second">
     <div class="hx-second-head">
-      <span class="mg-label">${t('ov.hx.title')}</span>
+      <span class="hx-second-name">
+        <span class="mg-label">${t('ov.hx.title')}</span>
+        <span class="hx-score" style="color:${band(h.score)}">${
+          h.score}<span class="hx-score-of">&nbsp;/ 100</span></span>
+      </span>
       ${delta}
     </div>
-    <div class="hx-second-body">
-      ${ring}
-      <div class="hx-axes">${axes}</div>
-    </div>
+    <div class="hx-axes">${axes}</div>
   </div>`;
 }
 
 /* ─── the symptoms ────────────────────────────────────────────────────── */
 
+/* A symptom that counts something other than memories carries its own
+   denominator (`of`) and no share of the store, so the share column names
+   what that denominator IS -- flows, or relation rows. */
+const OF_LABEL = { diagrams: 'ov.sym.ofFlows', orphans: 'ov.sym.ofRelations' };
+
 function symptomRow(s, active) {
-  const share = s.key === 'diagrams'
-    ? t('ov.sym.ofFlows', { n: fmtInt(s.count), all: fmtInt(s.of) })
+  const share = OF_LABEL[s.key]
+    ? t(OF_LABEL[s.key], { n: fmtInt(s.count), all: fmtInt(s.of) })
     : active ? `${(s.share * 100).toFixed(1)}%` : '';
   return `<div class="hx-sym" data-sym="${esc(s.key)}">
     <span class="hx-sev sev-${esc(s.severity)}"></span>
@@ -245,6 +247,18 @@ function symptomsPanel(symptoms, active) {
         <span class="hx-sym-n" data-dupes>—</span>
         <span class="hx-sym-share" data-dupes-share>${t('ov.sym.notScanned')}</span>
         <button type="button" class="btn btn-sm" data-scan>${t('ov.sym.scan')}</button>
+      </div>
+      <!-- Two checks over the FILE rather than counts over the memories:
+           whether SQLite can still read it, and whether the keyword index
+           still matches the rows it indexes. Asked for, like the scan
+           above, because together they cost around 400ms on a store of a
+           few tens of megabytes and this page paints on every landing. -->
+      <div class="hx-sym" data-sym="file">
+        <span class="hx-sev" data-file-sev></span>
+        <span class="hx-sym-name">${t('ov.sym.file')}</span>
+        <span class="hx-sym-n" data-file>—</span>
+        <span class="hx-sym-share" data-file-share>${t('ov.sym.file.notChecked')}</span>
+        <button type="button" class="btn btn-sm" data-check>${t('ov.sym.file.act')}</button>
       </div>
     </div>
   </div>`;
@@ -390,7 +404,11 @@ function wire(view, o) {
   view.querySelectorAll('.hx-sym-go').forEach(btn => btn.addEventListener('click', () => {
     const s = bySymptom[btn.closest('.hx-sym').dataset.sym];
     if (!s) return;
-    go(SYMPTOM_ROUTE[s.key] || 'memories', s.params || {});
+    /* a route with its own params overrides the server's filter -- see
+       SYMPTOM_ROUTE, where only the one with no list of its own has them */
+    const dest = SYMPTOM_ROUTE[s.key] || 'memories';
+    const [name, own] = Array.isArray(dest) ? dest : [dest, null];
+    go(name, own || s.params || {});
   }));
 
   /* The scan the count is worth waiting for. It replaces its own row rather
@@ -410,6 +428,55 @@ function wire(view, o) {
     } catch {
       scan.disabled = false;
       scan.textContent = t('ov.sym.scan');
+    }
+  });
+
+  /* The file's own two checks. The index can pass its integrity check and
+     still not hold the rows it indexes, so the count comparison is part of
+     the same verdict rather than a third line -- what a reader wants to
+     know is whether the index can be trusted, not which half failed. The
+     detail that says which half is on the row. */
+  const check = view.querySelector('[data-check]');
+  check?.addEventListener('click', async () => {
+    check.disabled = true;
+    check.textContent = t('ov.sym.file.checking');
+    try {
+      const h = await api('/api/maintenance/health');
+      const indexOk = h.fts.ok && h.fts.rows === h.fts.expected;
+      const passed = Number(h.integrity.ok) + Number(indexOk);
+      const detail = [
+        h.integrity.ok ? '' : (h.integrity.detail || t('ov.sym.file.dbBad')),
+        indexOk ? '' : (h.fts.detail || t('ov.sym.file.rows',
+          { a: fmtInt(h.fts.rows), b: fmtInt(h.fts.expected) })),
+      ].filter(Boolean).join(' · ');
+
+      const row = view.querySelector('[data-sym="file"]');
+      row.querySelector('[data-file]').textContent = `${passed}/2`;
+      row.querySelector('[data-file-share]').textContent =
+        passed === 2 ? t('ov.sym.file.ok') : t('ov.sym.file.bad', { n: 2 - passed });
+      /* Every other mark in this panel carries a severity even at a count of
+         zero, so a clean verdict is coloured too. Grey is reserved for the
+         state before the check has been run, which is neither. */
+      row.querySelector('[data-file-sev]').className =
+        `hx-sev ${passed === 2 ? 'sev-info' : h.integrity.ok ? 'sev-warn' : 'sev-bad'}`;
+      /* the whole verdict, including SQLite's own message, where a 74px
+         column cannot carry it */
+      row.title = detail || t('ov.sym.file.okLong');
+
+      check.disabled = false;
+      /* The label stays put on a pass: pressing Check again is what it does,
+         and a second wording for the same action ran to two lines in a 92px
+         column and made this row taller than the eight above it. */
+      check.textContent = t('ov.sym.file.act');
+      if (passed < 2) {
+        /* the repairs are operations on the file, and they live where the
+           other operations on the file do */
+        check.textContent = t('ov.sym.file.repair');
+        check.onclick = () => go('maintenance', { tab: 'storage' });
+      }
+    } catch {
+      check.disabled = false;
+      check.textContent = t('ov.sym.file.act');
     }
   });
 }

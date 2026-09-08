@@ -204,6 +204,18 @@ const ICONS = {
     body: `<path d="M5.5 4h.01M10.5 4h.01M5.5 8h.01M10.5 8h.01M5.5 12h.01M10.5 12h.01"/>`,
   },
 
+  /* a shelf of backups: the folder that holds one project's files */
+  'folder': {
+    viewBox: '0 0 16 16',
+    body: `<path d="M2 4.2a1 1 0 011-1h3.2l1.3 1.5H13a1 1 0 011 1v6.1a1 1 0 01-1 1H3a1 1 0 01-1-1z"/>`,
+  },
+  /* one backup: a sheet with rows, the last one short */
+  'db-file': {
+    viewBox: '0 0 16 16',
+    body: `<rect x="2.5" y="2.5" width="11" height="11" rx="1.4"/>
+           <path d="M5.2 6.4h5.6M5.2 8.6h5.6M5.2 10.8h3.4"/>`,
+  },
+
   /* free flight in the relations graph: a body and the path around it,
      tilted, so it reads as depth rather than as a target */
   'orbit': {

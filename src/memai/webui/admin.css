@@ -994,16 +994,14 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
 }
 .hx-right { display: grid; gap: var(--sp-4); min-width: 0; }
 
-/* ── the rings ──
-   Two of them, and SIZE goes to the one with something to show at size.
-   The index is a single arc in a single colour -- it reads the same at
-   104px as at 228 -- while confidence is three segments whose proportions
+/* ── the ring ──
+   One of them, on the confidence split: three segments whose proportions
    are the whole point of drawing it as a ring at all. */
 
 .hx-ring-panel { display: flex; flex-direction: column; }
 .hx-ring {
   position: relative; align-self: center;
-  width: var(--ring, 228px); height: var(--ring, 228px);
+  width: 228px; height: 228px;
   margin: var(--sp-2) 0;
 }
 /* -90deg so the first segment starts at twelve o'clock, which is where a
@@ -1018,11 +1016,10 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
 .hx-ring-pct { font: 500 var(--fs-hero)/1 var(--font-ui); color: var(--ink); }
 /* what the percentage in the middle IS a percentage of */
 .hx-ring-cap { font-size: var(--fs-sm); color: var(--ink-2); margin-top: var(--sp-0); }
-.hx-ring-of { font: 400 var(--fs-read) var(--font-ui); color: var(--ink-3); }
-
-/* the secondary ring: the same drawing at half the size, laid beside the
-   four readings it is the mean of. `margin-top: auto` puts it at the foot
-   of the card whatever the legend above it comes out to. */
+/* the index, at the foot of the same card: the figure beside its own
+   label, and the four readings it is the mean of as bars under both.
+   `margin-top: auto` puts it at the foot whatever the legend above it
+   comes out to. */
 .hx-second {
   margin-top: auto; padding-top: var(--sp-4);
   border-top: 1px solid var(--line-soft);
@@ -1031,10 +1028,11 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
   display: flex; align-items: baseline; justify-content: space-between;
   gap: var(--sp-3); margin-bottom: var(--sp-2);
 }
-.hx-second-body { display: flex; align-items: center; gap: var(--sp-4); }
-.hx-second .hx-ring { --ring: 104px; flex: none; margin: 0; }
-.hx-second .hx-ring-pct { font-size: var(--fs-lg); }
-.hx-second .hx-ring-of { font-size: var(--fs-sm); }
+/* the label and the figure read as one line, so they share a baseline and
+   the delta keeps the far end of the head to itself */
+.hx-second-name { display: flex; align-items: baseline; gap: var(--sp-2); }
+.hx-score { font: 500 var(--fs-lg) var(--font-m); font-variant-numeric: tabular-nums; }
+.hx-score-of { font: 400 var(--fs-sm) var(--font-ui); color: var(--ink-3); }
 
 .hx-legend { display: flex; flex-direction: column; gap: var(--sp-2); margin-top: var(--sp-2); }
 /* a real button: each row lists the memories in that state, which is a
@@ -1065,10 +1063,10 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
 }
 .hx-delta.down { color: var(--bad-ink); }
 
-/* Beside a 104px ring rather than across the card, so the label column and
-   the gaps come in to leave the bar something to be. */
-.hx-axes { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: var(--sp-1); }
-.hx-axis { display: grid; grid-template-columns: 88px minmax(0, 1fr) 24px; align-items: center; gap: var(--sp-2); }
+/* Across the card: the label column takes the longest axis name in any
+   language, and the reading keeps a fixed 24px so the bars end level. */
+.hx-axes { min-width: 0; display: flex; flex-direction: column; gap: var(--sp-1); }
+.hx-axis { display: grid; grid-template-columns: 104px minmax(0, 1fr) 24px; align-items: center; gap: var(--sp-2); }
 .hx-axis-name { font-size: var(--fs-sm); color: var(--ink-2); }
 /* an axis bar is thinner than a chart bar: it is a reading, not the subject */
 .hx-axis .bar-track { height: 6px; border-radius: var(--r-pill); }
@@ -3096,86 +3094,311 @@ button.rs-mono:hover { color: var(--accent); }
 
 /* ── maintenance ─────────────────────────────────────────────────────── */
 
-/* The rail carries what the file IS -- its checks and the operations over
-   it -- and the wide column carries the work: the bodies that could not be
-   read, the pairs that look alike, the edits the store has taken. Below
-   --fill-floor the grid is one column and the page scrolls, so the boxes
-   only get their fixed heights inside the window-filling layout
-   (see .view.fill). */
-.mnt-grid, .mnt-rail, .mnt-work { display: grid; gap: var(--sp-3); }
-/* a heading inside a panel body, under the block it follows */
-.mnt-sub { margin-top: var(--sp-5); }
+/* Maintenance is six workspaces behind one tab strip, not six panels
+   competing for one screen. Each tab owns the whole area under the strip
+   and scrolls inside it; the strip and the store's own state stay put.
+
+   The panels are all built at mount and hidden with [hidden] rather than
+   thrown away, because two of them hold work you would lose: a dedup scan
+   is an O(n^2) sweep, and a log you have scrolled back through is a place
+   you were reading. Flipping to another tab and back must not re-run
+   either. */
+.mnt-head {
+  flex: none;
+  display: flex; align-items: center; gap: var(--sp-2) var(--sp-4);
+  flex-wrap: wrap;
+  padding-bottom: var(--sp-3);
+  border-bottom: 1px solid var(--line-soft);
+  margin-bottom: var(--sp-4);
+}
+.mnt-tabs { display: flex; align-items: center; gap: var(--sp-0); flex-wrap: wrap; }
+.mnt-tab {
+  display: inline-flex; align-items: center; gap: var(--sp-2);
+  height: var(--ctl-h); padding: 0 var(--sp-3);
+  border: none; border-radius: var(--r-md);
+  background: none; color: var(--ink-2);
+  font: 500 var(--fs-body) var(--font-ui);
+  cursor: pointer; transition: background .13s, color .13s;
+}
+.mnt-tab:hover { background: var(--hover-2); color: var(--ink); }
+/* the same rule as the rail and the segmented control: aria-selected IS
+   the state, not a class shadowing it */
+.mnt-tab[aria-selected="true"] { background: var(--accent-dim); color: var(--accent); }
+/* how many items that tab is holding for you. Amber rather than accent:
+   it is a backlog, and the selected tab is already accent-coloured. */
+.mnt-tab-badge {
+  font: 500 var(--fs-label) var(--font-m);
+  color: var(--warn); background: rgba(255, 213, 79, .14);
+  border-radius: var(--r-pill); padding: 1px 7px;
+}
+
+.mnt-state { margin-left: auto; display: flex; align-items: center; gap: var(--sp-3); }
+/* Which store the tabs are acting on. Not a verdict on it: the six checks
+   that used to hang off this line count the same defects the Health view
+   counts, and two screens saying it was two places to keep in step. */
+.mnt-store { font: 400 var(--fs-label) var(--font-m); color: var(--ink-3); }
+
+/* One repair: what it would act on, and the control that does it. No dot --
+   a status list is what this view stopped being. */
+.mnt-fix {
+  display: flex; align-items: center; gap: var(--sp-3);
+  padding: var(--sp-3) 0;
+  border-bottom: 1px solid var(--line-soft);
+}
+.mnt-fix:last-child { border-bottom: none; }
+.mnt-fix-name { font-size: var(--fs-body); color: var(--ink); min-width: 150px; }
+.mnt-fix-state { font-size: var(--fs-sm); color: var(--ink-2); flex: 1; min-width: 0; }
+.mnt-fix .btn { flex: none; }
+
+.mnt-panels { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.mnt-panel { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: var(--sp-3); }
+/* display:flex outranks the hidden attribute's own display:none, so the
+   attribute has to be spelled out or every panel paints at once */
+.mnt-panel[hidden] { display: none; }
+/* a panel whose header draws its own rule and whose body does its own
+   padding: the shelf, and anything else built as head-over-scroller */
+.panel.mnt-flush { padding: 0; }
+
+/* ── the backups shelf ───────────────────────────────────────────────── */
+
+.mnt-two { flex: 1; min-height: 0; display: grid; gap: var(--sp-4); }
+.mnt-rail2 { display: flex; flex-direction: column; gap: var(--sp-5); min-height: 0; }
+.mnt-rail-head {
+  display: flex; align-items: center; gap: var(--sp-2);
+  padding: 0 var(--sp-3) var(--sp-2);
+  font: 500 var(--fs-label) var(--font-ui);
+  letter-spacing: .08em; text-transform: uppercase; color: var(--ink-3);
+}
+.mnt-rail-head b { margin-left: auto; font: 500 var(--fs-label) var(--font-m); color: var(--ink-3); }
+.mnt-shelf {
+  display: grid; grid-template-columns: 16px minmax(0, 1fr) auto;
+  gap: var(--sp-2); align-items: center;
+  width: 100%; min-height: var(--tap); text-align: left;
+  background: none; border: none; border-radius: var(--r-md);
+  padding: var(--sp-2) var(--sp-3);
+  font: 400 var(--fs-body) var(--font-ui); color: var(--ink-2);
+  cursor: pointer; transition: background .13s, color .13s;
+}
+.mnt-shelf:hover { background: var(--hover-2); color: var(--ink); }
+.mnt-shelf[aria-current="true"] { background: var(--accent-dim); color: var(--accent); font-weight: 500; }
+.mnt-shelf-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mnt-shelf-count { font: 500 var(--fs-label) var(--font-m); color: var(--ink-3); }
+.mnt-shelf[aria-current="true"] .mnt-shelf-count { color: var(--accent); }
+
+.mnt-disk { margin-top: auto; padding-top: var(--sp-4); border-top: 1px solid var(--line-soft); }
+.mnt-disk-label {
+  font: 500 var(--fs-label) var(--font-ui);
+  letter-spacing: .08em; text-transform: uppercase; color: var(--ink-3);
+  margin-bottom: var(--sp-1);
+}
+.mnt-disk-value { font: 500 var(--fs-lg) var(--font-ui); color: var(--ink); }
+.mnt-disk-split { font-size: var(--fs-sm); color: var(--ink-3); margin-top: var(--sp-0); }
+.mnt-disk .btn { width: 100%; margin-top: var(--sp-3); justify-content: center; }
+
+/* A stacked bar of one segment says nothing, so every use of this has at
+   least two: the live file against what its backups cost, the pages in
+   use against the pages a compaction would return. */
+.mnt-bar {
+  display: flex; height: 6px; margin-top: var(--sp-2);
+  border-radius: var(--r-sm); overflow: hidden; background: var(--inset);
+}
+.mnt-bar > span { display: block; }
+.mnt-legend { display: flex; flex-wrap: wrap; gap: var(--sp-2) var(--sp-4); margin-top: var(--sp-3); }
+.mnt-legend > span {
+  display: inline-flex; align-items: center; gap: var(--sp-2);
+  font-size: var(--fs-sm); color: var(--ink-2);
+}
+
+/* The shelf itself: a header that stays, rows that scroll under it. */
+.mnt-shelf-head {
+  flex: none; display: flex; align-items: center; gap: var(--sp-3);
+  flex-wrap: wrap; padding: var(--sp-3) var(--sp-4);
+  border-bottom: 1px solid var(--line-soft);
+}
+.mnt-shelf-title { font: 500 var(--fs-read) var(--font-ui); color: var(--ink); white-space: nowrap; }
+.mnt-shelf-meta {
+  font: 400 var(--fs-sm) var(--font-m); color: var(--ink-3);
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.mnt-shelf-acts { margin-left: auto; display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; }
+.mnt-shelf-body { flex: 1; min-height: 0; overflow-y: auto; padding: var(--sp-1) var(--sp-4) var(--sp-4); }
+
+/* A group rule inside the shelf: the bucket's name, then a hairline out to
+   what that bucket costs. */
+.mnt-group {
+  display: flex; align-items: center; gap: var(--sp-3);
+  padding: var(--sp-3) var(--sp-2) var(--sp-2);
+}
+.mnt-group-name {
+  font: 500 var(--fs-label) var(--font-ui);
+  letter-spacing: .08em; text-transform: uppercase; color: var(--ink-3);
+}
+.mnt-group-rule { flex: 1; height: 1px; background: var(--line-soft); }
+.mnt-group-meta { font: 500 var(--fs-label) var(--font-m); color: var(--ink-3); }
+
+.mnt-file {
+  display: grid; grid-template-columns: 16px minmax(0, 1fr) 96px 74px;
+  gap: var(--sp-3); align-items: center;
+  border-radius: var(--r-md); padding: var(--sp-2);
+}
+.mnt-file:hover { background: var(--hover-1); }
+/* the column names, on the same grid so Taken and Size line up with what
+   they name */
+.mnt-file-head { padding-bottom: var(--sp-1); }
+.mnt-file-head:hover { background: none; }
+.mnt-file-head span {
+  font: 500 var(--fs-label) var(--font-ui);
+  letter-spacing: .08em; text-transform: uppercase; color: var(--ink-3);
+}
+.mnt-file-head .num { text-align: right; }
+.mnt-file .ico { --ico: 15px; color: var(--ink-3); }
+.mnt-file-main { min-width: 0; }
+.mnt-file-label {
+  font: 500 var(--fs-body) var(--font-ui); color: var(--ink);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+/* the filename standing in for the label, when the group heading is
+   already carrying the reason */
+.mnt-file-mono { font: 400 var(--fs-sm) var(--font-m); color: var(--ink-2); }
+.mnt-file-sub {
+  display: flex; align-items: center; gap: var(--sp-2);
+  margin-top: var(--sp-0); min-width: 0;
+}
+.mnt-file-name {
+  font: 400 var(--fs-label) var(--font-m); color: var(--ink-3);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0;
+}
+.mnt-file-when { font-size: var(--fs-sm); color: var(--ink-2); }
+.mnt-file-size { font: 400 var(--fs-sm) var(--font-m); color: var(--ink-2); text-align: right; }
+
+/* ── storage ─────────────────────────────────────────────────────────── */
+
+/* Tabs whose content is a stack of sections rather than one list: the
+   stack scrolls, each section keeps its own box. */
+.mnt-stack {
+  flex: 1; min-height: 0; overflow-y: auto;
+  display: flex; flex-direction: column; gap: var(--sp-3);
+}
+.mnt-stack > .panel { flex: none; }
+
+.mnt-note {
+  background: var(--inset); border-radius: var(--r-md);
+  padding: var(--sp-3); margin-top: var(--sp-3);
+  font-size: var(--fs-sm); color: var(--ink-2); line-height: 1.6;
+}
+
+/* One step of an operation that has to be taken in order. The number is
+   the state: pending, done, or waiting on the step above it. */
+.mnt-step {
+  display: flex; align-items: center; gap: var(--sp-3);
+  padding: var(--sp-3) 0;
+  border-bottom: 1px solid var(--line-soft);
+}
+.mnt-step:last-child { border-bottom: none; }
+.mnt-step-n {
+  flex: none; width: 22px; height: 22px; border-radius: 50%;
+  display: grid; place-content: center;
+  border: 1px solid var(--line);
+  font: 500 var(--fs-label) var(--font-m); color: var(--ink-3);
+}
+.mnt-step.done .mnt-step-n { border-color: var(--ok); color: var(--ok); }
+.mnt-step.now .mnt-step-n { border-color: var(--accent); color: var(--accent); }
+.mnt-step-body { min-width: 0; }
+.mnt-step-name { font-size: var(--fs-body); color: var(--ink); }
+.mnt-step.locked .mnt-step-name { color: var(--ink-3); }
+.mnt-step-note { font-size: var(--fs-sm); color: var(--ink-3); margin-top: var(--sp-0); }
+.mnt-step .btn { margin-left: auto; flex: none; }
+
+/* ── the change log ──────────────────────────────────────────────────── */
+
+.mnt-log { flex: 1; min-height: 0; overflow-y: auto; }
+.mnt-day {
+  position: sticky; top: 0; z-index: 1;
+  display: flex; align-items: center; gap: var(--sp-3);
+  padding: var(--sp-3) var(--sp-2) var(--sp-2);
+  background: var(--surface);
+}
+.mnt-day-name {
+  font: 500 var(--fs-label) var(--font-ui);
+  letter-spacing: .08em; text-transform: uppercase; color: var(--ink-3);
+}
+.mnt-ev {
+  display: grid; grid-template-columns: 58px 9px minmax(0, 1fr) auto;
+  gap: var(--sp-3); align-items: baseline;
+  width: 100%; text-align: left;
+  background: none; border: none; border-radius: var(--r-md);
+  padding: var(--sp-2); font: inherit; color: inherit; cursor: pointer;
+}
+.mnt-ev:hover { background: var(--hover-1); }
+.mnt-ev-time { font: 400 var(--fs-label) var(--font-m); color: var(--ink-3); }
+/* the dot has no baseline of its own: a title wrapping to two lines
+   would pull a centred one down, away from the row it marks */
+.mnt-ev .dot { align-self: start; margin-top: .42em; }
+.mnt-ev-main { min-width: 0; }
+.mnt-ev-uid { font: 400 var(--fs-label) var(--font-m); color: var(--ink-3); }
+/* An event's own note is the title, and a note has no length limit -- one
+   of 400 characters would otherwise own a third of the log. Two lines,
+   then the full text in the row's tooltip. */
+.mnt-ev-title {
+  font-size: var(--fs-body); color: var(--ink); line-height: 1.45;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.mnt-ev-detail {
+  display: flex; align-items: baseline; gap: var(--sp-2); flex-wrap: wrap;
+  font-size: var(--fs-sm); color: var(--ink-2); margin-top: var(--sp-0); min-width: 0;
+}
+.mnt-ev-domain {
+  font: 400 var(--fs-label) var(--font-m); color: var(--ink-3);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0;
+}
+.mnt-ev-delta { font: 400 var(--fs-sm) var(--font-m); color: var(--ink-3); white-space: nowrap; }
+
+/* ── inside the window-filling layout ────────────────────────────────── */
 
 @media (min-height: 620px) and (min-width: 1024px) {
-  .mnt-grid {
-    flex: 1; min-height: 0;
-    /* 420px is what a check's sentence needs to stop at two lines; six of
-       them wrapping to three fill the rail on their own. */
-    grid-template-columns: minmax(320px, 420px) minmax(0, 1fr);
-  }
-  .mnt-rail, .mnt-work { display: flex; flex-direction: column; min-height: 0; }
-
-  /* A panel is a heading that stays and a body that moves. The toolbar of
-     the scan sits between them and stays too: it is what you set before you
+  /* 240px is the widest project name the rail has to hold without
+     truncating, plus the folder and the count. */
+  .mnt-two { grid-template-columns: minmax(0, 240px) minmax(0, 1fr); }
+  .mnt-rail2 { overflow-y: auto; }
+  /* a panel is a heading that stays and a body that moves. The toolbar of a
+     scan sits between them and stays too: it is what you set before you
      press Run, and it cannot scroll away from its own results. */
-  .mnt-grid .panel { min-height: 0; display: flex; flex-direction: column; }
-  .mnt-grid .panel-body { flex: 1; min-height: 0; overflow-y: auto; }
-  /* The checks are as tall as their rows; the operations take what is left
-     of the rail. Their basis is zero so that a window too short for both
-     shrinks the panel that scrolls and not the six checks. */
-  .mnt-fit { flex: 0 1 auto; }
-  .mnt-fill { flex: 1 1 0; }
-  /* A queue of bodies to settle is usually one line saying there are none,
-     and never worth a third of the column. */
-  .mnt-work > .mnt-fit { max-height: 30%; }
-  /* The log always has rows in it and the scan is empty until you run one,
-     so the log holds the larger share -- until a scan comes back with pairs
-     to rule on, which is when the room moves to the panel being worked in
-     (maintenance.js toggles .mnt-open). */
-  .mnt-dedup { flex: 1 1 0; }
-  .mnt-audit { flex: 1.6 1 0; }
-  .mnt-dedup.mnt-open { flex: 3 1 0; }
+  .mnt-panel .panel { min-height: 0; display: flex; flex-direction: column; }
+  /* A tab whose content is one list takes the tab's whole height, so an
+     empty one is a box saying it is empty rather than a strip of heading
+     over a screen of nothing. The exception opts out: a pair of settings
+     grown to full height is a rule with more air under it than words. */
+  .mnt-panel > .panel { flex: 1; }
+  .mnt-panel > .panel.mnt-short { flex: none; }
+  .mnt-panel .panel > .panel-body { flex: 1; min-height: 0; overflow-y: auto; }
+  .mnt-panel .panel > .panel-title,
+  .mnt-panel .panel > .list-toolbar { flex: none; }
+  /* except in a stack, where the sections are as tall as their content and
+     the column behind them is the scroller */
+  .mnt-stack > .panel { flex: none; }
 
-  /* A sentence saying there is nothing here centres in the box it is left
-     with. Its own padding is generous enough to overflow a short panel and
-     raise a scrollbar over six pixels of nothing. */
-  .mnt-grid .panel-body > .empty,
-  .mnt-grid .panel-body > .loading {
+  /* a sentence saying there is nothing here centres in the box it is left
+     with, rather than sitting under a heading with a screen below it */
+  .mnt-panel .panel-body > .empty,
+  .mnt-panel .panel-body > .loading {
     height: 100%; padding: var(--sp-4);
     display: grid; place-content: center;
   }
-
-  /* A log scrolled inside a box loses its column names on the first row. */
-  .mnt-audit .table th {
-    position: sticky; top: 0; z-index: 1;
-    background: var(--surface);
-  }
 }
 
-.check-row {
-  display: flex; align-items: baseline; gap: var(--sp-3);
-  padding: var(--sp-2) var(--sp-0);
-  border-bottom: 1px solid var(--line-soft);
-  font-size: var(--fs-sm);
+/* Below the fill floor the tabs stack as a page: the rail goes above its
+   shelf, and every box grows to its content instead of scrolling inside
+   one that is no longer tall enough to be worth scrolling. */
+@media (max-width: 1023px), (max-height: 619px) {
+  .mnt-two { grid-template-columns: minmax(0, 1fr); }
+  /* the rail is a band across the top here, not a column with a foot */
+  .mnt-disk { margin-top: 0; }
+  .mnt-disk .btn { width: auto; }
 }
-.check-row:last-child { border-bottom: none; }
-/* A dot has no baseline of its own, so it is placed against the first line
-   rather than left to the row: a detail wrapping to four lines pulls a
-   centred dot halfway down the row, away from the name it marks. */
-.check-dot {
-  width: 9px; height: 9px; border-radius: 50%; flex: none;
-  align-self: start; margin-top: .4em;
-}
-.check-dot.ok { background: var(--ok); }
-.check-dot.warn { background: var(--warn); }
-.check-dot.bad { background: var(--bad); }
-.check-name { color: var(--ink); min-width: 150px; font-weight: 500; }
-.check-detail { color: var(--ink-2); font-size: var(--fs-sm); flex: 1; }
 
 .mnt-actions { display: flex; flex-wrap: wrap; gap: var(--sp-2); }
 
-.backup-row { display: flex; justify-content: space-between; gap: var(--sp-3); padding: var(--sp-2) var(--sp-0); border-bottom: 1px solid var(--line-soft); font: 400 var(--fs-sm) var(--font-m); color: var(--ink-2); }
-.backup-row:last-child { border-bottom: none; }
 
 /* A body the section parser could not read. The whole row opens the record,
    which is where its fields are set by hand, so it is a button and the uid
@@ -4044,6 +4267,24 @@ button.rs-mono:hover { color: var(--accent); }
   .graph-controls::-webkit-scrollbar { display: none; }
   .graph-controls > * { flex: none; }
   .graph-find { width: 130px; }
+  /* The backup takes the width; when and size go under it. Four columns at
+     375px left the label 129px, so both the reason and the filename ended
+     in an ellipsis and neither said which file it was. */
+  .mnt-file {
+    grid-template-columns: 16px minmax(0, 1fr);
+    gap: var(--sp-0) var(--sp-3);
+    align-items: start;
+  }
+  .mnt-file .ico { margin-top: 3px; }
+  .mnt-file-when, .mnt-file-size { grid-column: 2; grid-row: 2; }
+  .mnt-file-size { justify-self: end; }
+  /* names for columns that are no longer there */
+  .mnt-file-head { display: none; }
+  /* a step's control drops under its own words rather than squeezing them */
+  .mnt-step { flex-wrap: wrap; }
+  .mnt-step .btn { margin-left: 34px; }
+  .mnt-ev { grid-template-columns: 46px 9px minmax(0, 1fr); gap: var(--sp-2); }
+  .mnt-ev-delta { grid-column: 3; }
   /* a floating bar with four controls does not fit a phone as a pill. It is
      no longer centred by a transform here, so it takes the plain entrance --
      bulk-rise would put the translateX(-50%) back. */
