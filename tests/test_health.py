@@ -7,6 +7,7 @@ a change to an axis definition fails on the axis and not on a total.
 
 from __future__ import annotations
 
+import sqlite3
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -188,6 +189,42 @@ def test_the_diagram_symptom_counts_flows_not_memories(client):
     sym = _symptom(client.get("/api/overview").json(), "diagrams")
     assert sym["count"] == 1
     assert sym["of"] == 1
+
+
+def test_untagged_counts_a_tag_that_is_only_the_type(client):
+    """A tag repeating the type carries no synonym, so it is not a tag."""
+    with db.connect() as conn:
+        _add(conn, tags="")
+        _add(conn, type="note", tags="note")
+        _add(conn, tags="  ")
+        _add(conn, tags="queue drain")
+    sym = _symptom(client.get("/api/overview").json(), "untagged")
+    assert sym["count"] == 3
+    listed = client.get("/api/memories", params=sym["params"]).json()
+    assert listed["total"] == 3
+
+
+def test_the_orphan_symptom_counts_relations_not_memories(client):
+    """A dangling edge is legacy data. db.connect turns foreign keys on, so
+    nothing can write one today -- the row worth counting is one written
+    before the constraint, which is what a raw connection reproduces."""
+    with db.connect() as conn:
+        a, b = _add(conn), _add(conn)
+        db.add_relation(conn, a, b, "relates_to")
+    raw = sqlite3.connect(str(db.default_db_path()))
+    try:
+        raw.execute(
+            """INSERT INTO relations (from_uid, to_uid, relation_type, created_at)
+               VALUES (?, ?, 'relates_to', ?)""", (a, "gone", db.now_iso()))
+        raw.commit()
+    finally:
+        raw.close()
+    sym = _symptom(client.get("/api/overview").json(), "orphans")
+    assert sym["count"] == 1
+    assert sym["of"] == 2
+    # no memory list can show a broken edge: the end that would name the row
+    # is the end that is missing
+    assert sym["params"] == {}
 
 
 def test_every_symptom_filter_lists_exactly_what_it_counted(client):

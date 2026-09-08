@@ -272,6 +272,12 @@ _SYMPTOMS: tuple[tuple[str, str, str, dict], ...] = (
     ("untitled", "info",
      "TRIM(title) = ''",
      {"untitled": "1"}),
+    # A row whose tags are empty, or are nothing but the type every read
+    # already filters on: either way it carries no synonym, and BM25 can
+    # only reach it by quoting its own wording.
+    ("untagged", "info",
+     "TRIM(tags) = '' OR TRIM(tags) = type",
+     {"untagged": "1"}),
 )
 
 
@@ -305,6 +311,19 @@ def _symptoms(conn: sqlite3.Connection, active: int) -> list[dict]:
     out.append({
         "key": "diagrams", "severity": "info", "count": broken,
         "of": len(flows), "share": 0.0, "params": {},
+    })
+    # Same shape, over the relations table: an edge whose endpoint no longer
+    # exists. There is no memory list to open -- both its endpoints are the
+    # problem -- so it carries an empty filter, and the view sends its
+    # button to the operation that clears them.
+    total_rels = conn.execute("SELECT COUNT(*) FROM relations").fetchone()[0]
+    orphans = conn.execute(
+        """SELECT COUNT(*) FROM relations
+           WHERE from_uid NOT IN (SELECT uid FROM memories)
+              OR to_uid NOT IN (SELECT uid FROM memories)""").fetchone()[0]
+    out.append({
+        "key": "orphans", "severity": "warn", "count": orphans,
+        "of": total_rels, "share": 0.0, "params": {},
     })
     return out
 
@@ -448,6 +467,8 @@ def _defect_clauses(qp) -> tuple[list[str], list]:
         params.append(stale)
     if qp.get("untitled") == "1":
         clauses.append("AND TRIM(title) = ''")
+    if qp.get("untagged") == "1":
+        clauses.append("AND (TRIM(tags) = '' OR TRIM(tags) = type)")
     return clauses, params
 
 
@@ -459,7 +480,8 @@ def list_memories(request, payload) -> dict:
     status = qp.get("status", "")           # "" = all
     confidence = qp.get("confidence", "")
     session = qp.get("session", "")
-    # 'linked=no', 'due=1', 'stale=1', 'untitled=1' -- see _defect_clauses
+    # 'linked=no', 'due=1', 'stale=1', 'untitled=1', 'untagged=1'
+    # -- see _defect_clauses
     defects, defect_params = _defect_clauses(qp)
     sort = qp.get("sort", "created_at")
     if sort not in _MEMORY_SORTS:
