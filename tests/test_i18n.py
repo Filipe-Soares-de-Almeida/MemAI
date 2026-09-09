@@ -60,6 +60,12 @@ def test_the_branch_reads_the_number_not_the_text(en):
     assert en["plural-thousand"] == "Archives 1024 memories"
 
 
+def test_a_grouped_count_agrees_with_the_count(en):
+    """pt-BR groups thousands with a dot, which Number() reads as one."""
+    assert en["plural-grouped-dot"] == "Archives 1.000 memories"
+    assert en["plural-grouped-comma"] == "Archives 1,000 memories"
+
+
 def test_a_count_the_caller_forgot_takes_the_plural(en):
     """Better a plural than a sentence that silently reads as singular."""
     assert en["plural-missing-var"] == "Archives {n} memories"

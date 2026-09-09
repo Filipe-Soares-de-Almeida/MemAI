@@ -45,6 +45,10 @@ const CASES = [
      has to read the number rather than the text it interpolates */
   ['plural-formatted', 'op.what.archive', { n: '1' }],
   ['plural-thousand', 'op.what.archive', { n: 1024 }],
+  /* the separator is a dot in pt-BR, so a round thousand reads as 1 to a
+     bare Number() -- the digits come out of the value before the branch */
+  ['plural-grouped-dot', 'op.what.archive', { n: '1.000' }],
+  ['plural-grouped-comma', 'op.what.archive', { n: '1,000' }],
   ['plural-missing-var', 'op.what.archive', {}],
   /* two independently counted words in one sentence */
   ['plural-two-counts-one', 'op.what.retag', { n: 1, terms: 1 }],

@@ -1785,6 +1785,17 @@ def _suggestion_json(conn, row) -> dict:
             # a crosslist suggestion replaces the whole set, so the Before
             # pane needs the whole set, not only the filed path
             target["also"] = db.get_domain_links(conn, row["target_uid"])
+            # Once a suggestion is applied the memory HOLDS what it proposed,
+            # so the target row is no longer the Before of anything --
+            # prev_state is. `_revert_kind` names its keys after the fields
+            # this card carries, so the overlay is the same one for every
+            # kind; a key the card does not carry is ignored.
+            if row["status"] == "applied" and row["prev_state"]:
+                prev = json.loads(row["prev_state"])
+                for field in ("tags", "title", "domain", "also", "confidence",
+                              "review_after", "status"):
+                    if field in prev:
+                        target[field] = prev[field]
         d["target"] = target
     peers = {}
     for key in ("from_uid", "to_uid", "keep_uid", "drop_uid"):

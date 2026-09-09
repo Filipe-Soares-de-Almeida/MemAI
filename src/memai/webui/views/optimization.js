@@ -17,9 +17,11 @@ import { $, esc, fmtInt, fmtDate, dayKey, monthKey, fromKey } from '../core/dom.
 import { api, seg } from '../core/api.js';
 import { icon } from '../core/icons.js';
 import { toast, failed, confirmModal, copyCode } from '../core/ui.js';
-import { typeTag, uidChip, statusTag, wireCopyChips, failedHTML,
-         relLabel, relTypeTitle, peerName, kindColor } from '../core/shared.js';
+import { typeTag, uidChip, statusTag, confPill, wireCopyChips, failedHTML,
+         relLabel, relTypeTitle, peerName, kindColor,
+         kindLabel, kindTitle, CONF } from '../core/shared.js';
 import { renderRich, wireRich } from '../core/richtext.js';
+import { markPair } from '../core/textdiff.js';
 import { go, previousRoute } from '../core/router.js';
 import { openRecord } from './record.js';
 import { I18N, t } from '../i18n.js';
@@ -30,6 +32,16 @@ import { I18N, t } from '../i18n.js';
    is shown as its payload rather than as two empty boxes -- see optRaw. */
 const DIFF_KINDS = new Set(['compact', 'reword', 'retag', 'retitle', 'redomain',
                             'crosslist', 'set_confidence', 'review', 'archive']);
+
+/* Three shapes of change, and one pane apiece. A kind is not a diff because
+   it replaces something: a body is PROSE and is read, a tag list is a SET
+   and is compared item by item, and a confidence is a FLAG the rest of this
+   UI already draws as a ringed pill. Rendering all three as two walls of
+   text put one word in a pane four hundred pixels tall and asked the reader
+   to spot which word it was. */
+const SET_KINDS = new Set(['retag', 'crosslist']);
+const FLAG_KINDS = new Set(['set_confidence', 'archive']);
+const LINE_KINDS = new Set(['retitle', 'redomain', 'review']);
 
 /* The kinds whose "before" IS the memory's own content. For these, the
    memory-under-review preview and the Before pane print the identical
@@ -49,40 +61,11 @@ const CONTENT_KINDS = new Set(['compact', 'reword']);
    whatever markup the cut happened to leave open. */
 const rich = (text, s) => renderRich(text ?? '', s.body_links);
 
-function optBefore(s) {
-  const tg = s.target || {};
-  switch (s.kind) {
-    /* the whole body, not the preview: After is complete, and a truncated
-       Before beside it reads as text the suggestion is removing */
-    case 'compact': case 'reword': return rich(s.content_before ?? tg.snippet, s);
-    case 'retag': return esc(tg.tags || '—');
-    case 'retitle': return esc(tg.title || '—');
-    case 'redomain': return esc(tg.domain || '—');
-    /* the whole set is replaced, so Before is the whole set -- and an em
-       dash where a memory has none, like every other empty field here */
-    case 'crosslist': return esc((tg.also || []).join(', ') || '—');
-    case 'set_confidence': return esc(tg.confidence || '—');
-    case 'review': return esc(tg.review_after || '—');
-    case 'archive': return esc(tg.status || 'active');
-    default: return '';
-  }
-}
-
-function optAfter(s) {
-  const p = s.payload || {};
-  switch (s.kind) {
-    case 'compact': case 'reword': return rich(p.new_content, s);
-    case 'retag': return esc(p.tags || '—');
-    case 'retitle': return esc(p.title || '—');
-    case 'redomain': return esc(p.domain || '—');
-    case 'crosslist': return esc((p.also || []).join(', ') || '—');
-    case 'set_confidence': return esc(p.confidence || '—');
-    /* '' clears the date, and the panel has to show that as the absence it is */
-    case 'review': return esc(p.review_after || '—');
-    case 'archive': return 'archived' + (p.reason ? ` · ${esc(p.reason)}` : '');
-    default: return '';
-  }
-}
+/* The body a rewrite starts from and the body it proposes. The whole of
+   each, not the preview: After is complete, and a truncated Before beside
+   it reads as text the suggestion is removing. */
+const proseBefore = s => rich(s.content_before ?? (s.target || {}).snippet, s);
+const proseAfter = s => rich((s.payload || {}).new_content, s);
 
 /* A peer's well: the memory NAMED, and then read.
 
@@ -150,6 +133,98 @@ function optRaw(s) {
   </div>`;
 }
 
+/* ── a FLAG changing state ──
+   set_confidence and archive move a memory between a handful of named
+   states. Both states are drawn with the mark the rest of the UI uses for
+   them, side by side on one line: the change is the pair, and there is no
+   text to read. */
+
+const statusPill = st => st === 'archived'
+  ? `<span class="status-tag archived">${t('status.archived')}</span>`
+  : `<span class="status-tag active">${t('status.active')}</span>`;
+
+function flagPairHTML(s) {
+  const tg = s.target || {}, p = s.payload || {};
+  const pair = s.kind === 'set_confidence'
+    ? [confPill(tg.confidence || 'unverified'), confPill(p.confidence)]
+    : [statusPill(tg.status || 'active'), statusPill('archived')];
+  return `<div class="opt-flag">
+    <span class="opt-label">${t('op.before')}</span>
+    <span class="opt-flag-was">${pair[0]}</span>
+    <span class="opt-flag-arrow">${icon('arrow-right')}</span>
+    <span class="opt-label">${t('op.after')}</span>
+    <span class="opt-flag-now">${pair[1]}</span>
+    ${s.kind === 'archive' && p.reason
+      ? `<span class="opt-flag-why">${esc(p.reason)}</span>` : ''}
+  </div>`;
+}
+
+/* ── a SET gaining and losing members ──
+   Tags and cross-listings are collections, so what changed is which items
+   left and which arrived -- not where the characters differ in a joined
+   string. Both sides are drawn in full so what STAYED is visible too. */
+
+const SET_SPLIT = /\s*,\s*/;
+const setOf = v => (Array.isArray(v) ? v : String(v ?? '').split(SET_SPLIT))
+  .map(x => String(x).trim()).filter(Boolean);
+
+function setPairHTML(s) {
+  const tg = s.target || {}, p = s.payload || {};
+  const [was, now] = s.kind === 'retag'
+    ? [setOf(tg.tags), setOf(p.tags)]
+    : [setOf(tg.also), setOf(p.also)];
+  const gone = was.filter(x => !now.includes(x));
+  const born = now.filter(x => !was.includes(x));
+  const chips = (items, other, cls) => items.length
+    ? items.map(x => `<span class="opt-schip${other.includes(x) ? '' : ' ' + cls}">${esc(x)}</span>`).join('')
+    : `<span class="opt-schip is-none">${t('op.set.none')}</span>`;
+  return `<div class="opt-set">
+    <span class="opt-label">${t('op.before')} · ${t('op.set.n', { n: was.length })}</span>
+    <span class="opt-label">${t('op.after')} · ${t('op.set.n', { n: now.length })}</span>
+    <div class="opt-chips">${chips(was, now, 'is-gone')}</div>
+    <div class="opt-chips">${chips(now, was, 'is-new')}</div>
+    <div class="opt-set-sum">${[
+      gone.length ? `<span class="opt-set-out">${t('op.set.dropped', { n: gone.length })}</span>` : '',
+      born.length ? `<span class="opt-set-in">${t('op.set.added', { n: born.length })}</span>` : '',
+      gone.length || born.length ? '' : `<span>${t('op.set.same')}</span>`,
+    ].join('')}</div>
+  </div>`;
+}
+
+/* ── a VALUE being replaced ──
+   A title, a domain path, a review date: one short line each, so the pair
+   is two lines and not two panes. The words that differ are still marked --
+   an appended path segment is easy to miss -- so these carry the diff
+   classes the pane wires up. */
+function linePairHTML(s) {
+  const tg = s.target || {}, p = s.payload || {};
+  const mono = s.kind === 'redomain' ? ' is-path' : '';
+  const [was, now] = s.kind === 'retitle' ? [tg.title, p.title]
+    : s.kind === 'redomain' ? [tg.domain, p.domain]
+    : [tg.review_after, p.review_after];   /* review */
+  return `<div class="opt-line">
+    <span class="opt-label">${t('op.before')}</span>
+    <span class="opt-label">${t('op.after')}</span>
+    <div class="opt-lval opt-diff-b${mono}">${esc(was || '—')}</div>
+    <div class="opt-lval opt-diff-a${mono}">${esc(now || '—')}</div>
+  </div>`;
+}
+
+/* ── PROSE being rewritten ──
+   The only kind whose change is a body someone has to read, and the only
+   one that earns two full panes with a scroller each. */
+function prosePairHTML(s) {
+  return `<div class="opt-diff">
+    <span class="opt-label opt-diff-bl">${t('op.before')}${
+      s.chars_before ? ` · ${t('op.chars', { n: fmtInt(s.chars_before) })}` : ''}</span>
+    <span class="opt-label opt-diff-al">${t('op.after')}${
+      s.chars_after ? ` · ${t('op.chars', { n: fmtInt(s.chars_after) })}` : ''}</span>
+    <div class="snippet opt-diff-b rt">${proseBefore(s)}</div>
+    <div class="opt-arrow">${icon('arrow-right')}</div>
+    <div class="snippet opt-diff-a rt">${proseAfter(s)}</div>
+  </div>`;
+}
+
 /* "applied 8 · 2 failed" used to be painted 'bad' -- total-failure red for a
    mostly-successful batch -- and res.failed, which carries the id AND the reason
    for every one that did not go through, was thrown away. So the screen said
@@ -205,12 +280,29 @@ const VERIFIED_FILL = { all: 'var(--ok)', some: 'var(--warn)', done: 'var(--ink-
    picks the variant here. */
 const WHAT_MIXED = { redomain: 'to', set_confidence: 'conf', link: 'rel' };
 
+/* Two of those facts are vocabularies this UI already translates, and the
+   server sends the stored spelling. Naming a confidence `contradicted` and
+   a relation `relates_to` inside an otherwise translated sentence is the
+   same leak the kind masks close. A domain path stays as it is: it is data,
+   not vocabulary. */
+const WHAT_MASK = {
+  conf: c => midSentence((CONF[c] || {}).label || c),
+  rel: v => midSentence(relLabel(v)),
+};
+
+/* Both vocabularies are written to stand alone -- "Contradicted", "Relates
+   to" -- and these facts land in the middle of a sentence, where a capital
+   reads as a proper noun. A value that is already lower stays as it is. */
+const midSentence = v => (v ? v.charAt(0).toLocaleLowerCase() + v.slice(1) : v);
+
 function groupWhat(g) {
   const facts = g.facts || {};
   const field = WHAT_MIXED[g.kind];
   const key = `op.what.${g.kind}${field && !facts[field] ? 'Mixed' : ''}`;
-  const line = t(key, { n: g.pending || g.total, ...facts });
-  return line === key ? t('op.what.other', { n: g.pending || g.total, kind: g.kind }) : line;
+  const shown = Object.fromEntries(Object.entries(facts).map(
+    ([k, v]) => [k, WHAT_MASK[k] && v ? WHAT_MASK[k](v) : v]));
+  const line = t(key, { n: g.pending || g.total, ...shown });
+  return line === key ? t('op.what.other', { n: g.pending || g.total, kind: kindLabel(g.kind) }) : line;
 }
 
 /* ─── entry point ────────────────────────────────────────────────────── */
@@ -263,11 +355,19 @@ export async function renderOptimization(view, params, ctx) {
    Deliberately NOT kept: the searchable grid of every run. The month is the
    whole index now. */
 
-/* Monday first, in the order I18N.weekdays is authored -- the array this app
-   already ships for exactly this label. One constant, so a locale that
-   wants Sunday first is one edit and the header can never disagree with the
-   columns under it. */
-const WEEK_START = 1;
+/* Which weekday a row starts on, 0 = Sunday. One constant, so the header and
+   the columns under it cannot disagree.
+
+   I18N.weekdays is authored Monday-first (it labels the activity heatmap,
+   which chunks the last 30 days in sevens and aligns to no week at all), so
+   the names are ROTATED to whatever this says rather than read in order. */
+const WEEK_START = 0;
+
+const weekdayNames = () => {
+  const names = I18N.weekdays || [];
+  /* the array starts on Monday, which is index 1 of a Sunday-based week */
+  return names.map((_, i) => names[(i + WEEK_START + 6) % names.length]);
+};
 
 const longDate = (date, opts) => {
   try { return date.toLocaleDateString(I18N.numberLocale, opts); }
@@ -293,42 +393,32 @@ function byDay(runs) {
   return days;
 }
 
-/* How many suggestions of each kind a set of runs APPLIED: what the run
-   declares, less what is still pending and what was turned down. */
-function appliedKinds(runsOfDay) {
-  const tally = new Map();
-  for (const r of runsOfDay) {
-    for (const k of r.kinds || []) {
-      const done = k.total - k.pending - (k.rejected || 0);
-      if (done > 0) tally.set(k.kind, (tally.get(k.kind) || 0) + done);
-    }
-  }
-  return [...tally.entries()].sort((a, b) => b[1] - a[1]);
-}
-
 /* ── the grid ── */
 
+/* One month as 7-column cells, starting on WEEK_START and padded at both
+   ends so the grid is always whole weeks. */
 function monthCells(month, days, today, selected) {
-  const first = fromKey(`${month}-01`);
-  const lead = (first.getDay() - WEEK_START + 7) % 7;
-  const dim = new Date(first.getFullYear(), first.getMonth() + 1, 0).getDate();
-
+  const at = fromKey(`${month}-01`);
+  const lead = (at.getDay() - WEEK_START + 7) % 7;
+  const dim = new Date(at.getFullYear(), at.getMonth() + 1, 0).getDate();
   const cells = [];
   for (let i = 0; i < lead; i++) cells.push(null);
   for (let d = 1; d <= dim; d++) cells.push(d);
   while (cells.length % 7) cells.push(null);
 
   return cells.map(d => {
+    /* The lead and the tail are cells too, and inert: an erased corner
+       punches a hole in the block the month reads as. */
     if (d === null) return '<div class="opt-cell opt-cell-out" aria-hidden="true"></div>';
     const key = `${month}-${String(d).padStart(2, '0')}`;
     const slot = days.get(key);
     const has = !!slot;
     const open = slot ? slot.pending : 0;
-    /* One bar per RUN, coloured by whether THAT run still holds a decision:
+    /* One tick per RUN, coloured by whether THAT run still holds a decision:
        a day with three runs of which one is open reads as two settled and
        one waiting, which a single day-level colour cannot say. */
     const bars = (slot ? slot.runs : []).slice(0, 3).map(r =>
-      `<span class="opt-bar${r.pending ? ' is-open' : ''}"></span>`).join('');
+      `<span class="opt-tick${r.pending ? ' is-open' : ''}"></span>`).join('');
     const more = slot && slot.runs.length > 3;
     const cls = ['opt-cell'];
     if (has) cls.push('has-runs');
@@ -344,24 +434,32 @@ function monthCells(month, days, today, selected) {
         <span class="opt-cell-day">${d}</span>
         ${open ? `<span class="opt-cell-open">${t('op.cal.openN', { n: open })}</span>` : ''}
       </span>
-      ${bars ? `<span class="opt-bars">${bars}</span>` : ''}
+      ${bars ? `<span class="opt-ticks">${bars}</span>` : ''}
       <span class="opt-cell-n">${has
         ? (more ? t('op.cal.runsAnd', { n: slot.runs.length, s: slot.total })
-                : t('op.cal.sugN', { n: slot.total }))
+                : t('op.cal.sugShort', { n: slot.total }))
         : ''}</span>
     </button>`;
   }).join('');
 }
 
+/* What the whole month came to, under the grid. */
 function monthFoot(month, days) {
   let runs = 0, sug = 0, open = 0, worked = 0;
   const dim = new Date(fromKey(`${month}-01`).getFullYear(),
                        fromKey(`${month}-01`).getMonth() + 1, 0).getDate();
   for (const [key, slot] of days) {
     if (!key.startsWith(month)) continue;
-    worked += 1; runs += slot.runs.length; sug += slot.total; open += slot.pending;
+    worked += 1;
+    runs += slot.runs.length;
+    sug += slot.total;
+    open += slot.pending;
   }
-  if (!runs) return `<span>${t('op.cal.foot.noRuns')}</span>`;
+  if (!runs) {
+    return `<span>${t('op.cal.foot.noRuns')}</span>
+    <span class="opt-foot-gap"></span>
+    <span>${t('op.cal.foot.noRunsHint')}</span>`;
+  }
   return `<span>${t('op.cal.foot.runs', { n: fmtInt(runs) })}</span>
     <span>${t('op.cal.foot.sug', { n: fmtInt(sug) })}</span>
     <span class="${open ? 'opt-foot-open' : 'opt-foot-done'}">${
@@ -374,14 +472,13 @@ function monthFoot(month, days) {
 
 function railHeadHTML(key, slot, today) {
   const date = fromKey(key);
-  const ids = slot ? slot.runs.slice(0, 3).map(r => `#${r.id}`).join(' ')
-    + (slot.runs.length > 3 ? ` +${slot.runs.length - 3}` : '') : '';
   return `<div class="opt-day-head">
     <div class="opt-day-title">
       <span class="opt-day-when">${esc(longDate(date, { weekday: 'long', day: 'numeric', month: 'long' }))}</span>
       ${key === today ? `<span class="opt-day-today">${t('op.cal.today')}</span>` : ''}
       <span class="opt-foot-gap"></span>
-      ${ids ? `<span class="opt-day-ids">${esc(ids)}</span>` : ''}
+      ${slot && slot.pending ? `<button type="button" class="btn btn-sm opt-day-review" data-seeday="${esc(key)}"
+        title="${esc(t('op.cal.reviewDayTitle'))}">${t('op.cal.reviewDay')}${icon('chevron-right')}</button>` : ''}
     </div>
     <div class="opt-day-sub">${slot
       ? t('op.cal.daySub', { n: slot.runs.length, s: slot.total })
@@ -389,147 +486,55 @@ function railHeadHTML(key, slot, today) {
   </div>`;
 }
 
-function runRowsHTML(slot, filtered) {
-  return slot.runs.map(r => `
-    <div class="opt-runrow${filtered === r.id ? ' is-on' : ''}" data-runrow="${r.id}"
-         role="button" tabindex="0"
-         aria-pressed="${filtered === r.id}">
-      <button type="button" class="opt-runrow-id" data-openrun="${r.id}"
-              title="${esc(t('op.cal.openRun', { id: r.id }))}">#${r.id}</button>
-      <span class="opt-runrow-at">${esc(fmtTime(r.created_at))}</span>
-      <span class="opt-runrow-note" title="${esc(r.note || '')}">${esc(r.note || '—')}</span>
-      <span class="opt-runrow-state${r.pending ? ' is-open' : ''}">${r.pending
-        ? t('op.cal.openN', { n: r.pending })
-        : t('op.cal.sugN', { n: r.total })}</span>
-    </div>`).join('');
+/* One run of the day, as a card that opens it.
+
+   The card carries the run's number and the one count that says what is
+   left to do with it -- what is still open, or, once nothing is, what it
+   applied. Everything else about the run is on the page the card leads to,
+   which is where a decision is taken. */
+function lotCardHTML(r) {
+  const open = r.pending;
+  /* The kinds a run holds, most of them first, so the card says what sort
+     of curation is waiting inside without being opened. */
+  const kinds = [...(r.kinds || [])].sort((a, b) => b.total - a.total);
+  const chips = kinds.slice(0, 4).map(k => `<span class="opt-lot-kind"
+      title="${esc(t('op.cal.lot.kindTitle', { kind: kindLabel(k.kind), n: k.total }))}">
+      <span class="opt-lot-dot" style="background:${kindColor(k.kind)}"></span>
+      <span>${esc(kindLabel(k.kind))}</span></span>`).join('');
+  const more = kinds.length - 4;
+  /* What the run has SETTLED against what it still holds, in the same meter
+     the run page states its case with. A run part-applied reads as part
+     applied; the count beside it names the half that still wants an
+     answer. */
+  const seg = (n, c, label) => n
+    ? `<div class="meter-seg" style="flex:${n};background:var(${c})" title="${esc(label)}"></div>` : '';
+  const counts = open
+    ? t('op.cal.lot.openOf', { n: fmtInt(open), all: fmtInt(r.total) })
+    : t('op.cal.lot.appliedOf', { n: fmtInt(r.applied), all: fmtInt(r.total) })
+      + (r.rejected ? ` · ${t('op.cal.lot.rejectedN', { n: fmtInt(r.rejected) })}` : '');
+  return `<button type="button" class="opt-lot ${open ? 'is-open' : 'is-settled'}"
+      data-openrun="${r.id}" title="${esc(t('op.cal.openRun', { id: r.id }))}">
+    <span class="opt-lot-top">
+      <span class="opt-lot-id">#${r.id}</span>
+      <span class="opt-lot-at">${esc(fmtTime(r.created_at))}</span>
+      <span class="opt-lot-what">${open ? t('op.cal.lot.open') : t('op.cal.lot.settled')}</span>
+    </span>
+    ${r.note ? `<span class="opt-lot-note">${esc(r.note)}</span>` : ''}
+    <span class="meter opt-lot-meter">
+      ${seg(r.applied, '--ok', t('op.applied'))}
+      ${seg(r.rejected, '--bad', t('op.rejected'))}
+      ${seg(open, '--warn', t('op.cal.lot.open'))}
+    </span>
+    <span class="opt-lot-count">${counts}</span>
+    <span class="opt-lot-kinds">${chips}${
+      more > 0 ? `<span class="opt-lot-more">${t('op.cal.lot.more', { n: more })}</span>` : ''}</span>
+  </button>`;
 }
 
 const fmtTime = iso => {
   const d = new Date(iso);
   return isNaN(d) ? '' : `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
 };
-
-/* One pending suggestion, as the line the decision is taken on: which
-   memory, what would change, and the two buttons. `before → after` is the
-   whole diff compressed to one line -- the pane that shows it in full is
-   one click away, and a rail that opened it here would be the pane. */
-function pendRowHTML(s) {
-  const d = optSummary(s);
-  return `<div class="opt-pend" data-sug="${s.id}">
-    <span class="opt-pend-uid">${esc(s.target_uid || '—')}</span>
-    <span class="opt-pend-body">
-      <span class="opt-pend-title">${esc(pendName(s))}</span>
-      <span class="opt-pend-diff">
-        <span class="opt-pend-before" title="${esc(d.before)}">${esc(d.before)}</span>
-        ${icon('arrow-right', { cls: 'opt-pend-arrow' })}
-        <span class="opt-pend-after${d.good ? ' is-good' : ''}" title="${esc(d.after)}">${esc(d.after)}</span>
-      </span>
-    </span>
-    <span class="opt-pend-acts">
-      <button type="button" class="icon-btn opt-yes" data-apply="${s.id}"
-              title="${esc(t('common.apply'))}" aria-label="${esc(t('common.apply'))}">${icon('check')}</button>
-      <button type="button" class="icon-btn opt-no" data-reject="${s.id}"
-              title="${esc(t('common.reject'))}" aria-label="${esc(t('common.reject'))}">${icon('close')}</button>
-    </span>
-  </div>`;
-}
-
-const pendName = s => {
-  const p = peerName(s.target || {});
-  if (p.text) return p.text;
-  const pay = s.payload || {};
-  if (s.kind === 'link') return `${pay.from_uid || '?'} → ${pay.to_uid || '?'}`;
-  if (s.kind === 'merge') return `${pay.keep_uid || '?'} ← ${pay.drop_uid || '?'}`;
-  if (s.kind === 'distill') return pay.title || t('op.distill.new');
-  return s.kind;
-};
-
-/* The whole change of a suggestion, as two short values. Not the diff panes:
-   those are the record of a decision being taken, this is the line it is
-   taken ON, and a body belongs in neither. */
-function optSummary(s) {
-  const tg = s.target || {}, p = s.payload || {};
-  const chars = n => t('op.chars', { n: fmtInt(n) });
-  switch (s.kind) {
-    case 'compact': case 'reword':
-      return { before: chars(s.chars_before || 0), after: chars(s.chars_after || 0), good: true };
-    case 'retag':
-      return { before: tg.tags || t('op.cal.noTags'), after: p.tags || '—' };
-    case 'retitle':
-      return { before: tg.title || t('op.cal.noTitle'), after: p.title || '—' };
-    case 'redomain':
-      return { before: tg.domain || t('op.cal.noDomain'), after: p.domain || '—' };
-    case 'crosslist':
-      return { before: (tg.also || []).join(', ') || t('op.cal.noAlso'),
-               after: (p.also || []).join(', ') || '—' };
-    case 'set_confidence':
-      return { before: tg.confidence || '—', after: p.confidence || '—',
-               good: p.confidence === 'confirmed' };
-    case 'review':
-      return { before: tg.review_after || t('op.cal.noReview'), after: p.review_after || '—' };
-    case 'archive':
-      return { before: tg.status || 'active', after: 'archived' };
-    case 'link':
-      return { before: t('op.cal.noRel'),
-               after: `${relLabel(p.relation_type || 'relates_to')} ${p.to_uid || ''}`.trim() };
-    case 'merge':
-      return { before: p.drop_uid || '—', after: `${relLabel('supersedes')} ${p.keep_uid || ''}`.trim() };
-    case 'distill':
-      return { before: t('op.cal.nSources', { n: (p.source_uids || []).length }),
-               after: p.new_type || 'note' };
-    default:
-      return { before: '', after: s.kind };
-  }
-}
-
-function pendGroupsHTML(pend) {
-  const kinds = [];
-  for (const s of pend) if (!kinds.includes(s.kind)) kinds.push(s.kind);
-  return kinds.map(kind => {
-    const mine = pend.filter(s => s.kind === kind);
-    return `<div class="opt-pend-group">
-      <div class="opt-pend-head">
-        <span class="opt-pend-mark" style="background:${kindColor(kind)}"></span>
-        <span class="opt-pend-kind">${esc(kind)}</span>
-        <span class="opt-pend-what">${esc(kindWhat(kind))}</span>
-        <span class="opt-foot-gap"></span>
-        <span class="opt-pend-count">${t('op.cal.openN', { n: mine.length })}</span>
-      </div>
-      ${mine.map(pendRowHTML).join('')}
-    </div>`;
-  }).join('');
-}
-
-/* What a kind does, in one clause. The same catalog family the group table
-   of a run reads (op.what.*), stripped of its counts: here the row under it
-   is the suggestion itself, so the sentence only has to say what sort of
-   change is being proposed. */
-const kindWhat = kind => {
-  const key = `op.cal.what.${kind}`;
-  const line = t(key);
-  return line === key ? '' : line;
-};
-
-function appliedFootHTML(slot) {
-  const kinds = appliedKinds(slot.runs);
-  const done = kinds.reduce((n, [, c]) => n + c, 0);
-  if (!done) return '';
-  const backup = slot.runs.map(r => r.backup_path).filter(Boolean).pop();
-  return `<div class="opt-applied">
-    <div class="opt-applied-head">
-      ${icon('confirmed')}
-      <span>${t('op.cal.appliedN', { n: fmtInt(done) })}</span>
-    </div>
-    <div class="opt-applied-kinds">
-      ${kinds.map(([k, n]) => `<span class="opt-applied-chip">
-        <span class="opt-pend-mark" style="background:${kindColor(k)}"></span>${esc(k)} <b>${fmtInt(n)}</b>
-      </span>`).join('')}
-    </div>
-    ${backup ? `<div class="opt-applied-backup" title="${esc(t('op.backupNote', { name: backup.split(/[\\/]/).pop() }))}">
-      ${icon('db-file')}<span class="opt-lg-backup-name">${esc(backup.split(/[\\/]/).pop())}</span>
-    </div>` : ''}
-  </div>`;
-}
 
 /* ── the view ── */
 
@@ -546,7 +551,6 @@ function renderOptCalendar(view, runs, params) {
   let selected = params.get('day') || landing;
   if (!days.has(selected) && selected !== today && !/^\d{4}-\d{2}-\d{2}$/.test(selected)) selected = landing;
   let month = params.get('month') || selected.slice(0, 7);
-  let runFilter = null;
 
   view.innerHTML = `<div class="opt-shell">
     <h2 class="sr-only">${t('op.title')}</h2>
@@ -565,203 +569,77 @@ function renderOptCalendar(view, runs, params) {
 
   function paintMonth() {
     const at = fromKey(`${month}-01`);
-    const head = I18N.weekdays.map(w => `<span class="opt-dow">${esc(w)}</span>`).join('');
+    const head = weekdayNames().map(w => `<span class="opt-dow">${esc(w)}</span>`).join('');
     $('#optCal').innerHTML = `
       <div class="opt-cal-bar">
         <h3 class="opt-cal-month">${esc(longDate(at, { month: 'long', year: 'numeric' }))}</h3>
         <span class="opt-cal-step">
-          <button type="button" class="icon-btn" id="optPrev"
+          <button type="button" class="opt-step" id="optPrev"
                   title="${esc(t('op.cal.prev'))}" aria-label="${esc(t('op.cal.prev'))}">${icon('chevron-left')}</button>
-          <button type="button" class="icon-btn" id="optNext"
+          <button type="button" class="opt-step" id="optNext"
                   title="${esc(t('op.cal.next'))}" aria-label="${esc(t('op.cal.next'))}">${icon('chevron-right')}</button>
         </span>
         <button type="button" class="btn btn-sm" id="optToday">${t('op.cal.jumpToday')}</button>
         <span class="opt-foot-gap"></span>
-        <span class="opt-legend"><span class="opt-bar"></span>${t('op.cal.legend.done')}</span>
-        <span class="opt-legend"><span class="opt-bar is-open"></span>${t('op.cal.legend.open')}</span>
-        <span class="opt-legend"><span class="opt-bar is-none"></span>${t('op.cal.legend.idle')}</span>
+        <span class="opt-legend"><span class="opt-tick"></span>${t('op.cal.legend.done')}</span>
+        <span class="opt-legend"><span class="opt-tick is-open"></span>${t('op.cal.legend.open')}</span>
+        <span class="opt-legend"><span class="opt-tick is-none"></span>${t('op.cal.legend.idle')}</span>
       </div>
-      <div class="opt-grid" role="grid" aria-label="${esc(t('op.cal.gridAria'))}">
-        ${head}${monthCells(month, days, today, selected)}
+      <div class="opt-grid-scroll">
+        <div class="opt-grid" role="grid" aria-label="${esc(t('op.cal.gridAria'))}">
+          ${head}${monthCells(month, days, today, selected)}
+        </div>
       </div>
       <div class="opt-cal-foot">${monthFoot(month, days)}</div>`;
 
     $('#optPrev').addEventListener('click', () => step(-1));
     $('#optNext').addEventListener('click', () => step(1));
     $('#optToday').addEventListener('click', () => {
-      month = today.slice(0, 7); selected = today; runFilter = null;
+      month = today.slice(0, 7); selected = today;
       remember(); paintMonth(); paintDay();
     });
     view.querySelectorAll('[data-day]').forEach(b => b.addEventListener('click', () => {
-      selected = b.dataset.day; runFilter = null;
+      selected = b.dataset.day;
       remember(); paintMonth(); paintDay();
     }));
   }
 
+  /* Stepping a month takes the rail with it, onto the same day-of-month, so
+     `selected` always names a cell the grid is drawing. Short months clamp
+     to their last day. */
   function step(by) {
     const at = fromKey(`${month}-01`);
-    month = monthKey(new Date(at.getFullYear(), at.getMonth() + by, 1));
+    const next = new Date(at.getFullYear(), at.getMonth() + by, 1);
+    month = monthKey(next);
+    const wanted = Number(selected.slice(8));
+    const dim = new Date(next.getFullYear(), next.getMonth() + 1, 0).getDate();
+    selected = `${month}-${String(Math.min(wanted, dim)).padStart(2, '0')}`;
     remember();
     paintMonth();
+    paintDay();
   }
 
-  /* the day's still-open suggestions, fetched once per day and kept while
-     the reader decides them */
-  let pend = [];
-
-  const loadPend = async slot => {
-    if (!slot || !slot.pending) { pend = []; return; }
-    const ids = slot.runs.filter(r => r.pending).map(r => r.id).join(',');
-    const res = await api(`/api/optimization/suggestions?runs=${seg(ids)}&status=pending`);
-    pend = res.suggestions;
-  };
-
-  async function paintDay() {
+  /* The rail is a LAUNCHER: the day it names, and the runs staged on it as
+     cards. A decision is taken on the run's own page, where the evidence
+     for it is; nothing here reads a suggestion. */
+  function paintDay() {
     const host = $('#optDay');
     if (!host) return;
     const slot = days.get(selected);
     host.innerHTML = railHeadHTML(selected, slot, today)
-      + `<div class="loading"><span class="spin"></span></div>`;
-    try {
-      await loadPend(slot);
-    } catch (err) {
-      if (!host.isConnected) return;
-      host.innerHTML = railHeadHTML(selected, slot, today) + failedHTML(err);
-      host.querySelector('[data-retry]').addEventListener('click', paintDay);
-      return;
-    }
-    if (!host.isConnected) return;
-    drawDay(slot);
-  }
+      + (slot
+        ? `<div class="opt-lots">${slot.runs.map(lotCardHTML).join('')}</div>`
+        : `<div class="empty opt-day-empty">
+             ${icon('db-file', { cls: 'opt-empty-mark' })}
+             <p class="opt-empty-msg">${t('op.cal.emptyDay', {
+               day: longDate(fromKey(selected), { day: 'numeric', month: 'long' }) })}</p>
+             <p class="hint-sm">${t('op.cal.emptyHint')}</p>
+           </div>`);
 
-  function drawDay(slot) {
-    const host = $('#optDay');
-    if (!host) return;
-    if (!slot) {
-      host.innerHTML = railHeadHTML(selected, slot, today)
-        + `<div class="empty opt-day-empty">${t('op.cal.emptyDay')}
-             <p class="hint-sm">${t('op.cal.emptyHint')}</p></div>`;
-      return;
-    }
-    const shown = runFilter ? pend.filter(s => s.run_id === runFilter) : pend;
-    const scope = runFilter
-      ? t('op.cal.scopeRun', { id: runFilter, n: shown.length,
-          all: (slot.runs.find(r => r.id === runFilter) || { total: 0 }).total })
-      : t('op.cal.scopeDay', { n: shown.length, all: slot.total });
-
-    host.innerHTML = railHeadHTML(selected, slot, today)
-      + (slot.pending ? `<div class="opt-day-banner">
-          <span class="opt-day-count">
-            <span class="opt-day-n">${fmtInt(slot.pending)}</span>
-            <span class="opt-day-of">${t('op.cal.ofWaiting', { n: fmtInt(slot.total) })}</span>
-          </span>
-          <span class="opt-day-acts">
-            <button type="button" class="btn btn-sm" id="optDayApply">${t('op.cal.applyAll', { n: slot.pending })}</button>
-            <button type="button" class="btn btn-solid btn-sm" id="optDayReview">${t('op.cal.reviewOne')}</button>
-          </span>
-        </div>` : '')
-      + `<div class="opt-day-scroll">
-          <div class="opt-runrows">
-            <div class="mg-label opt-runrows-head">${t('op.cal.runsOfDay')}
-              <span class="panel-aside">${t('op.cal.daySub', { n: slot.runs.length, s: slot.total })}</span></div>
-            ${runRowsHTML(slot, runFilter)}
-          </div>
-          ${shown.length ? `<div class="opt-open">
-            <div class="mg-label opt-open-head">${t('op.cal.openHead')}
-              <span class="panel-aside">${esc(scope)}</span>
-              ${runFilter ? `<button type="button" class="btn btn-sm btn-ghost" id="optClearFilter">${t('op.cal.clearFilter')}</button>` : ''}
-            </div>
-            ${pendGroupsHTML(shown)}
-          </div>` : `<div class="empty opt-open-empty">${runFilter
-            ? t('op.cal.nothingRun', { id: runFilter })
-            : slot.pending ? t('op.cal.nothingRunAny') : t('op.cal.allDecided', { n: slot.total })}</div>`}
-          ${appliedFootHTML(slot)}
-        </div>`;
-
-    wireDay(slot);
-  }
-
-  function wireDay(slot) {
-    const rerun = async () => {
-      /* a decision changes the counts the grid is drawn from, so the run
-         index is re-read rather than adjusted in place */
-      const fresh = (await api('/api/optimization/runs')).runs;
-      if (!view.isConnected) return;
-      runs.length = 0; runs.push(...fresh);
-      const next = byDay(runs);
-      days.clear();
-      for (const [k, v] of next) days.set(k, v);
-      paintMonth();
-      await paintDay();
-    };
-
-    view.querySelectorAll('[data-runrow]').forEach(row => {
-      const pick = () => {
-        const id = +row.dataset.runrow;
-        runFilter = runFilter === id ? null : id;
-        drawDay(slot);
-      };
-      row.addEventListener('click', e => {
-        if (e.target.closest('[data-openrun]')) return;   /* the id is a link out */
-        pick();
-      });
-      row.addEventListener('keydown', e => {
-        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); pick(); }
-      });
-    });
-    view.querySelectorAll('[data-openrun]').forEach(b => b.addEventListener('click', e => {
-      e.stopPropagation();
-      go('optimization', { run: b.dataset.openrun });
-    }));
-    const clear = $('#optClearFilter');
-    if (clear) clear.addEventListener('click', () => { runFilter = null; drawDay(slot); });
-
-    /* one row's decision, applied where it was taken */
-    const decide = (btn, path, id, msg, undo) => async () => {
-      btn.disabled = true;
-      try {
-        const res = await api(path, { body: { id } });
-        toast(res && res.backup ? t('op.toast.appliedBackup') : msg, 'ok', undo ? {
-          action: {
-            label: t('common.undo'),
-            run: () => api(undo, { body: { id } })
-              .then(() => { toast(t('op.toast.reverted'), 'ok'); return rerun(); })
-              .catch(err => failed('err.optimize', err)),
-          },
-        } : {});
-        await rerun();
-      } catch (err) { failed('err.optimize', err); btn.disabled = false; }
-    };
-    view.querySelectorAll('[data-apply]').forEach(b => b.addEventListener('click',
-      decide(b, '/api/optimization/apply', +b.dataset.apply,
-             t('op.toast.applied1'), '/api/optimization/revert')));
-    view.querySelectorAll('[data-reject]').forEach(b => b.addEventListener('click',
-      decide(b, '/api/optimization/reject', +b.dataset.reject, t('op.toast.rejected1'))));
-
-    const applyAll = $('#optDayApply');
-    if (applyAll) applyAll.addEventListener('click', async () => {
-      const ids = pend.map(s => s.id);
-      if (!(await confirmModal({ title: t('op.cal.applyConfirm.title'),
-        body: t('op.cal.applyConfirm.body', { n: ids.length,
-          day: longDate(fromKey(selected), { day: 'numeric', month: 'long' }) }),
-        okLabel: t('op.cal.applyConfirm.ok') }))) return;
-      try {
-        /* one call per run: apply-all is scoped to a run, and a day can hold
-           several -- the failures of each come back with their own ids */
-        let applied = 0; const failedRows = [];
-        for (const r of slot.runs.filter(x => x.pending)) {
-          const res = await api('/api/optimization/apply-all', { body: { run: r.id } });
-          applied += res.applied;
-          failedRows.push(...(res.failed || []));
-        }
-        reportApplied({ applied, failed: failedRows });
-        await rerun();
-      } catch (err) { failed('err.optimize', err); }
-    });
-
-    const review = $('#optDayReview');
-    if (review) review.addEventListener('click',
-      () => go('optimization', { review: selected }));
+    host.querySelectorAll('[data-openrun]').forEach(b => b.addEventListener('click',
+      () => go('optimization', { run: b.dataset.openrun })));
+    host.querySelectorAll('[data-seeday]').forEach(b => b.addEventListener('click',
+      () => go('optimization', { review: b.dataset.seeday })));
   }
 
   paintMonth();
@@ -840,24 +718,30 @@ function groupRow(g) {
   const value = g.pending
     ? `<b>${fmtInt(g.verified)}</b> ${t('op.grp.ofN', { n: fmtInt(g.pending) })}`
     : `<span class="opt-grp-quiet">${g.applied ? t('op.applied') : t('op.rejected')}</span>`;
+  /* Every button carries its verb alone. The count each one would repeat is
+     two columns to the left, and reading it twice on one row made the two
+     numbers look like two different measurements. What a bulk press is
+     about to touch is named in the dialog it opens. */
   const acts = g.pending ? `
       <button type="button" class="btn btn-sm btn-ghost" data-rejectkind="${esc(g.kind)}"
               data-n="${g.pending}">${t('common.reject')}</button>
       <button type="button" class="btn btn-sm" data-applykind="${esc(g.kind)}"
-              data-n="${g.pending}">${t('op.grp.applyN', { n: g.pending })}</button>`
+              data-n="${g.pending}">${t('common.apply')}</button>`
     : g.applied ? `
-      <button type="button" class="btn btn-sm" data-undokind="${esc(g.kind)}"
-              data-n="${g.applied}">${t('op.grp.undoN', { n: g.applied })}</button>` : '';
+      <button type="button" class="btn btn-sm btn-ghost" data-undokind="${esc(g.kind)}"
+              data-n="${g.applied}">${t('common.undo')}</button>` : '';
   return `<div class="opt-grp${g.pending ? '' : ' decided'}">
     <span class="opt-grp-mark" style="background:${VERIFIED_FILL[state]}"></span>
-    <button type="button" class="opt-grp-kind" data-open="${esc(g.kind)}">${esc(g.kind)}</button>
+    <button type="button" class="opt-grp-kind" data-open="${esc(g.kind)}"
+            title="${esc(kindTitle(g.kind))}">${esc(kindLabel(g.kind))}</button>
     <span class="opt-grp-what">${esc(groupWhat(g))}</span>
     <span class="opt-grp-n${g.pending ? '' : ' nil'}">${g.pending || '—'}</span>
     <span class="opt-grp-val">${value}</span>
-    <span class="opt-grp-acts">${acts}</span>
-    <button type="button" class="icon-btn opt-grp-go" data-open="${esc(g.kind)}"
-            title="${esc(t('op.grp.open', { kind: g.kind }))}"
-            aria-label="${esc(t('op.grp.open', { kind: g.kind }))}">${icon('chevron-right')}</button>
+    <span class="opt-grp-acts">
+      ${acts}
+      <button type="button" class="btn btn-sm opt-grp-go" data-open="${esc(g.kind)}"
+              title="${esc(t('op.grp.open', { kind: kindLabel(g.kind) }))}">${t('op.grp.detail')}${icon('chevron-right')}</button>
+    </span>
   </div>`;
 }
 
@@ -896,7 +780,7 @@ function renderOptRun(view, sum) {
             <div class="opt-grp opt-grp-th">
               <span></span><span>${t('op.grp.col.kind')}</span><span>${t('op.grp.col.what')}</span>
               <span class="opt-grp-n">${t('op.grp.col.pending')}</span>
-              <span>${t('op.grp.col.checked')}</span><span></span><span></span>
+              <span>${t('op.grp.col.checked')}</span><span></span>
             </div>
             ${sum.groups.map(groupRow).join('')}
           ` : `<div class="empty">${t('op.emptyRun')}</div>`}
@@ -921,7 +805,7 @@ function renderOptRun(view, sum) {
   view.querySelectorAll('[data-applykind]').forEach(b => b.addEventListener('click', async () => {
     const kind = b.dataset.applykind, n = +b.dataset.n;
     if (!(await confirmModal({ title: t('op.group.applyConfirm.title'),
-      body: t('op.group.applyConfirm.body', { n, kind, id: runId }),
+      body: t('op.group.applyConfirm.body', { n, kind: kindLabel(kind), id: runId }),
       okLabel: t('op.group.applyConfirm.ok') }))) return;
     b.disabled = true;
     try {
@@ -933,7 +817,7 @@ function renderOptRun(view, sum) {
   view.querySelectorAll('[data-rejectkind]').forEach(b => b.addEventListener('click', async () => {
     const kind = b.dataset.rejectkind, n = +b.dataset.n;
     if (!(await confirmModal({ title: t('op.group.rejectConfirm.title'),
-      body: t('op.group.rejectConfirm.body', { n, kind, id: runId }),
+      body: t('op.group.rejectConfirm.body', { n, kind: kindLabel(kind), id: runId }),
       okLabel: t('op.group.rejectConfirm.ok') }))) return;
     b.disabled = true;
     try {
@@ -946,6 +830,10 @@ function renderOptRun(view, sum) {
   /* An undone group goes back to pending, so this is the inverse of the
      group Apply above and not a second kind of write. */
   view.querySelectorAll('[data-undokind]').forEach(b => b.addEventListener('click', async () => {
+    const n = +b.dataset.n;
+    if (!(await confirmModal({ title: t('op.group.undoConfirm.title'),
+      body: t('op.group.undoConfirm.body', { n, kind: kindLabel(b.dataset.undokind), id: runId }),
+      okLabel: t('op.group.undoConfirm.ok') }))) return;
     b.disabled = true;
     try {
       const r = await api(`/api/optimization/suggestions?run=${seg(runId)}&kind=${seg(b.dataset.undokind)}&status=applied`);
@@ -989,10 +877,10 @@ function kindScope(sum, kind) {
   const meta = sum.groups.find(g => g.kind === kind);
   return {
     kind,
-    title: kind,
+    title: kindLabel(kind),
     sub: meta ? t('op.group.countPending', { p: meta.pending, t: meta.total })
               : t('op.group.countAll', { t: 0 }),
-    listAria: t('op.sel.listAria', { kind }),
+    listAria: t('op.sel.listAria', { kind: kindLabel(kind) }),
     emptyMsg: t('op.emptyGroup'),
     back: { label: t('op.runTitle', { id: runId }), to: { run: runId } },
     query: `run=${seg(runId)}&kind=${seg(kind)}`,
@@ -1001,12 +889,6 @@ function kindScope(sum, kind) {
        already decided about it */
     keepDecided: false,
     pending: meta ? meta.pending : 0,
-    applyLabel: n => t('op.grp.applyGroup', { n }),
-    confirm: what => ({
-      title: t(`op.group.${what}Confirm.title`),
-      body: n => t(`op.group.${what}Confirm.body`, { n, kind, id: runId }),
-      ok: t(`op.group.${what}Confirm.ok`),
-    }),
     async refresh() {
       const fresh = await api(`/api/optimization/summary?run=${seg(runId)}`);
       const g = fresh.groups.find(x => x.kind === kind);
@@ -1045,12 +927,6 @@ function dayScope(day, runsOfDay) {
        hold it any more */
     keepDecided: true,
     pending: now.pending,
-    applyLabel: n => t('op.cal.applyAll', { n }),
-    confirm: what => ({
-      title: t(`op.cal.${what}Confirm.title`),
-      body: n => t(`op.cal.${what}Confirm.body`, { n, day: label }),
-      ok: t(`op.cal.${what}Confirm.ok`),
-    }),
     async refresh() {
       const fresh = (await api('/api/optimization/runs')).runs
         .filter(r => dayKey(new Date(r.created_at)) === day);
@@ -1102,26 +978,20 @@ function rowName(s) {
 function detailHTML(s, at, total) {
   if (!s) return `<div class="empty">${t('op.pickOne')}</div>`;
   const relKind = s.kind === 'link' || s.kind === 'merge' || s.kind === 'distill';
-  /* Only the two panes that hold a BODY are rich; the rest of the diff kinds
-     put a tag set, a path, a date or a confidence in there, and those are
-     values, not prose. */
-  const prose = CONTENT_KINDS.has(s.kind) ? ' rt' : '';
+  /* One pane per SHAPE of change, not one pane for every kind -- see the
+     block that defines SET_KINDS. */
   const body = s.kind === 'distill' ? optDistillBody(s)
     : relKind ? optRelBody(s)
-    : !DIFF_KINDS.has(s.kind) ? optRaw(s) : `<div class="opt-diff">
-      <span class="opt-label" style="grid-area:bl">${t('op.before')}${
-        s.chars_before ? ` · ${t('op.chars', { n: fmtInt(s.chars_before) })}` : ''}</span>
-      <span class="opt-label" style="grid-area:al">${t('op.after')}${
-        s.chars_after ? ` · ${t('op.chars', { n: fmtInt(s.chars_after) })}` : ''}</span>
-      <div class="snippet${prose}" style="grid-area:bs">${optBefore(s)}</div>
-      <div class="opt-arrow" style="grid-area:arrow">→</div>
-      <div class="snippet${prose}" style="grid-area:as">${optAfter(s)}</div>
-    </div>`;
+    : CONTENT_KINDS.has(s.kind) ? prosePairHTML(s)
+    : FLAG_KINDS.has(s.kind) ? flagPairHTML(s)
+    : SET_KINDS.has(s.kind) ? setPairHTML(s)
+    : LINE_KINDS.has(s.kind) ? linePairHTML(s)
+    : optRaw(s);
   const tg = s.target || {};
   const openUid = s.target_uid || s.new_uid;   /* distill: the created memory, once applied */
   const decided = s.status !== 'pending';
   return `<div class="opt-detail-head">
-      <span class="opt-kind">${esc(s.kind)}</span>
+      <span class="opt-kind" title="${esc(kindTitle(s.kind))}">${esc(kindLabel(s.kind))}</span>
       ${tg.type ? typeTag(tg.type) : ''}
       ${s.target_uid ? uidChip(s.target_uid) : ''}
       ${tg.domain ? `<span class="chip">${esc(tg.domain)}</span>` : ''}
@@ -1158,11 +1028,6 @@ function renderOptGroup(view, scope) {
       ${backButton('optBack', scope.back.label)}
       <h2 class="opt-bar-title">${esc(scope.title)}
         <em class="opt-run-when">· ${esc(scope.sub)}</em></h2>
-      <span class="opt-bar-end">
-        <button type="button" class="btn btn-sm" id="optApplyKind"
-                ${scope.pending ? '' : 'disabled'}>${
-          esc(scope.applyLabel(scope.pending))}</button>
-      </span>
     </div>
     <div class="opt-two">
       <div class="opt-list" id="optList"><div class="loading"><span class="spin"></span></div></div>
@@ -1187,11 +1052,6 @@ function renderOptGroup(view, scope) {
     const fresh = await scope.refresh();
     if (!view.isConnected) return;
     scope.pending = fresh.pending;
-    const btn = $('#optApplyKind');
-    if (btn) {
-      btn.disabled = !fresh.pending;
-      btn.textContent = scope.applyLabel(fresh.pending);
-    }
     const when = view.querySelector('.opt-run-when');
     if (when) when.textContent = `· ${fresh.sub}`;
   };
@@ -1200,6 +1060,10 @@ function renderOptGroup(view, scope) {
     const host = $('#optDetail');
     if (!host) return;
     host.innerHTML = detailHTML(items[picked], picked, items.length);
+    /* Before and After are two walls of nearly the same text; the marks are
+       what tells them apart. Taken from the panes rather than from the
+       payload, so the words marked are the words drawn. */
+    markPair(host.querySelector('.opt-diff-b'), host.querySelector('.opt-diff-a'));
     wireCopyChips(host);
     /* the [[uid]] references drawn in the bodies and the rationale open the
        record they name, and a fenced block copies itself -- same two hooks
@@ -1406,16 +1270,6 @@ function renderOptGroup(view, scope) {
       () => bulk('reject', '/api/optimization/reject-all',
                  r => t('op.toast.rejectedN', { n: r.rejected })));
   }
-
-  $('#optApplyKind').addEventListener('click', async () => {
-    const ask = scope.confirm('apply');
-    if (!(await confirmModal({ title: ask.title,
-      body: ask.body(pendingIds().length), okLabel: ask.ok }))) return;
-    try {
-      reportApplied(await api('/api/optimization/apply-all', { body: scope.body }));
-      await loadList();
-    } catch (err) { failed('err.optimize', err); }
-  });
 
   loadList();
 }

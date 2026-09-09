@@ -161,6 +161,10 @@
   /* the same job one step down the status scale: a box the eye should treat
      as WAITING rather than as risky. Amber 300 at the tint alpha above. */
   --warn-tint:   rgba(255, 213, 79, .08);
+  /* and the same job for a box that is SETTLED. Green 300 at the tint
+     alpha, so the day banner can say "nothing open" in its own colour
+     instead of disappearing. */
+  --ok-tint:     rgba(129, 199, 132, .08);
 
   /* edit-history diff: a tinted row, plus ink light enough to read on it */
   --diff-add-bg:  rgba(129, 199, 132, .12);
@@ -890,6 +894,9 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
   border-radius: var(--r-sm); padding: var(--sp-0) var(--sp-2);
 }
 .status-tag.archived { color: var(--warn); border-color: rgba(255, 213, 79, .35); }
+/* The other half of the pair, for the one place both states are shown at
+   once: what a memory is BEFORE an archive suggestion is applied. */
+.status-tag.active { color: var(--ok); border-color: rgba(129, 199, 132, .35); }
 
 /* the one chip that reports an absence, so it wears the same warning colour
    as an archived tag rather than reading as a tag named "no tags" */
@@ -1506,14 +1513,30 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
    sentence's to raise. */
 .opt-cal-month::first-letter, .opt-day-when::first-letter { text-transform: uppercase; }
 .opt-cal-step { display: inline-flex; gap: var(--sp-1); }
+/* A month step is an OUTLINED control, not a bare glyph: it sits next to a
+   22px month name with nothing else around it, and .icon-btn's borderless
+   ink-3 gave the pair no edge to aim at. */
+.opt-step {
+  width: var(--ctl-h-sm); height: var(--ctl-h-sm);
+  display: inline-flex; align-items: center; justify-content: center;
+  border: 1px solid var(--line); border-radius: var(--r-md);
+  background: transparent; color: var(--accent); cursor: pointer;
+  --ico: 14px;
+  transition: background .15s, border-color .15s;
+}
+.opt-step:hover { background: var(--accent-dim); border-color: rgba(187, 134, 252, .4); }
 .opt-legend {
   display: inline-flex; align-items: center; gap: var(--sp-2);
   font-size: var(--fs-label); color: var(--ink-3);
 }
 
+/* Seven columns need room: below about 820px they stop being columns and
+   start being slivers, so the month scrolls sideways instead of squeezing. */
+.opt-grid-scroll { flex: none; overflow-x: auto; }
 .opt-grid {
-  flex: none;
-  display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: var(--sp-1);
+  min-width: 820px;
+  display: grid; grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: var(--sp-2);
 }
 .opt-dow {
   font: 500 var(--fs-label)/1.4 var(--font-ui);
@@ -1524,21 +1547,27 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
 /* A day is a control: it selects, so it is a button and it answers the
    keyboard for free. The three states it can be in are told apart by the
    FILL -- worked on, empty, selected -- and never by colour alone: the
-   number, the count and the bars all move with it. */
+   number, the count and the bars all move with it.
+
+   An empty day still carries a fill. Painting it in the page colour made it
+   disappear, and the month stopped reading as a block of days. */
 .opt-cell {
   min-height: 84px;
   display: flex; flex-direction: column; gap: var(--sp-1);
   padding: var(--sp-2);
   border: 1px solid var(--line-soft); border-radius: var(--r-md);
-  background: var(--bg); color: inherit;
+  background: var(--inset); color: inherit;
   text-align: left; cursor: pointer;
   transition: background .15s, border-color .15s;
+  /* the label of a press target is not content anyone copies */
+  user-select: none;
 }
-.opt-cell-out { background: transparent; border-color: transparent; cursor: default; }
+/* the lead and the tail of the month: a cell, quieter, and inert */
+.opt-cell-out { background: var(--bg); cursor: default; }
 .opt-cell.has-runs { background: var(--surface); }
-.opt-cell:hover { background: var(--raised); }
+.opt-cell:not(.opt-cell-out):hover { background: var(--raised); }
 .opt-cell.is-sel { background: var(--raised); border-color: var(--accent); }
-.opt-cell.is-sel.has-open { border-color: var(--warn); }
+.opt-cell.is-sel.has-open { border-color: rgba(255, 213, 79, .4); }
 .opt-cell-top { display: flex; align-items: baseline; gap: var(--sp-2); min-width: 0; }
 .opt-cell-day {
   font: 500 var(--fs-sm) var(--font-m); color: var(--ink-3);
@@ -1548,9 +1577,10 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
 /* today is said by the colour of its own number: the label did not fit the
    line at seven columns, and the cell already carries three other facts */
 .opt-cell.is-today .opt-cell-day { color: var(--accent); }
+/* the one fact in the cell that asks for an answer carries the medium weight */
 .opt-cell-open {
   margin-left: auto;
-  font: 400 var(--fs-label) var(--font-m); color: var(--warn);
+  font: 500 var(--fs-label) var(--font-m); color: var(--warn);
   white-space: nowrap;
 }
 .opt-cell-n {
@@ -1563,11 +1593,14 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
 
 /* One bar per RUN, not per day: a day with three runs of which one is still
    open reads as two settled and one waiting, which a single day-level
-   colour cannot say. */
-.opt-bars { display: flex; flex-wrap: wrap; gap: 3px; }
-.opt-bar { width: 17px; height: 5px; border-radius: var(--r-sm); background: var(--ok); flex: none; }
-.opt-bar.is-open { background: var(--warn); }
-.opt-bar.is-none { background: var(--inset); }
+   colour cannot say. One row, never wrapped -- three bars is the cap and the
+   count line carries the overflow. */
+.opt-ticks { display: flex; gap: 3px; height: 5px; overflow: hidden; }
+.opt-tick { width: 14px; height: 5px; border-radius: var(--r-sm); background: var(--ok); flex: none; }
+.opt-tick.is-open { background: var(--warn); }
+/* the legend's third swatch stands for a day with nothing on it, so it has
+   to be visible against the page rather than equal to it */
+.opt-tick.is-none { background: var(--hover-3); }
 
 .opt-cal-foot {
   flex: none; margin-top: auto;
@@ -1593,151 +1626,99 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
 .opt-day-today {
   flex: none;
   font: 500 var(--fs-label) var(--font-m); color: var(--accent);
-  background: var(--accent-dim); border-radius: var(--r-sm); padding: 2px var(--sp-1);
+  background: var(--accent-dim); border-radius: var(--r-sm); padding: 2px var(--sp-2);
 }
-.opt-day-ids { flex: none; font: 400 var(--fs-label) var(--font-m); color: var(--ink-3); }
 .opt-day-sub { margin-top: var(--sp-0); font-size: var(--fs-sm); color: var(--ink-2); }
 
-/* What the day is waiting on, and the two ways to answer it.
-
-   Two GROUPS and not five loose children: with the number, the sentence and
-   each button as siblings of one wrapping flex, 452px of rail put every one
-   of them on a line of its own -- a 93px banner for one short claim. The
-   count shrinks, the buttons never do. */
-.opt-day-banner {
+/* The one way out of the rail that is not a run: every suggestion the day
+   still holds, read one at a time across all of them. An ordinary .btn --
+   the same one the month bar and the group rows use for a control that
+   goes somewhere, carrying its chevron at the size they carry theirs. */
+.opt-day-review {
   flex: none;
-  display: flex; align-items: center; gap: var(--sp-3); flex-wrap: wrap;
-  padding: var(--sp-3) var(--sp-4);
-  background: var(--warn-tint); border-bottom: 1px solid var(--line-soft);
+  display: inline-flex; align-items: center; gap: var(--sp-1);
+  --ico: 12px;
 }
-.opt-day-count {
-  display: flex; align-items: baseline; gap: var(--sp-2);
-  flex: 1 1 0; min-width: 0;
+
+/* ── the runs of the day ── */
+
+/* The runs staged on the day, as the cards that open them. One card per row
+   at the rail's width: the card has to say which run this is, what the pass
+   set out to do, how much of it is answered, and what sort of curation is
+   inside -- and the brief is the part that needs the line. */
+.opt-lots {
+  flex: 1; min-height: 0;
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: var(--sp-3); padding: var(--sp-4); align-content: start;
+  overflow-y: auto;
 }
-.opt-day-n {
-  font: 500 var(--fs-num)/1 var(--font-m); color: var(--warn);
+.opt-lot {
+  display: grid; gap: var(--sp-2); align-content: start;
+  padding: var(--sp-3);
+  text-align: left; cursor: pointer;
+  background: var(--inset); border: 1px solid var(--line); border-radius: var(--r-md);
+  transition: border-color .15s, background .15s;
+}
+.opt-lot:hover { border-color: var(--accent); background: var(--hover-1); }
+.opt-lot-top { display: flex; align-items: baseline; gap: var(--sp-2); }
+.opt-lot-id {
+  font: 500 var(--fs-sm) var(--font-m); color: var(--accent);
   font-variant-numeric: tabular-nums; flex: none;
 }
-.opt-day-of { font-size: var(--fs-sm); color: var(--ink-2); min-width: 0; }
-.opt-day-acts { display: flex; align-items: center; gap: var(--sp-2); flex: none; }
-
-.opt-day-scroll { flex: 1; min-height: 0; display: flex; flex-direction: column; }
-.opt-day-empty { padding: var(--sp-6) var(--sp-4); }
-.opt-day-empty .hint-sm { margin: var(--sp-2) 0 0; }
-
-.opt-runrows-head, .opt-open-head {
-  display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap;
-  padding: var(--sp-3) var(--sp-4) var(--sp-1);
-}
-.opt-open-head .btn { margin-left: auto; }
-
-/* One run of the day. It FILTERS the list below rather than opening
-   anything; the id inside it is the way to the run's own page, which is why
-   that one is a button of its own and stops the click. */
-.opt-runrow {
-  display: grid;
-  grid-template-columns: auto auto minmax(0, 1fr) auto;
-  align-items: center; gap: var(--sp-2);
-  padding: var(--sp-2) var(--sp-4);
-  border-bottom: 1px solid var(--line-soft);
-  cursor: pointer;
-}
-.opt-runrow:hover { background: var(--hover-1); }
-.opt-runrow.is-on { background: var(--hover-2); outline: 2px solid var(--accent); outline-offset: -2px; }
-.opt-runrow-id {
-  font: 500 var(--fs-label) var(--font-m); color: var(--accent);
-  background: none; border: 0; padding: 0; cursor: pointer;
-}
-.opt-runrow-id:hover { color: var(--accent-hi); text-decoration: underline; }
-.opt-runrow-at { font: 400 var(--fs-label) var(--font-m); color: var(--ink-3); font-variant-numeric: tabular-nums; }
-.opt-runrow-note {
-  font-size: var(--fs-sm); color: var(--ink-2);
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-}
-.opt-runrow-state { font: 400 var(--fs-label) var(--font-m); color: var(--ink-3); white-space: nowrap; }
-.opt-runrow-state.is-open { color: var(--warn); }
-
-/* ── the suggestions still open ── */
-
-.opt-open { display: flex; flex-direction: column; }
-.opt-open-empty { padding: var(--sp-5) var(--sp-4); }
-.opt-pend-group { display: flex; flex-direction: column; }
-.opt-pend-head {
-  display: flex; align-items: center; gap: var(--sp-2);
-  padding: var(--sp-3) var(--sp-4) var(--sp-1);
-  min-width: 0;
-}
-.opt-pend-mark { width: 8px; height: 8px; border-radius: var(--r-sm); flex: none; }
-.opt-pend-kind { font: 500 var(--fs-sm) var(--font-m); color: var(--ink); flex: none; }
-.opt-pend-what {
-  font-size: var(--fs-label); color: var(--ink-3); min-width: 0;
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-}
-.opt-pend-count { font: 400 var(--fs-label) var(--font-m); color: var(--ink-3); white-space: nowrap; }
-
-/* The line a decision is taken on. `before → after` is the whole change
-   compressed to one line; the pane that shows it in full is one press away,
-   and a rail that opened it here would BE that pane. */
-.opt-pend {
-  display: grid; grid-template-columns: auto minmax(0, 1fr) auto;
-  align-items: start; gap: var(--sp-2);
-  padding: var(--sp-2) var(--sp-4);
-  border-bottom: 1px solid var(--line-soft);
-}
-.opt-pend:hover { background: var(--hover-1); }
-.opt-pend-uid {
+.opt-lot-at {
   font: 400 var(--fs-label) var(--font-m); color: var(--ink-3);
-  background: var(--chip-fill); border-radius: var(--r-sm);
-  padding: 2px var(--sp-1); margin-top: 2px; white-space: nowrap;
+  font-variant-numeric: tabular-nums; flex: none;
 }
-.opt-pend-body { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
-.opt-pend-title {
-  font-size: var(--fs-sm); color: var(--ink);
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+.opt-lot-what { font-size: var(--fs-label); color: var(--ink-3); margin-left: auto; }
+/* The pass's own brief, which is the only line on the card written by
+   whoever staged it. Two lines: db.RUN_NOTE_MAX is 250 characters, and the
+   rest is on the page the card opens. */
+.opt-lot-note {
+  font-size: var(--fs-sm); color: var(--ink); line-height: 1.45;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+  overflow: hidden;
 }
-.opt-pend-diff { display: flex; align-items: center; gap: var(--sp-1); min-width: 0; }
-.opt-pend-before, .opt-pend-after {
-  font: 400 var(--fs-label) var(--font-m); color: var(--ink-3);
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+.opt-lot-meter { height: 6px; }
+.opt-lot-count { font: 400 var(--fs-sm) var(--font-m); color: var(--ink-3); }
+.opt-lot-count b {
+  font: 500 var(--fs-lg) var(--font-m); color: var(--ink-2);
+  font-variant-numeric: tabular-nums; margin-right: 2px;
 }
-.opt-pend-before { max-width: 45%; flex: none; }
-.opt-pend-after { color: var(--ink-2); }
-.opt-pend-after.is-good { color: var(--ok); }
-.opt-pend-arrow { --ico: 11px; color: var(--ink-3); flex: none; }
-.opt-pend-acts { display: flex; gap: var(--sp-1); flex: none; }
-/* the two answers, told apart by outline rather than by fill: they sit in a
-   list of rows and a filled pair on every row would out-shout the titles */
-.opt-pend-acts .opt-yes { color: var(--ok); border: 1px solid rgba(129, 199, 132, .4); }
-.opt-pend-acts .opt-no { color: var(--bad-ink); border: 1px solid var(--bad-line); }
-.opt-pend-acts .opt-yes:hover { background: rgba(129, 199, 132, .12); }
-.opt-pend-acts .opt-no:hover { background: var(--bad-wash); }
+/* What is inside, before the card is opened. Named and not only coloured:
+   the kind is the word the whole tab is organised by, and a row of dots
+   would be a legend the reader has to go and find. */
+.opt-lot-kinds { display: flex; flex-wrap: wrap; gap: 3px; align-content: start; }
+.opt-lot-kind {
+  display: inline-flex; align-items: center; gap: 3px;
+  font: 400 var(--fs-label) var(--font-ui); color: var(--ink-3);
+  background: var(--chip-fill); border-radius: var(--r-sm); padding: 1px var(--sp-1);
+  max-width: 100%; min-width: 0;
+}
+.opt-lot-kind > span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.opt-lot-dot { width: 6px; height: 6px; border-radius: 2px; flex: none; }
+.opt-lot-more { color: var(--ink-3); font: 400 var(--fs-label) var(--font-m); padding: 1px 2px; }
+/* A run still holding a decision is the one the reader came for, so it
+   takes the waiting colour and a tinted ground; a settled one stays the
+   quiet default beside it. The word by the count says which is which
+   without the colour. */
+.opt-lot.is-open { background: var(--warn-tint); border-color: rgba(255, 213, 79, .28); }
+.opt-lot.is-open .opt-lot-count b { color: var(--warn); }
+.opt-lot.is-open .opt-lot-what { color: var(--ink-2); }
 
-/* ── what the day already applied ── */
 
-.opt-applied {
-  flex: none; margin-top: auto;
-  padding: var(--sp-3) var(--sp-4);
-  border-top: 1px solid var(--line); background: var(--inset);
+/* ── the empty states ── */
+
+/* Centred in what is left of the rail, with a mark: top-anchored grey text
+   in a 400px column reads as a layout gap rather than as an answer. */
+.opt-day-empty {
+  flex: 1; min-height: 180px;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: var(--sp-2); padding: var(--sp-6) var(--sp-5); text-align: center;
 }
-.opt-applied-head {
-  display: flex; align-items: center; gap: var(--sp-2);
-  font-size: var(--fs-sm); color: var(--ink-2); --ico: 12px;
-}
-.opt-applied-head .ico { color: var(--ok); flex: none; }
-.opt-applied-kinds { display: flex; flex-wrap: wrap; gap: var(--sp-1); margin-top: var(--sp-2); }
-.opt-applied-chip {
-  display: inline-flex; align-items: center; gap: var(--sp-1);
-  font: 400 var(--fs-label) var(--font-m); color: var(--ink-2);
-  background: var(--chip-fill); border-radius: var(--r-sm); padding: 2px var(--sp-2);
-}
-.opt-applied-chip b { color: var(--ink); font-weight: 500; }
-.opt-applied-backup {
-  display: flex; align-items: center; gap: var(--sp-1);
-  margin-top: var(--sp-2);
-  font: 400 var(--fs-label) var(--font-m); color: var(--ok);
-  --ico: 12px; min-width: 0;
-}
-.opt-applied-backup .ico { flex: none; }
+.opt-empty-mark { --ico: 26px; color: var(--ink-3); }
+.opt-empty-mark.s-ok { --ico: 22px; color: var(--ok); }
+.opt-empty-msg { margin: 0; max-width: 280px; color: var(--ink-2); line-height: 1.6; }
+.opt-day-empty .hint-sm { margin: 0; max-width: 300px; }
 
 /* ── optimization · the run and the group ───────────────────────────────
    Three addresses under one view: one run, one kind, one day. All of them
@@ -1751,13 +1732,14 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
 .opt-bar-title { font: 500 var(--fs-xl)/1.25 var(--font-ui); margin: 0; min-width: 0; }
 .opt-bar-end { margin-left: auto; display: flex; align-items: center; gap: var(--sp-3); }
 .opt-run-when { font-style: normal; font-weight: 400; font-size: var(--fs-md); color: var(--ink-3); }
+/* A note staged before db.RUN_NOTE_MAX can be any length. In the
+   window-filling layout the shell is a fixed height, so the note is capped
+   and scrolls inside its ceiling; below that layout the page scrolls and
+   the note runs as long as it likes. */
 .opt-run-note-line {
-  flex: none; margin-bottom: var(--sp-3);
+  flex: 0 1 auto; margin-bottom: var(--sp-3);
   font-size: var(--fs-sm); color: var(--ink-2);
 }
-
-/* level 0 — the grid scrolls, the toolbar over it does not */
-.opt-run-scroll { flex: 1; min-height: 0; }
 
 /* level 1 — the rail states the case, the table holds the decisions.
    One column until there is room for two: the two-column arrangement and
@@ -1816,9 +1798,14 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
 /* The name of a kind IS the way into it, with the chevron at the end of the
    row repeating the target. Three buttons competing for the same cell left
    the sentence that says what the group does with 144px and three lines. */
+/* The controls of a row sit in a track of their OWN width, not in one that
+   sizes to what the row happens to hold: a group with three buttons and a
+   group with one put every control at the same x, and the eye reads down
+   the column instead of hunting along each row. 264px is the widest set --
+   reject, apply, details -- at the longest catalog's labels. */
 .opt-grp {
   display: grid;
-  grid-template-columns: 6px 128px minmax(0, 1fr) 44px minmax(0, 152px) auto var(--ctl-h-sm);
+  grid-template-columns: 6px 128px minmax(0, 1fr) 76px minmax(0, 108px) 264px;
   align-items: center; gap: var(--sp-3);
   padding: var(--sp-3) var(--sp-4) var(--sp-3) var(--sp-5);
   border-bottom: 1px solid var(--line-soft);
@@ -1837,8 +1824,10 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
 .opt-grp.decided { background: var(--bg); }
 /* the severity mark, drawn in the row rather than as a border on it */
 .opt-grp-mark { height: 22px; border-radius: var(--r-sm); }
+/* The kind reads as a phrase now, not as an identifier (see kindLabel), so
+   it is set in the UI face; the stored spelling is on the title. */
 .opt-grp-kind {
-  font: 500 var(--fs-sm) var(--font-m); color: var(--accent);
+  font: 500 var(--fs-sm) var(--font-ui); color: var(--accent);
   background: none; border: 0; padding: 0; cursor: pointer;
   justify-self: start; min-width: 0; text-align: left;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
@@ -1860,7 +1849,12 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
 .opt-grp-quiet { color: var(--ink-3); }
 .opt-grp-acts { display: flex; gap: var(--sp-2); justify-content: flex-end; }
 .opt-grp-acts .btn { white-space: nowrap; flex: none; }
-.opt-grp-go { --ico: 13px; }
+/* The way into a group is a control with a name on it. As a bare chevron it
+   read as decoration at the end of a row of real buttons. */
+.opt-grp-go {
+  display: inline-flex; align-items: center; gap: var(--sp-1);
+  --ico: 12px;
+}
 
 /* level 2 — the list you pick from, beside the evidence for the pick */
 .opt-two { flex: 1; min-height: 0; display: grid; gap: var(--sp-4); }
@@ -1945,13 +1939,13 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
    an ordinary column that scrolls, and a pane with its own scrollbar inside
    a scrolling page is two bars for one gesture. */
 @media (min-height: 620px) and (min-width: 1024px) {
+  .opt-run-note-line { max-height: 22vh; overflow-y: auto; }
   .opt-work { grid-template-columns: minmax(0, 352px) minmax(0, 1fr); align-items: start; }
   .opt-two { grid-template-columns: minmax(0, 380px) minmax(0, 1fr); }
-  /* 452px is what the comp gives the rail, and what a suggestion's line
-     needs: the uid, a title, `before → after` and the two answers. Below
-     this the month and the day stack and the view scrolls as a page. */
+  /* 452px is what the comp gives the rail, and what a run card needs: the
+     number, the count, and the kinds staged in it. Below this breakpoint
+     the month and the day stack and the view scrolls as a page. */
   .opt-cal-work { grid-template-columns: minmax(0, 1fr) minmax(0, 452px); }
-  .opt-day-scroll { overflow-y: auto; }
   .opt-grp-scroll, .opt-rows { overflow-y: auto; }
   /* the rail is taller than the window on a short one, and it is the rail
      that gives, not the table of decisions beside it */
@@ -3010,6 +3004,18 @@ button.rs-mono:hover { color: var(--accent); }
 .diff-add { background: var(--diff-add-bg); color: var(--diff-add-ink); display: block; }
 .diff-ctx { color: var(--ink-3); display: block; }
 
+/* The same two colours, inline: the edit history compares whole lines, the
+   before/after panes of a suggestion compare words inside one. <mark> is
+   the element for it and arrives yellow-on-black from the browser, so both
+   ends of it are set here. The padding is horizontal only -- a vertical one
+   would push the line the mark sits in away from its neighbours. */
+.df-del, .df-ins {
+  border-radius: var(--r-sm); padding: 0 2px;
+  text-decoration: none;
+}
+.df-del { background: var(--diff-del-bg); color: var(--diff-del-ink); }
+.df-ins { background: var(--diff-add-bg); color: var(--diff-add-ink); }
+
 .dz-hint, .dz-type { font-size: var(--fs-sm); color: var(--ink-2); }
 .dz-row { display: flex; flex-wrap: wrap; gap: var(--sp-2); align-items: center; }
 /* the phrase is 23 characters and the button's label is long: the field
@@ -3874,7 +3880,7 @@ button.rs-mono:hover { color: var(--accent); }
    with the orange that means "note" everywhere else in the UI. */
 .opt-kind {
   display: inline-flex; align-items: center;
-  font: 500 var(--fs-sm) var(--font-m);
+  font: 500 var(--fs-sm) var(--font-ui);
   color: var(--ink-2);
   background: var(--chip-fill);
   border: 1px solid var(--line-soft);
@@ -3913,6 +3919,72 @@ button.rs-mono:hover { color: var(--accent); }
   grid-template-areas: "bl . al" "bs arrow as";
   column-gap: var(--sp-3); row-gap: var(--sp-1);
 }
+/* Scoped to the prose pair: .opt-diff-b and .opt-diff-a also name the two
+   halves of the one-line pair below, which is an ordinary two-column grid
+   with no areas to place into. */
+.opt-diff > .opt-diff-bl { grid-area: bl; }
+.opt-diff > .opt-diff-al { grid-area: al; }
+.opt-diff > .opt-diff-b  { grid-area: bs; }
+.opt-diff > .opt-diff-a  { grid-area: as; }
+/* ── the three panes that are not prose ──
+   A flag, a set and a single line each change in their own way, so each
+   gets the shape that shows the change and nothing wider. All three sit at
+   their natural height: only the prose pair earns the pane. */
+
+/* A flag moving between named states: both marks on one line, the way the
+   rest of the UI draws them, with the arrow between. */
+.opt-flag {
+  display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap;
+  padding: var(--sp-3) var(--sp-4);
+  background: var(--inset); border: 1px solid var(--line-soft); border-radius: var(--r-md);
+}
+.opt-flag-arrow { --ico: 14px; color: var(--ink-3); display: inline-flex; }
+.opt-flag-why {
+  flex: 1 1 100%; font-size: var(--fs-sm); color: var(--ink-2);
+  border-top: 1px dashed var(--line-soft); padding-top: var(--sp-2);
+}
+
+/* A set: both sides in full, so what STAYED is as visible as what moved. */
+.opt-set {
+  display: grid; grid-template-columns: 1fr 1fr;
+  gap: var(--sp-1) var(--sp-3); align-content: start;
+}
+.opt-chips {
+  display: flex; flex-wrap: wrap; gap: var(--sp-1); align-content: start;
+  padding: var(--sp-2);
+  background: var(--inset); border: 1px solid var(--line-soft); border-radius: var(--r-md);
+}
+.opt-schip {
+  font: 400 var(--fs-sm) var(--font-m); color: var(--ink-2);
+  background: var(--chip-fill); border-radius: var(--r-sm); padding: 1px var(--sp-2);
+}
+/* the two colours the before/after panes already use for a dropped and an
+   added run of text, on the items that left and arrived */
+.opt-schip.is-gone {
+  background: var(--diff-del-bg); color: var(--diff-del-ink);
+  text-decoration: line-through;
+}
+.opt-schip.is-new { background: var(--diff-add-bg); color: var(--diff-add-ink); }
+.opt-schip.is-none { background: none; color: var(--ink-3); font-style: italic; }
+.opt-set-sum {
+  grid-column: 1 / -1;
+  display: flex; gap: var(--sp-3);
+  font: 400 var(--fs-label) var(--font-m); color: var(--ink-3);
+}
+.opt-set-out { color: var(--diff-del-ink); }
+.opt-set-in { color: var(--diff-add-ink); }
+
+/* One short value replaced by another: two lines, not two panes. */
+.opt-line { display: grid; grid-template-columns: 1fr 1fr; gap: var(--sp-1) var(--sp-3); }
+.opt-lval {
+  padding: var(--sp-2) var(--sp-3); min-width: 0;
+  font-size: var(--fs-body); color: var(--ink); line-height: 1.5;
+  background: var(--inset); border: 1px solid var(--line-soft); border-radius: var(--r-md);
+  overflow-wrap: anywhere;
+}
+.opt-lval.is-path { font: 400 var(--fs-sm) var(--font-m); }
+.opt-line .opt-diff-a { border-color: rgba(129, 199, 132, .25); }
+
 .opt-arrow {
   grid-area: arrow; align-self: center; justify-self: center;
   color: var(--ink-3); font-size: var(--fs-label);
@@ -3928,6 +4000,10 @@ button.rs-mono:hover { color: var(--accent); }
   padding: var(--sp-2) var(--sp-2); color: var(--ink-2); line-height: 1.5; max-height: 150px; overflow: auto;
   height: 100%;
 }
+/* The proposal's side of the pair, named by its edge: the two wells hold
+   nearly the same text, and which one is the store as it stands has to be
+   readable without going back up to the label. */
+.opt-diff .opt-diff-a { border-color: rgba(129, 199, 132, .25); }
 /* A well holding a BODY is prose someone reads to decide, so it carries the
    reading ink; the plain wells beside it hold a tag set or a path and stay a
    step quieter. Padding grows with it -- rendered blocks need the room that

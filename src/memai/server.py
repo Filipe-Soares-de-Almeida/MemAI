@@ -52,7 +52,9 @@ pulse(domain) for the state of a subject, recall(query) or search(query)
 for anything specific, list_domains() for the tree that exists. Write as
 you go, not at the end: note() a durable fact, anti_pattern() a pitfall
 worth not repeating, checkpoint() where the work stands before a pause,
-diagram() a routine start to end. A claim you could not check says so in
+diagram() a routine start to end. One memory holds ONE fact: when a body
+grows into several subjects, write them as separate memories and
+link_memories() them to each other. A claim you could not check says so in
 its own body; set_confidence(uid, 'confirmed'|'contradicted') closes it
 once the evidence turns up.
 
@@ -425,6 +427,15 @@ def note(title: str, content: str, domain: str = "", also: str = "", tags: str =
     characters, and a name that needs more than that is summarizing the
     body instead of naming it.
 
+    content: ONE fact, and what a reader needs to use it -- what holds,
+    where it holds, what it rules out. Retrieval ranks whole memories, so a
+    body answering four questions comes back for all four and is read for
+    one: write the second subject as its own memory, on its own domain, and
+    connect the two with link_memories(). A [[uid]] typed inside a body is
+    a reference a reader can follow, not an edge -- get_relations() and the
+    graph do not see it until link_memories() creates one. Past a couple of
+    thousand characters, a body is usually several memories written as one.
+
     domain: the subject this belongs to, as a path from the outermost
     scope in ('acme/x100/p200'). File it as deep as the fact is specific
     -- a note about one routine goes on the routine, and still comes back
@@ -481,7 +492,10 @@ def checkpoint(
     A summary of where the work stands, so the next session picks up
     the right bearing via pulse(). Fields are free-length; still prefer
     a readable summary here and put timeless detail into note() --
-    checkpoints are read for bearing, not as an archive. Stored as
+    checkpoints are read for bearing, not as an archive. One fact per
+    note(), each cited back here by [[uid]] and linked with
+    link_memories(); pulse() returns the latest checkpoint IN FULL, so
+    every session pays for whatever was parked in these fields. Stored as
     type='checkpoint'.
 
     title: one line naming what this memory is about, in the words someone
@@ -521,6 +535,10 @@ def anti_pattern(
     Stored as type='anti_pattern'; open ones for a domain are surfaced by pulse().
     `also` cross-lists it into further domain paths, `review_after` dates
     when to recheck it and `source_ref` says what it came from -- see note().
+
+    ONE pitfall per memory: a second temptation from the same session is
+    its own anti_pattern(), connected with link_memories(). See note() on
+    what a body holds and when it is two memories.
 
     title: one line naming what this memory is about, in the words someone
     would look for it by. It is what a list shows instead of the opening of
@@ -564,7 +582,9 @@ def reasoning(
 
     For the PROCESS, not the fact it produced -- note() takes the fact.
     Stored as type='reasoning'; filter search/list_* with type='reasoning'
-    to get these back.
+    to get these back. ONE analysis per memory: a second hypothesis tested
+    in the same session is its own reasoning(). See note() on what a body
+    holds and when it is two memories.
 
     title: one line naming what this memory is about, in the words someone
     would look for it by. It is what a list shows instead of the opening of
@@ -605,6 +625,10 @@ def handoff(title: str, content: str, domain: str = "", also: str = "",
 
     Stored as type='handoff'; open ones for a domain are surfaced by pulse().
     `also` cross-lists it into further domain paths -- see note().
+
+    `content` holds the message and what the next agent needs to act on it.
+    Durable knowledge goes to note() and is cited from here -- see note()
+    on when a body is two memories.
 
     title: one line naming what this memory is about, in the words someone
     would look for it by. It is what a list shows instead of the opening of
@@ -1407,7 +1431,10 @@ def edit_memory(uid: str, new_content: str = "", note: str = "", mode: str = "re
     replacing the body. Use it when a memory gains a fact rather than
     turning out to be wrong: the alternative is reading the whole thing,
     restating it and sending it back, which pays for the body twice and
-    stakes the existing text on it being copied faithfully.
+    stakes the existing text on it being copied faithfully. Append what
+    THIS memory gained. A fact about a further subject is a new memory plus
+    an edge, not a line at the bottom -- appended text is ranked as part of
+    the body it lands in and comes back with it.
 
     source_ref points the memory at what its claim came from -- the field
     note() takes at write time, and the one a later pass checks the claim
@@ -1481,6 +1508,10 @@ def link_memories(from_uid: str, to_uid: str, relation_type: str, note: str = ""
 
     relation_type is free text but keep it consistent, e.g.
     'supersedes', 'relates_to', 'contradicts', 'links_to'.
+
+    This is what splitting a body into several memories costs: a [[uid]]
+    written inside prose is a reference a reader follows, and only an edge
+    created here is visible to get_relations() and to the graph.
 
     Refuses an unknown uid, a memory related to itself, and an edge that
     already exists with that same type -- each as
@@ -1668,6 +1699,11 @@ def optimize_stage(suggestions: list[dict], note: str = "") -> dict:
     distill) require a non-empty `verified` describing the live-facts
     check behind them. Invalid suggestions are skipped and reported in
     `errors`; the rest are staged. Returns {run_id, staged, errors}.
+
+    `note` is one short summary of the pass, at most 250 characters; a
+    longer one raises and stages nothing. What a single suggestion needs
+    said belongs in its own `rationale` and `verified`, which are not
+    capped.
     help(command='optimize_stage') explains each kind in full.
     """
     with db.connect() as conn:
@@ -1896,6 +1932,12 @@ check that justifies them.
 
 Invalid suggestions are skipped and reported in `errors`; the rest are
 staged. Returns {run_id, staged, errors}.
+
+`note` describes the whole run in at most 250 characters -- one or two
+sentences, the shape of "what this pass did and why now". A longer note
+raises and stages nothing. Per-suggestion detail goes in `rationale`
+and `verified`, which have no limit; findings worth keeping go in a
+memory, not in the run note.
 """,
     "get_diagram": """
 TO SHOW THE DIAGRAM TO A USER, pick by what you can actually do with it:

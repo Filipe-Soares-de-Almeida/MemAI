@@ -68,6 +68,18 @@ def test_stage_validates_and_reports_errors(conn):
     assert len(sugs) == 1 and sugs[0]["kind"] == "reword"
 
 
+def test_a_note_over_the_cap_stages_nothing(conn):
+    """The run note holds a summary, so an oversized one raises before any
+    suggestion is written."""
+    uid = _mk(conn, content="keep me")
+    sug = [{"kind": "reword", "target_uid": uid, "payload": {"new_content": "better"}}]
+    with pytest.raises(ValueError, match=f"the limit is {db.RUN_NOTE_MAX}"):
+        db.stage_optimization(conn, "x" * (db.RUN_NOTE_MAX + 1), sug)
+    assert db.list_optimization_runs(conn) == []
+    res = db.stage_optimization(conn, "x" * db.RUN_NOTE_MAX, sug)
+    assert res["staged"] == 1
+
+
 def test_stage_no_valid_suggestions_creates_no_run(conn):
     res = db.stage_optimization(conn, "", [{"kind": "bogus", "payload": {}}])
     assert res["run_id"] is None and res["staged"] == 0
@@ -232,6 +244,57 @@ def test_apply_merge_archives_drop_and_links(conn):
     drow = db.get_memory(conn, drop)
     assert drow["status"] == "active" and drow["superseded_by"] is None
     assert db.get_relations(conn, keep) == []
+
+
+def test_a_rejection_can_be_taken_back(conn):
+    """Reject is a decision a reader can get wrong.
+
+    Nothing was written to any memory, so taking the answer back is only a
+    change of status -- but it has to be possible, or a mis-click in the
+    day rail is a dead end no undo reaches.
+    """
+    uid = _mk(conn, content="original")
+    staged = db.stage_optimization(conn, "reject then think again", [
+        {"kind": "retag", "target_uid": uid, "payload": {"tags": "x"}, "rationale": "r"},
+    ])
+    sug = db.get_optimization_suggestions(conn, staged["run_id"])[0]
+
+    db.reject_suggestion(conn, sug["id"])
+    assert db.get_suggestion(conn, sug["id"])["status"] == "rejected"
+
+    db.revert_suggestion(conn, sug["id"])
+    back = db.get_suggestion(conn, sug["id"])
+    assert back["status"] == "pending"
+    assert back["decided_at"] is None
+    # and it can then be applied for real
+    db.apply_suggestion(conn, sug["id"])
+    assert db.get_memory(conn, uid)["tags"] == "x"
+
+
+def test_reverting_a_pending_suggestion_is_refused(conn):
+    """It is already on the table; saying so beats performing a no-op."""
+    uid = _mk(conn)
+    staged = db.stage_optimization(conn, "nothing decided", [
+        {"kind": "retag", "target_uid": uid, "payload": {"tags": "x"}, "rationale": "r"},
+    ])
+    sug = db.get_optimization_suggestions(conn, staged["run_id"])[0]
+    with pytest.raises(ValueError, match="already pending"):
+        db.revert_suggestion(conn, sug["id"])
+
+
+def test_reverting_a_rejection_writes_nothing_to_the_memory(conn):
+    uid = _mk(conn, content="untouched")
+    before = dict(db.get_memory(conn, uid))
+    staged = db.stage_optimization(conn, "reject and revert", [
+        {"kind": "reword", "target_uid": uid, "payload": {"new_content": "rewritten"},
+         "rationale": "r"},
+    ])
+    sug = db.get_optimization_suggestions(conn, staged["run_id"])[0]
+    db.reject_suggestion(conn, sug["id"])
+    db.revert_suggestion(conn, sug["id"])
+    after = dict(db.get_memory(conn, uid))
+    assert after["content"] == before["content"] == shaped("note", "untouched")
+    assert after["updated_at"] == before["updated_at"]
 
 
 def test_reject_leaves_memory_untouched(conn):
@@ -1135,6 +1198,35 @@ def test_a_rewrite_carries_the_whole_before_and_both_lengths(client):
     assert not {"content_before", "chars_before", "chars_after"} & set(s2)
 
 
+def test_an_applied_suggestion_still_reports_what_it_replaced(client):
+    """Before is the state the apply left behind, for every kind.
+
+    Applying writes the proposal into the memory, so reading the memory
+    afterwards puts the same value in both panes and the pair says nothing
+    changed. prev_state is the Before once a suggestion is decided.
+    """
+    cases = {
+        "retag": ({"tags": "queue, drain"}, "tags", "cache, warmup"),
+        "retitle": ({"title": "the new name"}, "title", "the old name"),
+        "redomain": ({"domain": "acme/x200"}, "domain", "acme/x100"),
+        "set_confidence": ({"confidence": "confirmed"}, "confidence", "unverified"),
+        "review": ({"review_after": "2027-01-01"}, "review_after", ""),
+        "archive": ({}, "status", "active"),
+    }
+    for kind, (payload, field, before) in cases.items():
+        uid = _new_memory(client, title="the old name", tags="cache, warmup",
+                          domain="acme/x100", confidence="unverified")
+        staged = _stage_via_db(uid, kind, payload)
+        sug = client.get(
+            f"/api/optimization/suggestions?run={staged['run_id']}").json()["suggestions"][0]
+        assert client.post("/api/optimization/apply",
+                           json={"id": sug["id"]}).status_code == 200
+        after = client.get(
+            f"/api/optimization/suggestions?run={staged['run_id']}").json()["suggestions"][0]
+        assert after["status"] == "applied"
+        assert after["target"][field] == before, kind
+
+
 def test_a_peer_card_carries_the_name_the_memory_goes_by(client):
     """Every preview names a memory by its title and keeps the body behind it.
 
@@ -1313,12 +1405,17 @@ OPTIMIZATION_JS = (Path(__file__).resolve().parents[1]
 RELATIONAL = {"link", "merge", "distill"}
 
 
+def _kind_set(name: str) -> set[str]:
+    """One of optimization.js's kind sets, read from the file."""
+    body = OPTIMIZATION_JS.read_text(encoding="utf-8")
+    match = re.search(rf"const {name} = new Set\(\[(.*?)\]\)", body, re.S)
+    assert match, f"{name} is not where this test expects it"
+    return set(re.findall(r"'([a-z_]+)'", match.group(1)))
+
+
 def _diff_kinds() -> set[str]:
     """The kinds optimization.js gives a before/after pair, read from the file."""
-    body = OPTIMIZATION_JS.read_text(encoding="utf-8")
-    match = re.search(r"const DIFF_KINDS = new Set\(\[(.*?)\]\)", body, re.S)
-    assert match, "DIFF_KINDS is not where this test expects it"
-    return set(re.findall(r"'([a-z_]+)'", match.group(1)))
+    return _kind_set("DIFF_KINDS")
 
 
 def test_every_staged_kind_reaches_a_renderer():
@@ -1330,13 +1427,21 @@ def test_every_staged_kind_reaches_a_renderer():
     assert set(db.SUGGESTION_KINDS) == _diff_kinds() | RELATIONAL
 
 
-@pytest.mark.parametrize("side", ["optBefore", "optAfter"])
-def test_each_diff_kind_has_a_case_on_both_sides(side):
-    """Being in DIFF_KINDS is not enough: both panes switch on the kind."""
-    body = OPTIMIZATION_JS.read_text(encoding="utf-8")
-    start = body.index(f"function {side}(")
-    arm = body[start:body.index("\n}", start)]
-    assert _diff_kinds() <= set(re.findall(r"case '([a-z_]+)'", arm))
+def test_every_diff_kind_is_claimed_by_exactly_one_pane():
+    """A kind's change has a SHAPE, and the four panes divide them up.
+
+    Content is prose and gets two scrolling wells, a flag gets the two
+    marks the rest of the UI draws it with, a set gets both collections as
+    chips, and a single value gets one line each. A kind in DIFF_KINDS that
+    no set claims falls through to the raw payload dump.
+    """
+    groups = {name: _kind_set(name) for name in
+              ("CONTENT_KINDS", "FLAG_KINDS", "SET_KINDS", "LINE_KINDS")}
+    union: set[str] = set()
+    for name, kinds in groups.items():
+        assert not (union & kinds), f"{name} claims a kind another pane already draws"
+        union |= kinds
+    assert union == _diff_kinds()
 
 
 def _catalogs():
@@ -1357,6 +1462,20 @@ def test_every_kind_has_a_sentence_in_every_catalog():
         for kind in db.SUGGESTION_KINDS:
             assert f"op.what.{kind}" in strings, f"{loc} has no sentence for {kind}"
         assert "op.what.other" in strings
+
+
+def test_every_kind_has_a_name_in_every_catalog():
+    """`kind.${kind}` is what the reader sees instead of the identifier.
+
+    kindLabel falls back to the raw string, so a gap does not break the
+    screen -- it leaves `set_confidence` on it in one locale and "Definir
+    confianca" in the other, which is the inconsistency the mask exists to
+    remove.
+    """
+    for loc, strings in _catalogs().items():
+        for kind in db.SUGGESTION_KINDS:
+            assert f"kind.{kind}" in strings, f"{loc} has no name for {kind}"
+        assert "kind.raw" in strings, f"{loc} cannot show the stored spelling"
 
 
 def test_the_mixed_variants_exist_for_the_kinds_that_ask_for_one():

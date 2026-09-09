@@ -4973,15 +4973,26 @@ def _validate_suggestion(conn: sqlite3.Connection, s: object) -> tuple[dict | No
     }, None
 
 
+# Characters a run note may hold. A longer note is refused, not truncated.
+RUN_NOTE_MAX = 250
+
+
 def stage_optimization(conn: sqlite3.Connection, note: str, suggestions: list) -> dict:
     """Validate a batch of suggestions and write them to a new run.
 
     Invalid suggestions are skipped and reported in `errors`; only valid
     ones are staged. Returns {run_id, staged, errors}. No run is created
     when nothing validates.
+
+    `note` summarises the run in at most RUN_NOTE_MAX characters; a longer
+    one raises and nothing is staged.
     """
     if not isinstance(suggestions, list) or not suggestions:
         raise ValueError("suggestions must be a non-empty list")
+    note = str(note or "")
+    if len(note) > RUN_NOTE_MAX:
+        raise ValueError(
+            f"note is {len(note)} characters; the limit is {RUN_NOTE_MAX}")
     valid, errors = [], []
     for i, s in enumerate(suggestions):
         norm, err = _validate_suggestion(conn, s)
@@ -4994,7 +5005,7 @@ def stage_optimization(conn: sqlite3.Connection, note: str, suggestions: list) -
     ts = now_iso()
     cur = conn.execute(
         "INSERT INTO optimization_runs (created_at, note, status) VALUES (?, ?, 'open')",
-        (ts, note or ""),
+        (ts, note),
     )
     run_id = cur.lastrowid
     for v in valid:
@@ -5249,14 +5260,23 @@ def reject_suggestion(conn: sqlite3.Connection, sug_id: int) -> bool:
 
 
 def revert_suggestion(conn: sqlite3.Connection, sug_id: int) -> bool:
+    """Put a decided suggestion back on the table.
+
+    An APPLIED one is undone in the store first, from the prev_state its
+    apply recorded. A REJECTED one wrote nothing to any memory, so taking
+    the answer back is only a change of status.
+
+    Raises ValueError for an unknown id and for one that is already pending.
+    """
     row = get_suggestion(conn, sug_id)
     if row is None:
         raise ValueError(f"unknown suggestion: {sug_id}")
-    if row["status"] != "applied":
-        raise ValueError("only applied suggestions can be reverted")
-    payload = json.loads(row["payload"])
-    prev = json.loads(row["prev_state"]) if row["prev_state"] else {}
-    _revert_kind(conn, row["kind"], row["target_uid"], payload, prev)
+    if row["status"] == "pending":
+        raise ValueError("suggestion is already pending")
+    if row["status"] == "applied":
+        payload = json.loads(row["payload"])
+        prev = json.loads(row["prev_state"]) if row["prev_state"] else {}
+        _revert_kind(conn, row["kind"], row["target_uid"], payload, prev)
     conn.execute(
         "UPDATE optimization_suggestions SET status = 'pending', prev_state = NULL, decided_at = NULL WHERE id = ?",
         (sug_id,),

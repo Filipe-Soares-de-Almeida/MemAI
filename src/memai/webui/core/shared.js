@@ -66,6 +66,30 @@ export const relTypeTitle = type => {
   return relLabel(raw) === raw ? '' : t('rel.raw', { type: raw });
 };
 
+/* What a curation KIND is called on screen.
+
+   Same arrangement as relLabel above, and for the same reason: `retag` and
+   `set_confidence` are the identifiers the MCP tool takes and the database
+   stores, and a reader deciding whether to apply one should not have to
+   read them as English. The stored spelling moves to the title.
+
+   The set is open -- db.SUGGESTION_KINDS grows, and a run staged by an
+   older build can carry a kind this catalog has never heard of -- so a kind
+   with no entry falls back to itself rather than to the key. */
+export function kindLabel(kind) {
+  const raw = String(kind || '').trim();
+  if (!raw) return '';
+  const key = `kind.${raw}`;
+  const label = t(key);
+  return label === key ? raw : label;
+}
+
+/* Empty when the label IS the stored string, like relTypeTitle. */
+export const kindTitle = kind => {
+  const raw = String(kind || '').trim();
+  return kindLabel(raw) === raw ? '' : t('kind.raw', { kind: raw });
+};
+
 /* How a peer memory is NAMED wherever one is previewed.
 
    Its title, with its body as the fallback for a memory that has none --
