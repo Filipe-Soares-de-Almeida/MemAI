@@ -84,6 +84,16 @@ comes back later ([§3.1](#31-getting-back-what-you-wrote-which-tool-to-call)).
 > **`diagram` is for a PROCESS, not a fact.** `note` records what is true,
 > `checkpoint` where the work stands, `diagram` how a routine runs.
 
+> **One memory, ONE fact.** A body that answers four questions is still one
+> ranked row: it comes back for all four subjects and is read for one of
+> them. When a second subject turns up while writing, it is a second
+> memory — filed on its own domain, cited from the first by `[[uid]]` and
+> joined with `link_memories()`. Past a couple of thousand characters, a
+> body is usually several memories written as one. A `[[uid]]` in prose is a
+> reference a reader follows, **not** an edge: `get_relations()` and the
+> graph see only what `link_memories()` created
+> ([§4](#4-during-the-work)).
+
 > **Curate, do not index.** Write MemAI **record by record**, for what has
 > reuse. It is not a document index — do not load a corpus of files into it.
 > Every stored row is a candidate the retrieval side has to rank against every
