@@ -34,9 +34,22 @@ if (locale !== 'en') {
   catch (err) { console.error(err); /* fall back to English rather than break the UI */ }
 }
 
+/* `{count?one:many}` -- the word that has to agree with a number.
+   "Archives {n} {n?memory:memories}" reads correctly at one and at three,
+   which "{n} memories" does not. The branch is chosen by the NUMBER in
+   `vars`, not by the interpolated text, so a value like "1,024" (fmtInt
+   puts the separator in) still takes the plural. Anything that is not
+   exactly one takes `many`, zero included -- English and Portuguese both
+   say "0 memories". A count the caller did not pass takes `many` as well,
+   rather than silently reading as singular. */
+const PLURAL = /\{(\w+)\?([^{}:]*):([^{}]*)\}/g;
+
 const t = (key, vars) => {
   let s = active.strings[key] ?? en.strings[key] ?? key;
-  if (vars) for (const [k, v] of Object.entries(vars)) s = s.split(`{${k}}`).join(String(v));
+  if (vars) {
+    s = s.replace(PLURAL, (_, k, one, many) => (Number(vars[k]) === 1 ? one : many));
+    for (const [k, v] of Object.entries(vars)) s = s.split(`{${k}}`).join(String(v));
+  }
   return s;
 };
 

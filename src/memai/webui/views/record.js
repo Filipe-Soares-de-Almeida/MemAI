@@ -27,7 +27,8 @@ import { icon } from '../core/icons.js';
 import { toast, failed, openModal, closeModal, confirmModal, promptModal,
          openCtxMenu, copyCode, copyUid, modalOpen } from '../core/ui.js';
 import { typeTag, uidChip, statusTag, wireCopyChips,
-         CONF, REL_SUGGEST, typeItems, sectionLabel, sectionLabelHTML, sectionHue,
+         CONF, REL_SUGGEST, relLabel, relTypeTitle, peerName, typeItems,
+         sectionLabel, sectionLabelHTML, sectionHue,
          cachedDomains, invalidateDomains, domainDatalist } from '../core/shared.js';
 import { pickerFor, pickerValue, wirePicker, fixedItems } from '../core/pick.js';
 import { pickMemories } from '../core/link-picker.js';
@@ -447,11 +448,14 @@ function sideHTML(m, uid) {
   const rels = m.relations.map(r => `
     <div class="rs-rel">
       <span class="rel-dir" title="${r.direction === 'out' ? t('dr.rel.out.title') : t('dr.rel.in.title')}">${icon(r.direction === 'out' ? 'arrow-right' : 'arrow-left')}</span>
-      <span class="rel-type-chip">${esc(r.relation_type)}</span>
+      <span class="rel-type-chip" title="${esc(relTypeTitle(r.relation_type))}"
+        >${esc(relLabel(r.relation_type))}</span>
       ${r.peer.missing
         ? `<span class="snippet rel-gone">${t('dr.rel.missing', { uid: esc(r.peer.uid) })}</span>`
-        : `<button type="button" class="snippet" data-open="${esc(r.peer.uid)}"
-             title="${esc(r.peer.snippet)}">${esc(r.peer.snippet)}</button>`}
+        : (() => { const p = peerName(r.peer); return `
+          <button type="button" class="snippet${p.named ? ' mem-named' : ''}"
+             data-open="${esc(r.peer.uid)}"
+             title="${esc(p.hover || p.text)}">${esc(p.text)}</button>`; })()}
       <button type="button" class="icon-btn danger" data-delrel="${r.id}"
               title="${t('dr.rel.remove.title')}"
               aria-label="${t('dr.rel.remove.title')}">${icon('close')}</button>

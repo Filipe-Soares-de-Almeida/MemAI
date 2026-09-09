@@ -5020,11 +5020,18 @@ def list_optimization_runs(conn: sqlite3.Connection) -> list[sqlite3.Row]:
 
 
 def optimization_run_kind_counts(conn: sqlite3.Connection) -> list[sqlite3.Row]:
-    """Per-run, per-kind suggestion counts (total / pending) across all runs."""
+    """Per-run, per-kind suggestion counts across all runs.
+
+    All three states, because a reader of the counts alone has to be able to
+    say how many of a kind were APPLIED -- total minus pending minus
+    rejected. Without `rejected` a rejected suggestion counts as applied,
+    and the day's summary claims work that was turned down.
+    """
     return conn.execute(
         """SELECT run_id, kind,
                   COUNT(*) AS total,
-                  SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) AS pending
+                  SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) AS pending,
+                  SUM(CASE WHEN status = 'rejected' THEN 1 ELSE 0 END) AS rejected
            FROM optimization_suggestions
            GROUP BY run_id, kind
            ORDER BY run_id, kind"""

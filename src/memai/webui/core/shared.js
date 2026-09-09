@@ -40,6 +40,50 @@ export const DG_REL_SUGGEST = ['explains', 'contradicts', 'relates_to'];
 
 const REL_OTHER = '__other';
 
+/* What a relation type is CALLED, wherever one is shown.
+
+   The picker has translated its options since it was built; every place that
+   READ a relation back printed the stored string instead, so the same edge
+   was "Substitui" while you were choosing it and `supersedes` once it
+   existed. The stored value is what queries and the MCP tools use, so it is
+   not replaced -- it moves to the title (see relTypeTitle).
+
+   The set is open: db accepts any string and relations predating either
+   suggestion list are still editable, so a type with no entry falls back to
+   itself rather than to the key. */
+export function relLabel(type) {
+  const raw = String(type || '').trim();
+  if (!raw) return '';
+  const key = `rel.${raw}`;
+  const label = t(key);
+  return label === key ? raw : label;
+}
+
+/* Empty when the label IS the stored string -- a tooltip repeating what is
+   already on screen is noise. */
+export const relTypeTitle = type => {
+  const raw = String(type || '').trim();
+  return relLabel(raw) === raw ? '' : t('rel.raw', { type: raw });
+};
+
+/* How a peer memory is NAMED wherever one is previewed.
+
+   Its title, with its body as the fallback for a memory that has none --
+   `untitled` is a defect Health counts, so a name cannot be assumed -- and
+   as the tooltip when a title is there. `named` says which of the two came
+   back, so a row naming itself reads at full contrast and one falling back
+   to its body stays as quiet as the body it shows (.mem-named).
+
+   The memories list has worked this way since it was built. The relation
+   rail, the diagram's links and the optimization panes previewed a peer by
+   its opening line even when it had a name, because _peer_card did not
+   send one. */
+export const peerName = peer => {
+  const title = String(peer?.title || '').trim();
+  const body = String(peer?.snippet || '').trim();
+  return { text: title || body, hover: title ? body : '', named: !!title };
+};
+
 /* A relation type was a text input behind a <datalist>, and admin.css hides
    the native datalist indicator -- so the field looked like free text and
    gave no sign a known set existed. Recall where recognition was available.
@@ -83,6 +127,29 @@ export function wireRelTypeField(root, { selId, customId, options, onPick }) {
   });
   return () => (btn.dataset.v === REL_OTHER ? custom.value.trim() : btn.dataset.v);
 }
+
+/* What a suggestion KIND does to a memory, as one of the six field roles the
+   theme already declares (--f-*, see admin.css).
+
+   Not a palette of its own: the hues the comp picked for these ARE that
+   ramp, and what a kind's colour has to say is what it DOES -- connect,
+   rewrite, decide, name, defer, remove -- which is exactly what the roles
+   are for. Two kinds doing the same kind of thing share a hue, and the
+   label beside the mark says which one it is.
+
+   Deliberately NOT the --t-* type ramp: painting a `reword` in the orange
+   that means "note" everywhere else in this UI is a bug this file has
+   already fixed once (see the note on .opt-kind). */
+export const KIND_ROLE = {
+  link: 'aim', crosslist: 'aim',
+  reword: 'hold', compact: 'hold', distill: 'hold',
+  set_confidence: 'ask', redomain: 'ask',
+  retitle: 'go', retag: 'go',
+  review: 'next',
+  archive: 'stop', merge: 'stop',
+};
+
+export const kindColor = kind => `var(--f-${KIND_ROLE[kind] || 'aim'})`;
 
 export const typeColor = tp => (TYPES[tp] || {}).color || '#9e9e9e';
 export const typeClass = tp => TYPES[tp] ? `t-${tp}` : '';
