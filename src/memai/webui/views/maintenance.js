@@ -227,14 +227,38 @@ export async function renderMaintenance(view, params) {
 
   /* ── backups ───────────────────────────────────────────────────────── */
 
+  /* Two shelves' worth of state: which one is being read, how it is
+     grouped, and what is ticked on it. A tick belongs to the fresh shelf --
+     a file inside a zip cannot be acted on without unzipping first. */
   let bkGroup = 'date';
+  let bkZip = null;          /* the archive being read, or null for the shelf */
+  let bkSel = new Set();
+  let shelf = null;          /* /api/maintenance/backups, in full */
+
+  /* health carries a SHORT list of backups for the summary strip. The shelf
+     is drawn from its own endpoint instead: a file the list does not show
+     cannot be ticked, and a shelf that hides its thirteenth file is a shelf
+     that cannot archive it. */
+  const loadShelf = retryable('#bkBody', async () => {
+    const fresh = await api('/api/maintenance/backups');
+    if (!$('#bkBody')) return;
+    shelf = fresh;
+    const names = new Set(shelf.shelf.map(f => f.name));
+    bkSel = new Set([...bkSel].filter(n => names.has(n)));
+    if (bkZip && !shelf.archives.some(a => a.name === bkZip)) bkZip = null;
+    paintBackups();
+  });
 
   BUILD.backups = () => {
     panel('backups').innerHTML = `<div class="mnt-two">
       <aside class="mnt-rail2">
         <div>
-          <div class="mnt-rail-head">${t('mn.bk.shelves')} <b id="bkTotal"></b></div>
+          <div class="mnt-rail-head">${t('mn.bk.fresh')} <b id="bkTotal"></b></div>
           <div id="bkShelves"></div>
+        </div>
+        <div>
+          <div class="mnt-rail-head is-zip">${t('mn.bk.archived')} <b id="bkZipTotal"></b></div>
+          <div id="bkArchives"></div>
         </div>
         <div class="mnt-disk">
           <div class="mnt-disk-label">${t('mn.bk.onDisk')}</div>
@@ -248,56 +272,127 @@ export async function renderMaintenance(view, params) {
         <div class="mnt-shelf-head">
           <span class="mnt-shelf-title" id="bkTitle">—</span>
           <span class="mnt-shelf-meta" id="bkMeta"></span>
-          <div class="mnt-shelf-acts">
-            <span class="inline-label">${t('mn.bk.groupBy')}
-              <span class="seg" id="bkGroupSeg" role="group" aria-label="${t('mn.bk.groupBy')}">
-                <button type="button" data-g="date" aria-pressed="true">${t('mn.bk.byDate')}</button>
-                <button type="button" data-g="reason" aria-pressed="false">${t('mn.bk.byReason')}</button>
-              </span></span>
-            <button class="btn btn-solid btn-sm" data-op="backup">${t('mn.op.backup')}</button>
-          </div>
+          <div class="mnt-shelf-acts" id="bkActs"></div>
         </div>
         <div class="mnt-shelf-body" id="bkBody"><div class="loading"><span class="spin"></span></div></div>
+        <div class="mnt-sel" id="bkSelBar"></div>
       </section>
     </div>`;
-    wireOps(panel('backups'));
     $('#bkStorage').addEventListener('click', () => show('storage'));
+    loadShelf();
+  };
+
+  /* Every control on this tab redraws from the server rather than adjusting
+     the lists in place: archiving moves files between two of them, and the
+     sizes on the rail are the point of having done it. */
+  const afterShelfWrite = async (msg) => {
+    toast(msg, 'ok');
+    bkSel.clear();
+    await loadShelf();
+    loadHealth().catch(() => {});
+  };
+
+  function paintBackups() {
+    if (!shelf || !$('#bkBody')) return;
+    const files = shelf.shelf.map(b => ({ ...b, kind: backupKind(b.name, shelf.project) }));
+    const loose = files.reduce((n, f) => n + f.size, 0);
+    const zipped = shelf.archives.reduce((n, a) => n + a.size, 0);
+    const store = health ? health.file.size : 0;
+    const archive = bkZip ? shelf.archives.find(a => a.name === bkZip) : null;
+
+    $('#bkTotal').textContent = fmtBytes(loose);
+    $('#bkShelves').innerHTML = `<button type="button" class="mnt-shelf" data-shelf=""
+      aria-current="${!archive}">${icon('folder')}<span class="mnt-shelf-name">${esc(shelf.project)}</span>
+      <span class="mnt-shelf-count">${fmtInt(files.length)}</span></button>`;
+
+    $('#bkZipTotal').textContent = fmtBytes(zipped);
+    $('#bkArchives').innerHTML = shelf.archives.length
+      ? shelf.archives.map(a => `<button type="button" class="mnt-shelf is-zip" data-shelf="${esc(a.name)}"
+          aria-current="${archive === a}" title="${esc(a.name)}">${icon('archive')}
+          <span class="mnt-shelf-name">${esc(archiveLabel(a.name, shelf.project))}</span>
+          <span class="mnt-shelf-count">${fmtInt(a.count)}</span></button>`).join('')
+      : `<p class="mnt-rail-empty">${t('mn.bk.noZips')}</p>`;
+
+    $('#bkDiskAll').textContent = fmtBytes(store + loose + zipped);
+    $('#bkDiskSplit').textContent = t('mn.bk.diskSplit', {
+      store: fmtBytes(store), loose: fmtBytes(loose), zip: fmtBytes(zipped) });
+    $('#bkBar').innerHTML = barHTML([
+      { value: store, fill: 'var(--accent)' },
+      { value: loose, fill: 'rgba(187, 134, 252, .42)' },
+      { value: zipped, fill: 'var(--zip)' },
+    ]);
+
+    paintShelfHead(archive, files, loose);
+    paintShelfBody(archive, files);
+    paintSelBar(archive, files);
+
+    view.querySelectorAll('[data-shelf]').forEach(b => b.addEventListener('click', () => {
+      bkZip = b.dataset.shelf || null;
+      bkSel.clear();
+      paintBackups();
+    }));
+  }
+
+  function paintShelfHead(archive, files, loose) {
+    $('#bkTitle').textContent = archive
+      ? archiveLabel(archive.name, shelf.project) : shelf.project;
+    $('#bkMeta').textContent = archive
+      ? t('mn.bk.zipMeta', { n: fmtInt(archive.count), size: fmtBytes(archive.size),
+                             raw: fmtBytes(archive.raw) })
+      : t('mn.bk.shelfMeta', { n: fmtInt(files.length), size: fmtBytes(loose) });
+    $('#bkActs').innerHTML = archive
+      ? `<button class="btn btn-sm" id="bkUnzip">${t('mn.bk.unzip')}</button>
+         <button class="btn btn-sm btn-danger" id="bkDropZip">${t('mn.bk.deleteZip')}</button>`
+      : `<span class="inline-label">${t('mn.bk.groupBy')}
+           <span class="seg" id="bkGroupSeg" role="group" aria-label="${t('mn.bk.groupBy')}">
+             <button type="button" data-g="date" aria-pressed="${bkGroup === 'date'}">${t('mn.bk.byDate')}</button>
+             <button type="button" data-g="reason" aria-pressed="${bkGroup === 'reason'}">${t('mn.bk.byReason')}</button>
+           </span></span>
+         <button class="btn btn-solid btn-sm" data-op="backup">${t('mn.op.backup')}</button>`;
+
+    if (archive) {
+      $('#bkUnzip').addEventListener('click', async () => {
+        if (!(await confirmModal({ title: t('mn.bk.unzip'),
+          body: t('mn.confirm.unzip', { n: archive.count, name: archive.name }),
+          okLabel: t('mn.bk.unzip') }))) return;
+        try {
+          const r = await api('/api/maintenance/unarchive', { body: { name: archive.name } });
+          bkZip = null;
+          await afterShelfWrite(t('mn.msg.unzipped', { n: fmtInt(r.restored.length) }));
+        } catch (err) { failed('err.maintenance', err); }
+      });
+      $('#bkDropZip').addEventListener('click', async () => {
+        if (!(await confirmModal({ title: t('mn.bk.deleteZip'),
+          body: t('mn.confirm.deleteZip', { n: archive.count, name: archive.name }),
+          okLabel: t('mn.bk.deleteZip') }))) return;
+        try {
+          const r = await api('/api/maintenance/archive-delete', { body: { name: archive.name } });
+          bkZip = null;
+          await afterShelfWrite(t('mn.msg.zipDeleted', { n: fmtInt(r.count), name: archive.name }));
+        } catch (err) { failed('err.maintenance', err); }
+      });
+      return;
+    }
+    wireOps($('#bkActs'));
     $('#bkGroupSeg').addEventListener('click', e => {
       const b = e.target.closest('[data-g]');
       if (!b || b.dataset.g === bkGroup) return;
       bkGroup = b.dataset.g;
-      $('#bkGroupSeg').querySelectorAll('[data-g]').forEach(
-        x => x.setAttribute('aria-pressed', String(x.dataset.g === bkGroup)));
       paintBackups();
     });
-    if (health) paintBackups();
-  };
+  }
 
-  function paintBackups() {
-    if (!health || !$('#bkBody')) return;
-    const h = health;
-    const files = h.backups.map(b => ({ ...b, kind: backupKind(b.name, h.project) }));
-    const bytes = files.reduce((n, f) => n + f.size, 0);
-
-    /* One shelf while a project's backups are the only ones the server
-       lists. It is still a rail: what it selects is which shelf you are
-       reading, and there is one to read. */
-    $('#bkTotal').textContent = fmtBytes(bytes);
-    $('#bkShelves').innerHTML = `<button type="button" class="mnt-shelf" aria-current="true">
-      ${icon('folder')}<span class="mnt-shelf-name">${esc(h.project)}</span>
-      <span class="mnt-shelf-count">${fmtInt(files.length)}</span></button>`;
-    $('#bkTitle').textContent = h.project;
-    $('#bkMeta').textContent = t('mn.bk.shelfMeta', { n: fmtInt(files.length), size: fmtBytes(bytes) });
-
-    $('#bkDiskAll').textContent = fmtBytes(bytes + h.file.size);
-    $('#bkDiskSplit').textContent = t('mn.bk.diskSplit', { store: fmtBytes(h.file.size), backups: fmtBytes(bytes) });
-    $('#bkBar').innerHTML = barHTML([
-      { value: h.file.size, fill: 'var(--accent)' },
-      { value: bytes, fill: 'rgba(187, 134, 252, .42)' },
-    ]);
-
+  function paintShelfBody(archive, files) {
+    const body = $('#bkBody');
+    body.classList.toggle('pickable', !archive);
+    if (archive) {
+      body.innerHTML = archive.count
+        ? fileRowsHTML([{ name: t('mn.bk.inside'), rows: archive.members }], false)
+        : `<div class="empty">${t('mn.bk.emptyZip')}</div>`;
+      return;
+    }
     if (!files.length) {
-      $('#bkBody').innerHTML = `<div class="empty">${t('mn.backups.empty')}</div>`;
+      body.innerHTML = `<div class="empty">${t('mn.backups.empty')}</div>`;
       return;
     }
     /* by date the buckets come out in the order the files already are --
@@ -308,22 +403,56 @@ export async function renderMaintenance(view, params) {
       if (!groups.has(key)) groups.set(key, []);
       groups.get(key).push(f);
     }
-    const head = `<div class="mnt-file mnt-file-head">
-      <span></span><span>${t('mn.bk.th.backup')}</span>
-      <span>${t('mn.bk.th.taken')}</span><span class="num">${t('mn.bk.th.size')}</span></div>`;
-    $('#bkBody').innerHTML = head + [...groups].map(([name, rows]) => `
+    const all = files.length && files.every(f => bkSel.has(f.name));
+    body.innerHTML = `<div class="mnt-file mnt-file-head">
+        <span><input type="checkbox" id="bkAll" ${all ? 'checked' : ''}
+          aria-label="${esc(t('mn.bk.selectAll'))}" title="${esc(t('mn.bk.selectAll'))}"></span>
+        <span></span><span>${t('mn.bk.th.backup')}</span>
+        <span>${t('mn.bk.th.taken')}</span><span class="num">${t('mn.bk.th.size')}</span>
+      </div>`
+      + fileRowsHTML([...groups].map(([name, rows]) => ({ name, rows })), true);
+
+    /* A tick redraws the row it is in and the bar that counts it, never the
+       shelf: rebuilding the list under a checkbox takes the focus off it,
+       and ticking a run of files with the keyboard then stops after one. */
+    const afterTick = () => {
+      $('#bkAll').checked = files.length > 0 && files.every(f => bkSel.has(f.name));
+      body.querySelectorAll('[data-pick]').forEach(el =>
+        el.closest('.mnt-file').classList.toggle('is-picked', bkSel.has(el.dataset.pick)));
+      paintSelBar(null, files);
+    };
+    $('#bkAll').addEventListener('change', e => {
+      if (e.target.checked) files.forEach(f => bkSel.add(f.name));
+      else bkSel.clear();
+      body.querySelectorAll('[data-pick]').forEach(el => { el.checked = bkSel.has(el.dataset.pick); });
+      afterTick();
+    });
+    body.querySelectorAll('[data-pick]').forEach(box => box.addEventListener('change', () => {
+      if (box.checked) bkSel.add(box.dataset.pick); else bkSel.delete(box.dataset.pick);
+      afterTick();
+    }));
+  }
+
+  /* One writer for both shelves. A zip's members carry no reason and cannot
+     be ticked, so `pick` is what the two arrangements differ by. */
+  function fileRowsHTML(groups, pick) {
+    return groups.map(({ name, rows }) => `
       <div class="mnt-group">
         <span class="mnt-group-name">${esc(name)}</span>
         <span class="mnt-group-rule"></span>
-        <span class="mnt-group-meta">${t('mn.bk.shelfMeta', { n: fmtInt(rows.length), size: fmtBytes(rows.reduce((n, r) => n + r.size, 0)) })}</span>
+        <span class="mnt-group-meta">${t('mn.bk.shelfMeta', {
+          n: fmtInt(rows.length), size: fmtBytes(rows.reduce((n, r) => n + r.size, 0)) })}</span>
       </div>` + rows.map(f => `
-      <div class="mnt-file">
+      <div class="mnt-file${pick && bkSel.has(f.name) ? ' is-picked' : ''}">
+        ${pick ? `<span><input type="checkbox" data-pick="${esc(f.name)}"
+          ${bkSel.has(f.name) ? 'checked' : ''}
+          aria-label="${esc(f.name)}"></span>` : ''}
         ${icon('db-file')}
         <div class="mnt-file-main">
           <!-- Grouped by reason, the heading already says what the backup was
                taken for, and repeating it on every row under it says nothing.
                The filename moves up and the row loses its second line. -->
-          ${bkGroup === 'reason' ? `
+          ${!pick || bkGroup === 'reason' ? `
           <div class="mnt-file-label mnt-file-mono" title="${esc(f.name)}">${esc(f.name)}</div>` : `
           <div class="mnt-file-label">${esc(reasonLabel(f.kind))}</div>
           <div class="mnt-file-sub"><span class="mnt-file-name" title="${esc(f.name)}">${esc(f.name)}</span></div>`}
@@ -332,6 +461,38 @@ export async function renderMaintenance(view, params) {
         <span class="mnt-file-size">${fmtBytes(f.size)}</span>
       </div>`).join('')).join('');
   }
+
+  function paintSelBar(archive, files) {
+    const bar = $('#bkSelBar');
+    if (archive) {
+      bar.innerHTML = `<span class="mnt-sel-text">${t('mn.bk.zipReadOnly')}</span>`;
+      return;
+    }
+    const picked = files.filter(f => bkSel.has(f.name));
+    const size = picked.reduce((n, f) => n + f.size, 0);
+    bar.innerHTML = `<span class="mnt-sel-text${picked.length ? ' is-on' : ''}">${picked.length
+        ? t('mn.bk.selN', { n: fmtInt(picked.length), size: fmtBytes(size) })
+        : t('mn.bk.selNone')}</span>
+      <button class="btn btn-sm mnt-sel-zip" id="bkArchive" ${picked.length ? '' : 'disabled'}>
+        ${icon('archive')}${t('mn.bk.archiveSel')}</button>`;
+    $('#bkArchive').addEventListener('click', async () => {
+      const names = picked.map(f => f.name);
+      if (!(await confirmModal({ title: t('mn.bk.archiveSel'),
+        body: t('mn.confirm.archive', { n: names.length, size: fmtBytes(size) }),
+        okLabel: t('mn.bk.archiveSel') }))) return;
+      try {
+        const r = await api('/api/maintenance/archive', { body: { names } });
+        await afterShelfWrite(t('mn.msg.archived', {
+          n: fmtInt(r.added), name: r.archive,
+          raw: fmtBytes(r.raw), size: fmtBytes(r.size) }));
+      } catch (err) { failed('err.maintenance', err); }
+    });
+  }
+
+  /* `General-2026-09.zip` is read as the month it holds: the project is the
+     shelf it sits under and the extension is how it is stored. */
+  const archiveLabel = (name, project) =>
+    name.replace(/\.zip$/, '').replace(new RegExp(`^${project}-`), '');
 
   /* ── storage ───────────────────────────────────────────────────────── */
 

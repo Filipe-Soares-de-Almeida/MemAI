@@ -1628,6 +1628,65 @@ def backup(request, payload) -> dict:
             "size": _file_size(dest)}
 
 
+def _shelf_row(path) -> dict:
+    return {"name": path.name, "size": _file_size(path),
+            "mtime": datetime.fromtimestamp(path.stat().st_mtime,
+                                            tz=timezone.utc).isoformat()}
+
+
+def backups(request, payload) -> dict:
+    """The whole backup shelf of the active project, and its archives.
+
+    `health` carries a short list of backups for the summary strip; this is
+    the one the shelf is drawn from, so it is not truncated -- a file the
+    list does not show cannot be selected or archived. Each archive reports
+    what it costs on disk and what it holds uncompressed, because the second
+    number is what archiving it saved.
+    """
+    project = db.active_project()
+    archives = []
+    for path in db.archive_files(project):
+        members = db.archive_members(path)
+        archives.append({**_shelf_row(path), "count": len(members),
+                         "raw": sum(m["size"] for m in members),
+                         "members": members})
+    return {"project": project,
+            "shelf": [_shelf_row(p) for p in db.backup_files(project)],
+            "archives": archives}
+
+
+def archive(request, payload) -> dict:
+    """Zip the named backups into this month's archive and take them off the
+    shelf. Merges into the archive when one is already there for the month."""
+    names = payload.get("names") or []
+    if not isinstance(names, list) or not names:
+        raise ValueError("names must be a non-empty list")
+    project = db.active_project()
+    raw = 0
+    shelf = db.backups_dir(project)
+    for name in names:
+        path = shelf / str(name)
+        if path.is_file():
+            raw += _file_size(path)
+    dest = db.archive_backups(project, [str(n) for n in names])
+    return {"ok": True, "archive": dest.name, "added": len(names),
+            "raw": raw, "size": _file_size(dest)}
+
+
+def unarchive(request, payload) -> dict:
+    """Put an archive's files back on the shelf and remove the archive."""
+    name = str(payload.get("name") or "")
+    restored = db.unarchive(db.active_project(), name)
+    return {"ok": True, "name": name, "restored": restored}
+
+
+def archive_delete(request, payload) -> dict:
+    """Remove an archive and everything inside it."""
+    name = str(payload.get("name") or "")
+    count = db.delete_archive(db.active_project(), name)
+    return {"ok": True, "name": name, "count": count}
+
+
 def sectionize(request, payload) -> dict:
     """Read every sectioned body in the store into its fields, once.
 
@@ -2375,6 +2434,10 @@ routes = [
     Route("/api/maintenance/prune-renders", api(prune_renders), methods=["POST"]),
     Route("/api/maintenance/vacuum", api(vacuum), methods=["POST"]),
     Route("/api/maintenance/backup", api(backup), methods=["POST"]),
+    Route("/api/maintenance/backups", api(backups)),
+    Route("/api/maintenance/archive", api(archive), methods=["POST"]),
+    Route("/api/maintenance/unarchive", api(unarchive), methods=["POST"]),
+    Route("/api/maintenance/archive-delete", api(archive_delete), methods=["POST"]),
     Route("/api/projects", api(projects), methods=["GET"]),
     Route("/api/projects", api(project_create), methods=["POST"]),
     Route("/api/projects/active", api(project_activate), methods=["POST"]),

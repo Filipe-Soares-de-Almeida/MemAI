@@ -166,6 +166,13 @@
      instead of disappearing. */
   --ok-tint:     rgba(129, 199, 132, .08);
 
+  /* An archived backup is neither a warning nor an outcome, so it is off
+     the status scale entirely: Blue 300, for the one shelf whose files are
+     zipped and read-only. */
+  --zip:      #7fb3d5;
+  --zip-wash: rgba(127, 179, 213, .13);
+  --zip-line: rgba(127, 179, 213, .34);
+
   /* edit-history diff: a tinted row, plus ink light enough to read on it */
   --diff-add-bg:  rgba(129, 199, 132, .12);
   --diff-add-ink: #a9d6ab;
@@ -3586,6 +3593,18 @@ button.rs-mono:hover { color: var(--accent); }
 .mnt-shelf-count { font: 500 var(--fs-label) var(--font-m); color: var(--ink-3); }
 .mnt-shelf[aria-current="true"] .mnt-shelf-count { color: var(--accent); }
 
+.mnt-rail-head.is-zip { color: var(--zip); }
+.mnt-rail-empty {
+  margin: 0; padding: var(--sp-2) var(--sp-3);
+  font-size: var(--fs-sm); color: var(--ink-3); line-height: 1.5;
+}
+/* An archive is a shelf like the project's own, in the colour that says its
+   files are zipped: the same row, one hue apart. */
+.mnt-shelf.is-zip .ico { color: var(--zip); }
+.mnt-shelf.is-zip[aria-current="true"] { background: var(--zip-wash); color: var(--zip); }
+.mnt-shelf.is-zip[aria-current="true"] .mnt-shelf-count { color: var(--zip); }
+.mnt-shelf.is-zip[aria-current="true"] .ico { color: var(--zip); }
+
 .mnt-disk { margin-top: auto; padding-top: var(--sp-4); border-top: 1px solid var(--line-soft); }
 .mnt-disk-label {
   font: 500 var(--fs-label) var(--font-ui);
@@ -3642,7 +3661,14 @@ button.rs-mono:hover { color: var(--accent); }
   gap: var(--sp-3); align-items: center;
   border-radius: var(--r-md); padding: var(--sp-2);
 }
+/* The tick is a column of its own on the shelf that can be acted on. A zip's
+   files are read-only, so that shelf keeps the four it always had. */
+.mnt-shelf-body.pickable .mnt-file {
+  grid-template-columns: 18px 16px minmax(0, 1fr) 96px 74px;
+}
 .mnt-file:hover { background: var(--hover-1); }
+.mnt-file.is-picked { background: var(--accent-dim); }
+.mnt-file input[type="checkbox"] { margin: 0; display: block; }
 /* the column names, on the same grid so Taken and Size line up with what
    they name */
 .mnt-file-head { padding-bottom: var(--sp-1); }
@@ -3671,6 +3697,24 @@ button.rs-mono:hover { color: var(--accent); }
 }
 .mnt-file-when { font-size: var(--fs-sm); color: var(--ink-2); }
 .mnt-file-size { font: 400 var(--fs-sm) var(--font-m); color: var(--ink-2); text-align: right; }
+
+/* What the ticks add up to, and the one thing that can be done with them.
+   It sits under the scroller rather than in the head, because it is about
+   the rows and it has to stay put while they move. */
+.mnt-sel {
+  flex: none;
+  display: flex; align-items: center; gap: var(--sp-3);
+  padding: var(--sp-2) var(--sp-4);
+  border-top: 1px solid var(--line);
+  min-height: calc(var(--ctl-h-sm) + var(--sp-4));
+}
+.mnt-sel-text { flex: 1; min-width: 0; font-size: var(--fs-sm); color: var(--ink-3); }
+.mnt-sel-text.is-on { color: var(--ink); }
+.mnt-sel-zip {
+  flex: none; display: inline-flex; align-items: center; gap: var(--sp-2);
+  --ico: 13px; color: var(--zip); border-color: var(--zip-line);
+}
+.mnt-sel-zip:hover:not(:disabled) { background: var(--zip-wash); border-color: var(--zip); }
 
 /* ── storage ─────────────────────────────────────────────────────────── */
 
@@ -3798,7 +3842,6 @@ button.rs-mono:hover { color: var(--accent); }
   .mnt-disk .btn { width: auto; }
 }
 
-.mnt-actions { display: flex; flex-wrap: wrap; gap: var(--sp-2); }
 
 
 /* A body the section parser could not read. The whole row opens the record,

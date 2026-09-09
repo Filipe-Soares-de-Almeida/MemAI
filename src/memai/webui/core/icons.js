@@ -209,6 +209,12 @@ const ICONS = {
     viewBox: '0 0 16 16',
     body: `<path d="M2 4.2a1 1 0 011-1h3.2l1.3 1.5H13a1 1 0 011 1v6.1a1 1 0 01-1 1H3a1 1 0 01-1-1z"/>`,
   },
+  /* a zip of backups: the same box the folder is, closed down the middle */
+  'archive': {
+    viewBox: '0 0 16 16',
+    body: `<rect x="2.5" y="3.2" width="11" height="9.6" rx="1"/>
+           <path d="M8 3.4v9.2" stroke-dasharray="1.6 1.4"/>`,
+  },
   /* one backup: a sheet with rows, the last one short */
   'db-file': {
     viewBox: '0 0 16 16',

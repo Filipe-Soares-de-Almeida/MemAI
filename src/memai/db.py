@@ -26,6 +26,7 @@ import os
 import re
 import secrets
 import sqlite3
+import zipfile
 from contextlib import contextmanager
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
@@ -370,6 +371,7 @@ GENERAL_FILE = "memai.db"
 PROJECTS_DIRNAME = "projects"
 ACTIVE_FILE = "active"
 BACKUPS_DIRNAME = "backups"
+ARCHIVES_DIRNAME = "archive"
 PROJECT_NAME_MAX = 80
 # A project's name is its file name, so it follows the rules of the strictest
 # filesystem the home may sit on, which is Windows: none of these characters,
@@ -596,6 +598,131 @@ def backup_files(project: str) -> list[Path]:
     backups_dir(), whatever they are named."""
     files = [p for p in backups_dir(project).glob("*.db") if p.is_file()]
     return sorted(files, key=lambda p: p.stat().st_mtime, reverse=True)
+
+
+def archives_dir(project: str = GENERAL_PROJECT) -> Path:
+    """Where a project's zipped backups go, created if needed:
+    `<backups_dir>/archive`. A subfolder, so backup_files() -- which globs
+    `*.db` one level deep -- never sees what has been archived."""
+    out = backups_dir(project) / ARCHIVES_DIRNAME
+    out.mkdir(parents=True, exist_ok=True)
+    return out
+
+
+def archive_files(project: str) -> list[Path]:
+    """A project's archives, newest first: the `.zip` files in archives_dir()."""
+    files = [p for p in archives_dir(project).glob("*.zip") if p.is_file()]
+    return sorted(files, key=lambda p: p.stat().st_mtime, reverse=True)
+
+
+def archive_name(project: str, when: date | None = None) -> str:
+    """`<project>-<YYYY-MM>.zip`: the archive a backup taken in that month
+    joins. One per month per project, so archiving twice in September adds to
+    the same file rather than making a second one."""
+    stamp = (when or datetime.now(timezone.utc).date()).strftime("%Y-%m")
+    return f"{project}-{stamp}.zip"
+
+
+def _inside(path: Path, root: Path) -> Path:
+    """`path` resolved, or ValueError when it lands outside `root`.
+
+    Every name below arrives from an HTTP payload, so a name is treated as
+    hostile until it resolves under the folder it is supposed to be in.
+    """
+    full = (root / path).resolve()
+    if not full.is_relative_to(root.resolve()):
+        raise ValueError(f"path escapes its folder: {path}")
+    return full
+
+
+def _member_mtime(info: zipfile.ZipInfo) -> datetime:
+    """A member's timestamp as an aware datetime.
+
+    A zip stores a DOS timestamp: local wall-clock time, no zone, rounded to
+    two seconds. It is read back as local, which is the only reading that
+    round-trips the file it was written from.
+    """
+    return datetime(*info.date_time).astimezone()
+
+
+def archive_members(path: Path) -> list[dict]:
+    """What one archive holds: name, uncompressed size and stored timestamp
+    per member, in the order the zip lists them."""
+    with zipfile.ZipFile(path) as zf:
+        return [{"name": i.filename, "size": i.file_size,
+                 "mtime": _member_mtime(i).isoformat()}
+                for i in zf.infolist() if not i.is_dir()]
+
+
+def archive_backups(project: str, names: list[str], when: date | None = None) -> Path:
+    """Move the named backups into this month's archive and return it.
+
+    Each name is a file in the project's backups_dir; anything that is not
+    there, or that resolves outside it, raises. The archive is created on the
+    first call of the month and appended to afterwards. Each backup is
+    deleted only after it is in the zip, so an interrupted run leaves the
+    file on the shelf rather than nowhere.
+    """
+    if not names:
+        raise ValueError("no backups named")
+    shelf = backups_dir(project)
+    sources = []
+    for name in names:
+        full = _inside(Path(name), shelf)
+        if full.suffix != ".db" or not full.is_file():
+            raise ValueError(f"not a backup on this shelf: {name}")
+        sources.append(full)
+
+    dest = archives_dir(project) / archive_name(project, when)
+    with zipfile.ZipFile(dest, "a", zipfile.ZIP_DEFLATED) as zf:
+        held = set(zf.namelist())
+        for src in sources:
+            if src.name in held:
+                raise ValueError(f"already archived: {src.name}")
+            zf.write(src, src.name)
+    for src in sources:
+        src.unlink()
+    return dest
+
+
+def unarchive(project: str, name: str) -> list[str]:
+    """Put an archive's files back on the shelf and remove the archive.
+
+    Returns the names restored. A member whose name is a path, or that would
+    land on a file already on the shelf, raises before anything is written.
+    """
+    archives = archives_dir(project)
+    full = _inside(Path(name), archives)
+    if full.suffix != ".zip" or not full.is_file():
+        raise ValueError(f"not an archive: {name}")
+    shelf = backups_dir(project)
+    with zipfile.ZipFile(full) as zf:
+        members = [i for i in zf.infolist() if not i.is_dir()]
+        for i in members:
+            member = Path(i.filename)
+            if member.name != i.filename:
+                raise ValueError(f"archive holds a path, not a name: {i.filename}")
+            if (shelf / member.name).exists():
+                raise ValueError(f"already on the shelf: {member.name}")
+        for i in members:
+            zf.extract(i, shelf)
+            # extract() leaves the file stamped with the moment it was
+            # written, so a restored backup would read as taken just now and
+            # sort to the top of a shelf ordered by when it was taken.
+            stamp = _member_mtime(i).timestamp()
+            os.utime(shelf / i.filename, (stamp, stamp))
+    full.unlink()
+    return [i.filename for i in members]
+
+
+def delete_archive(project: str, name: str) -> int:
+    """Remove an archive and everything in it. Returns how many files went."""
+    full = _inside(Path(name), archives_dir(project))
+    if full.suffix != ".zip" or not full.is_file():
+        raise ValueError(f"not an archive: {name}")
+    count = len(archive_members(full))
+    full.unlink()
+    return count
 
 
 def backup_to(dest: Path, *, project: str | None = None) -> Path:
