@@ -372,6 +372,7 @@ PROJECTS_DIRNAME = "projects"
 ACTIVE_FILE = "active"
 BACKUPS_DIRNAME = "backups"
 ARCHIVES_DIRNAME = "archive"
+SHELF_META_FILE = "shelf.json"
 PROJECT_NAME_MAX = 80
 # A project's name is its file name, so it follows the rules of the strictest
 # filesystem the home may sit on, which is Windows: none of these characters,
@@ -600,6 +601,74 @@ def backup_files(project: str) -> list[Path]:
     return sorted(files, key=lambda p: p.stat().st_mtime, reverse=True)
 
 
+def _shelf_meta_path(project: str) -> Path:
+    return backups_dir(project) / SHELF_META_FILE
+
+
+def shelf_meta(project: str = GENERAL_PROJECT) -> dict:
+    """What has been written ABOUT a project's backups: `{filename: {...}}`.
+
+    A backup's own name carries when it was taken and what took it; a name
+    somebody typed for it, and whether it is pinned, have nowhere in the file
+    to live. They sit beside the shelf in `shelf.json`, keyed by filename --
+    so an entry follows its file into an archive and back out.
+
+    Missing or unreadable, the shelf simply has nothing written about it.
+    """
+    path = _shelf_meta_path(project)
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _write_shelf_meta(project: str, data: dict) -> None:
+    """Replace the sidecar, or remove it once nothing is written about the
+    shelf. Written to a temp file and moved into place, so a reader never
+    sees half of it."""
+    path = _shelf_meta_path(project)
+    if not data:
+        path.unlink(missing_ok=True)
+        return
+    tmp = path.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(data, indent=2, sort_keys=True), encoding="utf-8")
+    tmp.replace(path)
+
+
+def set_shelf_meta(project: str, name: str, **fields) -> dict:
+    """Write `fields` about one backup and return what it now holds.
+
+    A field set back to its default -- an empty label, an unpinned file --
+    is removed rather than stored, and an entry with nothing left in it goes
+    with it, so the sidecar never grows a row per backup ever taken.
+    """
+    _inside(Path(name), backups_dir(project))
+    data = shelf_meta(project)
+    entry = dict(data.get(name) or {})
+    for key, value in fields.items():
+        if value in ("", None, False):
+            entry.pop(key, None)
+        else:
+            entry[key] = value
+    if entry:
+        data[name] = entry
+    else:
+        data.pop(name, None)
+    _write_shelf_meta(project, data)
+    return entry
+
+
+def forget_shelf_meta(project: str, names: list[str]) -> None:
+    """Drop what was written about backups that no longer exist."""
+    data = shelf_meta(project)
+    if not any(n in data for n in names):
+        return
+    for n in names:
+        data.pop(n, None)
+    _write_shelf_meta(project, data)
+
+
 def archives_dir(project: str = GENERAL_PROJECT) -> Path:
     """Where a project's zipped backups go, created if needed:
     `<backups_dir>/archive`. A subfolder, so backup_files() -- which globs
@@ -683,6 +752,47 @@ def archive_backups(project: str, names: list[str], when: date | None = None) ->
     for src in sources:
         src.unlink()
     return dest
+
+
+def delete_backups(project: str, names: list[str]) -> int:
+    """Remove the named backups from the shelf, and what was written about
+    them. Returns how many files went. Nothing is deleted until every name
+    has been checked."""
+    if not names:
+        raise ValueError("no backups named")
+    shelf = backups_dir(project)
+    targets = []
+    for name in names:
+        full = _inside(Path(name), shelf)
+        if full.suffix != ".db" or not full.is_file():
+            raise ValueError(f"not a backup on this shelf: {name}")
+        targets.append(full)
+    for path in targets:
+        path.unlink()
+    forget_shelf_meta(project, [p.name for p in targets])
+    return len(targets)
+
+
+def restore_backup(project: str, name: str) -> None:
+    """Copy a backup over the project it belongs to, through SQLite.
+
+    Uses the online backup API rather than replacing the file: the live
+    database has a WAL beside it and readers open on it, and a file swapped
+    underneath that leaves the two out of step. The caller takes a copy of
+    the current state first -- restoring is not undoable from here.
+    """
+    full = _inside(Path(name), backups_dir(project))
+    if full.suffix != ".db" or not full.is_file():
+        raise ValueError(f"not a backup on this shelf: {name}")
+    src = sqlite3.connect(str(full), timeout=30.0)
+    try:
+        dst = sqlite3.connect(str(project_path(project)), timeout=30.0)
+        try:
+            src.backup(dst)
+        finally:
+            dst.close()
+    finally:
+        src.close()
 
 
 def unarchive(project: str, name: str) -> list[str]:

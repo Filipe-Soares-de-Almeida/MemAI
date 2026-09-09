@@ -3661,11 +3661,32 @@ button.rs-mono:hover { color: var(--accent); }
   gap: var(--sp-3); align-items: center;
   border-radius: var(--r-md); padding: var(--sp-2);
 }
-/* The tick is a column of its own on the shelf that can be acted on. A zip's
-   files are read-only, so that shelf keeps the four it always had. */
+/* The tick and the row's own two controls are columns of their own on the
+   shelf that can be acted on. A zip's files are read-only, so that shelf
+   keeps the four it always had. */
 .mnt-shelf-body.pickable .mnt-file {
-  grid-template-columns: 18px 16px minmax(0, 1fr) 96px 74px;
+  grid-template-columns: 18px 16px minmax(0, 1fr) 96px 74px 62px;
 }
+.mnt-file-acts { display: flex; gap: var(--sp-1); justify-content: flex-end; }
+.mnt-file-acts .icon-btn { --ico: 13px; }
+/* Pinned reads at full weight in the accent; unpinned is the same diamond
+   at the quiet ink, so the pair differs in weight as well as in colour. */
+.mnt-pin { color: var(--ink-3); }
+.mnt-pin .ico { fill: none; }
+.mnt-pin.is-on { color: var(--accent); border-color: rgba(187, 134, 252, .4); }
+.mnt-pin.is-on .ico { fill: currentColor; }
+.mnt-pin-mark {
+  display: inline-flex; vertical-align: -1px; margin-left: var(--sp-1);
+  --ico: 10px; color: var(--accent);
+}
+.mnt-pin-mark .ico { fill: currentColor; }
+.mnt-file-rename {
+  width: 100%; height: var(--ctl-h-sm);
+  background: var(--inset); border: 1px solid var(--accent); border-radius: var(--r-sm);
+  padding: 0 var(--sp-2);
+  font: 400 var(--fs-body) var(--font-ui); color: var(--ink);
+}
+.mnt-file-rename:focus { outline: none; }
 .mnt-file:hover { background: var(--hover-1); }
 .mnt-file.is-picked { background: var(--accent-dim); }
 .mnt-file input[type="checkbox"] { margin: 0; display: block; }

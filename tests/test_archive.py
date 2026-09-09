@@ -1,4 +1,4 @@
-"""Zipping backups off the shelf, and putting them back.
+"""The backup shelf: naming, pinning, zipping, restoring and deleting.
 
 A backup is a whole copy of the store, so a shelf of them is the largest
 thing in a MemAI home. Archiving moves the ones nobody is going to restore
@@ -248,3 +248,136 @@ def test_the_delete_endpoint_takes_the_archive_and_its_contents(client):
 def test_archiving_with_no_names_is_an_error(client):
     res = client.post("/api/maintenance/archive", json={"names": []})
     assert res.status_code >= 400
+
+
+# ----------------------------------------------------------- names and pins
+
+def test_a_name_and_a_pin_are_written_beside_the_shelf(client):
+    a = _shelve("General-20260901-120000.db")
+
+    db.set_shelf_meta("General", a.name, label="before the move")
+    db.set_shelf_meta("General", a.name, pinned=True)
+
+    assert db.shelf_meta("General") == {
+        a.name: {"label": "before the move", "pinned": True}}
+    assert a.exists(), "the backup itself is untouched"
+
+
+def test_clearing_the_last_field_takes_the_entry_and_the_file_with_it(client):
+    """The sidecar holds what was WRITTEN about the shelf, not a row per
+    backup ever taken."""
+    a = _shelve("General-20260901-120000.db")
+    db.set_shelf_meta("General", a.name, label="temporary")
+
+    db.set_shelf_meta("General", a.name, label="")
+
+    assert db.shelf_meta("General") == {}
+    assert not (db.backups_dir("General") / db.SHELF_META_FILE).exists()
+
+
+def test_a_name_follows_its_backup_into_an_archive_and_back(client):
+    """The sidecar is keyed by filename, so archiving does not lose it."""
+    a = _shelve("General-20260901-120000.db")
+    db.set_shelf_meta("General", a.name, label="the one worth keeping")
+    dest = db.archive_backups("General", [a.name])
+
+    assert db.shelf_meta("General")[a.name]["label"] == "the one worth keeping"
+    db.unarchive("General", dest.name)
+    assert db.shelf_meta("General")[a.name]["label"] == "the one worth keeping"
+
+
+def test_writing_about_a_name_outside_the_shelf_is_refused(client):
+    with pytest.raises(ValueError):
+        db.set_shelf_meta("General", "../memai.db", label="x")
+
+
+def test_an_unreadable_sidecar_reads_as_an_unwritten_shelf(client):
+    (db.backups_dir("General") / db.SHELF_META_FILE).write_text("{oops", encoding="utf-8")
+    assert db.shelf_meta("General") == {}
+
+
+def test_the_shelf_endpoint_carries_the_name_and_the_pin(client):
+    a = _shelve("General-20260901-120000.db")
+    client.post("/api/maintenance/backup-name",
+                json={"name": a.name, "label": "before the move"})
+    client.post("/api/maintenance/backup-pin", json={"name": a.name, "pinned": True})
+
+    row = client.get("/api/maintenance/backups").json()["shelf"][0]
+
+    assert row["label"] == "before the move" and row["pinned"] is True
+
+
+def test_a_backup_with_nothing_written_about_it_carries_neither(client):
+    _shelve("General-20260901-120000.db")
+    row = client.get("/api/maintenance/backups").json()["shelf"][0]
+    assert "label" not in row and "pinned" not in row
+
+
+# ------------------------------------------------------------------ deleting
+
+def test_deleting_takes_the_files_and_what_was_written_about_them(client):
+    a = _shelve("General-20260901-120000.db")
+    b = _shelve("General-20260902-120000.db")
+    db.set_shelf_meta("General", a.name, label="gone with it")
+
+    assert db.delete_backups("General", [a.name, b.name]) == 2
+
+    assert not a.exists() and not b.exists()
+    assert db.shelf_meta("General") == {}
+
+
+def test_one_bad_name_deletes_nothing(client):
+    a = _shelve("General-20260901-120000.db")
+
+    with pytest.raises(ValueError):
+        db.delete_backups("General", [a.name, "../memai.db"])
+
+    assert a.exists()
+
+
+def test_the_delete_endpoint_reports_what_it_freed(client):
+    _shelve("General-20260901-120000.db", b"x" * 2048)
+    res = client.post("/api/maintenance/backup-delete",
+                      json={"names": ["General-20260901-120000.db"]})
+    assert res.json() == {"ok": True, "deleted": 1, "freed": 2048}
+
+
+# ----------------------------------------------------------------- restoring
+
+def test_restoring_puts_the_backup_over_the_live_store(client):
+    """The store is replaced through SQLite, not by swapping the file: the
+    live database has a WAL beside it and readers open on it."""
+    uid = client.post("/api/memories", json={
+        "title": "before the restore", "type": "note", "content": "the old fact"}).json()["uid"]
+    taken = client.post("/api/maintenance/backup", json={}).json()["path"]
+    name = Path(taken).name
+    client.post("/api/memories", json={
+        "title": "after the backup", "type": "note", "content": "a newer fact"})
+
+    res = client.post("/api/maintenance/backup-restore", json={"name": name})
+
+    assert res.json()["ok"]
+    titles = [m["title"] for m in client.get("/api/memories").json()["items"]]
+    assert "before the restore" in titles
+    assert "after the backup" not in titles, "the newer memory is not in the backup"
+    assert client.get(f"/api/memories/{uid}").status_code == 200
+
+
+def test_restoring_keeps_the_state_it_replaced(client):
+    """Restoring is not undoable from here, so the current file is copied
+    first and the copy says what it is."""
+    client.post("/api/memories", json={
+        "title": "the first", "type": "note", "content": "a fact"})
+    name = Path(client.post("/api/maintenance/backup", json={}).json()["path"]).name
+    client.post("/api/memories", json={
+        "title": "the second", "type": "note", "content": "another fact"})
+
+    kept = client.post("/api/maintenance/backup-restore", json={"name": name}).json()["kept"]
+
+    assert "pre-restore" in kept
+    assert (db.backups_dir("General") / kept).is_file()
+
+
+def test_restoring_something_that_is_not_on_the_shelf_is_refused(client):
+    with pytest.raises(ValueError):
+        db.restore_backup("General", "../memai.db")

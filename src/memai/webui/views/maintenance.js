@@ -79,9 +79,10 @@ function backupKind(name, project) {
 function reasonLabel(kind) {
   const run = /^optimize-run(\d+)$/.exec(kind);
   if (run) return t('mn.bk.reason.optimize', { n: run[1] });
-  if (kind === 'sectionize') return t('mn.bk.reason.sectionize');
   if (!kind) return t('mn.bk.reason.hand');
-  return kind;
+  const key = `mn.bk.reason.${kind}`;
+  const named = t(key);
+  return named === key ? kind : named;
 }
 
 /* The shelf's date buckets. Today and this week are named; anything older
@@ -233,6 +234,7 @@ export async function renderMaintenance(view, params) {
   let bkGroup = 'date';
   let bkZip = null;          /* the archive being read, or null for the shelf */
   let bkSel = new Set();
+  let bkRenaming = null;     /* the file whose name is being typed */
   let shelf = null;          /* /api/maintenance/backups, in full */
 
   /* health carries a SHORT list of backups for the summary strip. The shelf
@@ -245,6 +247,7 @@ export async function renderMaintenance(view, params) {
     shelf = fresh;
     const names = new Set(shelf.shelf.map(f => f.name));
     bkSel = new Set([...bkSel].filter(n => names.has(n)));
+    if (bkRenaming && !names.has(bkRenaming)) bkRenaming = null;
     if (bkZip && !shelf.archives.some(a => a.name === bkZip)) bkZip = null;
     paintBackups();
   });
@@ -431,6 +434,44 @@ export async function renderMaintenance(view, params) {
       if (box.checked) bkSel.add(box.dataset.pick); else bkSel.delete(box.dataset.pick);
       afterTick();
     }));
+
+    body.querySelectorAll('[data-pin]').forEach(b => b.addEventListener('click', async () => {
+      const name = b.dataset.pin;
+      const on = !files.find(f => f.name === name)?.pinned;
+      b.disabled = true;
+      try {
+        await api('/api/maintenance/backup-pin', { body: { name, pinned: on } });
+        bkSel.delete(name);   /* a pinned file cannot be ticked */
+        await loadShelf();
+      } catch (err) { failed('err.maintenance', err); b.disabled = false; }
+    }));
+
+    body.querySelectorAll('[data-rename]').forEach(b => b.addEventListener('click', () => {
+      bkRenaming = b.dataset.rename;
+      paintBackups();
+    }));
+
+    /* Enter writes the name, Escape leaves it as it was. Leaving the field
+       any other way is the same as Escape: a half-typed name saved because
+       the reader clicked elsewhere is a name nobody chose. */
+    const field = body.querySelector('[data-renaming]');
+    if (field) {
+      field.focus();
+      field.select();
+      const close = () => { bkRenaming = null; paintBackups(); };
+      field.addEventListener('keydown', async e => {
+        if (e.key === 'Escape') { e.preventDefault(); close(); return; }
+        if (e.key !== 'Enter') return;
+        e.preventDefault();
+        const name = bkRenaming, label = field.value.trim();
+        bkRenaming = null;
+        try {
+          await api('/api/maintenance/backup-name', { body: { name, label } });
+          await loadShelf();
+        } catch (err) { failed('err.maintenance', err); paintBackups(); }
+      });
+      field.addEventListener('blur', close);
+    }
   }
 
   /* One writer for both shelves. A zip's members carry no reason and cannot
@@ -445,21 +486,43 @@ export async function renderMaintenance(view, params) {
       </div>` + rows.map(f => `
       <div class="mnt-file${pick && bkSel.has(f.name) ? ' is-picked' : ''}">
         ${pick ? `<span><input type="checkbox" data-pick="${esc(f.name)}"
-          ${bkSel.has(f.name) ? 'checked' : ''}
+          ${bkSel.has(f.name) ? 'checked' : ''} ${f.pinned ? 'disabled' : ''}
+          title="${f.pinned ? esc(t('mn.bk.pinnedWhy')) : ''}"
           aria-label="${esc(f.name)}"></span>` : ''}
         ${icon('db-file')}
-        <div class="mnt-file-main">
-          <!-- Grouped by reason, the heading already says what the backup was
-               taken for, and repeating it on every row under it says nothing.
-               The filename moves up and the row loses its second line. -->
-          ${!pick || bkGroup === 'reason' ? `
-          <div class="mnt-file-label mnt-file-mono" title="${esc(f.name)}">${esc(f.name)}</div>` : `
-          <div class="mnt-file-label">${esc(reasonLabel(f.kind))}</div>
-          <div class="mnt-file-sub"><span class="mnt-file-name" title="${esc(f.name)}">${esc(f.name)}</span></div>`}
-        </div>
+        <div class="mnt-file-main">${fileNameHTML(f, pick)}</div>
         <span class="mnt-file-when" title="${esc(fmtDate(f.mtime))}">${esc(fmtAgo(f.mtime))}</span>
         <span class="mnt-file-size">${fmtBytes(f.size)}</span>
+        ${pick ? `<span class="mnt-file-acts">
+          <button type="button" class="icon-btn mnt-pin${f.pinned ? ' is-on' : ''}"
+                  data-pin="${esc(f.name)}" aria-pressed="${!!f.pinned}"
+                  title="${esc(t('mn.bk.pinnedWhy'))}"
+                  aria-label="${esc(t('mn.bk.pinnedWhy'))}">${icon('pin')}</button>
+          <button type="button" class="icon-btn" data-rename="${esc(f.name)}"
+                  title="${esc(t('mn.bk.rename'))}"
+                  aria-label="${esc(t('mn.bk.rename'))}">${icon('pencil')}</button>
+        </span>` : ''}
       </div>`).join('')).join('');
+  }
+
+  /* What the row is CALLED. A name somebody typed wins; otherwise the reason
+     the backup was taken for. Grouped by reason the heading already carries
+     that, so an unnamed row shows its filename instead and loses its second
+     line. */
+  function fileNameHTML(f, pick) {
+    if (pick && bkRenaming === f.name) {
+      return `<input type="text" class="mnt-file-rename" data-renaming
+        value="${esc(f.label || '')}" placeholder="${esc(t('mn.bk.renameHint'))}"
+        aria-label="${esc(t('mn.bk.rename'))}">
+        <div class="mnt-file-sub"><span class="hint-sm">${t('mn.bk.renameKeys')}</span></div>`;
+    }
+    const named = f.label || (pick && bkGroup !== 'reason' ? reasonLabel(f.kind) : '');
+    if (!named) {
+      return `<div class="mnt-file-label mnt-file-mono" title="${esc(f.name)}">${esc(f.name)}</div>`;
+    }
+    return `<div class="mnt-file-label">${esc(named)}${f.pinned
+        ? `<span class="mnt-pin-mark" title="${esc(t('mn.bk.pinnedWhy'))}">${icon('pin')}</span>` : ''}</div>
+      <div class="mnt-file-sub"><span class="mnt-file-name" title="${esc(f.name)}">${esc(f.name)}</span></div>`;
   }
 
   function paintSelBar(archive, files) {
@@ -474,7 +537,38 @@ export async function renderMaintenance(view, params) {
         ? t('mn.bk.selN', { n: fmtInt(picked.length), size: fmtBytes(size) })
         : t('mn.bk.selNone')}</span>
       <button class="btn btn-sm mnt-sel-zip" id="bkArchive" ${picked.length ? '' : 'disabled'}>
-        ${icon('archive')}${t('mn.bk.archiveSel')}</button>`;
+        ${icon('archive')}${t('mn.bk.archiveSel')}</button>
+      <button class="btn btn-sm" id="bkRestore" ${picked.length === 1 ? '' : 'disabled'}
+        title="${esc(t('mn.bk.restoreOne'))}">${t('common.restore')}</button>
+      <button class="btn btn-sm btn-danger" id="bkDelete" ${picked.length ? '' : 'disabled'}>
+        ${t('mn.bk.delete')}</button>`;
+
+    /* Putting a backup back replaces every memory in the store, so it asks
+       first and the copy it keeps is named for what it is. */
+    $('#bkRestore').addEventListener('click', async () => {
+      const one = picked[0];
+      if (!one || !(await confirmModal({ title: t('common.restore'),
+        body: t('mn.confirm.restore', { name: one.label || one.name }),
+        okLabel: t('mn.bk.restoreOk') }))) return;
+      try {
+        const r = await api('/api/maintenance/backup-restore', { body: { name: one.name } });
+        await afterShelfWrite(t('mn.msg.restored', { name: one.name, kept: r.kept }));
+        loadSections().catch(() => {});
+      } catch (err) { failed('err.maintenance', err); }
+    });
+
+    $('#bkDelete').addEventListener('click', async () => {
+      const names = picked.map(f => f.name);
+      if (!(await confirmModal({ title: t('mn.bk.delete'),
+        body: t('mn.confirm.deleteBackups', { n: names.length, size: fmtBytes(size) }),
+        okLabel: t('mn.bk.delete') }))) return;
+      try {
+        const r = await api('/api/maintenance/backup-delete', { body: { names } });
+        await afterShelfWrite(t('mn.msg.deleted', {
+          n: fmtInt(r.deleted), size: fmtBytes(r.freed) }));
+      } catch (err) { failed('err.maintenance', err); }
+    });
+
     $('#bkArchive').addEventListener('click', async () => {
       const names = picked.map(f => f.name);
       if (!(await confirmModal({ title: t('mn.bk.archiveSel'),

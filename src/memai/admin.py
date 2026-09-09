@@ -1628,10 +1628,15 @@ def backup(request, payload) -> dict:
             "size": _file_size(dest)}
 
 
-def _shelf_row(path) -> dict:
-    return {"name": path.name, "size": _file_size(path),
-            "mtime": datetime.fromtimestamp(path.stat().st_mtime,
-                                            tz=timezone.utc).isoformat()}
+def _shelf_row(path, meta: dict | None = None) -> dict:
+    row = {"name": path.name, "size": _file_size(path),
+           "mtime": datetime.fromtimestamp(path.stat().st_mtime,
+                                           tz=timezone.utc).isoformat()}
+    for key in ("label", "pinned"):
+        value = (meta or {}).get(key)
+        if value:
+            row[key] = value
+    return row
 
 
 def backups(request, payload) -> dict:
@@ -1644,14 +1649,17 @@ def backups(request, payload) -> dict:
     number is what archiving it saved.
     """
     project = db.active_project()
+    meta = db.shelf_meta(project)
     archives = []
     for path in db.archive_files(project):
-        members = db.archive_members(path)
+        members = [{**m, **{k: v for k, v in (meta.get(m["name"]) or {}).items()
+                            if k == "label"}}
+                   for m in db.archive_members(path)]
         archives.append({**_shelf_row(path), "count": len(members),
                          "raw": sum(m["size"] for m in members),
                          "members": members})
     return {"project": project,
-            "shelf": [_shelf_row(p) for p in db.backup_files(project)],
+            "shelf": [_shelf_row(p, meta.get(p.name)) for p in db.backup_files(project)],
             "archives": archives}
 
 
@@ -1671,6 +1679,52 @@ def archive(request, payload) -> dict:
     dest = db.archive_backups(project, [str(n) for n in names])
     return {"ok": True, "archive": dest.name, "added": len(names),
             "raw": raw, "size": _file_size(dest)}
+
+
+def name_backup(request, payload) -> dict:
+    """Give one backup a name, or take the one it has away."""
+    name = str(payload.get("name") or "")
+    label = str(payload.get("label") or "").strip()[:120]
+    entry = db.set_shelf_meta(db.active_project(), name, label=label)
+    return {"ok": True, "name": name, "label": entry.get("label", "")}
+
+
+def pin_backup(request, payload) -> dict:
+    """Pin or unpin one backup. A pinned backup cannot be ticked, so nothing
+    that acts on a selection can reach it."""
+    name = str(payload.get("name") or "")
+    pinned = bool(payload.get("pinned"))
+    entry = db.set_shelf_meta(db.active_project(), name, pinned=pinned)
+    return {"ok": True, "name": name, "pinned": bool(entry.get("pinned"))}
+
+
+def delete_backups(request, payload) -> dict:
+    """Remove backups from the shelf for good."""
+    names = payload.get("names") or []
+    if not isinstance(names, list) or not names:
+        raise ValueError("names must be a non-empty list")
+    project = db.active_project()
+    freed = 0
+    shelf = db.backups_dir(project)
+    for name in names:
+        path = shelf / str(name)
+        if path.is_file():
+            freed += _file_size(path)
+    count = db.delete_backups(project, [str(n) for n in names])
+    return {"ok": True, "deleted": count, "freed": freed}
+
+
+def restore_backup(request, payload) -> dict:
+    """Put a backup back over the active project, keeping the current state.
+
+    The copy is taken FIRST and named for what it is: restoring replaces
+    every memory in the store, and this file is the only way back to what
+    was there a moment ago.
+    """
+    name = str(payload.get("name") or "")
+    kept = _backup("pre-restore")
+    db.restore_backup(db.active_project(), name)
+    return {"ok": True, "name": name, "kept": kept.name}
 
 
 def unarchive(request, payload) -> dict:
@@ -2438,6 +2492,10 @@ routes = [
     Route("/api/maintenance/archive", api(archive), methods=["POST"]),
     Route("/api/maintenance/unarchive", api(unarchive), methods=["POST"]),
     Route("/api/maintenance/archive-delete", api(archive_delete), methods=["POST"]),
+    Route("/api/maintenance/backup-name", api(name_backup), methods=["POST"]),
+    Route("/api/maintenance/backup-pin", api(pin_backup), methods=["POST"]),
+    Route("/api/maintenance/backup-delete", api(delete_backups), methods=["POST"]),
+    Route("/api/maintenance/backup-restore", api(restore_backup), methods=["POST"]),
     Route("/api/projects", api(projects), methods=["GET"]),
     Route("/api/projects", api(project_create), methods=["POST"]),
     Route("/api/projects/active", api(project_activate), methods=["POST"]),
