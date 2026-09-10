@@ -10,7 +10,7 @@ import { $, esc, debounce } from '../core/dom.js';
 import { api, seg } from '../core/api.js';
 import { icon } from '../core/icons.js';
 import { toast, failed, openModal, closeModal, confirmModal, promptModal,
-         openCtxMenu, tipShow, tipHide, setPressed } from '../core/ui.js';
+         openCtxMenu, openDropMenu, tipShow, tipHide, setPressed } from '../core/ui.js';
 import { typeClass, DG_REL_SUGGEST, peerName } from '../core/shared.js';
 import { pickerFor, pickerValue, wirePicker, fixedItems } from '../core/pick.js';
 import { pickMemories } from '../core/link-picker.js';
@@ -474,8 +474,7 @@ export async function renderDiagram(view, params, ctx) {
   }
 
   function openFontMenu(ev) {
-    const r = ev.currentTarget.getBoundingClientRect();
-    openCtxMenu(r.left, r.bottom + 4, FONT_SCALES.map(s => ({
+    openDropMenu(ev.currentTarget, FONT_SCALES.map(s => ({
       label: `${Math.round(s * 100)}%${s === 1 ? ` · ${t('dg.font.default')}` : ''}`,
       run: () => act(() => api(`/api/diagrams/${seg(uid)}/meta`, {
         body: { font_scale: s } }), t('dg.saved')),

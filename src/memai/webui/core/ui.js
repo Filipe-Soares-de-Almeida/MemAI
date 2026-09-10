@@ -396,10 +396,13 @@ export function promptModal({ title, body = '', label, placeholder = '', value =
   });
 }
 
-/* ─── context menu ───────────────────────────────────────────────────
-   A right-click menu, not a modal: it has no scrim and no focus trap,
-   because it must be dismissable by clicking the thing you actually
-   wanted. Items are `{label, run, danger}` or `{sep: true}`. */
+/* ─── menu of actions ────────────────────────────────────────────────
+   Not a modal: it has no scrim and no focus trap, because it must be
+   dismissable by clicking the thing you actually wanted. Items are
+   `{label, run, danger}` or `{sep: true}`.
+
+   Two ways in, and they differ only in where the menu lands: openCtxMenu at a
+   pointer, openDropMenu under the control that opened it. */
 
 let ctxMenu = null, ctxDrop = null;
 
@@ -410,7 +413,18 @@ export function closeCtxMenu() {
   ctxMenu = null;
 }
 
-export function openCtxMenu(x, y, items) {
+/* At a point -- a right-click, or a canvas the pointer is over. */
+export const openCtxMenu = (x, y, items) => openMenu(items, { x, y });
+
+/* Under the button that opened it: measured against that button, flipped when
+   it does not fit below, and hung off the button's RIGHT edge when `align`
+   says so -- for a control at the end of a row, where a left-aligned menu
+   wider than its button runs off past it. */
+export function openDropMenu(btn, items, { align = 'left' } = {}) {
+  return openMenu(items, { btn, align });
+}
+
+function openMenu(items, at) {
   closeCtxMenu();
   tipHide();            /* same reason as openModal */
   const live = items.filter(Boolean);
@@ -421,15 +435,9 @@ export function openCtxMenu(x, y, items) {
     ? '<div class="ctx-sep"></div>'
     : `<button class="ctx-item${it.danger ? ' danger' : ''}" data-i="${i}">${esc(it.label)}</button>`
   ).join('');
-  el.style.left = `${x}px`;
-  el.style.top = `${y}px`;
   document.body.appendChild(el);
   ctxMenu = el;
-  /* measured after it is in the document, then clamped both ends -- the
-     same reason tipShow does it that way */
-  const r = el.getBoundingClientRect();
-  el.style.left = `${Math.max(8, Math.min(x, innerWidth - r.width - 8))}px`;
-  el.style.top = `${Math.max(8, Math.min(y, innerHeight - r.height - 8))}px`;
+  place(el, at);
 
   el.querySelectorAll('[data-i]').forEach(b => b.addEventListener('click', () => {
     const it = live[Number(b.dataset.i)];
@@ -448,5 +456,26 @@ export function openCtxMenu(x, y, items) {
     removeEventListener('mousedown', away, true);
     removeEventListener('keydown', key, true);
     removeEventListener('wheel', closeCtxMenu, true);
+  };
+}
+
+/* Measured after it is in the document, then clamped both ends -- the same
+   reason tipShow does it that way. */
+function place(el, { x, y, btn, align }) {
+  const box = el.getBoundingClientRect();
+  const at = btn ? dropPoint(btn.getBoundingClientRect(), box, align) : { x, y };
+  el.style.left = `${Math.max(8, Math.min(at.x, innerWidth - box.width - 8))}px`;
+  el.style.top = `${Math.max(8, Math.min(at.y, innerHeight - box.height - 8))}px`;
+}
+
+/* Below the button unless it does not fit and there is more room above. A menu
+   is a list of ACTIONS and not what a control currently holds, so it clears
+   the button by 4px rather than joining it the way a picker's panel does. */
+function dropPoint(r, box, align) {
+  const room = innerHeight - r.bottom - 8;
+  const below = box.height <= room || r.top - 8 < room;
+  return {
+    x: align === 'right' ? r.right - box.width : r.left,
+    y: below ? r.bottom + 4 : r.top - box.height - 4,
   };
 }

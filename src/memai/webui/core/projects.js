@@ -52,7 +52,7 @@ function paint(data) {
     ariaLabel: t('project.title'), cls: 'project-sel',
   });
   wirePicker(document, { id: 'projectSel', items: fixedItems(list), onPick: pick,
-                         minWidth: 200, panelCls: 'pick-quiet' });
+                         minWidth: 200, panelCls: 'pick-quiet', align: 'right' });
 }
 
 /* The button has already repainted itself to the row that was clicked, so a

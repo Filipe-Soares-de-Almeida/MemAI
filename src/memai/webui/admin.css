@@ -31,7 +31,7 @@
        --bg        the page — and a card whose work is DONE, sunk back out
        --surface   an ordinary content card, the default
        --raised    a card that WANTS A DECISION from you  ·  the record drawer
-       --overlay   floating chrome: menus, popovers, toasts, modal, bulk bar
+       --overlay   floating chrome: menus, popovers, toasts, modal
        --inset     a recessed well inside any of the above
 
      The corollary is that a container on one of these tones needs no outline.
@@ -39,8 +39,11 @@
      separated -- two elevation systems running at once, neither winning, and
      an outline around everything is what you reach for when you have not
      decided what should be forward. --line and --line-soft are for DIVIDERS
-     (a row, a table cell, a section rule) and for WELL EDGES (something
-     recessed below its own parent), and for nothing else. */
+     (a row, a table cell, a section rule), for WELL EDGES (something recessed
+     below its own parent), and for a FLOATING panel, which can open over a
+     surface of its own tone -- a picker raised inside a dialog, a toast lying
+     across one -- and has no elevation step left to separate it there. That
+     edge is --line-soft, never --line: the panel carries a shadow too. */
   --bg:        #121212;   /* 0dp  */
   --surface:   #1e1e1e;   /* 1dp  */
   --raised:    #232323;   /* 2dp  */
@@ -251,6 +254,11 @@
      to know how tall the chrome came out. */
   --head-h: 60px;
   --shadow-pop: 0 8px 28px rgba(0, 0, 0, .55);
+  /* A panel joined to the control it drops from. Offset, and pulled in with a
+     negative spread, so the blur does not reach back across the seam and lay
+     a dark band over the control's own edge. */
+  --shadow-drop:    0  10px 22px -6px rgba(0, 0, 0, .6);
+  --shadow-drop-up: 0 -10px 22px -6px rgba(0, 0, 0, .6);
 
   /* --surface with alpha, for the strips that float ON a canvas and have to
      let its dot grid read through. A token rather than a literal, because
@@ -339,7 +347,16 @@ body {
 
 ::-webkit-scrollbar { width: 10px; height: 10px; }
 ::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, .16); border-radius: var(--r-md); border: 2px solid var(--bg); }
+/* The 2px inset that keeps the thumb clear of the track edge is a
+   TRANSPARENT border with the background clipped to the padding box. A
+   scroller inside a menu, a dialog or a card is not on the page's tone, and a
+   border filled --bg draws a dark ring around the thumb everywhere else. */
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, .16);
+  border-radius: var(--r-md);
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
 ::-webkit-scrollbar-thumb:hover { background: rgba(255, 255, 255, .28); }
 
 h1, h2, h3 { margin: 0; font-weight: 500; }
@@ -1909,7 +1926,7 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
 .opt-list-foot {
   flex: none; display: flex; align-items: center; gap: var(--sp-2);
   padding: var(--sp-2) var(--sp-4);
-  border-top: 1px solid var(--line); background: var(--overlay);
+  border-top: 1px solid var(--line); background: var(--raised);
 }
 .opt-foot-n { font-size: var(--fs-sm); color: var(--ink); }
 .opt-keyhint {
@@ -3216,7 +3233,7 @@ button.rs-mono:hover { color: var(--accent); }
   position: absolute; left: 12px; bottom: 12px; z-index: 4;
   width: min(324px, calc(100% - 24px));
   background: var(--overlay);
-  border: 1px solid var(--line);
+  border: 1px solid var(--line-soft);
   border-radius: var(--r-lg);
   padding: var(--sp-3);
   box-shadow: var(--shadow-pop);
@@ -3410,13 +3427,72 @@ button.rs-mono:hover { color: var(--accent); }
   display: flex; flex-direction: column;
   max-height: min(50vh, 420px);
   background: var(--overlay);
-  border: 1px solid var(--line);
+  border: 1px solid var(--line-soft);
   border-radius: var(--r-md);
   box-shadow: var(--shadow-pop);
   animation: rise .13s both;
 }
+
+/* ── the panel, joined to its control ─────────────────────────────────
+   A picker's panel hangs OFF its button: it starts on the button's own edge
+   with nothing between them, and while it is open the button wears the
+   panel's surface, so the two read as one piece of material and not as a card
+   that happens to be near a control.
+
+   The corner the two share is square -- that one corner, and no other. The
+   panel is as wide as its rows need and a compact control is narrower than
+   that, so the far end of the same edge overhangs the button with nothing
+   above it to continue from. Which corner it is follows the edge they line up
+   on: drop-right for a control that hangs its panel off its RIGHT edge.
+
+   core/pick.js decides all of it, and marks nothing while a clamped panel is
+   not touching the button at all -- a squared corner against nothing reads as
+   a panel with a piece cut out of it.
+
+   Transparent, not zero: a border whose WIDTH changes changes the height the
+   placement already measured, and the panel then lands a pixel off the seam. */
+.pick-pop.drop-below {
+  border-top-color: transparent;
+  border-radius: 0 var(--r-md) var(--r-md) var(--r-md);
+  box-shadow: var(--shadow-drop);
+  /* the entrance settles DOWNWARD out of the control, against `rise` */
+  --rise-y: -6px;
+}
+.pick-pop.drop-above {
+  border-bottom-color: transparent;
+  border-radius: var(--r-md) var(--r-md) var(--r-md) 0;
+  box-shadow: var(--shadow-drop-up);
+}
+.pick-pop.drop-below.drop-right { border-radius: var(--r-md) 0 var(--r-md) var(--r-md); }
+.pick-pop.drop-above.drop-right { border-radius: var(--r-md) var(--r-md) 0 var(--r-md); }
+
+/* The control's half of it. The panel covers the whole of the edge they meet
+   on, so a line along that edge is only a line drawn across the join. */
+.pick.drop-below, .pick.drop-above { background-color: var(--overlay); }
+.pick.drop-below { border-bottom-color: transparent; border-bottom-left-radius: 0; }
+.pick.drop-above { border-top-color: transparent; border-top-left-radius: 0; }
+.pick.drop-below.drop-right {
+  border-bottom-left-radius: var(--r-md); border-bottom-right-radius: 0;
+}
+.pick.drop-above.drop-right {
+  border-top-left-radius: var(--r-md); border-top-right-radius: 0;
+}
+/* the project switch wears no box, open or shut */
+.pick.project-sel.drop-below, .pick.project-sel.drop-above { background-color: transparent; }
+
 .pick-head { flex: none; padding: var(--sp-2); border-bottom: 1px solid var(--line-soft); }
-.pick-q { width: 100%; font-size: var(--fs-sm); }
+/* The filter is a field ON the panel, not a well cut through it: the head's
+   own rule is the boundary, so the box needs no outline of its own, and
+   --inset here would be the page showing through a floating menu. A filled
+   field, the way the theme draws one -- a wash and an underline that takes
+   the accent while the caret is in it, which is from the moment it opens. */
+input.pick-q {
+  width: 100%; font-size: var(--fs-sm);
+  background: var(--hover-1);
+  border: 0; border-radius: var(--r-sm) var(--r-sm) 0 0;
+  box-shadow: inset 0 -1px 0 var(--line);
+}
+input.pick-q:focus { box-shadow: inset 0 -2px 0 var(--accent); }
 .pick-list { overflow-y: auto; padding: var(--sp-1) 0; outline: none; }
 .pick-empty { padding: var(--sp-3); color: var(--ink-3); font-size: var(--fs-sm); }
 .pick-row {
@@ -3456,15 +3532,11 @@ button.rs-mono:hover { color: var(--accent); }
   max-width: 190px;
 }
 
-/* The quiet variant, for a picker that IS a row of the rail rather than a
-   control sitting in a toolbar (see core/projects.js): one step of elevation
-   instead of eight, a hairline, the data font of the rows above it, and the
-   accent on one row -- the project that is active. */
+/* The quiet variant, for a picker whose control wears no box at all (see
+   core/projects.js): one step of elevation instead of eight, the data font of
+   the rows it lists, and the accent on one row -- the project that is active. */
 .pick-pop.pick-quiet {
   background: var(--raised);
-  border-color: var(--line-soft);
-  border-radius: var(--r-sm);
-  box-shadow: 0 4px 14px rgba(0, 0, 0, .45);
 }
 .pick-quiet .pick-row {
   font-family: var(--font-m);
@@ -4133,7 +4205,7 @@ button.rs-mono:hover { color: var(--accent); }
   width: min(540px, 92vw);
   max-height: 88vh; overflow-y: auto;
   background: var(--overlay);
-  border: 1px solid var(--line);
+  border: 1px solid var(--line-soft);
   border-radius: var(--r-lg);
   box-shadow: var(--shadow-pop);
   animation: rise .2s both;
@@ -4198,7 +4270,7 @@ button.rs-mono:hover { color: var(--accent); }
   --toast-line: calc(var(--fs-body) * 1.55);
   display: flex; align-items: flex-start; gap: var(--sp-3);
   background: var(--overlay);
-  border: 1px solid var(--line);
+  border: 1px solid var(--line-soft);
   border-radius: var(--r-md);
   padding: var(--sp-3) var(--sp-3) var(--sp-3) var(--sp-4);
   /* --fs-body, not --fs-sm: this is the only channel that reports what just
@@ -4258,7 +4330,7 @@ button.rs-mono:hover { color: var(--accent); }
 .tip {
   position: fixed; z-index: 95; pointer-events: none;
   background: var(--overlay);
-  border: 1px solid var(--line);
+  border: 1px solid var(--line-soft);
   border-radius: var(--r-md);
   padding: var(--sp-2) var(--sp-3);
   font-size: var(--fs-sm); color: var(--ink);
@@ -4281,14 +4353,16 @@ button.rs-mono:hover { color: var(--accent); }
 }
 .tip b { color: var(--accent); font-family: var(--font-m); }
 
-/* right-click menu. Above the tip, because the pointer is over the canvas
-   and a hovered step's note would otherwise sit on top of the menu. */
+/* A menu of actions: at the pointer for a right-click, or under the control
+   that opened it (see openDropMenu). Above the tip, because the pointer is
+   over the canvas and a hovered step's note would otherwise sit on top of the
+   menu. */
 .ctx-menu {
   position: fixed; z-index: 96;
   min-width: 190px; max-width: min(300px, calc(100vw - 24px));
   padding: var(--sp-1);
   background: var(--overlay);
-  border: 1px solid var(--line);
+  border: 1px solid var(--line-soft);
   border-radius: var(--r-md);
   box-shadow: var(--shadow-pop);
   animation: rise .13s both;
@@ -4866,12 +4940,4 @@ button.rs-mono:hover { color: var(--accent); }
   .mnt-step .btn { margin-left: 34px; }
   .mnt-ev { grid-template-columns: 46px 9px minmax(0, 1fr); gap: var(--sp-2); }
   .mnt-ev-delta { grid-column: 3; }
-  /* a floating bar with four controls does not fit a phone as a pill. It is
-     no longer centred by a transform here, so it takes the plain entrance --
-     bulk-rise would put the translateX(-50%) back. */
-  .bulkbar {
-    left: 12px; right: 12px; transform: none;
-    border-radius: var(--r-pill); flex-wrap: wrap;
-    animation-name: rise;
-  }
 }

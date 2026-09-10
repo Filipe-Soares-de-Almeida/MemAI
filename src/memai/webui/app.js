@@ -80,7 +80,7 @@ wirePicker(document, { id: 'langSel', items: fixedItems(langItems), onPick: code
     return;
   }
   I18N.set(code);
-} });
+}, align: 'right' });
 
 
 document.addEventListener('keydown', e => {

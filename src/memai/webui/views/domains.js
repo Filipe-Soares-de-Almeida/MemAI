@@ -21,7 +21,7 @@ import { esc, fmtInt, fmtAgo } from '../core/dom.js';
 import { api } from '../core/api.js';
 import { icon } from '../core/icons.js';
 import { toast, failed, openModal, closeModal, confirmModal, promptModal,
-         openCtxMenu, setPressed } from '../core/ui.js';
+         openDropMenu, setPressed } from '../core/ui.js';
 import { typeTag, getDomains, invalidateDomains, byDomainPath, domainLeaf,
          domainDatalist, domainSegments, inDomainPath, DOMAIN_SEP } from '../core/shared.js';
 import { pickerFor, pickerValue, wirePicker, fixedItems } from '../core/pick.js';
@@ -135,11 +135,10 @@ export async function renderDomains(view, params, ctx) {
   /* Store-wide, not level-wide: the casing policy is a property of the file,
      so it does not belong on a level's own action row. */
   view.querySelector('#domMore').addEventListener('click', e => {
-    const r = e.currentTarget.getBoundingClientRect();
-    openCtxMenu(r.left, r.bottom + 4, [
+    openDropMenu(e.currentTarget, [
       { label: t('do.case.title'), run: () => openCaseModal(cfg) },
       { label: t('do.case.normalize'), run: openNormalizeModal },
-    ]);
+    ], { align: 'right' });
   });
 
   if (here) loadDetail(view, here, domains);
@@ -293,8 +292,7 @@ function wireDetail(host, d, domains) {
   host.querySelectorAll('[data-uid]').forEach(b => b.addEventListener('click',
     () => openRecord(b.dataset.uid)));
   host.querySelector('[data-more]').addEventListener('click', e => {
-    const r = e.currentTarget.getBoundingClientRect();
-    openCtxMenu(r.left, r.bottom + 4, [
+    openDropMenu(e.currentTarget, [
       { label: t('do.act.toProject'), run: async () => {
         if (!await moveToProjectModal({ domain: d.domain })) return;
         invalidateDomains();
@@ -302,7 +300,7 @@ function wireDetail(host, d, domains) {
       } },
       { sep: true },
       { label: t('do.act.delete'), danger: true, run: () => openDeleteModal(d, domains) },
-    ]);
+    ], { align: 'right' });
   });
 }
 

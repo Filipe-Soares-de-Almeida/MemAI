@@ -25,7 +25,7 @@ import { esc, fmtDate, fmtInt, debounce } from '../core/dom.js';
 import { api, seg } from '../core/api.js';
 import { icon } from '../core/icons.js';
 import { toast, failed, openModal, closeModal, confirmModal, promptModal,
-         openCtxMenu, copyCode, copyUid, modalOpen } from '../core/ui.js';
+         openDropMenu, copyCode, copyUid, modalOpen } from '../core/ui.js';
 import { typeTag, uidChip, statusTag, wireCopyChips,
          CONF, REL_SUGGEST, relLabel, relTypeTitle, peerName, typeItems,
          sectionLabel, sectionLabelHTML, sectionHue,
@@ -776,11 +776,10 @@ function wire(view, m, uid, fields, isDiagram) {
   q('#dDelete').addEventListener('click', () => openPurgeModal(uid));
 
   q('#dMore').addEventListener('click', e => {
-    const r = e.currentTarget.getBoundingClientRect();
-    openCtxMenu(r.right - 220, r.bottom + 4, [
+    openDropMenu(e.currentTarget, [
       { label: t('mm.title'), run: () => openMetaModal(m) },
       { label: t('a11y.copyUid', { uid }), run: () => copyUid(uid) },
-    ]);
+    ], { align: 'right' });
   });
 
   /* ── relations ── */

@@ -39,6 +39,7 @@ export function closePicker() {
   drop();
   panel.remove();
   btn.setAttribute('aria-expanded', 'false');
+  btn.classList.remove('drop-below', 'drop-above', 'drop-right');
 }
 
 export const pickerOpen = () => Boolean(live);
@@ -97,16 +98,20 @@ export function setPickerValue(btn, { value, label = '', html = '', title = '' }
    measured and placed against that element instead of the button: a control
    that is only the right-hand half of a row opens over the whole row, at the
    row's width. It is resolved when the panel opens, so a repaint of the row
-   leaves no stale element behind. */
+   leaves no stale element behind.
+
+   `align` is the edge the panel lines up with, 'left' (default) or 'right' --
+   the right edge for a control that sits at the end of a bar, or whose own
+   label is right-aligned inside its box. */
 export function wirePicker(root, { id, items, onPick, search = 'auto',
                                    minWidth = 180, panelCls = '', keepLabel = false,
-                                   anchor = '' }) {
+                                   anchor = '', align = 'left' }) {
   const btn = root.querySelector(`#${id}`);
   if (!btn) return;
   /* a view swap drops the button but not a panel parented to <body> */
   onTeardown(closePicker);
   const open = () =>
-    openPanel(btn, { items, onPick, search, minWidth, panelCls, keepLabel, anchor });
+    openPanel(btn, { items, onPick, search, minWidth, panelCls, keepLabel, anchor, align });
   btn.addEventListener('click', () => {
     if (live && live.btn === btn) closePicker();
     else open();
@@ -119,7 +124,7 @@ export function wirePicker(root, { id, items, onPick, search = 'auto',
   });
 }
 
-function openPanel(btn, { items, onPick, search, minWidth, panelCls, keepLabel, anchor }) {
+function openPanel(btn, { items, onPick, search, minWidth, panelCls, keepLabel, anchor, align }) {
   closePicker();
   const current = btn.dataset.v || '';
   const all = items('');
@@ -213,15 +218,39 @@ function openPanel(btn, { items, onPick, search, minWidth, panelCls, keepLabel, 
 
   /* Placed after it is in the document and measured, then clamped both ends
      -- the same reason the tip and the context menu do it that way. Below the
-     button unless it does not fit and there is more room above. */
+     button unless it does not fit and there is more room above.
+
+     The panel starts ON the edge it hangs off, with nothing between them, and
+     says so: drop-below / drop-above square the corner the two share and drop
+     the line along that edge (see admin.css), which is what makes the list
+     read as this control's own drop. A clamp that moves the panel off the
+     button takes the mark with it -- a squared corner against nothing reads as
+     a panel with a piece cut out of it.
+
+     Vertical only: the panel is at least as wide as what it is measured
+     against, so a horizontal clamp slides it along the seam and never off it. */
   const place = () => {
     const r = ((anchor && btn.closest(anchor)) || btn).getBoundingClientRect();
     panel.style.width = `${Math.min(Math.max(r.width, minWidth), innerWidth - 16)}px`;
     const h = panel.offsetHeight;
+    const w = panel.offsetWidth;
     const room = innerHeight - r.bottom - 8;
-    const top = h <= room || r.top - 8 < room ? r.bottom + 4 : r.top - h - 4;
-    panel.style.top = `${Math.max(8, Math.min(top, innerHeight - h - 8))}px`;
-    panel.style.left = `${Math.max(8, Math.min(r.left, innerWidth - panel.offsetWidth - 8))}px`;
+    const below = h <= room || r.top - 8 < room;
+    const seam = below ? r.bottom : r.top - h;
+    const top = Math.max(8, Math.min(seam, innerHeight - h - 8));
+    const x = align === 'right' ? r.right - w : r.left;
+    panel.style.top = `${top}px`;
+    panel.style.left = `${Math.max(8, Math.min(x, innerWidth - w - 8))}px`;
+    const joined = Math.abs(top - seam) < 1;
+    panel.classList.toggle('drop-below', joined && below);
+    panel.classList.toggle('drop-above', joined && !below);
+    panel.classList.toggle('drop-right', align === 'right');
+    /* The button's own half of the seam -- but only when the panel was
+       measured against the button itself: with an `anchor` the seam is the
+       row's edge and the button is somewhere inside it. */
+    btn.classList.toggle('drop-below', joined && below && !anchor);
+    btn.classList.toggle('drop-above', joined && !below && !anchor);
+    btn.classList.toggle('drop-right', align === 'right');
   };
 
   const away = e => {
