@@ -1465,6 +1465,17 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
 .dom-queue-item code { font-family: var(--font-m); color: var(--ink-2); }
 .dom-queue-end { margin-left: auto; display: flex; gap: var(--sp-2); }
 
+/* ── the move dialog ──
+   The destination is two controls, so they share a row: a parent picked out
+   of the tree and the name it keeps there. `.rn-result` is the path the two
+   compose, which is the string the server is asked for. */
+.rn-target { display: grid; grid-template-columns: 1fr 1fr; gap: var(--sp-3); }
+.rn-target .pick { width: 100%; }
+.rn-result { font-size: var(--fs-sm); color: var(--ink-3); }
+.rn-result code {
+  font-family: var(--font-m); font-size: var(--fs-sm); color: var(--ink);
+}
+
 /* Below this the columns stop fitting side by side. They scroll sideways
    rather than wrapping -- a wrapped Miller column is not a column any more
    -- and the pane goes under them. */

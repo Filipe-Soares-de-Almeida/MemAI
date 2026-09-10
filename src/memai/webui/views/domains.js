@@ -23,7 +23,7 @@ import { icon } from '../core/icons.js';
 import { toast, failed, openModal, closeModal, confirmModal, promptModal,
          openDropMenu, setPressed } from '../core/ui.js';
 import { typeTag, getDomains, invalidateDomains, byDomainPath, domainLeaf,
-         domainDatalist, domainSegments, inDomainPath, DOMAIN_SEP } from '../core/shared.js';
+         domainSegments, inDomainPath, DOMAIN_SEP } from '../core/shared.js';
 import { pickerFor, pickerValue, wirePicker, fixedItems } from '../core/pick.js';
 import { domainPickerHTML, wireDomainPicker } from '../core/domain-picker.js';
 import { moveToProjectModal } from '../core/projects.js';
@@ -611,41 +611,72 @@ async function openNormalizeModal() {
   };
 }
 
-function openRenameModal(from, domains, presetTo = '') {
+/* Where a domain goes is a PARENT and a NAME, never one path typed out.
+
+   The parent is picked from the same tree the view draws, minus this level
+   and its own subtree: a domain cannot be filed inside itself, so those
+   rows would be on offer only to be refused. The name arrives holding the
+   leaf, so moving a level keeps its own name without it being retyped, and
+   renaming one in place is the same field with the picker left alone. The
+   path the two compose is spelled out under them, because that string is
+   what the server is asked for. */
+function openRenameModal(from, domains) {
   const node = domains.find(d => d.domain === from);
   const descendants = node ? node.subtree_active + node.subtree_archived
                              - node.active - node.archived : 0;
+  const parents = domains.filter(d => !inDomainPath(d.domain, from));
+  let parent = domainSegments(from).slice(0, -1).join(DOMAIN_SEP);
   const modal = openModal({
-    title: presetTo ? t('do.rn.merge') : t('do.rn.rename'),
+    title: t('do.rn.rename'),
     bodyHTML: `
       <div class="field"><label for="rnFrom">${t('do.rn.from')}</label>
         <input type="text" id="rnFrom" value="${esc(from)}" disabled></div>
-      <div class="field"><label for="rnTo">${t('do.rn.to')}</label>
-        <input type="text" id="rnTo" value="${esc(presetTo)}" list="rnDL" placeholder="${t('do.rn.placeholder')}">
-        <datalist id="rnDL">${domainDatalist(domains)}</datalist></div>
+      <div class="rn-target">
+        <div class="field"><label for="rnParent">${t('do.rn.parent')}</label>
+          ${domainPickerHTML({ id: 'rnParent', value: parent,
+                               ariaLabel: t('do.rn.parent'),
+                               anyLabel: t('do.rn.root') })}</div>
+        <div class="field"><label for="rnName">${t('do.rn.name')}</label>
+          <input type="text" id="rnName" value="${esc(domainLeaf(from))}"
+                 autocomplete="off" spellcheck="false"></div>
+      </div>
+      <div class="rn-result">${t('do.rn.result')} <code id="rnPath"></code></div>
       <div id="rnWarn" class="hint warn" hidden>${t('do.rn.warn')}</div>
       <div id="rnCycle" class="hint warn" hidden>${t('do.rn.cycle')}</div>
       ${descendants ? `<div class="hint">${t('do.rn.subtree', { n: fmtInt(descendants) })}</div>` : ''}
-      <div class="hint-sm">${t('do.rn.pathHint')}</div>
       <div class="hint-sm">${t('do.rn.hint')}</div>`,
     footHTML: `<button class="btn" data-x>${t('common.cancel')}</button><button class="btn btn-solid" data-ok>${t('common.apply')}</button>`,
   });
-  const toInput = modal.querySelector('#rnTo');
+  const nameInput = modal.querySelector('#rnName');
+  const pathEl = modal.querySelector('#rnPath');
   const okBtn = modal.querySelector('[data-ok]');
-  /* Moving a domain under itself is the one target the server refuses, so
-     say it here rather than letting the modal be submitted into a 400. */
+  /* A name written as a path still nests -- 'x100/p200' under 'acme' is
+     'acme/x100/p200' -- so only the separators at its ends are dropped. */
+  const target = () => pathOf(parent, nameInput.value.trim().replace(/^\/+|\/+$/g, ''));
+  /* Moving a domain into itself is the one target the server refuses, so
+     say it here rather than letting the modal be submitted into a 400. It
+     is only said about a target the reader COMPOSED: the dialog opens on
+     the path it is already at, and that one is not a move to complain
+     about -- it is Apply with nothing to apply. */
   const check = () => {
-    const to = toInput.value.trim().replace(/^\/+|\/+$/g, '');
-    const cycle = Boolean(to) && (to === from || to.startsWith(`${from}/`));
+    const to = target();
+    pathEl.textContent = to || '—';
+    const same = to === from;
+    const cycle = Boolean(to) && !same && inDomainPath(to, from);
     modal.querySelector('#rnCycle').hidden = !cycle;
     modal.querySelector('#rnWarn').hidden =
-      cycle || !domains.some(d => d.domain === to && d.domain !== from && !d.implicit);
-    okBtn.disabled = cycle;
+      same || cycle || !domains.some(d => d.domain === to && !d.implicit);
+    okBtn.disabled = !to || same || cycle;
   };
-  toInput.addEventListener('input', check); check();
+  wireDomainPicker(modal, {
+    id: 'rnParent', domains: parents, anyLabel: t('do.rn.root'),
+    onPick: v => { parent = v; check(); },
+  });
+  nameInput.addEventListener('input', check); check();
+  nameInput.focus(); nameInput.select();
   modal.querySelector('[data-x]').onclick = closeModal;
   okBtn.onclick = async () => {
-    const to = toInput.value.trim();
+    const to = target();
     try {
       const r = await api('/api/domains/rename', { body: { from, to } });
       closeModal();
