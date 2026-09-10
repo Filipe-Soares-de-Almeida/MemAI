@@ -54,7 +54,6 @@ export async function renderOverview(view, params, ctx) {
   const o = await api('/api/overview');
   if (ctx.stale()) return;
 
-  const tot = o.totals;
   const h = o.health;
   const days = calendar(o.activity);
   const weeks = intoWeeks(days);
@@ -64,12 +63,6 @@ export async function renderOverview(view, params, ctx) {
 
   view.innerHTML = `<div class="anim">
     <h2 class="sr-only">${t('ov.title')}</h2>
-    <!-- The store-wide counts that are not one of the four axes. The file's
-         path and size were here too and are on Maintenance, which is the
-         view about the file. -->
-    <div class="view-note">${t('ov.sub.store', {
-      domains: fmtInt(tot.domains), relations: fmtInt(tot.relations),
-      edits: fmtInt(tot.edits), sessions: fmtInt(tot.sessions) })}</div>
 
     <div class="hx-top">
       ${ringsPanel(h, o)}

@@ -918,7 +918,6 @@
     "ov.hx.inDays": "em {n} d",
     "ov.hx.title": "Índice de saúde",
     "ov.spark.aria": "Memórias novas por dia nos últimos {days} dias: {n} no total, {peak} no dia mais movimentado e atividade em {active} deles.",
-    "ov.sub.store": "{domains} domínios · {relations} relações · {edits} edições · {sessions} sessões",
     "ov.sym.aside": "O que puxa o índice para baixo",
     "ov.sym.atOverlap": "A {p}% de sobreposição",
     "ov.sym.contradicted": "Contraditas, sem decisão",
