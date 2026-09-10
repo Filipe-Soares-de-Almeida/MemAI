@@ -312,6 +312,7 @@ body {
    goes inside instead, with a wash behind it -- a `tr` outline alone is not
    something every browser paints the same way. */
 .mem-row:focus-visible,
+.dgl-row:focus-visible,
 .table tbody tr:focus-visible,
 .rs-rel:focus-visible,
 .picker-item:focus-visible {
@@ -376,6 +377,7 @@ kbd {
 .tile-label,
 .mg-label,
 .opt-label,
+.dgl-head,
 .table th,
 .status-tag,
 .match-badge {
@@ -630,7 +632,7 @@ kbd {
    keyboard and nameless to a screen reader -- and the fix costs only the
    browser styling this strips back. Declared here, ahead of the components
    themselves, so each still owns its own look. */
-.chip, .uid-chip, .collide-chip, .dgl-title, .picker-item, .row-open, .type-tag {
+.chip, .uid-chip, .collide-chip, .picker-item, .row-open, .type-tag {
   font: inherit;
   color: inherit;
   text-align: inherit;
@@ -4521,8 +4523,8 @@ button.rs-mono:hover { color: var(--accent); }
   background: var(--surface);
   border-radius: var(--r-lg);
   padding: var(--sp-4) var(--sp-4) var(--sp-4);
-  /* same guard as .dgl-card: a grid item defaults to min-width:auto and
-     would widen past this fixed column rather than clip a long chip */
+  /* a grid item defaults to min-width:auto and would widen past this fixed
+     column rather than clip a long chip */
   min-width: 0;
 }
 .dg-panel > * { min-width: 0; }
@@ -4618,77 +4620,79 @@ button.rs-mono:hover { color: var(--accent); }
   .dg-stage { height: 58vh; }
 }
 
-/* ── diagram list ────────────────────────────────────────────────────── */
+/* ── diagram list ────────────────────────────────────────────────────────
+   A list of flows and the inspector beside it, laid out like the memory
+   list: both panes scroll inside themselves, so the toolbar above and the
+   pane's own footer stay where the eye left them. */
 
-.dgl-grid {
-  display: grid;
-  /* min(), because a bare 340px track is a MINIMUM the grid must honour even
-     when the container is 313px wide -- which is what a 375px phone leaves
-     after the rail. The card then pushed 39px past its own scroll container.
-     min(340px, 100%) keeps the intent (two columns once there is room for two)
-     and drops the floor to the container when there is not. */
-  grid-template-columns: repeat(auto-fill, minmax(min(340px, 100%), 1fr));
-  gap: var(--sp-3);
+.dgl-work {
+  display: grid; grid-template-columns: minmax(0, 1fr) 420px;
+  gap: var(--sp-4);
+  flex: 1; min-height: 0;
 }
-/* This card carried a 3px teal left border. Two things were wrong with it:
-   the teal restated "this is a diagram" on a grid where every card is a
-   diagram, and then the same three pixels were recoloured to --warn to mean
-   "this one is broken" -- so the identity mark and the alarm were the same
-   pixel, and neither could be read without the other. Both are gone. */
-/* One band per outermost domain segment, so a store of forty flows reads as
-   a handful of branches. The heading is the filter into that branch. */
-.dgl-group + .dgl-group { margin-top: var(--sp-4); }
-.dgl-group-head {
-  display: flex; align-items: center; gap: var(--sp-2);
-  padding-bottom: var(--sp-2); margin-bottom: var(--sp-3);
+.dgl-pane { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+.dgl-pane .list-toolbar { flex: none; }
+
+/* The whole list scrolls, heads included, rather than the rows alone: a
+   scrollbar inside the rows makes them 15px narrower than the strip above,
+   and the last column of that strip then sits 15px right of the column it
+   names. The heads stick instead, so they are still there at row forty. */
+.dgl-list {
+  border-radius: var(--r-lg); background: var(--surface);
+  overflow: hidden auto;
+  flex: 1; min-height: 0;
+}
+/* The column heads. The first column is the row's first column to the
+   pixel, so the state marks read as a column under a heading rather than
+   as a stripe beside one. */
+.dgl-head {
+  position: sticky; top: 0; z-index: 1;
+  display: grid; grid-template-columns: var(--tap) minmax(0, 1fr) auto;
+  gap: var(--sp-3); align-items: center;
+  padding: var(--sp-2) var(--sp-4);
+  border-bottom: 1px solid var(--line);
+  /* --hover-1 composited on --surface: the strip is sticky, and a wash
+     would let the rows travelling under it read through */
+  background: color-mix(in srgb, #fff 4%, var(--surface));
+  color: var(--ink-2);
+}
+/* how many of the flows on screen have something structurally wrong: the
+   reason this view exists, in the line that counts them */
+.dgl-broken { color: var(--warn); }
+
+.dgl-row {
+  display: grid; grid-template-columns: var(--tap) minmax(0, 1fr) auto;
+  gap: var(--sp-3); align-items: center;
+  padding: var(--sp-2) var(--sp-4);
   border-bottom: 1px solid var(--line-soft);
-}
-.dgl-group-n { font-size: var(--fs-label); color: var(--ink-3); }
-
-.dgl-card {
-  display: grid; gap: var(--sp-2);
-  background: var(--surface);
-  border-radius: var(--r-lg);
-  padding: var(--sp-3) var(--sp-4);
-  min-width: 0;
-}
-/* Grid and flex items default to min-width:auto, so they refuse to shrink
-   below their min-content and spill out of the painted card -- a long
-   title alone was enough. Every row here is meant to clip or wrap to the
-   card, never to widen it. */
-.dgl-card > * { min-width: 0; }
-/* structural problems are the reason this view exists — make them visible
-   from across the grid, not only once a card is read. A card with something
-   wrong stands one step forward of the sound ones; the amber stays on the
-   .dgl-issue chips inside it, which name what is actually wrong. */
-.dgl-card.has-issues { background: var(--raised); }
-
-.dgl-top { display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; }
-.dgl-title {
-  /* same reason as .row-open: it opens the diagram, so it clears the pointer
-     floor, and the leading is what centres its one line inside that */
-  font: 500 var(--fs-md)/var(--tap) var(--font-ui);
-  color: var(--ink);
   cursor: pointer;
-  flex: 1; min-width: 0;
+  transition: background .13s;
+}
+.dgl-row:last-child { border-bottom: none; }
+.dgl-row:hover { background: var(--hover-1); }
+/* The caret and the pick are one thing here: the pane shows the row the
+   keyboard is on, so the row it shows is the row that is washed. Declared
+   after :focus-visible up top, which is what lets a focused pick keep the
+   accent wash and take the ring on top of it. */
+.dgl-row[aria-selected="true"] { background: var(--accent-dim); }
+.dgl-state { display: flex; justify-content: center; color: var(--ok); }
+.dgl-state.is-broken { color: var(--warn); }
+.dgl-main { min-width: 0; }
+/* 20px of leading, not the pointer floor .row-open uses: this line has a
+   second one under it, and the two together are what the row is tall for. */
+.dgl-name {
+  display: block;
+  font: 500 var(--fs-sm)/20px var(--font-ui); color: var(--ink);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-.dgl-title:hover { color: var(--accent); }
-/* a real routine's summary runs to a paragraph; clamp it so one verbose
-   flow cannot stretch its card past every other card in the row */
-.dgl-summary {
-  font-size: var(--fs-sm); color: var(--ink-2); line-height: 1.5;
-  display: -webkit-box; -webkit-box-orient: vertical;
-  -webkit-line-clamp: 4; line-clamp: 4;
-  overflow: hidden;
+.dgl-sub {
+  display: block;
+  font: 400 var(--fs-label) var(--font-m); color: var(--ink-3);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
+.dgl-sub.is-broken { color: var(--warn); }
+.dgl-right { display: flex; align-items: center; gap: var(--sp-2); white-space: nowrap; }
 
-.dgl-stats {
-  display: flex; flex-wrap: wrap; gap: var(--sp-1) var(--sp-3);
-  font: 500 var(--fs-label) var(--font-m);
-  color: var(--ink-3);
-}
-.dgl-issues { display: flex; flex-wrap: wrap; gap: var(--sp-1); }
 .dgl-issue {
   font: 500 var(--fs-label) var(--font-m);
   color: var(--warn);
@@ -4698,16 +4702,56 @@ button.rs-mono:hover { color: var(--accent); }
   cursor: help;
 }
 .dgl-sound { font: 500 var(--fs-label) var(--font-m); color: var(--ok); display: inline-flex; align-items: center; gap: var(--sp-1); --ico: 12px; }
-
-.dgl-foot {
-  display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap;
-  border-top: 1px solid var(--line-soft);
-  padding-top: var(--sp-2);
-}
-.dgl-foot .spacer { flex: 1; }
 .dgl-when { font: 500 var(--fs-label) var(--font-m); color: var(--ink-3); }
 .dgl-back { color: var(--ink-3); text-decoration: none; }
 .dgl-back:hover { color: var(--accent); }
+
+/* ── the flow inspector ──────────────────────────────────────────────────
+   A row holds a row's worth of characters; a routine's summary is a
+   paragraph, and its four counts are numbers to compare rather than words
+   to read. Both live here, for the one flow the caret is on. */
+.dgl-ins {
+  background: var(--surface); border-radius: var(--r-lg);
+  display: flex; flex-direction: column;
+  min-height: 0; overflow: hidden;
+}
+.dgl-ins.is-empty { justify-content: center; }
+.dgl-ins-empty { padding: var(--sp-5); text-align: center; color: var(--ink-3); }
+
+.dgl-ins-head {
+  flex: none; padding: var(--sp-4) var(--sp-5);
+  border-bottom: 1px solid var(--line-soft);
+  display: flex; flex-direction: column; gap: var(--sp-2);
+}
+.dgl-ins-title { font: 500 var(--fs-md)/1.3 var(--font-ui); color: var(--ink); text-wrap: pretty; }
+.dgl-ins-marks { display: flex; flex-wrap: wrap; gap: var(--sp-2); align-items: center; }
+
+.dgl-ins-body {
+  flex: 1; min-height: 0; overflow-y: auto;
+  padding: var(--sp-4) var(--sp-5);
+  display: flex; flex-direction: column; gap: var(--sp-4);
+}
+.dgl-ins-stats { display: grid; grid-template-columns: 1fr 1fr; gap: var(--sp-3); }
+/* the label voice is quiet; it inherits the pane's --ink otherwise */
+.dgl-ins-body .tile-label { color: var(--ink-2); }
+.dgl-stat { display: flex; flex-direction: column; min-width: 0; }
+.dgl-stat-n { font: 500 var(--fs-num) var(--font-m); color: var(--ink); }
+.dgl-ins-field { display: flex; flex-direction: column; gap: var(--sp-1); }
+.dgl-ins-text { font-size: var(--fs-body); line-height: 1.55; color: var(--ink-2); text-wrap: pretty; }
+/* a path has no spaces to break at, and it is the width of the pane that
+   has to win */
+.dgl-path { font: 400 var(--fs-sm) var(--font-m); color: var(--ink-2); overflow-wrap: anywhere; }
+.dgl-ins-foot {
+  flex: none; display: flex; gap: var(--sp-2); justify-content: flex-end;
+  padding: var(--sp-3) var(--sp-5);
+  border-top: 1px solid var(--line-soft);
+}
+
+/* Below this the two panes stop being two panes: the inspector goes under
+   the list and the list scrolls with the page again. */
+@media (max-width: 1180px), (max-height: 619px) {
+  .dgl-work { grid-template-columns: 1fr; }
+}
 
 /* ── responsive squeeze ──────────────────────────────────────────────── */
 

@@ -3351,9 +3351,9 @@ def diagram_overview(
     ):
         jumps_by[r["uid"]] = r["n"]
 
-    # the flows cross-listed into other subjects: the Diagrams view groups by
-    # branch, and a flow that is a step of an end-to-end process belongs
-    # under that process's branch as well as its own
+    # the subjects a flow also belongs to: the Diagrams view matches its
+    # filter against them, so a flow that is a step of an end-to-end process
+    # is found by that process's name as well as by its own
     also_by = domain_links_for(conn, [r["uid"] for r in rows])
 
     out = []

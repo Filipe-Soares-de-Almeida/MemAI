@@ -1,14 +1,20 @@
-/* Diagram list: one card per flow, with the soundness checks the store
-   reports for it. Filtering is client-side -- the list is small and the
-   whole point is to scan it. */
+/* The diagram list: one row per documented flow, and the inspector beside it.
+
+   A row carries what decides whether to open a flow -- whether its shape is
+   sound, what it is called, how big it is and how long ago it changed. The
+   summary, the counts and where the flow is filed are in the pane on the
+   right, which follows the caret, and the two things you can do to a flow
+   are its footer.
+
+   Filtering is client-side: the server sends the whole set for the domain
+   and status asked for, and the point of the view is to scan it. */
 
 import { $, esc, fmtInt, fmtAgo } from '../core/dom.js';
 import { api } from '../core/api.js';
 import { icon } from '../core/icons.js';
-import { toast, failed, promptModal } from '../core/ui.js';
-import { statusTag, confPill, uidChip, wireCopyChips, getDomains,
-         invalidateDomains, domainSegments, inDomainPath,
-         DOMAIN_SEP } from '../core/shared.js';
+import { failed, promptModal } from '../core/ui.js';
+import { statusTag, uidChip, wireCopyChips, getDomains,
+         invalidateDomains } from '../core/shared.js';
 import { domainPickerHTML, wireDomainPicker } from '../core/domain-picker.js';
 import { go } from '../core/router.js';
 import { openRecord } from './record.js';
@@ -42,6 +48,10 @@ async function promptNewDiagram(domain = '') {
   } catch (err) { failed('err.create', err); }
 }
 
+/* Worst first, so a row and the pane name the faults in the same order. */
+const sortIssues = d => d.issues.slice().sort(
+  (a, b) => ISSUE_ORDER.indexOf(a.kind) - ISSUE_ORDER.indexOf(b.kind));
+
 function issueChip(issue) {
   const label = t(`dg.issue.${issue.kind}`);
   const keys = issue.keys.length ? `: ${issue.keys.join(', ')}` : '';
@@ -53,6 +63,16 @@ function issueChip(issue) {
   return `<span class="dgl-issue" role="note" tabindex="0"
                 title="${esc(why)}" aria-label="${esc(`${label}${keys} — ${why}`)}">${esc(label)}${esc(keys)}</span>`;
 }
+
+/* How far a flow is explained, with the note that says what "explained"
+   means -- the one number in the row whose name is not obvious. */
+const explained = d => `<span title="${esc(t('dgl.documentedWhy'))}">${
+  t('dgl.documented', { n: fmtInt(d.documented), total: fmtInt(d.nodes) })}</span>`;
+
+const stat = (key, n, why = '') => `<div class="dgl-stat"${why ? ` title="${esc(why)}"` : ''}>
+  <span class="tile-label">${t(key)}</span>
+  <span class="dgl-stat-n">${fmtInt(n)}</span>
+</div>`;
 
 export async function renderDiagrams(view, params, ctx) {
   const state = {
@@ -69,30 +89,35 @@ export async function renderDiagrams(view, params, ctx) {
   ]);
   if (ctx.stale()) return;
 
-  view.innerHTML = `<div class="anim">
+  /* Every row on screen, by uid: the inspector's whole source of truth, so
+     nothing it shows costs a request. */
+  const byUid = new Map(data.items.map(d => [d.uid, d]));
+
+  view.innerHTML = `<div class="dgl-shell">
     <h2 class="sr-only">${t('dgl.title')}</h2>
-    <div class="view-note">${t('dgl.sub', { n: fmtInt(data.total) })}${
-        data.with_issues
-          ? ` · <span style="color:var(--warn)">${t('dgl.subIssues', { n: data.with_issues })}</span>`
-          : (data.total ? ` · <span style="color:var(--ok)">${t('dgl.allSound')}</span>` : '')}</div>
-    </div>
 
-    <div class="panel" style="margin-bottom:14px">
-      <div class="intro">${t('dgl.intro')}</div>
-      <div class="act-row">
-        ${domainPickerHTML({ id: 'dglDomain', value: state.domain,
-                             ariaLabel: t('common.allDomains') })}
-        <div class="seg" id="dglStatus" role="group" aria-label="${t('mem.status.aria')}">
-          <button type="button" data-v="active" aria-pressed="${state.status === 'active'}">${t('common.active')}</button>
-          <button type="button" data-v="" aria-pressed="${state.status === ''}">${t('common.all')}</button>
+    <div class="dgl-work">
+      <div class="dgl-pane">
+        <div class="list-toolbar">
+          ${domainPickerHTML({ id: 'dglDomain', value: state.domain,
+                               ariaLabel: t('common.allDomains') })}
+          <div class="seg" id="dglStatus" role="group" aria-label="${t('mem.status.aria')}">
+            <button type="button" data-v="active" aria-pressed="${state.status === 'active'}">${t('common.active')}</button>
+            <button type="button" data-v="" aria-pressed="${state.status === ''}">${t('common.all')}</button>
+          </div>
+          <input type="search" id="dglFilter" placeholder="${t('dgl.filter')}"
+                 aria-label="${t('dgl.filter')}" autocomplete="off" spellcheck="false">
+          <button class="btn btn-solid" id="dglNew">${t('dgl.new')}</button>
         </div>
-        <input type="text" id="dglFilter" placeholder="${t('dgl.filter')}" aria-label="${t('dgl.filter')}"
-               style="flex:1;min-width:160px" autocomplete="off">
-        <button class="btn btn-solid" id="dglNew">${t('dgl.new')}</button>
-      </div>
-    </div>
 
-    <div id="dglGrid"></div>
+        <div class="dgl-list" id="dglList"></div>
+      </div>
+
+      <!-- No aria-live: the pane mirrors the row the caret is on, and the
+           row announces itself as it takes focus. A live region here reads
+           the same flow out twice for every press of an arrow key. -->
+      <aside class="dgl-ins" id="dglIns"></aside>
+    </div>
   </div>`;
 
   const nav = patch => {
@@ -107,119 +132,160 @@ export async function renderDiagrams(view, params, ctx) {
     b.addEventListener('click', () => nav({ status: b.dataset.v })));
   $('#dglNew').addEventListener('click', () => promptNewDiagram(state.domain));
 
-  /* `branch` is the group the card is being drawn under. It is not always
-     where the flow is filed -- a flow whose home is outside the current
-     filter is drawn under the cross-listing that brought it into the list,
-     and it says so, or it reads as filed there. */
-  const card = (d, branch) => {
-    const issues = d.issues.slice().sort(
-      (a, b) => ISSUE_ORDER.indexOf(a.kind) - ISSUE_ORDER.indexOf(b.kind));
-    const away = branch !== homeOf(d);
-    return `<div class="dgl-card${issues.length ? ' has-issues' : ''}">
-      <div class="dgl-top">
-        <button type="button" class="dgl-title" data-edit="${esc(d.uid)}" title="${esc(d.title)}">${esc(d.title || '—')}</button>
-        ${statusTag(d.status)} ${confPill(d.confidence)}
-      </div>
-      ${d.summary ? `<div class="dgl-summary" title="${esc(d.summary)}">${esc(d.summary)}</div>` : ''}
-      <div class="dgl-stats">
-        <span>${t('dgl.steps', { n: d.nodes })}</span>
-        <span>${t('dgl.conns', { n: d.edges })}</span>
-        <span>${t('dgl.linked', { n: d.links })}</span>
-        <!-- counted from both ends: a flow nothing leaves but three arrive
-             into is as tied into the set as the one that made those jumps -->
-        ${d.jumps ? `<span title="${t('dgl.jumpsWhy')}">${t('dgl.jumps', { n: d.jumps })}</span>` : ''}
-        <span title="${t('dgl.documentedWhy')}">${t('dgl.documented', { n: d.documented, total: d.nodes })}</span>
-      </div>
-      <div class="dgl-issues">
-        ${issues.length ? issues.map(issueChip).join('')
-          : `<span class="dgl-sound">${icon('confirmed')}${t('dgl.sound')}</span>`}
-      </div>
-      <div class="dgl-foot">
-        ${away ? `<span class="chip" title="${esc(t('dgl.alsoWhy'))}">${t('dgl.also')}</span>` : ''}
-        ${d.domain ? `<button type="button" class="chip clickable" data-fdomain="${esc(d.domain)}"
-                aria-label="${esc(t('a11y.filterDomain', { domain: d.domain }))}">${esc(d.domain)}</button>` : ''}
-        ${(d.also || []).map(p => `<button type="button" class="chip clickable" data-fdomain="${esc(p)}"
-                aria-label="${esc(t('a11y.filterDomain', { domain: p }))}">${esc(p)}</button>`).join('')}
-        ${uidChip(d.uid)}
-        <span class="spacer"></span>
-        <span class="dgl-when" title="${esc(d.updated_at)}">${fmtAgo(d.updated_at)}</span>
-        <button class="btn btn-sm" data-record="${esc(d.uid)}">${t('dg.record')}</button>
-        <button class="btn btn-sm btn-solid" data-edit="${esc(d.uid)}">${t('dr.openEditor')}</button>
-      </div>
+  /* The header strip is a sibling of the rows and not the first of them: it
+     names the columns under it, and a listbox option is not what a column
+     head is. Its count is the count of what is SHOWN, so it tracks the
+     filter as it is typed. */
+  const head = shown => {
+    const broken = shown.filter(d => d.issues.length).length;
+    return `<div class="dgl-head">
+      <span></span>
+      <span>${t('dgl.count', { n: fmtInt(shown.length) })}${
+        broken ? ` · <span class="dgl-broken">${t('dgl.subIssues', { n: fmtInt(broken) })}</span>` : ''}</span>
+      <span>${t('dgl.colUpdated')}</span>
     </div>`;
   };
 
-  /* Flows are grouped by the segment of their domain just BELOW the active
-     filter -- the outermost one with nothing filtered: a store grows one
-     diagram per routine, and thirty cards in one flat grid is a list to read
-     rather than a set to navigate. The heading filters one level deeper, so
-     picking 'acme' turns the headings below into its modules.
+  /* A sound flow's row says how big it is; a broken one says what is wrong
+     with it instead -- the counts are in the pane, the fault is the reason
+     this view exists. The names alone here: their explanation and the steps
+     they name are the chips in the pane. */
+  const row = d => {
+    const issues = sortIssues(d);
+    const sub = issues.length
+      ? `${issues.map(i => esc(t(`dg.issue.${i.kind}`))).join(' · ')} · ${explained(d)}`
+      : `${t('dgl.steps', { n: fmtInt(d.nodes) })} · ${t('dgl.conns', { n: fmtInt(d.edges) })} · ${explained(d)}`;
+    return `<div class="dgl-row" role="option" aria-selected="false" tabindex="-1"
+                 data-uid="${esc(d.uid)}">
+      <span class="dgl-state${issues.length ? ' is-broken' : ''}">${
+        icon(issues.length ? 'unverified' : 'confirmed')}${
+        issues.length ? '' : `<span class="sr-only">${t('dgl.sound')}</span>`}</span>
+      <span class="dgl-main">
+        <span class="dgl-name" title="${esc(d.title || '')}">${esc(d.title || '—')}</span>
+        <span class="dgl-sub${issues.length ? ' is-broken' : ''}">${sub}</span>
+      </span>
+      <span class="dgl-right">${statusTag(d.status)}<span class="dgl-when"
+            title="${esc(d.updated_at)}">${fmtAgo(d.updated_at)}</span></span>
+    </div>`;
+  };
 
-     ONE card per flow, always. A flow cross-listed into three subjects used
-     to be drawn under each of their branches, and three cards with one uid
-     read as three records however the copies are marked; the cross-listings
-     are on the card as chips, and filtering to one of them is how you see
-     that subject's set. So a flow is grouped where it is FILED, and only
-     falls back to a cross-listing when its own path is not in the list at
-     all -- outside the active filter, or absent, which is how a purely
-     cross-cutting subject still shows the routines that are steps of it. */
-  const scope = domainSegments(state.domain);
-  const branchOf = p => inDomainPath(p, state.domain)
-    ? domainSegments(p).slice(0, scope.length + 1).join(DOMAIN_SEP)
-    : null;
-  /* Where the flow belongs: its own branch, and the leftover pile for one
-     filed nowhere -- which is a home, not an exile, so a card sitting in the
-     pile is not "cross-listed here". */
-  const homeOf = d => branchOf(d.domain);
-  /* `also` arrives sorted by path, so the fallback is the first cross-listing
-     in scope -- the same branch on every draw, not whichever came back first.
-     Nothing in scope at all leaves the card in the leftover pile: the server
-     matched it, and dropping it out of the grid is worse than filing it
-     loosely. */
-  const groupOf = d => (d.domain ? homeOf(d) : null)
-    ?? (d.also || []).map(branchOf).find(Boolean)
-    ?? '';
+  const ins = $('#dglIns');
+  const paintIns = uid => {
+    const d = byUid.get(uid);
+    ins.classList.toggle('is-empty', !d);
+    if (!d) {
+      ins.innerHTML = `<div class="dgl-ins-empty">${t('dgl.pickHint')}</div>`;
+      return;
+    }
+    const issues = sortIssues(d);
+    ins.innerHTML = `
+      <div class="dgl-ins-head">
+        <span class="dgl-ins-title">${esc(d.title || '—')}</span>
+        <div class="dgl-ins-marks">
+          ${issues.length ? issues.map(issueChip).join('')
+            : `<span class="dgl-sound">${icon('confirmed')}${t('dgl.sound')}</span>`}
+          ${uidChip(d.uid)}
+        </div>
+      </div>
+      <div class="dgl-ins-body">
+        <div class="dgl-ins-stats">
+          ${stat('dgl.stat.steps', d.nodes)}
+          ${stat('dgl.stat.conns', d.edges)}
+          ${stat('dgl.stat.linked', d.links)}
+          <!-- counted from both ends: a flow nothing leaves but three arrive
+               into is as tied into the set as the one that made those jumps -->
+          ${stat('dgl.stat.jumps', d.jumps, t('dgl.jumpsWhy'))}
+        </div>
+        <div class="dgl-ins-field">
+          <span class="tile-label">${t('dgl.summary')}</span>
+          ${d.summary ? `<p class="dgl-ins-text">${esc(d.summary)}</p>`
+            : `<span class="hint">${t('dgl.noSummary')}</span>`}
+        </div>
+        <div class="dgl-ins-field">
+          <span class="tile-label">${t('dgl.filed')}</span>
+          <span class="dgl-path">${d.domain ? esc(d.domain) : t('dgl.noDomain')}</span>
+        </div>
+      </div>
+      <div class="dgl-ins-foot">
+        <button class="btn btn-sm" data-record="${esc(d.uid)}">${t('dg.record')}</button>
+        <button class="btn btn-sm btn-solid" data-edit="${esc(d.uid)}">${t('dr.openEditor')}</button>
+      </div>`;
+    wireCopyChips(ins);
+    ins.querySelector('[data-record]').addEventListener('click', () => openRecord(d.uid));
+    ins.querySelector('[data-edit]').addEventListener('click', () => go('diagram', { uid: d.uid }));
+  };
 
-  const grid = $('#dglGrid');
+  const list = $('#dglList');
   const draw = () => {
     const q = $('#dglFilter').value.trim().toLowerCase();
     const shown = q
       ? data.items.filter(d => `${d.title} ${d.summary} ${d.domain} ${(d.also || []).join(' ')} ${d.tags}`
           .toLowerCase().includes(q))
       : data.items;
-    const groups = new Map();
-    for (const d of shown) {
-      const k = groupOf(d);
-      if (!groups.has(k)) groups.set(k, []);
-      groups.get(k).push(d);
-    }
-    /* undomained last: it is the leftover pile, not a branch */
-    const order = [...groups.keys()].sort((a, b) =>
-      (a === '') - (b === '') || a.localeCompare(b));
-    grid.innerHTML = !shown.length
-      ? `<div class="empty">${data.total ? t('dgl.noMatch') : `${t('dgl.empty')}<div class="dg-empty" style="margin-top:8px">${t('dgl.emptyHint')}</div>`}</div>`
-      : order.length < 2
-        /* one branch draws no heading, but the cards still get told which one
-           they are under: a flow only cross-listed into the filtered subject
-           has to say so, or it reads as filed there */
-        ? `<div class="dgl-grid">${shown.map(d => card(d, groupOf(d))).join('')}</div>`
-        : order.map(k => `<section class="dgl-group">
-            <div class="dgl-group-head">
-              ${k ? `<button type="button" class="chip clickable" data-fdomain="${esc(k)}"
-                       aria-label="${esc(t('a11y.filterDomain', { domain: k }))}">${esc(k)}</button>`
-                  : `<span class="chip">${t('dgl.noDomain')}</span>`}
-              <span class="dgl-group-n">${t('dgl.groupCount', { n: groups.get(k).length })}</span>
-            </div>
-            <div class="dgl-grid">${groups.get(k).map(d => card(d, k)).join('')}</div>
-          </section>`).join('');
-    wireCopyChips(grid);
-    grid.querySelectorAll('[data-edit]').forEach(el =>
-      el.addEventListener('click', () => go('diagram', { uid: el.dataset.edit })));
-    grid.querySelectorAll('[data-record]').forEach(el =>
-      el.addEventListener('click', e => { e.stopPropagation(); openRecord(el.dataset.record); }));
-    grid.querySelectorAll('[data-fdomain]').forEach(el =>
-      el.addEventListener('click', e => { e.stopPropagation(); nav({ domain: el.dataset.fdomain }); }));
+    list.innerHTML = !shown.length
+      ? `<div class="empty">${data.total ? t('dgl.noMatch')
+          : `${t('dgl.empty')}<div class="dg-empty" style="margin-top:8px">${t('dgl.emptyHint')}</div>`}</div>`
+      : `${head(shown)}
+         <div id="dglRows" role="listbox" aria-label="${t('dgl.title')}">${
+           shown.map(row).join('')}</div>`;
+
+    const rows = [...list.querySelectorAll('.dgl-row')];
+    /* Roving tabindex: the list is ONE tab stop and the arrows move inside
+       it. Selection follows the caret -- there is one flow in the pane and
+       landing on a row is how it is chosen -- so the row the caret is on and
+       the row the pane is showing are the same fact, written once. */
+    let cursor = -1;
+    const setCursor = (i, { focus = false } = {}) => {
+      if (i < 0 || i >= rows.length) return;
+      rows.forEach((r, n) => {
+        r.tabIndex = n === i ? 0 : -1;
+        r.setAttribute('aria-selected', n === i ? 'true' : 'false');
+      });
+      if (focus) rows[i].focus();
+      if (i === cursor) return;
+      cursor = i;
+      paintIns(rows[i].dataset.uid);
+    };
+    /* The first row is picked on arrival: the pane's job is to show a flow,
+       and an empty pane beside a full list says nothing. */
+    setCursor(0);
+
+    rows.forEach((r, i) => {
+      r.addEventListener('click', () => setCursor(i));
+      r.addEventListener('dblclick', () => go('diagram', { uid: r.dataset.uid }));
+    });
+    const rowBox = $('#dglRows');
+    if (rowBox) rowBox.addEventListener('keydown', e => {
+      const r = e.target.closest('.dgl-row');
+      if (!r) return;
+      const i = rows.indexOf(r);
+      const step = { ArrowDown: 1, ArrowUp: -1 }[e.key];
+      if (step !== undefined) {
+        e.preventDefault();
+        setCursor(Math.min(rows.length - 1, Math.max(0, i + step)), { focus: true });
+        return;
+      }
+      if (e.key === 'Home' || e.key === 'End') {
+        e.preventDefault();
+        setCursor(e.key === 'Home' ? 0 : rows.length - 1, { focus: true });
+        return;
+      }
+      /* Enter opens the editor and not the record: the flow's shape is what
+         this view is about, and the record is the pane's other button. */
+      if (e.key === 'Enter') { e.preventDefault(); go('diagram', { uid: r.dataset.uid }); }
+    });
+    if (!rows.length) paintIns('');
   };
+
+  /* Down out of the filter lands in the list, so finding a flow and opening
+     it is one uninterrupted keyboard path. */
+  $('#dglFilter').addEventListener('keydown', e => {
+    if (e.key !== 'ArrowDown') return;
+    const first = list.querySelector('.dgl-row[tabindex="0"]') || list.querySelector('.dgl-row');
+    if (!first) return;
+    e.preventDefault();
+    first.focus();
+  });
   $('#dglFilter').addEventListener('input', draw);
   draw();
 }
