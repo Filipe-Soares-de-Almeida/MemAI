@@ -285,6 +285,29 @@ def test_the_store_refuses_a_title_holding_it(conn):
         db.insert_memory(conn, type="note", title=f"a warmup{PREFIXED}", content="a fact")
 
 
+def test_the_store_refuses_leaked_tags_and_a_leaked_source_ref(conn):
+    """Where a leak lands is wherever the typo was typed, and the tags are as
+    common a landing place as the body."""
+    tail = "</tags>\n<source_ref>src/acme/x100/warmup.py</source_ref>"
+    with pytest.raises(ValueError, match="tool call's own source"):
+        db.insert_memory(conn, type="note", title="a cache warmup",
+                         content="a fact", tags=f"cache warmup{tail}")
+    with pytest.raises(ValueError, match="tool call's own source"):
+        db.insert_memory(conn, type="note", title="a cache warmup",
+                         content="a fact", source_ref=f"src/acme{tail}")
+
+
+def test_a_tag_edit_that_leaks_leaves_the_tags_it_had(conn):
+    uid = db.insert_memory(conn, type="note", title="a cache warmup",
+                           content="a fact", tags="cache warmup")
+    with pytest.raises(ValueError, match="tool call's own source"):
+        db.set_tags(conn, uid, "cache warmup</tags>")
+    with pytest.raises(ValueError, match="tool call's own source"):
+        db.set_source_ref(conn, uid, "src/acme/x100/warmup.py</source_ref>")
+    row = db.get_memory(conn, uid)
+    assert (row["tags"], row["source_ref"]) == ("cache warmup", "")
+
+
 def test_an_edit_that_leaks_leaves_the_body_it_had(conn):
     uid = db.insert_memory(conn, type="note", title="a cache warmup",
                            content="the warmup drains the queue once")

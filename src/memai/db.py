@@ -1469,6 +1469,12 @@ def leak_error(type: str, text: str) -> str | None:
 
 
 def _refuse_leak(type: str, *texts: str) -> None:
+    """Refuse any of `texts` that carries a tool call's own source.
+
+    Every text field a writer fills goes through this: the body, the title,
+    the tags and the source_ref. A leaked call lands in whichever one it was
+    typed under, and the tags are as common a landing place as the body.
+    """
     for text in texts:
         error = leak_error(type, text)
         if error:
@@ -1774,7 +1780,7 @@ def insert_memory(
     source_ref: str = "",
 ) -> str:
     _refuse_unreadable(conn, type, content)
-    _refuse_leak(type, content, title)
+    _refuse_leak(type, content, title, tags, source_ref)
     error = title_error(title)
     if error:
         raise ValueError(error)
@@ -2035,6 +2041,7 @@ def set_source_ref(conn: sqlite3.Connection, uid: str, value: str, note: str = "
     value = value.strip()
     if value == row["source_ref"]:
         return True
+    _refuse_leak(row["type"], value)
     conn.execute(
         "UPDATE memories SET source_ref = ?, updated_at = ? WHERE uid = ?",
         (value, now_iso(), uid))
@@ -2061,6 +2068,7 @@ def set_tags(conn: sqlite3.Connection, uid: str, value: str, note: str = "") -> 
     value = value.strip()
     if value == row["tags"]:
         return True
+    _refuse_leak(row["type"], value)
     conn.execute(
         "UPDATE memories SET tags = ?, updated_at = ? WHERE uid = ?",
         (value, now_iso(), uid))
