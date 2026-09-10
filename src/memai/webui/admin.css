@@ -4745,10 +4745,18 @@ input.pick-q:focus { box-shadow: inset 0 -2px 0 var(--accent); }
 .dgl-row:last-child { border-bottom: none; }
 .dgl-row:hover { background: var(--hover-1); }
 /* The caret and the pick are one thing here: the pane shows the row the
-   keyboard is on, so the row it shows is the row that is washed. Declared
-   after :focus-visible up top, which is what lets a focused pick keep the
-   accent wash and take the ring on top of it. */
-.dgl-row[aria-selected="true"] { background: var(--accent-dim); }
+   keyboard is on. So it is marked the way every roving list in this app marks
+   its caret -- the accent ring, inset because the list clips, over the same
+   wash a focused row takes (see .mem-row.is-cursor and .opt-row.picked).
+
+   NOT --accent-dim. That wash says a row is CHOSEN out of a set everywhere
+   else it appears -- a ticked memory, a staged suggestion, the level a column
+   is showing, the tab you are on -- and a caret is not a choice. */
+.dgl-row[aria-selected="true"] {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+  background: var(--hover-2);
+}
 .dgl-state { display: flex; justify-content: center; color: var(--ok); }
 .dgl-state.is-broken { color: var(--warn); }
 .dgl-main { min-width: 0; }
