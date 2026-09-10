@@ -22,11 +22,11 @@ import { paintIcons } from './core/icons.js';
 import { modalOpen, closeModal, toast } from './core/ui.js';
 import { pickerFor, setPickerValue, wirePicker, fixedItems } from './core/pick.js';
 import { mountProjectPicker } from './core/projects.js';
-import { registerViews, route, go } from './core/router.js';
+import { registerViews, route } from './core/router.js';
 import { I18N, t } from './i18n.js';
 
 import { renderOverview } from './views/overview.js';
-import { renderMemories, focusMemorySearch } from './views/memories.js';
+import { renderMemories } from './views/memories.js';
 import { renderGraph } from './views/graph.js';
 import { renderDiagrams } from './views/diagrams.js';
 import { renderDiagram } from './views/diagram.js';
@@ -82,23 +82,10 @@ wirePicker(document, { id: 'langSel', items: fixedItems(langItems), onPick: code
   I18N.set(code);
 }, align: 'right' });
 
-
 document.addEventListener('keydown', e => {
-  if (e.key === 'Escape') {
-    /* One level, innermost first: a sub-form opened from the record closes
-       back to the record rather than dismissing both. */
-    if (modalOpen()) closeModal();
-    return;
-  }
-  /* `/` reaches the search wherever you are. It used to focus a field in the
-     topbar that only forwarded you here anyway; it takes the caret to the
-     real one now, and brings the view along when you are somewhere else.
-     focusMemorySearch() claims the caret on the next render when the field
-     does not exist yet, so the order is: ask first, then navigate. */
-  if (e.key === '/' && !/^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement.tagName)) {
-    e.preventDefault();
-    if (!focusMemorySearch()) go('memories');
-  }
+  /* One level, innermost first: a sub-form opened from the record closes
+     back to the record rather than dismissing both. */
+  if (e.key === 'Escape' && modalOpen()) closeModal();
 });
 
 /* wrapped, so the hashchange Event is not read as route's options */

@@ -4888,8 +4888,6 @@ input.pick-q:focus { box-shadow: inset 0 -2px 0 var(--accent); }
 
 @media (max-width: 640px) {
   .appbar { padding: var(--sp-2) var(--sp-3); gap: var(--sp-2); }
-  /* a keyboard hint is for a window that probably has one */
-  .toolbar-kbd { display: none; }
   .appbar-right { gap: var(--sp-2); }
   .view {
     padding: var(--sp-4) var(--sp-3) calc(var(--sp-4) + var(--toast-h, 0px));

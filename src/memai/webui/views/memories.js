@@ -31,20 +31,6 @@ import { t } from '../i18n.js';
 const PAGE = 50;
 const selection = new Set();
 
-/* `/` from anywhere in the app asks for this view's search field. When the
-   view is not up yet there is nothing to focus, so the request is held and
-   the next render honours it -- which is why this returns whether it could
-   act: app.js navigates here only when it could not. */
-let wantsCaret = false;
-
-export function focusMemorySearch() {
-  const el = document.getElementById('fQ');
-  if (!el) { wantsCaret = true; return false; }
-  el.focus();
-  el.select();
-  return true;
-}
-
 /* What the inspector is holding but has not written. Reset on every render,
    because a page it was never applied to is not a page it should still be
    staged over. */
@@ -167,8 +153,6 @@ export async function renderMemories(view, params, ctx) {
                line of prose under the view's title, three inches away. -->
           <input id="fQ" type="search" placeholder="${t('mem.search.placeholder')}"
                  title="${esc(t('mem.sub'))}" value="${esc(state.q)}" spellcheck="false">
-          <!-- the app's one remaining accelerator, taught where it lands -->
-          <kbd class="toolbar-kbd" aria-hidden="true">/</kbd>
           <!-- Pickers, not selects (core/pick.js): a type keeps its colour and a
                confidence its ring in the list where you choose one, and a domain
                keeps the tree it is. -->
@@ -239,8 +223,6 @@ export async function renderMemories(view, params, ctx) {
     else out.status = p.status || '';
     go('memories', out);
   };
-
-  if (wantsCaret) { wantsCaret = false; $('#fQ').focus(); $('#fQ').select(); }
 
   $('#fQ').addEventListener('keydown', e => { if (e.key === 'Enter') navigate({ q: e.target.value.trim(), page: 0 }); });
   $('#fQ').addEventListener('input', debounce(e => {
