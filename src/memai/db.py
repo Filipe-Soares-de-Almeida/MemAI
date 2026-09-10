@@ -1927,7 +1927,7 @@ def get_memory(conn: sqlite3.Connection, uid: str) -> sqlite3.Row | None:
 
 def update_memory_content(
     conn: sqlite3.Connection, uid: str, new_content: str, note: str = "",
-    *, append: bool = False,
+    *, append: bool = False, leaked_ok: bool = False,
 ) -> bool:
     """Replace a memory's content, or add to the end of it.
 
@@ -1936,6 +1936,11 @@ def update_memory_content(
     the body twice and stakes the existing text on it being copied
     faithfully. The edit history records the same thing either way: what it
     said before, and what it says now.
+
+    leaked_ok writes a body carrying a tool call's own source, which every
+    other caller is refused (see leak_error). It is for restoring a body
+    that was already stored: undoing an `unleak` puts back what the row
+    held, and that body is the reason the suggestion existed.
     """
     row = get_memory(conn, uid)
     if row is None:
@@ -1943,7 +1948,8 @@ def update_memory_content(
     if append:
         new_content = f"{row['content']}\n{new_content}" if row["content"] else new_content
     _refuse_unreadable(conn, row["type"], new_content)
-    _refuse_leak(row["type"], new_content)
+    if not leaked_ok:
+        _refuse_leak(row["type"], new_content)
     conn.execute(
         "INSERT INTO edits (memory_uid, edited_at, prev_content, new_content, note) VALUES (?, ?, ?, ?, ?)",
         (uid, now_iso(), row["content"], new_content, note),
@@ -4705,7 +4711,14 @@ CONFIDENCE_VALUES = ("unverified", "confirmed", CONFIDENCE_CONTRADICTED)
 SUGGESTION_KINDS = (
     "compact", "reword", "retag", "retitle", "redomain", "crosslist",
     "set_confidence", "review", "archive", "link", "merge", "distill",
+    "unleak",
 )
+# The text fields a leaked tool call lands in, and the ones `unleak` repairs
+# -- one field per suggestion, so a reviewer decides the body and the tags
+# separately and either can be undone on its own.
+LEAK_FIELDS = ("content", "tags", "source_ref")
+# Findings a scan reports; the count of what it left behind comes with it.
+LEAK_SCAN_CAP = 40
 # distill targets must be durable knowledge types -- distilling INTO a
 # checkpoint/handoff would just recreate the ephemera it exists to retire
 DISTILL_TYPES = ("note", "reasoning", "anti_pattern")
@@ -4852,6 +4865,60 @@ def _nesting_hints(domain_counts: dict[str, int]) -> list[dict]:
     return hints
 
 
+def _leak_findings(
+    conn: sqlite3.Connection, where_sql: str, params: list, *, cap: int = LEAK_SCAN_CAP,
+) -> tuple[list[dict], int]:
+    """Rows whose text carries a tool call's own source, and how many exist.
+
+    SQL narrows to the rows holding a closing tag at all, which is the cheap
+    half of the test; guard.leak_marks judges each candidate, because which
+    marks count depends on the row's own type.
+
+    A finding names the fields that carry a mark, what a repair takes out of
+    each, and whether the repair CLEARS the field -- `clean: false` is a
+    field whose marks sit inside prose, which `unleak` refuses and a reword
+    has to rewrite by hand. `declares` is what the debris was trying to
+    write, reported only for the columns that are still empty: those are the
+    ones with a `redomain`, `crosslist` or `retag` waiting beside the
+    `unleak`.
+    """
+    like = " OR ".join(f"{f} LIKE '%</%'" for f in LEAK_FIELDS)
+    rows = conn.execute(
+        f"""SELECT uid, type, title, content, tags, source_ref, domain
+            FROM memories WHERE {where_sql} AND ({like})
+            ORDER BY created_at DESC""", params).fetchall()
+    findings, total = [], 0
+    for r in rows:
+        marks = {f: guard.leak_marks(r["type"], r[f] or "") for f in LEAK_FIELDS}
+        marks = {f: m for f, m in marks.items() if m}
+        if not marks:
+            continue
+        total += 1
+        if len(findings) >= cap:
+            continue
+        fields, declares = {}, {}
+        for f, found in marks.items():
+            clean, dropped = guard.strip_leak(r["type"], r[f])
+            declares.update(guard.declared(dropped))
+            fields[f] = {
+                "marks": found,
+                "removes": len(r[f]) - len(clean),
+                "clean": not guard.leak_marks(r["type"], clean),
+            }
+        # `also` is read from memory_domains, never from the one-field
+        # mirror beside it: the rows are where a membership lives
+        held = {"domain": r["domain"], "also": get_domain_links(conn, r["uid"]),
+                "tags": r["tags"], "source_ref": r["source_ref"]}
+        entry = {"uid": r["uid"], "type": r["type"], "fields": fields}
+        if r["title"]:
+            entry["title"] = r["title"][:CORPUS_SNIPPET_LEN]
+        empty = {k: v for k, v in declares.items() if k in held and not held[k]}
+        if empty:
+            entry["declares"] = empty
+        findings.append(entry)
+    return findings, total
+
+
 def optimization_corpus(
     conn: sqlite3.Connection, *, domain: str = "", type: str = "",
     since: str = "", include_archived: bool = False, limit: int = 500,
@@ -4887,9 +4954,11 @@ def optimization_corpus(
     `domain_hints` clusters likely-variant domain strings,
     `domain_nesting` proposes a path for each flat domain that already
     spells a hierarchy out (see _nesting_hints -- the raw material for
-    `redomain` suggestions), and `truncated` flags when the listing
-    stopped before the corpus ended -- page onward with offset (offset +
-    count is the next page's offset).
+    `redomain` suggestions), `leaked_calls` lists the rows carrying a tool
+    call's own source with `stats.leaked_calls` counting them all (see
+    _leak_findings -- the raw material for `unleak`), and `truncated` flags
+    when the listing stopped before the corpus ended -- page onward with
+    offset (offset + count is the next page's offset).
 
     `since` makes curation incremental: only memories created OR updated
     at/after the given ISO timestamp (a date like '2026-07-01' works --
@@ -5046,6 +5115,12 @@ def optimization_corpus(
         hints = _domain_hints(by_domain)
         nesting = _nesting_hints(by_domain)
 
+    # Leaked calls are read over the scan's own window, not the page: a
+    # finding is about one row, so pagination would hide the rest of them
+    # behind an offset a curation pass has no reason to walk.
+    leaked, leaked_total = _leak_findings(conn, where_sql, params)
+    stats["leaked_calls"] = leaked_total
+
     return {
         "memories": mems,
         "relations": edges,
@@ -5055,6 +5130,7 @@ def optimization_corpus(
         "stats": stats,
         "domain_hints": hints,
         "domain_nesting": nesting,
+        "leaked_calls": leaked,
     }
 
 
@@ -5105,6 +5181,37 @@ def _validate_suggestion(conn: sqlite3.Connection, s: object) -> tuple[dict | No
         err = section_error(conn, row["type"], str(payload["new_content"]))
         if err:
             return None, err
+    elif kind == "unleak":
+        err = target_err()
+        if err:
+            return None, err
+        field = str(payload.get("field", "")).strip() or LEAK_FIELDS[0]
+        if field not in LEAK_FIELDS:
+            return None, (f"payload.field must be one of: {', '.join(LEAK_FIELDS)}; "
+                          f"got {field!r}")
+        if field == "content":
+            err = _diagram_content_error(conn, target_uid)
+            if err:
+                return None, err
+        row = get_memory(conn, target_uid)
+        text = row[field] or ""
+        if not guard.leak_marks(row["type"], text):
+            return None, f"nothing leaked in {field} of {target_uid}: no marks to remove"
+        # the repair is computed HERE, from the row itself, and travels in the
+        # payload: the panel shows what will hold, the ledger counts the
+        # characters, and the caller never retypes a body it would have to
+        # copy faithfully -- which is the defect this kind exists to clean up
+        clean, _ = guard.strip_leak(row["type"], text)
+        left = guard.leak_marks(row["type"], clean)
+        if left:
+            return None, (f"{field} of {target_uid} still carries {', '.join(left)} "
+                          "after the pass -- the marks are inside its prose. Rewrite "
+                          "it with a reword instead")
+        if field == "content":
+            err = section_error(conn, row["type"], clean)
+            if err:
+                return None, err
+        payload = {"field": field, "new_text": clean}
     elif kind == "retag":
         err = target_err()
         if err:
@@ -5403,6 +5510,16 @@ def _apply_kind(conn: sqlite3.Connection, kind: str, target_uid: str | None, pay
         prev = {"content": row["content"]}
         update_memory_content(conn, target_uid, payload["new_content"], note=f"optimize:{kind}")
         return prev
+    if kind == "unleak":
+        field = str(payload.get("field", "")).strip() or LEAK_FIELDS[0]
+        row = get_memory(conn, target_uid)
+        prev = {field: row[field]}
+        text = str(payload["new_text"])
+        if field == "content":
+            update_memory_content(conn, target_uid, text, note=f"optimize:{kind}")
+        else:
+            _update_meta_field(conn, target_uid, field, text)
+        return prev
     if kind == "retag":
         row = get_memory(conn, target_uid)
         prev = {"tags": row["tags"]}
@@ -5480,6 +5597,16 @@ def _revert_kind(
 ) -> None:
     if kind in ("compact", "reword"):
         update_memory_content(conn, target_uid, prev["content"], note=f"optimize:undo {kind}")
+    elif kind == "unleak":
+        field = str(payload.get("field", "")).strip() or LEAK_FIELDS[0]
+        if field == "content":
+            # the body being restored is the leaked one, which the store no
+            # longer accepts from a writer: an undo puts back what was there,
+            # not what would be allowed in now
+            update_memory_content(conn, target_uid, prev["content"],
+                                  note=f"optimize:undo {kind}", leaked_ok=True)
+        else:
+            _update_meta_field(conn, target_uid, field, prev[field])
     elif kind == "retag":
         _update_meta_field(conn, target_uid, "tags", prev["tags"])
     elif kind == "retitle":

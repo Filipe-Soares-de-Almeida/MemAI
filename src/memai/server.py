@@ -1819,7 +1819,7 @@ Step 1 of the "optimize my memories" workflow. Returns every memory's
 curation-relevant fields, the relation edges among them, and
 dedup-candidate pairs as a starting hint. Read this, then decide what
 to compact/reword/retag/redomain/set_confidence/archive/link/merge/
-distill and stage it with optimize_stage.
+distill/unleak and stage it with optimize_stage.
 
 The listing is slim on purpose so a few-hundred-memory store fits one
 response: content is a ~120-char snippet plus `content_len` (tags cut
@@ -1868,7 +1868,19 @@ domain/type to curate one slice at a time. Also included:
     so you can tell a new membership from one that already holds,
   - anchors: per memory, the verifiable references found in its FULL
     content (URLs, file paths, table/field identifiers, constants),
-    space-joined -- the things to go check against live facts.
+    space-joined -- the things to go check against live facts,
+  - leaked_calls: rows whose text carries a tool call's OWN SOURCE. A
+    parameter tag typed without the antml: prefix stays in the text of
+    the parameter before it, so the fields it opened -- the domain, the
+    tags, the source_ref -- were written into the body and their own
+    columns are empty. Per finding: which `fields` carry a mark and
+    what a repair `removes` from each; `clean: false` when the marks
+    sit inside the prose, which `unleak` refuses and a `reword` has to
+    rewrite by hand; and `declares`, what the debris was trying to
+    write, reported only for the columns that are still empty. So one
+    finding is usually an `unleak` per dirty field PLUS the redomain /
+    crosslist / retag that finishes it. stats.leaked_calls counts every
+    one in the window; the list stops at a cap.
 
 Before proposing any change, CHECK IT AGAINST LIVE FACTS -- do not
 rewrite or archive something that was true then but stale now, and do
@@ -1907,6 +1919,20 @@ Kinds and their payload:
   merge              {"keep_uid", "drop_uid", "note"?}   links supersedes + archives drop
   distill            {"source_uids": [uid, ...], "new_type": "note|reasoning|anti_pattern",
                       "new_content": str, "title": str, "tags"?, "domain"?}
+  unleak             {"field": "content|tags|source_ref"}   the repair is computed here
+
+unleak takes a leaked tool call OUT of one field. Its payload names the
+field and nothing else: staging reads the row, removes what is the call's
+own source -- a line that is nothing but a tag, and a closing mark at the
+end of a line of text -- and writes the result into the payload as
+`new_text`, so the panel shows what will hold and no caller retypes a body
+it would have to copy faithfully. One field per suggestion, so a body and a
+tag list are two of them and either can be undone alone. Refused when the
+field carries no mark, and when the marks sit inside its prose: that is a
+`reword`, written by hand. What the debris DECLARED -- the domain, the tags
+the call meant to write -- comes back from the scan as `leaked_calls[].
+declares`, and is staged beside the unleak as a `redomain`, `crosslist` or
+`retag`.
 
 redomain moves where a memory is FILED -- one path, one parent chain.
 crosslist sets what it also BELONGS to: the subjects that cut across

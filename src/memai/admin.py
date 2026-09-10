@@ -1895,6 +1895,17 @@ def _suggestion_json(conn, row) -> dict:
                 d["content_before"] = before
                 d["chars_before"] = len(before)
                 d["chars_after"] = len(d["payload"].get("new_content", ""))
+            # An unleak is read as a pair too, but of ONE field the payload
+            # names -- a body, a tag list, a source reference -- so the
+            # Before pane is that field rather than the content.
+            if row["kind"] == "unleak":
+                field = str(d["payload"].get("field", db.LEAK_FIELDS[0]))
+                before = trow[field] if field in db.LEAK_FIELDS else ""
+                if row["status"] == "applied" and row["prev_state"]:
+                    before = json.loads(row["prev_state"]).get(field, before)
+                d["text_before"] = before or ""
+                d["chars_before"] = len(d["text_before"])
+                d["chars_after"] = len(str(d["payload"].get("new_text", "")))
             # a crosslist suggestion replaces the whole set, so the Before
             # pane needs the whole set, not only the filed path
             target["also"] = db.get_domain_links(conn, row["target_uid"])
@@ -2027,6 +2038,11 @@ def _run_ledger(conn: sqlite3.Connection, pending: list) -> dict:
             trow = db.get_memory(conn, target)
             if trow is not None:
                 chars += len(payload.get("new_content", "")) - len(trow["content"])
+        elif kind == "unleak":
+            field = str(payload.get("field", db.LEAK_FIELDS[0]))
+            trow = db.get_memory(conn, target) if target else None
+            if trow is not None and field in db.LEAK_FIELDS:
+                chars += len(str(payload.get("new_text", ""))) - len(trow[field] or "")
         elif kind == "redomain":
             domains.add(str(payload.get("domain", "")).strip())
         elif kind == "crosslist":
@@ -2071,6 +2087,14 @@ def _group_facts(conn: sqlite3.Connection, kind: str, rows: list) -> dict:
             trow = db.get_memory(conn, row["target_uid"]) if row["target_uid"] else None
             if trow is not None:
                 chars += len(payload.get("new_content", "")) - len(trow["content"])
+        return {"chars": chars}
+    if kind == "unleak":
+        chars = 0
+        for row, payload in zip(rows, payloads):
+            trow = db.get_memory(conn, row["target_uid"]) if row["target_uid"] else None
+            field = str(payload.get("field", db.LEAK_FIELDS[0]))
+            if trow is not None and field in db.LEAK_FIELDS:
+                chars += len(str(payload.get("new_text", ""))) - len(trow[field] or "")
         return {"chars": chars}
     if kind == "retag":
         terms = 0

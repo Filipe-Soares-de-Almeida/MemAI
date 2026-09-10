@@ -31,9 +31,10 @@ import { I18N, t } from '../i18n.js';
 /* the kinds the before/after pair below knows how to render. Anything else
    is shown as its payload rather than as two empty boxes -- see optRaw. */
 const DIFF_KINDS = new Set(['compact', 'reword', 'retag', 'retitle', 'redomain',
-                            'crosslist', 'set_confidence', 'review', 'archive']);
+                            'crosslist', 'set_confidence', 'review', 'archive',
+                            'unleak']);
 
-/* Three shapes of change, and one pane apiece. A kind is not a diff because
+/* A shape of change, and one pane apiece. A kind is not a diff because
    it replaces something: a body is PROSE and is read, a tag list is a SET
    and is compared item by item, and a confidence is a FLAG the rest of this
    UI already draws as a ringed pill. Rendering all three as two walls of
@@ -42,6 +43,15 @@ const DIFF_KINDS = new Set(['compact', 'reword', 'retag', 'retitle', 'redomain',
 const SET_KINDS = new Set(['retag', 'crosslist']);
 const FLAG_KINDS = new Set(['set_confidence', 'archive']);
 const LINE_KINDS = new Set(['retitle', 'redomain', 'review']);
+
+/* A fifth shape: TEXT losing a piece of itself. `unleak` removes a leaked
+   tool call from one field, and the payload says WHICH -- a body, a tag
+   list, a source reference. One renderer, because it is one kind of change;
+   the field picks the wells or the two lines, since a source reference in a
+   pane six hundred pixels tall is one line of text in an empty room. */
+const TEXT_KINDS = new Set(['unleak']);
+const leakField = s => (s.payload || {}).field || 'content';
+const isBodyLeak = s => TEXT_KINDS.has(s.kind) && leakField(s) === 'content';
 
 /* The kinds whose "before" IS the memory's own content. For these, the
    memory-under-review preview and the Before pane print the identical
@@ -222,6 +232,34 @@ function prosePairHTML(s) {
     <div class="snippet opt-diff-b rt">${proseBefore(s)}</div>
     <div class="opt-arrow">${icon('arrow-right')}</div>
     <div class="snippet opt-diff-a rt">${proseAfter(s)}</div>
+  </div>`;
+}
+
+/* ── TEXT being cleaned ──
+   The pair a reviewer of an `unleak` reads: the field as it stands, and the
+   same field with the call's own source gone. The label names the field --
+   two walls of text do not say whether they are a body or a tag list -- and
+   the diff classes are the ones the pane already marks, so what LEAVES is
+   marked in place. */
+function textPairHTML(s) {
+  const p = s.payload || {}, field = leakField(s);
+  const was = s.text_before ?? '', now = p.new_text ?? '';
+  const label = (side, n) => `${t(side)} · ${t('op.field.' + field)}${
+    n ? ` · ${t('op.chars', { n: fmtInt(n) })}` : ''}`;
+  if (field !== 'content') {
+    return `<div class="opt-line">
+      <span class="opt-label">${esc(label('op.before'))}</span>
+      <span class="opt-label">${esc(label('op.after'))}</span>
+      <div class="opt-lval opt-diff-b">${esc(was || '—')}</div>
+      <div class="opt-lval opt-diff-a">${esc(now || '—')}</div>
+    </div>`;
+  }
+  return `<div class="opt-diff">
+    <span class="opt-label opt-diff-bl">${esc(label('op.before', s.chars_before))}</span>
+    <span class="opt-label opt-diff-al">${esc(label('op.after', s.chars_after))}</span>
+    <div class="snippet opt-diff-b rt">${rich(was, s)}</div>
+    <div class="opt-arrow">${icon('arrow-right')}</div>
+    <div class="snippet opt-diff-a rt">${rich(now, s)}</div>
   </div>`;
 }
 
@@ -982,6 +1020,7 @@ function detailHTML(s, at, total) {
      block that defines SET_KINDS. */
   const body = s.kind === 'distill' ? optDistillBody(s)
     : relKind ? optRelBody(s)
+    : TEXT_KINDS.has(s.kind) ? textPairHTML(s)
     : CONTENT_KINDS.has(s.kind) ? prosePairHTML(s)
     : FLAG_KINDS.has(s.kind) ? flagPairHTML(s)
     : SET_KINDS.has(s.kind) ? setPairHTML(s)
@@ -1002,7 +1041,7 @@ function detailHTML(s, at, total) {
     ${s.rationale ? `<div class="opt-why">
       <span class="opt-label">${t('op.why')}</span>
       <div class="opt-why-body rt">${rich(s.rationale, s)}</div></div>` : ''}
-    ${relKind || CONTENT_KINDS.has(s.kind) || !s.target ? '' : `<div class="opt-preview">
+    ${relKind || CONTENT_KINDS.has(s.kind) || isBodyLeak(s) || !s.target ? '' : `<div class="opt-preview">
       <span class="opt-label">${t('op.underReview')}</span>
       <div class="snippet">${esc(tg.snippet || '')}</div></div>`}
     ${body}

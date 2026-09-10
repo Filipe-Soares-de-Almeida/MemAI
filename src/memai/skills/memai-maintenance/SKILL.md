@@ -88,6 +88,16 @@ sub-skill. Read each source once; nothing below is read twice.
      passed. This is the decay work list; `recalls` is **not** (a low count
      means unproven, never useless — judge the store by the aggregate and never
      archive a row for being unread);
+   - **`leaked_calls`** — rows whose text carries a tool call's **own source**,
+     because a parameter tag was typed without the `antml:` prefix and the
+     fields after it were written into the body instead of their columns. Per
+     finding: which `fields` carry a mark, what a repair `removes` from each,
+     `clean: false` when the marks sit inside the prose (a `reword`, not an
+     `unleak`), and **`declares`** — the domain and tags the debris was trying
+     to write, reported only where that column is still **empty**. So one
+     finding is usually an `unleak` per dirty field **plus** the `redomain` /
+     `crosslist` / `retag` that finishes it. `stats.leaked_calls` counts every
+     one in the window; the list stops at `db.LEAK_SCAN_CAP`;
    - `dedup_hints` — pairs probed from the delta against the **whole** store;
    - `domain_hints` — spelling/separator/case variants of one domain,
      **cross-window**;
@@ -117,7 +127,7 @@ sub-skill. Read each source once; nothing below is read twice.
 
 ---
 
-## 1. The twelve suggestion kinds (exact payload)
+## 1. The thirteen suggestion kinds (exact payload)
 
 | `kind` | `payload` | notes |
 |---|---|---|
@@ -131,6 +141,7 @@ sub-skill. Read each source once; nothing below is read twice.
 | `archive` | `{reason}` | soft and reversible — never deletes |
 | `link` | `{from_uid, to_uid, relation_type, note?}` | `target_uid` derives from `from_uid` — omit it |
 | `merge` | `{keep_uid, drop_uid, note?}` | links `supersedes` and archives `drop_uid`; `target_uid` derives from `drop_uid` — omit it |
+| `unleak` | `{field}` | `content` \| `tags` \| `source_ref` — **one field per suggestion**. The repair is **computed at staging** from the row itself and lands in the payload as `new_text`: nothing is retyped, and the panel shows what will hold. Refused when the field carries **no** mark, and when the marks sit **inside its prose** — that one is a `reword` written by hand |
 | `distill` | `{source_uids: […], new_type, new_content, title, tags?, domain?}` | **n-ary**; `new_type` ∈ `note` \| `reasoning` \| `anti_pattern`; creates the target, links `supersedes` from it to every source and archives them. `title` is **required** — this is the one kind that authors a memory, and nothing names it later. **Omit `target_uid`** — there is nothing to point at yet |
 
 - **`verified` is mandatory on the destructive kinds:** `archive`,

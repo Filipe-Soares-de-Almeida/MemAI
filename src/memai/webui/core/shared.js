@@ -166,7 +166,7 @@ export function wireRelTypeField(root, { selId, customId, options, onPick }) {
    already fixed once (see the note on .opt-kind). */
 export const KIND_ROLE = {
   link: 'aim', crosslist: 'aim',
-  reword: 'hold', compact: 'hold', distill: 'hold',
+  reword: 'hold', compact: 'hold', distill: 'hold', unleak: 'hold',
   set_confidence: 'ask', redomain: 'ask',
   retitle: 'go', retag: 'go',
   review: 'next',

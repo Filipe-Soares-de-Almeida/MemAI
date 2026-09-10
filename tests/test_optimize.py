@@ -16,7 +16,7 @@ import pytest
 from starlette.testclient import TestClient
 
 from conftest import shaped
-from memai import admin, db
+from memai import admin, db, sections
 
 
 @pytest.fixture
@@ -52,6 +52,188 @@ def _mk_diagram(conn):
     )
     assert errors == []
     return uid
+
+
+# ------------------------------------------------- a leaked call: scan and kind
+
+# A body the way a leaked call leaves it: the text is right up to the closing
+# tag of the field it was written under, and the fields after it follow as
+# prose. Only a store written before the store refused one holds this, so
+# these tests plant it with restore_memory -- the one writer that reproduces a
+# row instead of judging it.
+LEAKED_BODY = "\n".join((
+    "the warmup drains the queue twice on a cold start</content>",
+    "<domain>acme/x100/p200</domain>",
+    "<tags>cache warmup, queue drain</tags>",
+    "</invoke>",
+))
+
+
+def _plant(conn, uid="a1b2c3d4e5f60718", *, type="note", content=LEAKED_BODY, **kw):
+    db.restore_memory(conn, {"uid": uid, "type": type, "content": content,
+                             "title": "a cache warmup", **kw})
+    return uid
+
+
+def test_the_scan_reports_a_leaked_row_and_counts_every_one(conn):
+    _plant(conn)
+    _plant(conn, "b2c3d4e5f6071829")
+    _mk(conn, content="a body nobody leaked into")
+    res = db.optimization_corpus(conn)
+
+    assert res["stats"]["leaked_calls"] == 2
+    finding = next(f for f in res["leaked_calls"] if f["uid"] == "a1b2c3d4e5f60718")
+    assert finding["fields"]["content"]["marks"] == [
+        "</content>", "</domain>", "</invoke>", "</tags>"]
+    assert finding["fields"]["content"]["removes"] > 0
+    assert finding["fields"]["content"]["clean"] is True
+    assert finding["title"] == "a cache warmup"
+
+
+def test_a_finding_declares_only_the_columns_that_are_still_empty(conn):
+    """What the debris was TRYING to write is the raw material for the
+    redomain beside the unleak -- but only where nothing is filed yet."""
+    _plant(conn, "a1b2c3d4e5f60718")
+    _plant(conn, "b2c3d4e5f6071829", domain="acme/x100", tags="cache warmup")
+    findings = {f["uid"]: f for f in db.optimization_corpus(conn)["leaked_calls"]}
+
+    assert findings["a1b2c3d4e5f60718"]["declares"] == {
+        "domain": "acme/x100/p200", "tags": "cache warmup, queue drain"}
+    assert "declares" not in findings["b2c3d4e5f6071829"]
+
+
+def test_a_mark_inside_prose_is_reported_as_not_clean(conn):
+    """The memory that DOCUMENTS this defect quotes a mark mid-sentence.
+    Cutting it would take a hole out of the sentence, so the finding says the
+    repair does not clear the field."""
+    _plant(conn, content="a call quotes </content> mid-sentence and means to")
+    finding = db.optimization_corpus(conn)["leaked_calls"][0]
+    assert finding["fields"]["content"]["clean"] is False
+
+
+def test_staging_an_unleak_computes_the_repair_from_the_row(conn):
+    """The caller sends the field and nothing else: a payload carrying the
+    body would be the same retyping this kind exists to avoid."""
+    uid = _plant(conn)
+    res = db.stage_optimization(conn, "clean the leaks", [
+        {"kind": "unleak", "target_uid": uid, "payload": {"field": "content"}}])
+
+    assert (res["staged"], res["errors"]) == (1, [])
+    payload = json.loads(db.get_optimization_suggestions(conn, res["run_id"])[0]["payload"])
+    assert payload["field"] == "content"
+    assert payload["new_text"] == "the warmup drains the queue twice on a cold start"
+
+
+def test_an_unleak_defaults_to_the_body(conn):
+    uid = _plant(conn)
+    res = db.stage_optimization(conn, "clean the leaks", [
+        {"kind": "unleak", "target_uid": uid}])
+    payload = json.loads(db.get_optimization_suggestions(conn, res["run_id"])[0]["payload"])
+    assert payload["field"] == "content"
+
+
+def test_an_unleak_on_a_field_with_nothing_leaked_is_refused(conn):
+    uid = _mk(conn, content="a body nobody leaked into")
+    res = db.stage_optimization(conn, "clean the leaks", [
+        {"kind": "unleak", "target_uid": uid, "payload": {"field": "content"}}])
+    assert res["staged"] == 0
+    assert "nothing leaked" in res["errors"][0]["error"]
+
+
+def test_an_unleak_that_would_not_clear_the_field_is_refused(conn):
+    """A mark in the middle of a sentence is a rewrite somebody makes on
+    purpose, so this kind hands it to reword instead of half-cleaning it."""
+    uid = _plant(conn, content="a call quotes </content> mid-sentence")
+    res = db.stage_optimization(conn, "clean the leaks", [
+        {"kind": "unleak", "target_uid": uid, "payload": {"field": "content"}}])
+    assert res["staged"] == 0
+    assert "reword" in res["errors"][0]["error"]
+
+
+def test_an_unleak_of_an_unknown_field_is_refused(conn):
+    uid = _plant(conn)
+    res = db.stage_optimization(conn, "clean the leaks", [
+        {"kind": "unleak", "target_uid": uid, "payload": {"field": "title"}}])
+    assert res["staged"] == 0
+    assert "payload.field" in res["errors"][0]["error"]
+
+
+def test_an_unleak_leaves_a_sectioned_body_reading_as_its_type(conn):
+    """The debris sits between INTENT and ESTABLISHED, so a repair that
+    truncated at the first mark would drop three sections."""
+    body = "\n".join((
+        "INTENT: warm the cache before the queue drains</intent>",
+        "<session>abcd</session>",
+        "ESTABLISHED: it drains twice on a cold start",
+        "PURSUING: nothing",
+        "OPEN QUESTIONS: none",
+    ))
+    uid = _plant(conn, type="checkpoint", content=body)
+    res = db.stage_optimization(conn, "clean the leaks", [
+        {"kind": "unleak", "target_uid": uid, "payload": {"field": "content"}}])
+    assert (res["staged"], res["errors"]) == (1, [])
+
+    sug = db.get_optimization_suggestions(conn, res["run_id"])[0]
+    db.apply_suggestion(conn, sug["id"])
+    row = db.get_memory(conn, uid)
+    assert row["content"].startswith("INTENT: warm the cache before the queue drains")
+    assert "OPEN QUESTIONS: none" in row["content"]
+    assert sections.read("checkpoint", row["content"]).conforms
+
+
+def test_applying_an_unleak_clears_the_field_and_undo_puts_it_back(conn):
+    """The undo restores a body the store would refuse from a writer, which
+    is the whole reason the suggestion existed."""
+    uid = _plant(conn)
+    res = db.stage_optimization(conn, "clean the leaks", [
+        {"kind": "unleak", "target_uid": uid, "payload": {"field": "content"}}])
+    sug_id = db.get_optimization_suggestions(conn, res["run_id"])[0]["id"]
+
+    db.apply_suggestion(conn, sug_id)
+    assert db.get_memory(conn, uid)["content"] == (
+        "the warmup drains the queue twice on a cold start")
+
+    db.revert_suggestion(conn, sug_id)
+    assert db.get_memory(conn, uid)["content"] == LEAKED_BODY
+
+
+def test_an_unleak_of_the_tags_touches_only_the_tags(conn):
+    uid = _plant(conn, content="a clean body", tags="cache warmup</tags>")
+    res = db.stage_optimization(conn, "clean the leaks", [
+        {"kind": "unleak", "target_uid": uid, "payload": {"field": "tags"}}])
+    sug_id = db.get_optimization_suggestions(conn, res["run_id"])[0]["id"]
+    db.apply_suggestion(conn, sug_id)
+
+    row = db.get_memory(conn, uid)
+    assert (row["tags"], row["content"]) == ("cache warmup", "a clean body")
+
+    db.revert_suggestion(conn, sug_id)
+    assert db.get_memory(conn, uid)["tags"] == "cache warmup</tags>"
+
+
+def test_an_unleak_of_a_diagram_body_is_refused(conn):
+    """Same refusal the other content kinds get: the body is the graph's
+    projection, so a repair applied over it lasts until the next edit."""
+    uid = _mk_diagram(conn)
+    res = db.stage_optimization(conn, "clean the leaks", [
+        {"kind": "unleak", "target_uid": uid, "payload": {"field": "content"}}])
+    assert res["staged"] == 0
+    assert "is a diagram" in res["errors"][0]["error"]
+
+
+def test_the_panel_reads_the_leaked_field_as_a_pair(client):
+    """The dashboard draws Before and After for the field the payload names,
+    so the API sends that field's text -- not the memory's content."""
+    with db.connect() as conn:
+        uid = _plant(conn, content="a clean body", tags="cache warmup</tags>")
+        run = db.stage_optimization(conn, "clean the leaks", [
+            {"kind": "unleak", "target_uid": uid, "payload": {"field": "tags"}}])
+
+    res = client.get(
+        f"/api/optimization/suggestions?run={run['run_id']}").json()
+    sug = res["suggestions"][0]
+    assert sug["text_before"] == "cache warmup</tags>"
+    assert sug["chars_after"] == len("cache warmup")
 
 
 def test_stage_validates_and_reports_errors(conn):
@@ -1428,15 +1610,16 @@ def test_every_staged_kind_reaches_a_renderer():
 
 
 def test_every_diff_kind_is_claimed_by_exactly_one_pane():
-    """A kind's change has a SHAPE, and the four panes divide them up.
+    """A kind's change has a SHAPE, and the five panes divide them up.
 
     Content is prose and gets two scrolling wells, a flag gets the two
     marks the rest of the UI draws it with, a set gets both collections as
-    chips, and a single value gets one line each. A kind in DIFF_KINDS that
-    no set claims falls through to the raw payload dump.
+    chips, a single value gets one line each, and text losing a piece of
+    itself names the field it lost it from. A kind in DIFF_KINDS that no set
+    claims falls through to the raw payload dump.
     """
     groups = {name: _kind_set(name) for name in
-              ("CONTENT_KINDS", "FLAG_KINDS", "SET_KINDS", "LINE_KINDS")}
+              ("CONTENT_KINDS", "FLAG_KINDS", "SET_KINDS", "LINE_KINDS", "TEXT_KINDS")}
     union: set[str] = set()
     for name, kinds in groups.items():
         assert not (union & kinds), f"{name} claims a kind another pane already draws"
