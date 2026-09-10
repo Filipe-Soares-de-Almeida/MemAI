@@ -342,9 +342,9 @@ export async function renderOptimization(view, params, ctx) {
 }
 
 /* ─── level 0 — the month, and the day it opens ───────────────────────────
-   Curation is a daily routine, so the axis is the month. The grid says which
-   days the agent ran on and which of those still hold a decision; the rail
-   opens the selected day at the level of the suggestion.
+   The axis is the month. The grid says which days a maintenance pass ran on
+   and which of those still hold a decision; the rail opens the selected day
+   at the level of the suggestion.
 
    A day is a LOCAL day. `created_at` is UTC (db.now_iso), so grouping is
    done here rather than by asking the server for a date: a run staged at
