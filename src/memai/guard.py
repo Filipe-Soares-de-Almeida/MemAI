@@ -13,6 +13,15 @@ named fails on the next one. A field the tool does not require raises nothing
 at all on its own, so its absence is reported as a warning and the write goes
 through.
 
+The same typo has a second shape, and this one arrives. The tag's source
+lands in the text of the parameter before it, bringing the fields it opened
+with it: the body holds `</content>` and `<domain>acme/x100`, and the domain
+column is empty. Nothing was lost on the way, so this is refused rather than
+warned about -- here, and again in the store (`db.leak_error`) for a call that
+reaches it some other way. A CLOSING tag is the mark: a tag the parser
+accepted never reaches a parameter's text, and a memory written ABOUT this
+defect quotes the opening half.
+
 `GUARDED` is read from the tool signatures in `memai.server`: a parameter
 with no default is one the call cannot do without. A tool added here is
 checked against its own signature, not against what its siblings take.
@@ -23,6 +32,9 @@ database.
 """
 
 from __future__ import annotations
+
+import functools
+import re
 
 from memai import sections
 
@@ -47,6 +59,23 @@ WATCHED: dict[str, tuple[str, ...]] = {
     "checkpoint": ("domain", "tags"),
     "anti_pattern": ("domain", "tags", "source_ref"),
 }
+
+# tool -> the parameters it takes that have a default, in signature order.
+# GUARDED holds the ones that have none, so the two together are the whole
+# signature (tests/test_guard.py). WATCHED is the subset an absence is worth
+# warning about; a leak names the fields that never arrived, and most of a
+# call's fields are optional, so the closing tags are read from all of them.
+OPTIONAL: dict[str, tuple[str, ...]] = {
+    "note": ("domain", "also", "tags", "session", "review_after", "source_ref"),
+    "reasoning": ("domain", "also", "tags", "session", "review_after", "source_ref"),
+    "handoff": ("domain", "also", "tags", "session"),
+    "checkpoint": ("session", "domain", "also", "tags"),
+    "anti_pattern": ("domain", "also", "tags", "session", "review_after", "source_ref"),
+}
+
+# The frame of a tool call. A closing tag naming one of these, inside the text
+# of a parameter, is that parameter holding the rest of the call.
+FRAME: tuple[str, ...] = ("invoke", "parameter", "function_calls")
 
 # What a dropped tag leaves behind when it lands inside the NEXT parameter's
 # text instead of vanishing: the tag's own source, written into a memory's
@@ -103,6 +132,44 @@ def check(tool: str, params: dict) -> tuple[list[str], list[str], list[str]]:
     return missing, warn, debris
 
 
+def fields(tool: str) -> tuple[str, ...]:
+    """Every parameter `tool` takes, in the order of its signature.
+
+    Empty for a tool this does not know, which leaves its text checked
+    against the call frame alone.
+    """
+    return GUARDED.get(tool, ()) + OPTIONAL.get(tool, ())
+
+
+@functools.lru_cache(maxsize=None)
+def _closing(names: tuple[str, ...]) -> re.Pattern[str]:
+    """Matches a closing tag naming one of `names`, with or without the prefix."""
+    return re.compile(rf"</(?:antml:)?(?:{'|'.join(names)})>")
+
+
+def leak_marks(tool: str, text: str) -> list[str]:
+    """The closing tags in `text` that can only be a tool call's own source.
+
+    A tag naming the call frame, or naming a parameter of `tool` itself.
+    Returned as they are written, deduplicated and sorted. A closing tag of
+    anything else -- `</div>`, `</result>` in a tool that has no `result` --
+    is text somebody wrote, and is not one of these.
+    """
+    if not isinstance(text, str) or "</" not in text:
+        return []
+    return sorted({m.group(0) for m in _closing(FRAME + fields(tool)).finditer(text)})
+
+
+def leaked(tool: str, params: dict) -> dict[str, list[str]]:
+    """The parameters of a call whose text carries the call's own source.
+
+    Maps the parameter's name to the marks found in it, and is empty for a
+    call with none.
+    """
+    found = {k: leak_marks(tool, v) for k, v in params.items() if isinstance(v, str)}
+    return {k: marks for k, marks in found.items() if marks}
+
+
 def _table() -> str:
     """Every guarded tool as a signature, so the parameters read as an order.
 
@@ -135,6 +202,32 @@ def refusal(tool: str, missing: list[str], call: str = "") -> str:
         f"names one missing field at a time, so a retry that fixes only the "
         f"field named above will fail again on the next one. "
         f"Signatures: {_table()}."
+    )
+
+
+def leak_refusal(tool: str, leaks: dict[str, list[str]], call: str = "") -> str:
+    """What to tell a caller whose parameter is holding the rest of the call.
+
+    Names every parameter that carries a mark and the marks it carries, so
+    the retry knows which field ate the others. `call` is the tool name the
+    host used, as in `refusal`.
+    """
+    where = "; ".join(f"{name} carries {', '.join(marks)}"
+                      for name, marks in sorted(leaks.items()))
+    return (
+        f"BLOCKED ({call or f'mcp__memai__{tool}'}): a tool call's own source is "
+        f"inside the text of a parameter -- {where}. MOST LIKELY CAUSE: a "
+        f"parameter tag opened without the antml: prefix is not a tag, so the "
+        f"parser leaves it in the text of the parameter BEFORE it, and every "
+        f"field that tag opened never arrives: the domain, the tags and the "
+        f"source_ref are written into the body while their own columns stay "
+        f"empty. REDO the call typing EVERY tag again with the prefix, one per "
+        f"field, and do NOT reuse the text block from the attempt that failed, "
+        f"because the typo comes with it. If this memory is ABOUT this defect, "
+        f"put a space inside the closing tag (`</ invoke>`) so the quote is not "
+        f"a mark. These are the tool's POSITIONAL parameters, in the order it "
+        f"takes them, and every one of them has to be in the retry under its "
+        f"own name=. Signatures: {_table()}."
     )
 
 

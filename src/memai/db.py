@@ -31,7 +31,7 @@ from contextlib import contextmanager
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
-from memai import sections
+from memai import guard, sections
 
 # Domain-casing policy. Stored in the `meta` table under DOMAIN_CASE_KEY and
 # enforced at every domain write path. 'preserve' keeps free-text casing;
@@ -1440,6 +1440,41 @@ def _refuse_unreadable(conn: sqlite3.Connection, type: str, content: str) -> Non
         raise ValueError(error)
 
 
+def leak_error(type: str, text: str) -> str | None:
+    """Say why `text` cannot be stored, or None if it can.
+
+    Refuses a body or a title carrying a tool call's own source -- a closing
+    tag naming the call frame or one of the writer's own parameters. That
+    text is a call whose parameter tags were typed without the antml:
+    prefix: the fields after the first one are inside this text instead of
+    in their own columns. The marks, and what is not one, are
+    memai.guard.leak_marks; `type` selects the parameter names, so a type
+    with no writer is read against the frame alone.
+
+    The PreToolUse guard refuses such a call before it is made. This is the
+    same refusal for one that arrives another way -- the dashboard, an
+    import of staged text, a host with no hooks registered.
+    """
+    marks = guard.leak_marks(type, text)
+    if not marks:
+        return None
+    return (
+        f"the text carries a tool call's own source ({', '.join(marks)}): a "
+        f"parameter tag typed without the antml: prefix stays in the text of "
+        f"the parameter before it, so the fields it opened -- the domain, the "
+        f"tags -- are in this text instead of their own columns. Retype the "
+        f"call with every tag prefixed. If the memory is ABOUT this defect, "
+        f"put a space inside the closing tag so the quote is not a mark."
+    )
+
+
+def _refuse_leak(type: str, *texts: str) -> None:
+    for text in texts:
+        error = leak_error(type, text)
+        if error:
+            raise ValueError(error)
+
+
 def title_error(value: str) -> str | None:
     """Say why `value` cannot title a memory, or None if it can.
 
@@ -1739,6 +1774,7 @@ def insert_memory(
     source_ref: str = "",
 ) -> str:
     _refuse_unreadable(conn, type, content)
+    _refuse_leak(type, content, title)
     error = title_error(title)
     if error:
         raise ValueError(error)
@@ -1901,6 +1937,7 @@ def update_memory_content(
     if append:
         new_content = f"{row['content']}\n{new_content}" if row["content"] else new_content
     _refuse_unreadable(conn, row["type"], new_content)
+    _refuse_leak(row["type"], new_content)
     conn.execute(
         "INSERT INTO edits (memory_uid, edited_at, prev_content, new_content, note) VALUES (?, ?, ?, ?, ?)",
         (uid, now_iso(), row["content"], new_content, note),
@@ -2050,6 +2087,7 @@ def set_title(conn: sqlite3.Connection, uid: str, value: str, note: str = "") ->
     value = value.strip()
     if not value or value == row["title"]:
         return bool(value)
+    _refuse_leak(row["type"], value)
     error = title_error(value)
     if error:
         raise ValueError(error)

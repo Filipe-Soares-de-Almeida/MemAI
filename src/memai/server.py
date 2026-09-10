@@ -1474,9 +1474,14 @@ def edit_memory(uid: str, new_content: str = "", note: str = "", mode: str = "re
                     f"{uid} is a diagram: its content is generated from the graph. "
                     "Use diagram_node/diagram_edge to change the flow."
                 ])
-            if not db.update_memory_content(conn, uid, new_content, note=note,
-                                            append=mode == "append"):
-                return _errors([f"no memory {uid}"])
+            try:
+                if not db.update_memory_content(conn, uid, new_content, note=note,
+                                                append=mode == "append"):
+                    return _errors([f"no memory {uid}"])
+            except ValueError as exc:
+                # a body the store will not hold: one that does not read as its
+                # type's fields, or one carrying a tool call's own source
+                return _errors([str(exc)])
             changed.append("content")
         if source_ref.strip():
             if not db.set_source_ref(conn, uid, source_ref, note=note):

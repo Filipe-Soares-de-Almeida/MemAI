@@ -272,9 +272,11 @@ def _guard(payload: dict) -> int:
     """Read the call the host is about to make; 2 to refuse it, 0 to allow.
 
     Refusing writes the reason on stderr, which is where a host shows the
-    model what it did wrong. A call that goes through with an optional
-    parameter missing gets a systemMessage instead, so a write is never
-    interrupted over something that is not an error.
+    model what it did wrong. Two things earn one: required text that never
+    arrived, and a parameter whose text carries the call's own source. A call
+    that goes through with an optional parameter missing gets a systemMessage
+    instead, so a write is never interrupted over something that is not an
+    error.
 
     Anything unrecognised is allowed: a tool of another server, one memai
     does not guard, a payload without an input, and anything at all that
@@ -293,6 +295,10 @@ def _guard(payload: dict) -> int:
         missing, warn, debris = guard.check(tool, params)
         if missing:
             sys.stderr.write(guard.refusal(tool, missing, call) + "\n")
+            return 2
+        leaks = guard.leaked(tool, params)
+        if leaks:
+            sys.stderr.write(guard.leak_refusal(tool, leaks, call) + "\n")
             return 2
         text = guard.warning(tool, warn, debris, call)
         if text:
