@@ -9,9 +9,8 @@
    The head of level 1 reports how much of the batch the agent VERIFIED
    rather than what applying it would score. The index cannot carry that
    claim: it is round(mean of four axes), each round(met * 100 / active), so
-   on a 546-memory store one suggestion is worth 0.046 of a point and a
-   whole run reaches +1 at best. `verified` is what actually differs from
-   one suggestion to the next. */
+   one suggestion moves it by a fraction of a point and a whole run by one at
+   best. `verified` is what differs from one suggestion to the next. */
 
 import { $, esc, fmtInt, fmtDate, dayKey, monthKey, fromKey } from '../core/dom.js';
 import { api, seg } from '../core/api.js';
@@ -22,7 +21,7 @@ import { typeTag, uidChip, statusTag, confPill, wireCopyChips, failedHTML,
          kindLabel, kindTitle, CONF } from '../core/shared.js';
 import { renderRich, wireRich } from '../core/richtext.js';
 import { markPair } from '../core/textdiff.js';
-import { go, previousRoute } from '../core/router.js';
+import { go, previousRoute, replaceParams } from '../core/router.js';
 import { openRecord } from './record.js';
 import { I18N, t } from '../i18n.js';
 
@@ -602,8 +601,7 @@ function renderOptCalendar(view, runs, params) {
   /* the address carries the month and the day, so a reload and a shared link
      land on the same screen; replaceState because walking a month back is
      not a step worth pressing Back through */
-  const remember = () => history.replaceState(
-    null, '', `#/optimization?month=${month}&day=${selected}`);
+  const remember = () => replaceParams('optimization', { month, day: selected });
 
   function paintMonth() {
     const at = fromKey(`${month}-01`);
@@ -960,9 +958,8 @@ function dayScope(day, runsOfDay) {
        not is a request the size of the month. */
     query: `runs=${seg(ids.join(','))}&status=pending`,
     body: { runs: ids },
-    /* so a row that was just decided stays where it was, marked, instead of
-       vanishing out from under the reader -- the list it came from cannot
-       hold it any more */
+    /* a row that was just decided stays where it was, marked, instead of
+       vanishing out from under the reader */
     keepDecided: true,
     pending: now.pending,
     async refresh() {
@@ -1176,17 +1173,23 @@ function renderOptGroup(view, scope) {
       const s = items[i];
       row.classList.toggle('picked', i === picked);
       row.classList.toggle('marked', marked.has(s.id));
+      /* the tick is what "selected" means on a row; the cursor is the one row
+         that holds the tab stop */
+      row.setAttribute('aria-selected', marked.has(s.id) ? 'true' : 'false');
+      row.tabIndex = i === picked ? 0 : -1;
       const box = row.querySelector('input[type=checkbox]');
       if (box) box.checked = marked.has(s.id);
     });
   };
 
-  const pick = i => {
+  const pick = (i, focus = false) => {
     picked = Math.max(0, Math.min(items.length - 1, i));
     paintRows();
     paintDetail();
     const row = view.querySelectorAll('.opt-row')[picked];
-    if (row) row.scrollIntoView({ block: 'nearest' });
+    if (!row) return;
+    row.scrollIntoView({ block: 'nearest' });
+    if (focus) row.focus();
   };
 
   const toggle = (i, on) => {
@@ -1220,13 +1223,15 @@ function renderOptGroup(view, scope) {
           <input type="checkbox" id="optSelAll" aria-label="${esc(t('op.sel.all'))}">
           <span class="mg-label" id="optSelCount"></span>
         </div>
-        <div class="opt-rows" role="listbox" aria-label="${esc(scope.listAria)}" tabindex="0">
+        <!-- role="grid" and not listbox, for the reason the memory list is one
+             too: a row owns a checkbox, which an option may not contain. -->
+        <div class="opt-rows" role="grid" aria-multiselectable="true" aria-label="${esc(scope.listAria)}">
           ${items.map((s, i) => `
-            <div class="opt-row" role="option" data-i="${i}" aria-selected="false">
-              <span class="opt-row-box">${s.status === 'pending'
+            <div class="opt-row" role="row" data-i="${i}" aria-selected="false" tabindex="-1">
+              <span class="opt-row-box" role="gridcell">${s.status === 'pending'
                 ? `<input type="checkbox" tabindex="-1" aria-label="${esc(t('op.sel.one'))}">`
                 : icon(s.status === 'applied' ? 'confirmed' : 'close', { cls: 'opt-row-mark' })}</span>
-              <span class="opt-row-body">
+              <span class="opt-row-body" role="gridcell">
                 <span class="opt-row-name">${esc(rowName(s))}</span>
                 <span class="opt-row-meta">${rowMeta(s)}</span>
               </span>
@@ -1276,8 +1281,10 @@ function renderOptGroup(view, scope) {
 
     const rows = view.querySelector('.opt-rows');
     rows.addEventListener('keydown', e => {
-      if (e.key === 'ArrowDown') { e.preventDefault(); pick(picked + 1); anchor = picked; }
-      else if (e.key === 'ArrowUp') { e.preventDefault(); pick(picked - 1); anchor = picked; }
+      if (e.key === 'ArrowDown') { e.preventDefault(); pick(picked + 1, true); anchor = picked; }
+      else if (e.key === 'ArrowUp') { e.preventDefault(); pick(picked - 1, true); anchor = picked; }
+      else if (e.key === 'Home') { e.preventDefault(); pick(0, true); anchor = picked; }
+      else if (e.key === 'End') { e.preventDefault(); pick(items.length - 1, true); anchor = picked; }
       else if (e.key === ' ') { e.preventDefault(); toggle(picked); paintRows(); paintFoot(); }
       else return;
     });
@@ -1295,7 +1302,7 @@ function renderOptGroup(view, scope) {
       if (!ids.length) return;
       if (!(await confirmModal({ title: t(`op.sel.${what}Confirm.title`),
         body: t(`op.sel.${what}Confirm.body`, { n: ids.length, scope: scope.title }),
-        okLabel: t(`op.sel.${what}Confirm.ok`), danger: what === 'reject' }))) return;
+        okLabel: t(`op.sel.${what}Confirm.ok`) }))) return;
       try {
         const res = await api(path, { body: { ...scope.body, ids } });
         if (msg) toast(msg(res), 'ok'); else reportApplied(res);

@@ -182,8 +182,8 @@ def test_an_unleak_leaves_a_sectioned_body_reading_as_its_type(conn):
 
 
 def test_applying_an_unleak_clears_the_field_and_undo_puts_it_back(conn):
-    """The undo restores a body the store would refuse from a writer, which
-    is the whole reason the suggestion existed."""
+    """Applying an unleak clears the field; the undo puts back the body, which
+    the store would refuse from a writer."""
     uid = _plant(conn)
     res = db.stage_optimization(conn, "clean the leaks", [
         {"kind": "unleak", "target_uid": uid, "payload": {"field": "content"}}])

@@ -23,7 +23,7 @@ import { icon } from '../core/icons.js';
 import { toast, failed, openModal, closeModal, confirmModal, promptModal,
          openDropMenu, setPressed } from '../core/ui.js';
 import { typeTag, getDomains, invalidateDomains, byDomainPath, domainLeaf,
-         domainSegments, inDomainPath, DOMAIN_SEP } from '../core/shared.js';
+         domainSegments, inDomainPath, failedHTML, DOMAIN_SEP } from '../core/shared.js';
 import { pickerFor, pickerValue, wirePicker, fixedItems } from '../core/pick.js';
 import { domainPickerHTML, wireDomainPicker } from '../core/domain-picker.js';
 import { moveToProjectModal } from '../core/projects.js';
@@ -202,13 +202,17 @@ function levelHTML(d, on) {
     <span class="dom-grip" aria-hidden="true">${icon('grip')}</span>
     <span class="dom-name${d.implicit ? ' implicit' : ''}">${esc(domainLeaf(d.domain))}</span>
     ${queued ? `<span class="dom-arrow">→ ${esc(queued.to)}</span>` : ''}
+    ${isArchived(d) ? `<span class="status-tag archived"
+        title="${esc(t('do.tree.archivedWhy'))}">${t('do.tree.archivedTag')}</span>` : ''}
     ${isCrossing(d)
       ? `<span class="dom-count crossing" title="${esc(t('do.tree.crossingWhy'))}">${
           t('do.col.alsoN', { n: fmtInt(d.subtree_also) })}</span>`
       : `<span class="dom-count">${fmtInt(count)}</span>`}
-    ${isArchived(d) ? `<span class="status-tag archived"
-        title="${esc(t('do.tree.archivedWhy'))}">${t('do.tree.archivedTag')}</span>` : ''}
-    ${kids ? icon('chevron-right', { cls: 'dom-into' }) : ''}
+    <!-- The slot is there whether or not this level has one below it: it is
+         the last thing on the row, so a missing one moves every count in the
+         column left by its width. -->
+    ${kids ? icon('chevron-right', { cls: 'dom-into' })
+           : '<span class="dom-into" aria-hidden="true"></span>'}
   </div>`;
 }
 
@@ -224,9 +228,18 @@ function detailEmptyHTML() {
 async function loadDetail(view, node, domains) {
   const host = view.querySelector('#domDetail');
   if (!host) return;
+  host.innerHTML = '<div class="loading"><span class="spin"></span></div>';
   let data;
   try { data = await api(`/api/domains/detail?domain=${encodeURIComponent(node.domain)}`); }
-  catch (err) { failed('err.load', err); return; }
+  catch (err) {
+    if (!host.isConnected) return;
+    /* in the pane and not only as a toast: a toast fades, and the pane it
+       leaves behind reads as a level with nothing filed under it */
+    host.innerHTML = failedHTML(err);
+    host.querySelector('[data-retry]')
+        .addEventListener('click', () => loadDetail(view, node, domains));
+    return;
+  }
   if (!host.isConnected) return;
   host.innerHTML = detailHTML(node, data);
   wireDetail(host, node, domains);

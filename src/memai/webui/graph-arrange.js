@@ -266,9 +266,8 @@ class Hubs {
     }
     /* The hovered MEMORY's own relations, each drawn faint at the end it
        leaves: which way a relation points is only ever asked about one. A
-       hovered DOMAIN lights what is filed in it, and what joins it to those
-       memories is the tree above -- the relations among them are a different
-       question and drawing them here answers neither. */
+       hovered DOMAIN lights what is filed in it and no relation -- what joins
+       it to those memories is the tree above. */
     if (lit && env.hover && env.hover.uid) {
       for (const r of this.rel) {
         if (!lit.has(r.a.uid) || !lit.has(r.b.uid)) continue;

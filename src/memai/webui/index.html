@@ -20,10 +20,8 @@
 </head>
 <body>
 
-<!-- One band across the top: identity, the sections, and the two controls
-     that belong to the whole app rather than to a view. It replaced a
-     228px rail, and the width it gives back is what lets a list and its
-     inspector sit side by side. -->
+<!-- One band across the top: identity, the sections, and the controls that
+     belong to the whole app rather than to a view. -->
 <header class="appbar">
   <!-- Icons are drawn from webui/core/icons.js into these empty <svg>
        elements at boot. They ship empty rather than absent so admin.css
@@ -31,8 +29,7 @@
        layout -- same reason data-i18n swaps text in place. -->
   <a class="brand" href="#/overview" data-i18n-title="brand.sub">
     <svg class="brand-seal" data-icon="brand-seal"></svg>
-    <!-- the page's h1. It was a span, which left the document with no
-         level-one heading and every view's title starting at h2. -->
+    <!-- the page's h1; every view titles itself at h2 under it -->
     <h1 class="brand-name">MemAI</h1>
   </a>
 
@@ -63,16 +60,9 @@
       <span data-i18n="nav.optimization">Optimization</span></a>
   </nav>
 
-  <!-- No search field here. It was a shortcut to the Memories tab and nothing
-       else: Enter navigated there, cleared itself on the way, and on that tab
-       it sat above a second search field that actually filters and actually
-       keeps what you typed. `/` still reaches the search -- it focuses the
-       real field now (see app.js). -->
   <div class="appbar-right">
     <!-- which project the dashboard, and every MCP server on this machine,
-         reads and writes right now; built and wired in core/projects.js.
-         The active count and the file size were here too and are not any
-         more: both are on Health, in the view whose job is saying them. -->
+         reads and writes right now; built and wired in core/projects.js -->
     <span id="projectHost"></span>
     <span id="langHost"></span>
     <button id="btnNew" class="btn btn-solid" data-i18n="topbar.newMemory">+ New memory</button>
@@ -87,9 +77,8 @@
   </main>
 </div>
 
-<!-- Every dialog in the app lives here, stacked: modals, and the memory
-     record, which used to be a drawer welded into this page. See the stack
-     in webui/core/ui.js -- markup, labelling and focus are all its job. -->
+<!-- Every dialog in the app lives here, stacked. See the stack in
+     webui/core/ui.js -- markup, labelling and focus are all its job. -->
 <div id="modalRoot"></div>
 <div id="toasts" class="toasts" aria-live="polite"></div>
 <div id="tip" class="tip" hidden></div>

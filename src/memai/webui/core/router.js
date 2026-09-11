@@ -13,7 +13,6 @@
    before its first write, and again here around the post-render steps. */
 
 import { $ } from './dom.js';
-import { t } from '../i18n.js';
 import { teardownView } from './lifecycle.js';
 import { closeCtxMenu, modalOpen } from './ui.js';
 import { failedHTML } from './shared.js';
@@ -84,8 +83,6 @@ let generation = 0;
 let currentView = '';
 let lastHash = '';
 
-export const activeView = () => currentView;
-
 /* `focus` moves the caret into the new view, which is right for a
    navigation and wrong for refreshBehind() -- that one repaints the view
    under an open drawer, and stealing focus out of the drawer mid-edit is
@@ -128,20 +125,16 @@ export async function route({ focus = true } = {}) {
   }
   if (ctx.stale()) return;
   view.scrollTop = 0;
-  /* Put the caret in what was just navigated to. Without this the focus
-     stays on the rail link that was pressed: a screen reader announces
-     nothing, and Tab walks the rail again instead of entering the view.
-     #view is tabindex="-1" for exactly this, and programmatic focus on it
-     draws no ring. Never while something is layered over the view -- which
-     since the record became a dialog is one check rather than two -- and
-     never over a view that already put the caret somewhere inside itself:
-     `/` asks Memories for its search field, and this used to take it
-     straight back. A view that has aimed the caret has aimed it better. */
+  /* Put the caret in what was just navigated to: without it the focus stays
+     on the bar link that was pressed, a screen reader announces nothing, and
+     Tab walks the bar again instead of entering the view. #view is
+     tabindex="-1" for exactly this, and programmatic focus on it draws no
+     ring. Skipped while something is layered over the view, and while the
+     view has already aimed the caret somewhere inside itself. */
   if (focus && !modalOpen() && !view.contains(document.activeElement))
     view.focus({ preventScroll: true });
-  /* The record used to open as a dialog over whatever was showing, so a deep
-     link to one was a param on the covered view. It has an address of its own
-     now; the param is kept as a redirect so a bookmark still lands on it. */
+  /* `record` is a legacy deep-link param: it names a record to open over
+     whichever view the address asked for. */
   if (params.get('record')) onRecord?.(params.get('record'));
 }
 

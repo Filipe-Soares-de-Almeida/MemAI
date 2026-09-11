@@ -1,21 +1,13 @@
 /* The memory record: a view with an address of its own.
 
-   It was a centred dialog over whatever was behind it. A dialog is the
-   right shape for a form you fill in and dismiss, and the wrong one for the
-   thing this app exists to read and curate: it could not be linked to, it
-   could not be reloaded, browser Back did not close it, and everything
-   under it kept rendering behind a scrim.
-
-   It is #/memory?uid=… now, and openRecord(uid) navigates there -- every
-   caller in the app already went through that one function, so none of them
-   changed.
+   It is #/memory?uid=…, reached through openRecord(uid), so a record can be
+   linked to, reloaded and left with browser Back.
 
    Editing is per FIELD. A memory of a sectioned type is a handful of named
-   fields, and the editor used to be all of them at once in a stack of bare
-   textareas with no sight of what the markup would become. A field opens on
-   its own, full width, with the source on one side and the rendering on the
-   other, and the save bar pinned under the pair. `Edit all` is still there
-   for a rewrite that touches every field.
+   fields; a field opens on its own, full width, with the source on one side
+   and the rendering on the other, and the save bar pinned under the pair.
+   `Edit all` opens every field at once, for a rewrite that touches all of
+   them.
 
    There is no draft: Save writes the version immediately, with its note,
    and the previous text is kept inside that version -- which is what the
@@ -32,7 +24,7 @@ import { typeTag, uidChip, statusTag, wireCopyChips,
          cachedDomains, invalidateDomains, domainDatalist } from '../core/shared.js';
 import { pickerFor, pickerValue, wirePicker, fixedItems } from '../core/pick.js';
 import { pickMemories } from '../core/link-picker.js';
-import { go, refreshBehind, previousRoute } from '../core/router.js';
+import { go, backTo, refreshBehind, previousRoute } from '../core/router.js';
 import { onTeardown } from '../core/lifecycle.js';
 import { renderRich, wireRich, headings } from '../core/richtext.js';
 import { highlightIn } from '../core/highlight.js';
@@ -40,8 +32,7 @@ import { DiagramEditor } from '../diagram-engine.js';
 import { t } from '../i18n.js';
 
 /* Where every other view sends a reader who clicked a memory. It is a
-   navigation, so Back works, the URL is shareable, and nothing has to know
-   this used to be a dialog. */
+   navigation, so Back works and the URL is shareable. */
 export const openRecord = uid => go('memory', { uid });
 
 /* The read-only canvas a diagram record draws itself on. It listens on
@@ -119,11 +110,9 @@ const relink = (uid, rel) => api('/api/relations', {
 /* Where you have been inside the record, oldest first, and the route the
    walk started from.
 
-   Following a relation replaces what is on screen, and without a trail that
-   costs you the memory you were reading it FROM: checking a link meant
-   losing the record the link was on, which is the whole reason you followed
-   it. Browser Back does the same job, but a page that can only be left
-   through the browser's chrome is a page with no way out of its own.
+   Following a relation replaces what is on screen, so the trail is what
+   keeps the record it was followed FROM reachable from inside the page.
+   Browser Back reaches the same place; the trail puts it on screen.
 
    `origin` is the view the first record was opened from -- Memories, the
    graph, an optimization run -- so the bottom of the trail goes back THERE
@@ -426,8 +415,8 @@ function refsHTML(m) {
     <div class="dg-links">
       ${refs.map(r => `<div class="dg-link">
         <span class="dg-key">${esc(r.node_key)}</span>
-        <span class="snippet clickable" data-open="${esc(r.memory_uid)}">${esc(r.title)}${
-          r.label ? ` · ${esc(r.label)}` : ''}</span>
+        <button type="button" class="snippet clickable" data-open="${esc(r.memory_uid)}"
+                >${esc(r.title)}${r.label ? ` · ${esc(r.label)}` : ''}</button>
       </div>`).join('')}
     </div>
   </div>`;
@@ -469,7 +458,7 @@ function sideHTML(m, uid) {
         || (e.prev_content !== e.new_content ? t('dr.hist.contentEdited') : t('dr.hist.entry'))}</span>
       ${e.prev_content !== e.new_content
         ? `<button type="button" class="rs-hist-diff" data-diff="${i}" aria-expanded="false"
-                   aria-controls="histDiff${i}">${t('dr.hist.viewBtn')}</button>
+                   aria-controls="histDiff${i}">${t('dr.hist.show')}</button>
            <div class="hist-diff" id="histDiff${i}" data-diffbody="${i}" hidden></div>` : ''}
     </div>`).join('') || `<div class="hint-sm">${t('dr.hist.empty')}</div>`;
 
@@ -974,11 +963,8 @@ function openPurgeModal(uid) {
     title: t('dz.summary'),
     bodyHTML: `
       <div class="dz-hint">${t('dz.hint')}</div>
-      <!-- The phrase is printed HERE and nowhere else. It used to be the
-           field's placeholder as well, so an empty field showed the exact
-           text you were being asked for: nothing on screen told a typed
-           phrase from an untyped one, and the button beside it read as
-           broken rather than as waiting. -->
+      <!-- The phrase is printed here and is not the field's placeholder: an
+           empty field has to read as empty. -->
       <div class="dz-type">${t('dz.typeThis', { phrase: `<code>DELETE ${esc(uid)}</code>` })}</div>
       <div class="dz-row">
         <input type="text" id="dzPhrase" aria-label="${t('dz.phrase.aria')}" autocomplete="off">
@@ -1012,7 +998,7 @@ function openPurgeModal(uid) {
 }
 
 /* line diff — plain LCS, plenty for memory-sized content */
-export function renderDiff(a, b) {
+function renderDiff(a, b) {
   const A = a.split('\n'), B = b.split('\n');
   if (A.length * B.length > 250000)
     return `<span class="diff-del">− ${esc(a.slice(0, 800))}…</span><span class="diff-add">+ ${esc(b.slice(0, 800))}…</span>`;

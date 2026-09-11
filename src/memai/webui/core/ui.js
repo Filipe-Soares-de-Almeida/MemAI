@@ -232,8 +232,9 @@ export const copyUid = uid => copyText(uid, t('toast.uidCopied', { uid }));
 export const copyCode = text => copyText(text, t('toast.codeCopied'));
 
 /* ─── toggle state ────────────────────────────────────────────────────
-   A control that stays pressed says so in the accessibility tree too. The
-   UI marked these with a class alone, so the state existed only for eyes. */
+   A control that stays pressed says so in the accessibility tree as well as
+   in its fill. For a .btn; a .seg button wears its own pressed state and
+   sets aria-pressed itself. */
 
 export const setPressed = (el, on) => {
   if (!el) return;
@@ -241,18 +242,16 @@ export const setPressed = (el, on) => {
   el.classList.toggle('btn-solid', !!on);
 };
 
-/* Everything behind the modal stack, taken out of the tab order and out of
-   the accessibility tree for as long as anything is layered over it. A
-   dialog sits over the whole app behind a scrim, so tabbing into the list
-   underneath -- which is what used to happen -- moves an invisible caret
-   through covered content.
+/* Everything behind the modal stack -- the app bar and the view -- taken out
+   of the tab order and out of the accessibility tree for as long as anything
+   is layered over it: a dialog sits over the whole app behind a scrim, and
+   tabbing into what it covers moves an invisible caret through it.
 
    `inert` and not aria-hidden: it does both, and it also stops a click.
-   Applied by openModal/closeModal at the edges of the stack, so it is not
-   a thing a caller can forget: it used to be the record drawer's own call,
-   and every other dialog in the app went without it. */
+   Applied by openModal/closeModal at the edges of the stack, so no caller
+   has to remember it. */
 function inertBackground(on) {
-  for (const sel of ['.rail', '.frame']) {
+  for (const sel of ['.appbar', '.frame']) {
     const el = document.querySelector(sel);
     if (el) el.toggleAttribute('inert', !!on);
   }
@@ -263,11 +262,8 @@ function inertBackground(on) {
    inside itself, and closing it puts the caret back where it was. The
    context menu below is the deliberate opposite -- see its own note.
 
-   Modals STACK. One-at-a-time was the rule until a form grew a form of
-   its own: the memory record is itself a dialog now, and it opens the
-   link picker over the top of itself. Under the old rule opening the
-   picker would have thrown the record away, and closing the picker would
-   have had nothing to go back to.
+   Modals STACK, because a form can open a form of its own: the link picker
+   opens over whatever asked for it, and closing it goes back to that.
 
    So openModal PUSHES and closeModal POPS exactly one level -- Escape
    backs out of a sub-form into the form that raised it, which is the only

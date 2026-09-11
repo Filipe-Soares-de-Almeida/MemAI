@@ -57,14 +57,8 @@ mountProjectPicker();
 
 $('#btnNew').addEventListener('click', openNewMemory);
 
-/* Language. The reload that applies it discards whatever is on screen and
-   unsaved, so it refuses while a dialog is holding a form -- including the
-   memory record, which is one of them now. Asking instead is not an option:
-   the confirmation would itself be a dialog over the form it is asking
-   about, and answering it would leave the stack pointing at nothing. */
-/* The language switch. Built here and not in i18n.js: switching RELOADS the
-   page, so it has to ask first when a form is open -- and asking means the
-   modal machinery, which imports i18n.js. */
+/* The language switch. Applying a language reloads the page, which discards
+   whatever a form is holding, so it refuses while a dialog is open. */
 const langItems = Object.entries(I18N.locales).map(([value, label]) => ({ value, label }));
 $('#langHost').innerHTML = pickerFor({
   id: 'langSel', value: I18N.locale, items: langItems,

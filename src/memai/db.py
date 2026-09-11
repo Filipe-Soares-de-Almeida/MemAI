@@ -1938,9 +1938,8 @@ def update_memory_content(
     said before, and what it says now.
 
     leaked_ok writes a body carrying a tool call's own source, which every
-    other caller is refused (see leak_error). It is for restoring a body
-    that was already stored: undoing an `unleak` puts back what the row
-    held, and that body is the reason the suggestion existed.
+    other caller is refused (see leak_error). It is for restoring a body that
+    was already stored -- undoing an `unleak` puts back what the row held.
     """
     row = get_memory(conn, uid)
     if row is None:

@@ -43,10 +43,9 @@ const SYMPTOM_ROUTE = {
   contradicted: 'memories', stale: 'memories', due: 'memories',
   unlinked: 'memories', untitled: 'memories', untagged: 'memories',
   diagrams: 'diagrams',
-  /* The only one that counts something other than memories AND has no list
-     of its own: both endpoints of a broken edge are the defect, so there is
-     nothing to open. The button goes to the operation that clears them,
-     which is why this entry carries its own params instead of the server's. */
+  /* The only symptom with no list of its own: both endpoints of a broken
+     edge are the defect, so there is nothing to open. The button goes to the
+     operation that clears them, and this entry carries its own params. */
   orphans: ['maintenance', { tab: 'storage' }],
 };
 
@@ -404,8 +403,7 @@ function wire(view, o) {
     go(name, own || s.params || {});
   }));
 
-  /* The scan the count is worth waiting for. It replaces its own row rather
-     than the panel: everything else on screen is already true. */
+  /* The scan runs on demand and replaces its own row, not the panel. */
   const scan = view.querySelector('[data-scan]');
   scan?.addEventListener('click', async () => {
     scan.disabled = true;

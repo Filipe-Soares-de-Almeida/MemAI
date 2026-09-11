@@ -420,8 +420,3 @@ export const invalidateDomains = () => { cache = null; };
 /* The last fetched list without a round-trip, for a datalist that is only
    a convenience -- an empty one is not worth blocking a modal on. */
 export const cachedDomains = () => cache || [];
-
-/* The app bar carries the active project and nothing else about the store.
-   The rail's foot used to hold the active count and the file size, and both
-   said again what Health says in the view whose job is saying it -- so
-   every navigation was paying for an /api/overview nobody read. */

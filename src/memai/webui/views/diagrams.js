@@ -70,7 +70,7 @@ const explained = d => `<span title="${esc(t('dgl.documentedWhy'))}">${
   t('dgl.documented', { n: fmtInt(d.documented), total: fmtInt(d.nodes) })}</span>`;
 
 const stat = (key, n, why = '') => `<div class="dgl-stat"${why ? ` title="${esc(why)}"` : ''}>
-  <span class="tile-label">${t(key)}</span>
+  <span class="mg-label">${t(key)}</span>
   <span class="dgl-stat-n">${fmtInt(n)}</span>
 </div>`;
 
@@ -197,12 +197,12 @@ export async function renderDiagrams(view, params, ctx) {
           ${stat('dgl.stat.jumps', d.jumps, t('dgl.jumpsWhy'))}
         </div>
         <div class="dgl-ins-field">
-          <span class="tile-label">${t('dgl.summary')}</span>
+          <span class="mg-label">${t('dgl.summary')}</span>
           ${d.summary ? `<p class="dgl-ins-text">${esc(d.summary)}</p>`
             : `<span class="hint">${t('dgl.noSummary')}</span>`}
         </div>
         <div class="dgl-ins-field">
-          <span class="tile-label">${t('dgl.filed')}</span>
+          <span class="mg-label">${t('dgl.filed')}</span>
           <span class="dgl-path">${d.domain ? esc(d.domain) : t('dgl.noDomain')}</span>
         </div>
       </div>

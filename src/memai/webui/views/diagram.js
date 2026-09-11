@@ -28,7 +28,7 @@ function dgStepModal({ title, key = '', label = '', shape = 'step', lockKey = fa
     const m = openModal({
       title,
       bodyHTML: `
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+        <div class="field-pair">
           <div class="field"><label for="dgsKey">${t('dg.key')}</label>
             <input type="text" id="dgsKey" value="${esc(key)}" placeholder="${t('dg.keyPh')}"
                    ${lockKey ? 'disabled' : ''} autocomplete="off"></div>
@@ -716,8 +716,9 @@ export async function renderDiagram(view, params, ctx) {
           ${links.map(l => { const p = peerName(l.peer); return `
             <div class="dg-link">
               <span class="type-tag ${typeClass(l.peer.type)}" style="flex:none"><span class="dot"></span>${esc(l.peer.type || '?')}</span>
-              <span class="snippet clickable${p.named ? ' mem-named' : ''}" data-open="${esc(l.target_uid)}"
-                    title="${esc(p.hover || p.text || l.target_uid)}">${esc(p.text || l.target_uid)}</span>
+              <button type="button" class="snippet clickable${p.named ? ' mem-named' : ''}"
+                      data-open="${esc(l.target_uid)}"
+                      title="${esc(p.hover || p.text || l.target_uid)}">${esc(p.text || l.target_uid)}</button>
               ${editing ? `<button class="icon-btn danger" data-dellink="${esc(l.target_uid)}"
                       title="${t('dg.link.remove')}">${icon('close')}</button>` : ''}
             </div>`; }).join('') || `<div class="dg-empty">${t('dg.links.empty')}</div>`}

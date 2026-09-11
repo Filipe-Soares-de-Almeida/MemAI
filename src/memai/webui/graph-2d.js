@@ -24,9 +24,8 @@ const FIT_MS = 900;
 const FOLLOW_TAU = 260;
 /* the padding the camera leaves around a framed box, in CSS px */
 const FIT_PAD = 46;
-/* The wall-clock ceiling on one settle. A store big enough to reach it reads
-   long before the arrangement stops moving, and a bar sitting at 60% for a
-   minute is worse than a graph that has stopped. */
+/* The wall-clock ceiling on one settle, in milliseconds: a store big enough
+   to reach it is readable long before the arrangement stops moving. */
 const SETTLE_MAX_MS = 20000;
 
 /* What a memory fades to. The spotlight pushes a miss all the way back,
@@ -179,9 +178,8 @@ export class GraphCanvas {
     this.D = deriveStore(this.nodes, edges);
     this.edges = this.D.edges;
 
-    /* Relations are off unless asked for: at a store's scale they are a mesh
-       over the arrangement, and what a reader wants of them is one memory's
-       own, which the hover draws anyway. */
+    /* Relations are off unless asked for: at a store's scale they draw a
+       mesh over the arrangement, and the hover draws one memory's own. */
     this.show = {
       links: show.links === true,
       domains: show.domains !== false,

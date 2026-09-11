@@ -42,8 +42,6 @@ export function closePicker() {
   btn.classList.remove('drop-below', 'drop-above', 'drop-right');
 }
 
-export const pickerOpen = () => Boolean(live);
-
 /* The control. `value` is what it currently means and rides on the button as
    data-v: the panel opens onto it, and a form reads it back with pickerValue
    -- by then the caller's own state object is long out of reach.

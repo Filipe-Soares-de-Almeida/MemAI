@@ -372,26 +372,16 @@ kbd {
 }
 
 /* ── the two text voices ──────────────────────────────────────────────────
-   There were eleven implementations of "small uppercase label" here:
-   .field>label, .status-tag, .match-badge, .panel-title, .tile-label,
-   .table th, .mg-label, .opt-label and
-   .dg-panel>h3 -- across five sizes (9.5 / 10 / 10.5 / 11 / 12px) and four
-   trackings (.06 / .07 / .08 / .09em). Eleven ways to say one thing, no two
-   agreeing. And because uppercase-tracked was the ONLY label voice, nothing on
-   any screen was a heading: an h3 rendered at 11px, smaller than 13.5px body
-   text, while an h2 rendered at 22px. Heading level ran opposite to visual
-   weight, so the document outline and the eye disagreed on every view.
-
-   Two voices now, and the distance between them is the hierarchy:
+   Two voices, and the distance between them is the hierarchy:
 
      the label    names a FIELD    · uppercase, tracked, quiet, --fs-label
      the heading  names a SECTION  · sentence case, --fs-md, --ink
 
-   Nothing else may be uppercase. The catalog already stores these strings
-   sentence-cased -- "Content", "Edit history", "Recent memories" -- so the
-   uppercase was CSS shouting over copy that was already written correctly. */
+   Nothing else is uppercase, and the uppercase is the stylesheet's: the
+   catalog stores these strings sentence-cased. */
+.field-pair { display: grid; grid-template-columns: 1fr 1fr; gap: var(--sp-3); }
+
 .field > label,
-.tile-label,
 .mg-label,
 .opt-label,
 .dgl-head,
@@ -414,10 +404,8 @@ kbd {
 /* ── layout ───────────────────────────────────────────────────────────────────── */
 
 /* The app bar: identity, the sections, and the controls that belong to the
-   whole app rather than to one view -- across the top, in one band.
-
-   Three of this dashboard's working views are a list beside an inspector,
-   and a fixed column down the left was 228px those two panes never got. */
+   whole app rather than to one view -- across the top, in one band, so the
+   full width is left to a list and the inspector beside it. */
 .appbar {
   flex: none;
   min-height: var(--head-h);
@@ -437,24 +425,19 @@ kbd {
 .view {
   flex: 1;
   overflow-y: auto;
-  /* The bottom padding is clearance, not rhythm: whatever the floating bulk
-     bar and the toast stack are currently taking, over the normal gutter.
-
-     It was a flat 90px on all seven views for a bar that only ever appeared
-     on ONE. At 200% zoom that dead 90px was 27% of a 328px work area, on
-     views that could never show the bar it was reserved for. */
+  /* The bottom padding is clearance, not rhythm: whatever the toast stack
+     is taking right now (--toast-h), over the normal gutter. */
   padding: var(--sp-5) var(--sp-6) calc(var(--sp-5) + var(--toast-h, 0px));
   outline: none;
 }
-/* Centred, and never narrower than it used to be. `max()` is what makes
-   those two one rule: 1340px is the floor, and past about 1675px the view
-   tracks 80% of the WINDOW instead -- so a wide monitor gets the width and
-   a laptop is not made narrower to pay for it. vw and not %, because the
-   80% is of the screen and the view's own gutters are not part of it.
+/* Centred, with 1340px as the floor: past about 1675px the view tracks 80%
+   of the WINDOW instead, which is what `max()` writes as one rule. vw and
+   not %, because the 80% is of the screen and the view's own gutters are not
+   part of it.
 
-   A canvas is worth every pixel it can get, so the diagram editor opts out
-   of the cap -- and the auto margins that centre a capped view would, in
-   the flex column below, shrink it back to its content width. */
+   The diagram editor opts out of the cap (.view.wide below), and with it the
+   auto margins -- in the flex column they would shrink a full-bleed view
+   back to its content width. */
 .view > * { max-width: max(1340px, 80vw); margin-left: auto; margin-right: auto; }
 .view.wide > * { max-width: none; margin-left: 0; margin-right: 0; }
 @media (min-width: 1181px) {
@@ -502,15 +485,13 @@ kbd {
 @keyframes rise { from { opacity: 0; transform: translateY(var(--rise-y, 6px)); } }
 
 @media (prefers-reduced-motion: reduce) {
-  /* Not a blanket kill. `animation-duration: .01ms !important` on every
-     element also hit .spin, whose animation is INFINITE: one rotation per
-     hundredth of a millisecond paints an arbitrary angle each frame, so
-     every loading state in the UI lost the only thing saying it was
-     working. What is unwelcome here is travel, so travel is what goes --
-     entrances keep their fade and lose their slide, panels arrive in
-     place, and the spinner breathes instead of turning. */
+  /* Travel is what goes: entrances keep their fade and lose their slide,
+     panels arrive in place, bars jump to their value, and the spinner
+     breathes instead of turning -- an infinite rotation cut to a hundredth
+     of a millisecond paints an arbitrary angle each frame, which says
+     nothing about working. */
   :root { --rise-y: 0px; }
-  .bar-fill, .ratio-fill { transition: none; }
+  .bar-fill, .ratio-fill, .gs-fill { transition: none; }
   .spin { animation: breathe 1.5s ease-in-out infinite; }
 }
 @keyframes breathe { 50% { opacity: .25; } }
@@ -571,14 +552,14 @@ kbd {
   background-color: transparent;
   border: none;
   border-radius: var(--r-sm);
-  padding: 0 14px 0 0;
-  height: auto; min-height: 0;
+  padding: 0 var(--sp-4) 0 0;
+  height: auto; min-height: var(--ctl-h);
   flex: 1; min-width: 0;
   justify-content: flex-end;
   background-position: right 0 center;
 }
 .pick.project-sel:hover, .pick.project-sel[aria-expanded="true"] { color: var(--ink); }
-.pick.project-sel:focus-visible { outline: 1px solid var(--accent); outline-offset: 2px; }
+.pick.project-sel:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .pick.project-sel .pick-value { text-align: right; }
 /* the one row of the project list that is an action, not a project */
 .pick-row.pick-new .pick-label { color: var(--accent); }
@@ -627,15 +608,13 @@ kbd {
   background: none; border: none; cursor: pointer;
   color: var(--ink-3); font-size: var(--fs-md); line-height: 1;
   /* A square of the dense control height, even though the glyph inside is
-     13px. Two reasons: 21px was below the 24x24 target floor (WCAG 2.5.8) and
-     these are the controls that delete a relation and close a dialog; and it
-     shares a row with text buttons -- the domain table's actions cell has
-     three of those and this -- where anything shorter is the ragged edge
-     --ctl-h exists to end. Never taller than the dense height, because the
-     rows it sits inside are list rows and it must not set their height. */
+     13px: anything smaller falls under the 24x24 target floor (WCAG 2.5.8),
+     and these are the controls that delete a relation and close a dialog.
+     Never taller than the dense height, because the rows it sits inside are
+     list rows and it must not set their height. */
   width: var(--ctl-h-sm); height: var(--ctl-h-sm);
   padding: 0; border-radius: var(--r-md);
-  transition: all .12s;
+  transition: color .12s, background-color .12s;
   display: inline-flex; align-items: center; justify-content: center;
   --ico: 13px;
 }
@@ -645,30 +624,15 @@ kbd {
 /* ── controls that do not look like buttons ───────────────────────────────
    A chip, a uid, a row's own text, a result in a picker: each of these does
    something when you press it, so each of them IS a <button> in the markup.
-   They used to be spans and divs with click handlers -- unreachable by
-   keyboard and nameless to a screen reader -- and the fix costs only the
-   browser styling this strips back. Declared here, ahead of the components
-   themselves, so each still owns its own look. */
-.chip, .uid-chip, .collide-chip, .picker-item, .row-open, .type-tag {
+   Declared here, ahead of the components themselves, so each still owns its
+   own look. */
+.chip, .uid-chip, .picker-item, .type-tag {
   font: inherit;
   color: inherit;
   text-align: inherit;
   background: none;
   border: none;
   margin: 0;
-}
-/* the primary target of a list row: its own text, stretched across whatever
-   space the row gives it so the hit area matches what the mouse already had */
-.row-open {
-  display: block; width: 100%;
-  padding: 0;
-  /* One line of small text is under 19px, and this is the control that opens
-     the record. The leading, not a min-height, because it has to CENTRE the
-     line in the 24px it claims -- a min-height would leave the text at the top
-     of the box and misalign it against everything beside it. Overridden where
-     the same button wraps to two lines (see the narrow block). */
-  line-height: var(--tap);
-  cursor: pointer;
 }
 
 /* .pick is a BUTTON standing in for a select (see core/pick.js) -- there is
@@ -769,15 +733,13 @@ input[aria-invalid="true"], .pick[aria-invalid="true"], textarea[aria-invalid="t
   color: var(--ink-2);
   background: none; border: none; border-radius: var(--r-sm);
   padding: var(--sp-1) var(--sp-3); cursor: pointer;
-  /* the --tap floor, which this control was declared to honour and did not:
-     it measured 23px, one pixel under, and it is the Active/Archived/All
-     filter and the drawer's confidence setter -- two of the most-pressed
-     targets in the app */
+  /* the --tap floor: this is the Active/Archived/All filter and the record's
+     confidence setter, two of the most-pressed targets in the app */
   min-height: var(--tap);
   /* the group carries the row's height; a button inside it fills that */
   height: 100%;
   display: inline-flex; align-items: center; gap: var(--sp-2);
-  transition: all .13s;
+  transition: color .13s, background-color .13s;
 }
 .seg button:hover { color: var(--ink); }
 /* same rule as the rail: aria-pressed IS the selected state, not a mirror
@@ -796,8 +758,7 @@ input[aria-invalid="true"], .pick[aria-invalid="true"], textarea[aria-invalid="t
    -- `note` against `anti_pattern` -- and a stack of them left-aligned is a
    ragged edge whichever end you pin; the dot puts a mark at the same x on
    every row, so the eye has a column to run down and the ragged edge stops
-   mattering. It used to be the ONLY colour, next to a name at --ink-2 like
-   everything else on the row, which is the opposite failure.
+   mattering.
 
    Tint and outline are mixed from the one ink token, so a type has one
    colour on file and the chip cannot drift from the dot beside it in a
@@ -822,15 +783,6 @@ input[aria-invalid="true"], .pick[aria-invalid="true"], textarea[aria-invalid="t
    on its own beside a line of it */
 .type-tag .dot { width: 7px; height: 7px; }
 button.type-tag { cursor: pointer; min-height: var(--tap); }
-/* the audit row opens its memory by its uid, with the type as a mark in
-   front of it -- see the note in views/maintenance.js */
-.au-open {
-  display: inline-flex; align-items: center; gap: var(--sp-2);
-  min-height: var(--tap);
-  font: 500 var(--fs-label) var(--font-m);
-  color: var(--ink-2); cursor: pointer;
-}
-.au-open:hover { color: var(--ink); }
 .t-note         { --c: var(--t-note);         --tc: var(--t-note-ink); }
 .t-checkpoint   { --c: var(--t-checkpoint);   --tc: var(--t-checkpoint-ink); }
 .t-anti_pattern { --c: var(--t-anti_pattern); --tc: var(--t-anti_pattern-ink); }
@@ -871,11 +823,9 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
 .chip.clickable:hover { border-color: rgba(187, 134, 252, .4); color: var(--accent); }
 
 .conf-pill { display: inline-flex; align-items: center; gap: var(--sp-1); font-size: var(--fs-label); color: var(--ink-2); white-space: nowrap; --ico: 12px; }
-/* Mark only, for a list row. Slightly larger, because it is carrying the
-   state on its own and 12px of ring is small to read at a glance -- and a
-   FIXED box, because one of the three has a fill (below) and the padding
-   that fill needs was pushing that row's type chip 16px right of every
-   other row's. A column that moves is not a column. */
+/* Mark only, for a list row: slightly larger, since it carries the state on
+   its own, and a FIXED box, so the fill one of the three wears cannot push
+   the type chip beside it out of column. */
 .conf-pill.compact {
   gap: 0; --ico: 14px;
   width: 22px; height: 22px; flex: none;
@@ -936,18 +886,16 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
 
 /* ── view head ───────────────────────────────────────────────────────── */
 
-/* Named for assistive tech, drawn for nobody. Every view used to open with
-   its own name in 22px over the nav pill that already said the same word,
-   and on Health with the database's absolute path under it. What a heading
-   is FOR -- a document outline, and a screen reader's way of announcing
-   what just loaded -- does not need pixels. */
+/* Named for assistive tech, drawn for nobody: what a heading is FOR -- a
+   document outline, and a screen reader's way of announcing what just
+   loaded -- needs no pixels. */
 .sr-only {
   position: absolute; width: 1px; height: 1px;
   margin: -1px; padding: 0; overflow: hidden;
   clip-path: inset(50%); white-space: nowrap; border: 0;
 }
-/* The line of live figures where a heading used to be: what the view holds,
-   not what it is called. */
+/* The line of live figures under the bar: what the view holds, not what it
+   is called. */
 .view-note {
   margin-bottom: var(--sp-4);
   font-size: var(--fs-sm); color: var(--ink-3);
@@ -1010,15 +958,14 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
 
 .grid { display: grid; gap: var(--sp-4); }
 .grid > * { min-width: 0; } /* long nowrap snippets must ellipsize, not blow the track */
-.grid-2 { grid-template-columns: 1fr 1fr; }
 .grid-3232 { grid-template-columns: 3fr 2fr; }
-@media (max-width: 1080px) { .grid-2, .grid-3232 { grid-template-columns: 1fr; } }
+@media (max-width: 1080px) { .grid-3232 { grid-template-columns: 1fr; } }
 
 /* ── health ───────────────────────────────────────────────────────────────
    The landing view: the ring, the index and its axes, the symptom list, the
    calendar, and confidence split by type. Everything here is a reading of
-   the store's condition, which is why the numbers are set in the data font
-   and the labels are not. */
+   the store's condition: the numbers are set in the data font, the labels
+   are not. */
 
 /* the ring's column against everything else. 380px is the ring at the size
    the figure inside it stays a headline rather than a caption. */
@@ -1029,8 +976,8 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
 .hx-right { display: grid; gap: var(--sp-4); min-width: 0; }
 
 /* ── the ring ──
-   One of them, on the confidence split: three segments whose proportions
-   are the whole point of drawing it as a ring at all. */
+   One of them, on the confidence split: three segments, drawn in proportion
+   to it. */
 
 .hx-ring-panel { display: flex; flex-direction: column; }
 .hx-ring {
@@ -1188,8 +1135,7 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
 
 .hx-types { display: flex; flex-direction: column; gap: var(--sp-1); }
 /* The type, then its bar, then its count -- one line each, so the six read
-   as a chart. They were stacked, chip over bar, which made six rows of two
-   things that had to be paired up by eye. */
+   as a chart. */
 .hx-type {
   display: grid; grid-template-columns: 118px minmax(0, 1fr) 44px;
   align-items: center; gap: var(--sp-3);
@@ -1379,13 +1325,22 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
 /* a level nobody wrote to: it exists because something deeper is filed
    under it, which is a different kind of thing from a domain somebody named */
 .dom-name.implicit { color: var(--ink-3); font-style: italic; }
-.dom-arrow { font: 400 var(--fs-label) var(--font-m); color: var(--accent); white-space: nowrap; }
+.dom-arrow {
+  font: 400 var(--fs-label) var(--font-m); color: var(--accent);
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+/* Right-aligned in a track of its own, so fifty of them read as a column
+   rather than as fifty different indents. The crossing variant is a phrase
+   and grows past the track to the LEFT; its right edge is the same one. */
 .dom-count {
+  flex: none; min-width: 26px; text-align: right;
   font: 400 var(--fs-label) var(--font-m); color: var(--ink-3);
   font-variant-numeric: tabular-nums;
 }
 .dom-count.crossing { color: var(--secondary); }
-.dom-into { --ico: 11px; color: var(--ink-3); flex: none; }
+/* width of its own, because the empty span that stands in for a leaf's
+   missing chevron has no glyph to get one from */
+.dom-into { --ico: 11px; width: var(--ico); color: var(--ink-3); flex: none; }
 .dom-level.on .dom-into { color: var(--accent); }
 
 /* ── the level's own pane ── */
@@ -1516,9 +1471,6 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
    the column widths stop agreeing with the header. */
 .table-scroll { overflow-x: auto; }
 
-.type-dots { display: inline-flex; gap: var(--sp-1); align-items: center; }
-.type-dots .dot { width: 7px; height: 7px; }
-
 /* ── memories list ───────────────────────────────────────────────────── */
 
 .list-toolbar {
@@ -1586,8 +1538,8 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
    FILL -- worked on, empty, selected -- and never by colour alone: the
    number, the count and the bars all move with it.
 
-   An empty day still carries a fill. Painting it in the page colour made it
-   disappear, and the month stopped reading as a block of days. */
+   An empty day still carries a fill, so the month reads as a block of
+   days. */
 .opt-cell {
   min-height: 84px;
   display: flex; flex-direction: column; gap: var(--sp-1);
@@ -1753,7 +1705,6 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
   gap: var(--sp-2); padding: var(--sp-6) var(--sp-5); text-align: center;
 }
 .opt-empty-mark { --ico: 26px; color: var(--ink-3); }
-.opt-empty-mark.s-ok { --ico: 22px; color: var(--ok); }
 .opt-empty-msg { margin: 0; max-width: 280px; color: var(--ink-2); line-height: 1.6; }
 .opt-day-empty .hint-sm { margin: 0; max-width: 300px; }
 
@@ -2102,16 +2053,12 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
   min-width: 0; overflow: hidden;
 }
 .mem-main { min-width: 0; }
-/* also a .row-open button -- the clamp works the same on one */
-/* --ink, not --ink-2: this is the memory, and it was two tiers quieter than the
-   uid chip sitting beside it. The SIZE stays at --fs-sm though: at --fs-body the
-   snippet dominated the row instead of leading it. Brightness is what makes it
-   the primary thing here; it does not also need to be the biggest. */
-/* The line-height is the target: this button is the row's primary control and
-   one line of --fs-sm is 18.75px, under the pointer floor. 24px of leading
-   centres the same single line inside a 24px box, so the row does not grow
-   (the domain chip is still the tallest child) and the ellipsis still works,
-   which it would not inside a flex box. */
+/* The row's primary control: one line of the memory, clipped. It leads the
+   row by brightness -- --ink against the --ink-3 around it -- rather than by
+   size, which at --fs-body made it dominate instead. The leading and not a
+   min-height carries the 24px target: leading centres the single line in the
+   box, a min-height would pin it to the top, and a flex box would cost the
+   ellipsis. */
 .mem-snippet {
   color: var(--ink); font-size: var(--fs-sm); line-height: 24px;
   display: block; width: 100%;
@@ -2220,7 +2167,9 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
   background: none; border: 0; padding: 0; height: auto;
   color: var(--ink); font: 400 var(--fs-sm) var(--font-ui);
 }
+/* the ring belongs to the box, not to the bare field inside it */
 .mi-tagbox input:focus { outline: none; }
+.mi-tagbox:focus-within { border-color: var(--accent); }
 
 .mi-actions { display: flex; flex-direction: column; gap: var(--sp-2); }
 .mi-actions .btn { justify-content: flex-start; width: 100%; }
@@ -2265,9 +2214,8 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
    top carrying where you came from, where you are in the list, and the two
    controls that act on the whole record.
 
-   Both columns scroll inside themselves. A record with forty relations and
-   a long history used to make the page as tall as the LONGER of the two, so
-   reading the body meant scrolling past the metadata that explains it. */
+   Both columns scroll inside themselves, so neither can make the page as
+   tall as the longer of the two. */
 
 .rec-shell { gap: 0; }
 
@@ -2276,7 +2224,7 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
    measurements, so the same rule rather than a second copy of it. */
 .rec-bar, .opt-bar {
   flex: none;
-  display: flex; align-items: center; gap: var(--sp-2);
+  display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2);
   padding-bottom: var(--sp-3);
   margin-bottom: var(--sp-3);
   border-bottom: 1px solid var(--line-soft);
@@ -2290,6 +2238,7 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
 .rec-back-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .rec-crumb {
   margin-left: var(--sp-2);
+  display: inline-flex; align-items: center; min-height: var(--tap);
   background: none; border: 0; padding: 0;
   font: 400 var(--fs-sm) var(--font-m); color: var(--ink-3); cursor: pointer;
   min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
@@ -2483,6 +2432,7 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
 .rf-count.over { color: var(--bad-ink); }
 .rf-edit {
   margin-left: auto; display: inline-flex; align-items: center; gap: var(--sp-1);
+  min-height: var(--tap);
   --ico: 12px;
   background: none; border: 0; padding: 0;
   font: 500 var(--fs-sm) var(--font-ui); color: var(--accent); cursor: pointer;
@@ -2499,12 +2449,10 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
 
 .rf-split { display: grid; grid-template-columns: 1fr 1fr; }
 .rf-split.rf-solo { grid-template-columns: 1fr; }
-/* Editing on the stage keeps the card at the height it already had, and
-   each side of the pair scrolls inside it. The rule that made the old grid
-   drop its row cap -- a box you type into does not scroll inside a box --
-   is about the BOX: the textarea is the scroller here and it is on screen
-   whole. Letting the card grow instead put a 19.600-character block in a
-   card 14.612px tall, because the preview has no ceiling of its own. */
+/* Editing on the stage keeps the card at the height it already had, and each
+   side of the pair scrolls inside it: the textarea is the scroller, and it is
+   on screen whole. Letting the card grow instead leaves the preview with no
+   ceiling of its own. */
 .rec-stage .rf-split { flex: 1; min-height: 0; }
 .rec-stage .rf-pane { min-height: 0; }
 .rec-stage .rf-pane textarea { flex: 1; min-height: 0; resize: none; }
@@ -2569,6 +2517,7 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
 .rs-n { font: 400 var(--fs-label) var(--font-m); color: var(--ink-3); }
 .rs-more {
   margin-left: auto;
+  display: inline-flex; align-items: center; min-height: var(--tap);
   background: none; border: 0; padding: 0;
   font: 500 var(--fs-label) var(--font-ui); color: var(--accent); cursor: pointer;
 }
@@ -2595,7 +2544,9 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
 }
 .rs-chip-x {
   --ico: 10px;
-  display: inline-flex; align-items: center;
+  display: inline-flex; align-items: center; justify-content: center;
+  /* the glyph is 10px; the target around it is the pointer floor */
+  min-width: var(--tap); min-height: var(--tap); margin: calc(-1 * var(--sp-1)) 0;
   background: none; border: 0; padding: 0 var(--sp-0);
   color: var(--ink-3); cursor: pointer;
 }
@@ -2611,6 +2562,7 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
   background: none; border: 0; padding: 0; cursor: pointer;
   min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
+button.rs-mono { display: inline-flex; align-items: center; min-height: var(--tap); }
 button.rs-mono:hover { color: var(--accent); }
 
 .rs-rel {
@@ -2629,6 +2581,7 @@ button.rs-mono:hover { color: var(--accent); }
 .rs-rel:last-child { border-bottom: 0; }
 .rs-rel .snippet {
   flex: 1; min-width: 0; text-align: left;
+  display: inline-flex; align-items: center; min-height: var(--tap);
   background: none; border: 0; padding: 0;
   font-size: var(--fs-label); color: var(--ink-2); cursor: pointer;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
@@ -2808,7 +2761,7 @@ button.rs-mono:hover { color: var(--accent); }
 .rt-code .hljs-title, .rt-code .hljs-name, .rt-code .hljs-attr,
 .rt-code .hljs-attribute, .rt-code .hljs-section,
 .rt-code .hljs-variable, .rt-code .hljs-template-variable { color: var(--accent-hi); }
-.rt-code .hljs-deletion { color: var(--bad); }
+.rt-code .hljs-deletion { color: var(--bad-ink); }
 .rt-code .hljs-emphasis { font-style: italic; }
 .rt-code .hljs-strong { font-weight: 600; }
 
@@ -2850,12 +2803,9 @@ button.rs-mono:hover { color: var(--accent); }
 /* The marks a relation row wears, wherever it is drawn: which way it
    points, what kind of tie it is, and that the other end is gone. */
 .rel-dir { color: var(--ink-3); flex: none; width: 18px; display: inline-flex; justify-content: center; --ico: 14px; }
-/* The data font was right while this held an IDENTIFIER; it holds the
-   relation's NAME now, and a name is a word. Roboto Mono at 11px drew the
-   translated name of `relates_to` 40px wider than the identifier -- taken
-   straight out of the peer's own name beside it, in a column that is 368px
-   in total. The UI font gives that back and reads better for words either
-   way. The stored string is still one hover away (shared.relTypeTitle). */
+/* Holds the relation's NAME, so it is set in the UI font: a translated name
+   is a word, and it shares a 368px column with the peer's own name. The
+   stored identifier is one hover away (shared.relTypeTitle). */
 .rel-type-chip {
   font: 500 var(--fs-label) var(--font-ui);
   letter-spacing: .02em;
@@ -3166,9 +3116,9 @@ button.rs-mono:hover { color: var(--accent); }
    at the dense height; what is left here are the widths this one needs.
 
    Both pickers take the same width -- a row of controls that each sizes to its
-   own longest label is a ragged edge -- and it is the longest PLACEHOLDER that
-   sets it, not the shortest: "Todos os domínios" plus the chevron's reserved
-   32px needs 180, and at 150 pt-BR clipped its own first option. */
+   own longest label is a ragged edge -- and the width is set by the longest
+   TRANSLATED placeholder plus the chevron's reserved 32px, not by the
+   shortest. */
 .graph-bar > input, .graph-bar > .pick { font-size: var(--fs-sm); }
 .graph-bar > .pick { flex: none; width: 180px; }
 
@@ -3296,61 +3246,35 @@ button.rs-mono:hover { color: var(--accent); }
 
 /* ── domains ─────────────────────────────────────────────────────────── */
 
-.collide-chip {
-  font-size: var(--fs-label); letter-spacing: .03em;
-  color: var(--warn);
-  border: 1px dashed rgba(255, 213, 79, .4);
-  border-radius: var(--r-sm); padding: var(--sp-0) var(--sp-2);
-  cursor: pointer;
-  display: inline-flex; align-items: center; gap: var(--sp-1);
-  min-height: var(--tap);
-  --ico: 11px;
-}
-.rename-form { display: flex; gap: var(--sp-2); align-items: center; flex-wrap: wrap; }
+/* A domain is a path, so a list of them is a tree: one row per level,
+   indented by --d (its depth), and only the leaf name written out -- the
+   ancestors are the rows above it. The full path stays in the row's title and
+   in every link it emits, because that is what the API matches on.
 
-/* A domain is a path, so the table is a tree: one row per level, indented
-   by --d (its depth), and only the leaf name written out -- the ancestors
-   are the rows above it. The full path stays in the row's title and in
-   every link it emits, because that is what the API matches on.
+   ONE level is --dom-slot plus the gap after it, and the indent has to be
+   that same distance or the rail and the names it points at disagree.
+   Everything below is derived from that pair.
 
-   ONE level is the twist box plus the gap after it, and the indent has to be
-   that same distance or the two disagree: at 18px a step the guide line under
-   a parent landed 8px to the LEFT of that parent's own twist, so every branch
-   pointed slightly off the row it came from. Everything below is derived from
-   the pair, and .dom-twist reads its width from here for the same reason.
-
-   Declared on both hosts of a domain tree -- the table cell and the picker's
-   domain row -- because the rails are one drawing (see domainRailHTML) and the
-   two would otherwise be one drawing at two scales. What the two do NOT share is where
-   a column sits, and each says so in two variables:
+   Two variables place a column, and the host sets them:
 
      --dom-rail-x   where column 0 starts, which is whatever a depth-1 row
                     puts at its own left edge.
      --dom-line     how far into a column the vertical runs, so it lands on
                     the thing that column is anchored to.
 
-   In the table that anchor is the parent's twist, so the line goes down its
-   middle. The picker has no twists -- nothing in it expands -- so it reserves
-   no column for one, or a root would sit indented from the edge of its own
-   list; there the anchor is the parent's NAME, and the line runs just inside
-   its first character the way `tree` prints it. */
-.dom-td, .pick-row.dom-row {
+   Nothing in the picker expands, so it reserves no column for a control -- a
+   root would otherwise sit indented from the edge of its own list. Its anchor
+   is the parent's NAME, and the line runs just inside the first character the
+   way `tree` prints it. The rail itself is drawn by core/shared.js
+   (domainRailHTML). */
+.pick-row.dom-row {
   position: relative;
-  --dom-twist: 18px;
-  --dom-step: calc(var(--dom-twist) + var(--sp-2));
+  --dom-slot: 18px;
+  --dom-step: calc(var(--dom-slot) + var(--sp-2));
 }
-.dom-td {
-  /* the cell's padding, then the gap that follows the indent spacer */
-  --dom-rail-x: calc(var(--sp-3) + var(--sp-2));
-  --dom-line: calc(var(--dom-twist) / 2);
-}
-.dom-cell { display: flex; align-items: center; gap: var(--sp-2); }
-.dom-cell::before { content: ""; flex: none; width: calc(var(--d, 0) * var(--dom-step)); }
 
 /* The guide rails, drawn OVER that indent: one column per ancestor level,
-   carrying the lines that say which level a row hangs off. That used to be
-   left to the reader to infer from how far a row was pushed right, which in a
-   deep tree means counting pixels against the row above. core/shared.js
+   carrying the lines that say which level a row hangs off. core/shared.js
    decides which columns carry a line; this draws them.
 
    Positioned against the whole row BOX -- padding included, and the extra
@@ -3377,34 +3301,15 @@ button.rs-mono:hover { color: var(--accent); }
   width: calc(var(--dom-step) - var(--dom-line) - 3px);
   height: 1px; background: var(--line);
 }
-/* A leaf in the table has no twist, only the invisible pad that keeps its
-   name in line with its siblings' -- so the line runs on across that pad to
-   the name instead of stopping at a slot with nothing in it. */
+/* A leaf holds no column open of its own, so the crossbar runs on across the
+   empty slot to the name instead of stopping short of it. */
 .dom-rail.dg-leaf i.dg-elbow::after {
   width: calc(var(--dom-step) * 2 - var(--dom-line) - 3px);
 }
-.dom-twist {
-  flex: none; width: var(--dom-twist, 18px); height: 18px; padding: 0;
-  display: inline-flex; align-items: center; justify-content: center;
-  background: none; border: none; cursor: pointer; color: var(--ink-3);
-  border-radius: var(--r-sm); --ico: 12px;
-}
-.dom-twist:hover { color: var(--accent); background: var(--hover-1); }
-.dom-twist[hidden] { display: none; }
-.dom-twist.leafpad { visibility: hidden; }
-.dom-twist svg { transition: transform .12s; }
-.dom-twist[aria-expanded="true"] svg { transform: rotate(90deg); }
 .dom-leaf { color: var(--ink); font-family: var(--font-m); font-size: var(--fs-sm); }
 /* a level that exists only because something deeper is filed under it:
    real enough to group by, but nobody wrote a memory to it */
 .dom-leaf.implicit { color: var(--ink-3); font-style: italic; }
-.dom-kids { font-size: var(--fs-label); color: var(--ink-3); }
-.dom-roll { font-size: var(--fs-label); color: var(--ink-3); margin-left: var(--sp-1); }
-/* An archived branch, once the reader has asked to see them. Quieter than a
-   live level and never only that: the row carries the word too, because a
-   shade of grey is not a state anyone can read off a single row. */
-.dom-dead .dom-leaf { color: var(--ink-2); }
-
 /* ── the picker ────────────────────────────────────────────────────────
    The panel behind .pick, for every choice in the app that used to be a
    native <select> popup -- the one surface this stylesheet could not reach,
@@ -3515,15 +3420,6 @@ input.pick-q:focus { box-shadow: inset 0 -2px 0 var(--accent); }
   text-align: left;
 }
 .pick-value .type-tag, .pick-value .conf-pill { pointer-events: none; }
-/* the dense variant, for a toolbar or a floating bar where the row it sits in
-   is already at btn-sm height */
-.pick-sm {
-  font-size: var(--fs-sm);
-  height: var(--ctl-h-sm);
-  padding-left: var(--sp-2); padding-right: var(--sp-5);
-  max-width: 190px;
-}
-
 /* The quiet variant, for a picker whose control wears no box at all (see
    core/projects.js): one step of elevation instead of eight, the data font of
    the rows it lists, and the accent on one row -- the project that is active. */
@@ -3556,7 +3452,7 @@ input.pick-q:focus { box-shadow: inset 0 -2px 0 var(--accent); }
 }
 
 /* The domain variant. The indent is the row's own padding, not a spacer
-   inside it: with no twist to hold a column open, a zero-width spacer would
+   inside it: with no control holding a column open, a zero-width spacer would
    still leave the flex gap after it and push every level -- a root included
    -- off the left edge of its own list. */
 .pick-row.dom-row {
@@ -3607,13 +3503,12 @@ input.pick-q:focus { box-shadow: inset 0 -2px 0 var(--accent); }
 }
 
 .mnt-state { margin-left: auto; display: flex; align-items: center; gap: var(--sp-3); }
-/* Which store the tabs are acting on. Not a verdict on it: the six checks
-   that used to hang off this line count the same defects the Health view
-   counts, and two screens saying it was two places to keep in step. */
+/* Which store the tabs are acting on. Not a verdict on it -- Health is the
+   view that reads the store's condition. */
 .mnt-store { font: 400 var(--fs-label) var(--font-m); color: var(--ink-3); }
 
-/* One repair: what it would act on, and the control that does it. No dot --
-   a status list is what this view stopped being. */
+/* One repair: what it would act on, and the control that does it. No status
+   dot -- the line is an action, not a reading. */
 .mnt-fix {
   display: flex; align-items: center; gap: var(--sp-3);
   padding: var(--sp-3) 0;
@@ -3920,8 +3815,8 @@ input.pick-q:focus { box-shadow: inset 0 -2px 0 var(--accent); }
 }
 
 /* Below the fill floor the tabs stack as a page: the rail goes above its
-   shelf, and every box grows to its content instead of scrolling inside
-   one that is no longer tall enough to be worth scrolling. */
+   shelf, and every box grows to its content instead of scrolling inside a
+   frame too short to scroll in. */
 @media (max-width: 1023px), (max-height: 619px) {
   .mnt-two { grid-template-columns: minmax(0, 1fr); }
   /* the rail is a band across the top here, not a column with a foot */
@@ -3967,7 +3862,7 @@ input.pick-q:focus { box-shadow: inset 0 -2px 0 var(--accent); }
 /* how much of a field's ceiling is used. Quiet until it is passed, because
    until then it is a fact about the draft and not a problem with it. */
 .sec-count { float: right; text-transform: none; letter-spacing: 0; color: var(--ink-3); }
-.sec-count.over { color: var(--bad); }
+.sec-count.over { color: var(--bad-ink); }
 /* The body did not read back into the fields its type is supposed to
    have. A thin edge all the way round rather than a thick one down the
    left: the warning is about the whole box, and a coloured tab on one
@@ -4609,7 +4504,7 @@ input.pick-q:focus { box-shadow: inset 0 -2px 0 var(--accent); }
 .dg-empty { font-size: var(--fs-sm); color: var(--ink-3); line-height: 1.6; }
 .dg-key {
   font: 500 var(--fs-label) var(--font-m);
-  color: var(--t-diagram);
+  color: var(--t-diagram-ink);
   background: var(--chip-fill);
   border: 1px solid var(--line-soft);
   border-radius: var(--r-sm); padding: var(--sp-0) var(--sp-2);
@@ -4639,7 +4534,9 @@ input.pick-q:focus { box-shadow: inset 0 -2px 0 var(--accent); }
   border-radius: var(--r-md); padding: var(--sp-1) var(--sp-2);
 }
 .dg-link .snippet {
-  flex: 1; font-size: var(--fs-sm); color: var(--ink-2);
+  flex: 1; min-width: 0; text-align: left;
+  background: none; border: 0; padding: 0;
+  font-size: var(--fs-sm); color: var(--ink-2);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .dg-link .snippet.clickable { cursor: pointer; }
@@ -4752,8 +4649,8 @@ input.pick-q:focus { box-shadow: inset 0 -2px 0 var(--accent); }
 .dgl-state { display: flex; justify-content: center; color: var(--ok); }
 .dgl-state.is-broken { color: var(--warn); }
 .dgl-main { min-width: 0; }
-/* 20px of leading, not the pointer floor .row-open uses: this line has a
-   second one under it, and the two together are what the row is tall for. */
+/* 20px of leading, not the 24px pointer floor: this line has a second one
+   under it, and the two together are what the row is tall for. */
 .dgl-name {
   display: block;
   font: 500 var(--fs-sm)/20px var(--font-ui); color: var(--ink);
@@ -4807,7 +4704,7 @@ input.pick-q:focus { box-shadow: inset 0 -2px 0 var(--accent); }
 }
 .dgl-ins-stats { display: grid; grid-template-columns: 1fr 1fr; gap: var(--sp-3); }
 /* the label voice is quiet; it inherits the pane's --ink otherwise */
-.dgl-ins-body .tile-label { color: var(--ink-2); }
+.dgl-ins-body .mg-label { color: var(--ink-2); }
 .dgl-stat { display: flex; flex-direction: column; min-width: 0; }
 .dgl-stat-n { font: 500 var(--fs-num) var(--font-m); color: var(--ink); }
 .dgl-ins-field { display: flex; flex-direction: column; gap: var(--sp-1); }
@@ -4934,7 +4831,7 @@ input.pick-q:focus { box-shadow: inset 0 -2px 0 var(--accent); }
   .mnt-file .ico { margin-top: 3px; }
   .mnt-file-when, .mnt-file-size { grid-column: 2; grid-row: 2; }
   .mnt-file-size { justify-self: end; }
-  /* names for columns that are no longer there */
+  /* the column heads, hidden at this width */
   .mnt-file-head { display: none; }
   /* a step's control drops under its own words rather than squeezing them */
   .mnt-step { flex-wrap: wrap; }

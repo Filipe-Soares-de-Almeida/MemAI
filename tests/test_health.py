@@ -205,9 +205,9 @@ def test_untagged_counts_a_tag_that_is_only_the_type(client):
 
 
 def test_the_orphan_symptom_counts_relations_not_memories(client):
-    """A dangling edge is legacy data. db.connect turns foreign keys on, so
-    nothing can write one today -- the row worth counting is one written
-    before the constraint, which is what a raw connection reproduces."""
+    """The symptom counts dangling relations, not the memories at their ends.
+    db.connect enforces foreign keys, so the edge is written through a raw
+    connection."""
     with db.connect() as conn:
         a, b = _add(conn), _add(conn)
         db.add_relation(conn, a, b, "relates_to")

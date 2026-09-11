@@ -17,6 +17,7 @@ import { typeTag, typeClass, uidChip, statusTag, wireCopyChips, failedHTML, retr
          getDomains, typeItems, domainDatalist } from '../core/shared.js';
 import { pickerFor, pickerValue, setPickerValue, wirePicker, fixedItems } from '../core/pick.js';
 import { icon } from '../core/icons.js';
+import { replaceParams } from '../core/router.js';
 import { openRecord } from './record.js';
 import { I18N, t } from '../i18n.js';
 
@@ -34,10 +35,10 @@ const OPS = {
      Clean orphans DELETES rows; VACUUM rewrites the file and discards the
      free pages an undo would have needed. */
   'orphans': { path: '/api/maintenance/clean-orphans', body: {},
-               confirm: t('mn.confirm.orphans'),
+               confirm: t('mn.confirm.orphans'), danger: true,
                msg: r => t('mn.msg.orphans', { r: r.relations_removed }) },
   'vacuum': { path: '/api/maintenance/vacuum', body: {},
-              confirm: t('mn.confirm.vacuum'),
+              confirm: t('mn.confirm.vacuum'), danger: true,
               msg: r => t('mn.msg.vacuum', { a: fmtBytes(r.before), b: fmtBytes(r.after) }) },
   'backup': { path: '/api/maintenance/backup', body: {},
               msg: r => t('mn.msg.backup', { name: r.path.split(/[\\/]/).pop(), size: fmtBytes(r.size) }) },
@@ -124,7 +125,8 @@ export async function renderMaintenance(view, params) {
     <div class="mnt-head">
       <div class="mnt-tabs" role="tablist" aria-label="${t('mn.title')}">
         ${TABS.map(id => `<button type="button" class="mnt-tab" role="tab" data-tab="${id}"
-            id="mntTab-${id}" aria-controls="mntPanel-${id}" aria-selected="${id === opened}">
+            id="mntTab-${id}" aria-controls="mntPanel-${id}" aria-selected="${id === opened}"
+            tabindex="${id === opened ? 0 : -1}">
             ${t('mn.tab.' + id)}<span class="mnt-tab-badge" data-badge="${id}" hidden></span></button>`).join('')}
       </div>
       <!-- Which store these tabs are acting on. The CONDITION it is in is
@@ -154,14 +156,16 @@ export async function renderMaintenance(view, params) {
   const BUILD = {};
 
   function show(id) {
-    view.querySelectorAll('.mnt-tab').forEach(
-      b => b.setAttribute('aria-selected', String(b.dataset.tab === id)));
+    view.querySelectorAll('.mnt-tab').forEach(b => {
+      b.setAttribute('aria-selected', String(b.dataset.tab === id));
+      b.tabIndex = b.dataset.tab === id ? 0 : -1;
+    });
     view.querySelectorAll('.mnt-panel').forEach(
       p => { p.hidden = p.dataset.panel !== id; });
-    /* replaceState, not go(): a tab is an ADDRESS worth deep-linking, not a
+    /* replaceParams, not go(): a tab is an ADDRESS worth deep-linking, not a
        step worth pressing Back through. Six of them in the history would
        put five presses between this view and the one you came from. */
-    history.replaceState(null, '', `#/maintenance?tab=${id}`);
+    replaceParams('maintenance', { tab: id });
     if (!built.has(id)) { built.add(id); BUILD[id](); }
   }
 
@@ -206,7 +210,8 @@ export async function renderMaintenance(view, params) {
   function wireOps(root) {
     root.querySelectorAll('[data-op]').forEach(b => b.addEventListener('click', async () => {
       const op = OPS[b.dataset.op];
-      if (op.confirm && !(await confirmModal({ title: t('mn.confirm.title'), body: op.confirm, okLabel: t('common.run') }))) return;
+      if (op.confirm && !(await confirmModal({ title: t('mn.confirm.title'), body: op.confirm,
+                                              okLabel: t('common.run'), danger: !!op.danger }))) return;
       b.disabled = true;
       b.setAttribute('aria-busy', 'true');
       const prev = b.textContent;
@@ -367,7 +372,7 @@ export async function renderMaintenance(view, params) {
       $('#bkDropZip').addEventListener('click', async () => {
         if (!(await confirmModal({ title: t('mn.bk.deleteZip'),
           body: t('mn.confirm.deleteZip', { n: archive.count, name: archive.name }),
-          okLabel: t('mn.bk.deleteZip') }))) return;
+          okLabel: t('mn.bk.deleteZip'), danger: true }))) return;
         try {
           const r = await api('/api/maintenance/archive-delete', { body: { name: archive.name } });
           bkZip = null;
@@ -561,7 +566,7 @@ export async function renderMaintenance(view, params) {
       const names = picked.map(f => f.name);
       if (!(await confirmModal({ title: t('mn.bk.delete'),
         body: t('mn.confirm.deleteBackups', { n: names.length, size: fmtBytes(size) }),
-        okLabel: t('mn.bk.delete') }))) return;
+        okLabel: t('mn.bk.delete'), danger: true }))) return;
       try {
         const r = await api('/api/maintenance/backup-delete', { body: { names } });
         await afterShelfWrite(t('mn.msg.deleted', {

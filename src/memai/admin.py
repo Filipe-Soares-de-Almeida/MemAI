@@ -392,9 +392,8 @@ def overview(request, payload) -> dict:
                 """SELECT substr(created_at, 1, 10) AS day, COUNT(*)
                    FROM memories GROUP BY day ORDER BY day DESC LIMIT 45""").fetchall())
         ]
-        # Confidence within each type, which is what says WHERE the vetting
-        # is behind: a store can be 58% confirmed overall and have every
-        # anti_pattern in it unread.
+        # Confidence within each type: where the vetting is behind, which
+        # the store-wide split cannot say.
         by_type_conf: dict[str, dict[str, int]] = {}
         for tp, conf, n in conn.execute(
                 """SELECT type, confidence, COUNT(*) FROM memories
@@ -2105,7 +2104,7 @@ def _group_facts(conn: sqlite3.Connection, kind: str, rows: list) -> dict:
         return {"terms": terms}
     if kind == "redomain":
         paths = {str(p.get("domain", "")).strip() for p in payloads}
-        # one destination is worth naming; several are just "N domains"
+        # `to` names the destination only when the group has exactly one
         return {"paths": len(paths), "to": paths.pop() if len(paths) == 1 else ""}
     if kind == "crosslist":
         return {"paths": len({p for pl in payloads for p in pl.get("also", []) if p})}
@@ -2123,12 +2122,11 @@ def _group_facts(conn: sqlite3.Connection, kind: str, rows: list) -> dict:
 def optimization_summary(request, payload) -> dict:
     """The run's own head: how much of it was checked, and what it would do.
 
-    Everything here is read off the staged rows. Deliberately NOT here: any
-    projection of the health index. One suggestion moves it by 100/active/4
-    of a point -- 0.046 on a 546-memory store -- so a per-group or
-    per-suggestion "gain" rounds to zero on every row, and the whole run
-    reaches +1 at best. `verified` is what actually varies between one
-    suggestion and the next, so that is what the head reports.
+    Everything here is read off the staged rows. No projection of the health
+    index: one suggestion moves it by 100/active/4 of a point, so a per-group
+    or per-suggestion "gain" rounds to zero on every row and a whole run
+    reaches +1 at best. The head reports `verified` instead, which varies
+    from one suggestion to the next.
     """
     try:
         run_id = int(request.query_params.get("run", ""))

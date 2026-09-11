@@ -24,7 +24,7 @@ export async function openNewMemory() {
   const modal = openModal({
     title: t('nm.title'),
     bodyHTML: `
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+      <div class="field-pair">
         <div class="field"><label for="nmType">${t('nm.type')}</label>
           ${pickerFor({ id: 'nmType', value: 'note', items: types, ariaLabel: t('nm.type') })}</div>
         <div class="field"><label for="nmConf">${t('nm.conf')}</label>

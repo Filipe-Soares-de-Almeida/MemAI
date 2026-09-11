@@ -339,8 +339,8 @@ def test_the_dashboard_refuses_it(client):
 
 
 def test_a_restore_reproduces_a_row_that_already_carries_it(conn):
-    """A store holding one from before this refusal still exports and imports:
-    a round trip reproduces rows, it does not re-judge them."""
+    """A restore reproduces a row whose body carries a leak: a round trip
+    reproduces rows, it does not re-judge them."""
     db.restore_memory(conn, {"uid": "a1b2c3d4e5f60718", "type": "note",
                              "title": "a cache warmup", "content": LEAKED})
     assert db.get_memory(conn, "a1b2c3d4e5f60718")["content"] == LEAKED

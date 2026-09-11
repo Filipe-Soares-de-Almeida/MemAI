@@ -1,13 +1,10 @@
 /* The memory list, and the inspector beside it.
 
-   The list is the same one it has always been -- the filters, the paging,
-   the roving-tabindex keyboard model. What changed is where the actions
-   live: they used to be a strip that floated in over the rows once
-   something was ticked, so the controls appeared on top of the thing they
-   acted on and said only how many rows they had. The pane on the right is
-   always there, it shows the memory when exactly one is ticked, and it
-   turns into a batch editor when more are -- with what the change will do
-   written out before the button that does it.
+   The list carries the filters, the paging and a roving-tabindex keyboard
+   model. The pane on the right is always there: it shows the memory when
+   exactly one row is ticked, and turns into a batch editor when more are,
+   with what the change will do written out before the button that does
+   it.
 
    Confidence, tags and the filed domain are STAGED: they are chosen here
    and written by Apply, in one /api/bulk call each. Archive, restore and
@@ -52,10 +49,9 @@ let rowData = new Map();
    row and a tick is only ever needed to build a batch. */
 let caretUid = '';
 
-/* The one place that writes a row's selected-ness. The tick, the row's own
+/* The one place that writes a row's selected-ness: the tick, the row's own
    wash, the state a screen reader reads off the row, and the set the
-   inspector acts on are four faces of one fact, and four call sites used to
-   each set the ones they happened to remember. */
+   inspector acts on are four faces of one fact. */
 function selectRow(row, on) {
   row.querySelector('input[type=checkbox]').checked = on;
   row.classList.toggle('selected', on);
@@ -152,6 +148,7 @@ export async function renderMemories(view, params, ctx) {
           <!-- how the search behaves, on the field it behaves on. It was a
                line of prose under the view's title, three inches away. -->
           <input id="fQ" type="search" placeholder="${t('mem.search.placeholder')}"
+                 aria-label="${esc(t('mem.search.placeholder'))}"
                  title="${esc(t('mem.sub'))}" value="${esc(state.q)}" spellcheck="false">
           <!-- Pickers, not selects (core/pick.js): a type keeps its colour and a
                confidence its ring in the list where you choose one, and a domain
@@ -392,13 +389,10 @@ export async function renderMemories(view, params, ctx) {
 }
 
 /* ─── the rows ────────────────────────────────────────────────────────────
-   Quiet on purpose. The row used to carry the domain, the tags, the recall
-   count and the full date beside the snippet -- four annotations per row,
-   fifty rows down the page, and the one you were looking for was whichever
-   the eye happened to land on. What a row says now is what tells you
-   whether to open it: how far it has been vetted, what kind of memory it
-   is, what it is called, and how old. Everything else is a tick away, in
-   the pane that has room to lay it out. */
+   A row says what tells a reader whether to open it: how far it has been
+   vetted, what kind of memory it is, what it is called, and how old.
+   Everything else is a tick away, in the pane that has room to lay it
+   out. */
 
 function renderRows(items, scope = '') {
   if (!items.length) return `<div class="empty">${t('mem.empty')}</div>`;

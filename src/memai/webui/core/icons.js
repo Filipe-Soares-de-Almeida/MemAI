@@ -244,7 +244,7 @@ const ICONS = {
   },
 };
 
-export const iconNames = () => Object.keys(ICONS);
+
 
 /* Markup for a template string.
 

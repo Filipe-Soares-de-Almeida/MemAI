@@ -121,10 +121,8 @@ export async function renderGraph(view, params, ctx) {
         <button type="button" data-v="active" aria-pressed="${state.status === 'active'}">${t('common.active')}</button>
         <button type="button" data-v="" aria-pressed="${state.status === ''}">${t('common.all')}</button>
       </div>
-      <!-- What the drawing carries. Independent of each other, so a button
-           each rather than a choice between them: a reader who wants the
-           places named and the memories not is asking one question, and a
-           single titles toggle answered a different one. -->
+      <!-- What the drawing carries. The three are independent of each
+           other, so a button each rather than a choice between them. -->
       <div class="seg" role="group" aria-label="${t('g.show')}">
         <button type="button" id="gShowLinks" aria-pressed="${show.links}"
                 title="${esc(t('g.show.links.hint'))}">${icon('relation')}${t('g.show.links')}</button>
