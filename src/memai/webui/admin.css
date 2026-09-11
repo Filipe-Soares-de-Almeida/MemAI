@@ -3088,38 +3088,31 @@ button.rs-mono:hover { color: var(--accent); }
 
 .graph-wrap {
   position: relative;
-  height: calc(100vh - 200px); min-height: 480px;
+  height: calc(100vh - 246px); min-height: 420px;
   border: 1px solid var(--line-soft);
   border-radius: var(--r-lg);
-  /* Not the dotted well the diagram canvas uses: what is drawn here
-     composites ADDITIVELY over the ground, so the ground has to stay the
-     darkest tone the theme has and the depth cannot come from a lighter
-     surface. Two washes in the primary and secondary hues carry it instead,
-     at an alpha where they read as distance and not as decoration. */
+  /* Not the dotted well the diagram canvas uses: this one holds a whole
+     store at once, so the ground stays the darkest tone the theme has and the
+     depth comes from two washes in the primary and secondary hues, at an
+     alpha where they read as distance and not as decoration. */
   background:
     radial-gradient(115% 85% at 50% 42%, rgba(187, 134, 252, .06), transparent 60%),
     radial-gradient(95% 75% at 82% 90%, rgba(3, 218, 198, .045), transparent 58%),
     var(--bg);
   overflow: hidden;
 }
-/* free flight is a MODE, and a cursor cannot say so: the frame does */
-.graph-wrap.flying { box-shadow: inset 0 0 0 1px rgba(187, 134, 252, .38); }
 /* touch-action: none so a drag on the canvas is a drag ON the canvas and not
    the browser scrolling the page out from under it -- the engines listen on
    pointer events, which covers mouse, pen and finger with one path */
-/* width/height 100% for the same reason .dg-stage canvas has them, and this
-   is the canvas that went without. A canvas's width/height ATTRIBUTES act as
-   a CSS width, and an absolutely-positioned REPLACED element with width:auto
-   resolves from its intrinsic size rather than stretching between left and
-   right -- so `cv.width = r.width * dpr` (views/graph.js) was also setting
-   the displayed width, and .graph-wrap's overflow:hidden quietly clipped the
-   difference. At devicePixelRatio 1 the attribute happened to equal the wrap
-   and the bug was a one-pixel sliver; at 2 the element laid out at twice its
-   frame and three quarters of the graph was painted off-screen, with no
-   scrollbar and nothing on screen saying so. Every 125% / 150% / 200%
-   Windows scaling and every Retina panel had it; the machine it was written
-   on did not. resize() already reads the WRAP for its coordinate space, so
-   pinning the CSS size to the wrap is what the drawing code always assumed. */
+/* width/height 100% for the same reason .dg-stage canvas has them. A canvas's
+   width/height ATTRIBUTES act as a CSS width, and an absolutely-positioned
+   REPLACED element with width:auto resolves from its intrinsic size rather
+   than stretching between left and right -- so the backing store the engine
+   sets (`cv.width = w * dpr`, graph-2d.js) would also set the displayed
+   width, and at a device pixel ratio of 2 the element lays out at twice its
+   frame with .graph-wrap's overflow:hidden clipping the difference. The
+   engine reads the WRAP for its coordinate space, so the CSS size is pinned
+   to the wrap. */
 .graph-wrap canvas {
   position: absolute; inset: 0;
   width: 100%; height: 100%;
@@ -3128,10 +3121,6 @@ button.rs-mono:hover { color: var(--accent); }
 }
 .graph-wrap canvas.grabbing { cursor: grabbing; }
 .graph-wrap canvas.linkmode { cursor: crosshair; }
-/* The names sit on their own canvas over the drawing, and nothing is aimed
-   at them: every gesture belongs to the WebGL canvas underneath. */
-.graph-wrap #gLabels { z-index: 2; pointer-events: none; cursor: default; }
-
 /* The arrangement, while it is still arranging. On a large store this is a
    real wait and the layout visibly condenses through it, so it reports how
    much is left rather than spinning. */
@@ -3160,22 +3149,7 @@ button.rs-mono:hover { color: var(--accent); }
   transition: transform .14s linear;
 }
 
-/* The keys, while they are the ones that do something. A modifier nobody was
-   told about is a feature nobody has; this appears with the mode and leaves
-   with it. */
-.graph-flight {
-  position: absolute; left: 50%; top: 54px;
-  transform: translateX(-50%);
-  z-index: 4; max-width: calc(100% - 24px);
-  background: var(--glass);
-  border: 1px solid rgba(187, 134, 252, .35);
-  border-radius: var(--r-md);
-  padding: var(--sp-2) var(--sp-3);
-  font-size: var(--fs-sm); color: var(--ink-2);
-  text-align: center;
-}
-
-/* No WebGL2, nothing to draw, and nothing to pretend: the same memories are
+/* No canvas, nothing to draw, and nothing to pretend: the same memories are
    one click away as text. */
 .graph-blocked {
   position: absolute; inset: 0;
@@ -3188,28 +3162,33 @@ button.rs-mono:hover { color: var(--accent); }
   font-size: var(--fs-read); line-height: 1.6; color: var(--ink-2);
 }
 
-/* A floating strip over the canvas, and the row this app's --ctl-h token was
-   first worked out on: every control in it answers to the dense height.
+/* The row ABOVE the drawing is the list toolbar every other view files under,
+   at the dense height; what is left here are the widths this one needs.
 
-   It spans the canvas rather than hugging its content so the search field can
-   take the space left over: it is the filter that answers the most questions
-   here, so it leads the row and it is the widest thing in it. */
-.graph-controls {
+   Both pickers take the same width -- a row of controls that each sizes to its
+   own longest label is a ragged edge -- and it is the longest PLACEHOLDER that
+   sets it, not the shortest: "Todos os domínios" plus the chevron's reserved
+   32px needs 180, and at 150 pt-BR clipped its own first option. */
+.graph-bar > input, .graph-bar > .pick { font-size: var(--fs-sm); }
+.graph-bar > .pick { flex: none; width: 180px; }
+
+/* The arrangement, and the only control left standing on the canvas: it says
+   what the drawing IS rather than which memories are in it. Wide enough for
+   the longest name in either catalogue, and lifted off the field by its own
+   shadow, since what is behind it is a drawing and not a surface. */
+.graph-mode {
   --ctl-h: var(--ctl-h-sm);
-  position: absolute; top: 12px; left: 12px; right: 12px; z-index: 3;
-  display: flex; flex-wrap: wrap; gap: var(--sp-2); align-items: center;
+  position: absolute; top: 12px; left: 12px; z-index: 3;
 }
-.graph-controls > input, .graph-controls > .pick { font-size: var(--fs-sm); }
-/* Both pickers the same width -- a row of controls that each sizes to its own
-   longest label is a ragged edge again -- and wide enough for the longest
-   PLACEHOLDER, not the shortest: "Todos os domínios" plus the chevron's
-   reserved 32px needs 180, and at 150 pt-BR clipped its own first option. */
-.graph-controls > .pick { flex: none; width: 180px; }
+.graph-mode > .pick {
+  width: 196px; font-size: var(--fs-sm);
+  box-shadow: var(--shadow-pop);
+}
 /* Capped rather than allowed to eat the row: the leftover has to stay free so
    the match count can sit at the far end without shoving anything when it
-   appears. 380px is roughly what the domain picker used to occupy before it
-   was pinned, which is the width this field was asked for. */
-.graph-find { flex: 1 1 240px; min-width: 150px; max-width: 340px; }
+   appears. The compound selector is what it takes to reach past
+   `.list-toolbar input[type="search"]`, which sets the rest of its flex. */
+.graph-bar .graph-find { max-width: 340px; }
 /* A reserved slot at the far end of the toolbar, held whether it has text in
    it or not. Sizing it to its content and pushing it right was not enough:
    the leftover it needed existed in English and not in pt-BR, where the
@@ -3230,12 +3209,14 @@ button.rs-mono:hover { color: var(--accent); }
   font-size: var(--fs-label); color: var(--ink-2);
 }
 .graph-legend .legend-item { font-size: var(--fs-label); }
-/* Which way a relation points, now that it is a gradient along the line
-   rather than an arrowhead -- three pixels at an angle read as nothing. */
+/* What the arrangement on screen means. It is a sentence rather than a label,
+   so it wraps inside a measure instead of stretching the legend across the
+   drawing. */
 .graph-legend .legend-note {
   margin-top: var(--sp-1); padding-top: var(--sp-1);
   border-top: 1px solid var(--line-soft);
   color: var(--ink-3); font-size: var(--fs-label);
+  max-width: 34ch; line-height: 1.5;
 }
 /* The card floats over the drawing, so its height is canvas the reader does
    not get to look at. It answers four things -- what this memory is, what it
@@ -4930,15 +4911,18 @@ input.pick-q:focus { box-shadow: inset 0 -2px 0 var(--accent); }
   .modal-head, .modal-body, .modal-foot {
     padding-left: var(--sp-4); padding-right: var(--sp-4);
   }
-  .graph-wrap { height: calc(100vh - 250px); }
+  .graph-wrap { height: calc(100vh - 294px); }
   /* Five controls wrapped to four rows here and covered 28% of the canvas --
      on the one view whose whole job is the shape of the whole store. The strip
      scrolls sideways instead: one row at any width, and the artifact keeps its
      pixels. */
-  .graph-controls { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; }
-  .graph-controls::-webkit-scrollbar { display: none; }
-  .graph-controls > * { flex: none; }
-  .graph-find { width: 130px; }
+  .graph-bar { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; }
+  .graph-bar::-webkit-scrollbar { display: none; }
+  .graph-bar > * { flex: none; }
+  .graph-bar .graph-find { width: 130px; }
+  /* The legend floats over the drawing, and on a phone the drawing is the
+     scarce thing: the counts stay, the sentence about the arrangement goes. */
+  .graph-legend .legend-note { display: none; }
   /* The backup takes the width; when and size go under it. Four columns at
      375px left the label 129px, so both the reason and the filename ended
      in an ellipsis and neither said which file it was. */

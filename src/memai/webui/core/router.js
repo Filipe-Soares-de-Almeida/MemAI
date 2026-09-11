@@ -43,6 +43,19 @@ export function go(view, params = {}) {
   location.hash = `#/${view}${qs ? '?' + qs : ''}`;
 }
 
+/* Rewrite the current route's params without navigating. For a control the
+   view has already applied in place: the address has to agree with the screen
+   and survive a reload, and re-running the route would throw the applied work
+   away. `lastHash` moves with it, or the next navigation would file this hash
+   as the one to go BACK to. */
+export function replaceParams(view, params = {}) {
+  const qs = new URLSearchParams(params).toString();
+  const hash = `#/${view}${qs ? '?' + qs : ''}`;
+  if (hash === location.hash) return;
+  history.replaceState(history.state, '', `${location.pathname}${location.search}${hash}`);
+  lastHash = hash;
+}
+
 /* The hash the last route ran on. Kept so a view can go BACK to the one it
    came from with whatever that one was filtered and paged to -- which
    go(view) cannot do, because it would land on an unfiltered first page. */

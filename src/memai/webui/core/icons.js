@@ -229,12 +229,18 @@ const ICONS = {
            <path d="M5.2 6.4h5.6M5.2 8.6h5.6M5.2 10.8h3.4"/>`,
   },
 
-  /* free flight in the relations graph: a body and the path around it,
-     tilted, so it reads as depth rather than as a target */
-  'orbit': {
+  /* the relations graph's two show toggles: one relation, and one name.
+     Two dots joined is the line the toggle hides; the tag is what a title
+     sits on. */
+  'relation': {
     viewBox: '0 0 16 16',
-    body: `<circle cx="8" cy="8" r="2.2" fill="currentColor" stroke="none"/>
-           <ellipse cx="8" cy="8" rx="6.8" ry="3" transform="rotate(-24 8 8)"/>`,
+    body: `<circle cx="3.6" cy="8" r="2"/><circle cx="12.4" cy="8" r="2"/>
+           <path d="M5.7 8h4.6"/>`,
+  },
+  'label': {
+    viewBox: '0 0 16 16',
+    body: `<path d="M2.6 7.6V3.3a.8.8 0 01.8-.8h4.3l5.8 5.8a.8.8 0 010 1.1l-3.5 3.5a.8.8 0 01-1.1 0z"/>
+           <circle cx="5.5" cy="5.5" r="1"/>`,
   },
 };
 
