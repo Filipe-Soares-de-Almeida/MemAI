@@ -1,7 +1,7 @@
 /* The three arrangements of the relations graph, behind one interface.
 
    An arrangement owns where things ARE and how they are drawn; the engine
-   (graph-2d.js) owns the camera, the pointer, the selection and the two show
+   (graph-2d.js) owns the camera, the pointer, the selection and the show
    toggles, and hands all of it over in `env` on every frame. The interface is:
 
      new Arrangement(env)     build, from the derived store in env.D
@@ -264,9 +264,12 @@ class Hubs {
         lines(ctx, segs, relColor(palette, type), type === 'relates_to' ? 1 : 1.6,
               lit ? 0.25 : 1);
     }
-    /* the hovered memory's own relations, each drawn faint at the end it
-       leaves: which way a relation points is only ever asked about one */
-    if (lit) {
+    /* The hovered MEMORY's own relations, each drawn faint at the end it
+       leaves: which way a relation points is only ever asked about one. A
+       hovered DOMAIN lights what is filed in it, and what joins it to those
+       memories is the tree above -- the relations among them are a different
+       question and drawing them here answers neither. */
+    if (lit && env.hover && env.hover.uid) {
       for (const r of this.rel) {
         if (!lit.has(r.a.uid) || !lit.has(r.b.uid)) continue;
         const from = r.e.from_uid === r.a.uid ? r.a : r.b;
@@ -303,8 +306,8 @@ class Hubs {
       ring(ctx, s.x, s.y, clamp((b.r || 3) * K, 4, 48) + 4, mark.color, mark.width);
     }
 
-    if (!show.titles) return;
-    const named = [...this.hubs].sort((a, b) => b.count - a.count);
+    if (!show.domains && !show.names) return;
+    const named = show.domains ? [...this.hubs].sort((a, b) => b.count - a.count) : [];
     for (const h of named.slice(0, 70)) {
       const s = sc(h);
       if (s.x < -60 || s.y < -20 || s.x > env.W + 60 || s.y > env.H + 20) continue;
@@ -316,7 +319,7 @@ class Hubs {
         gap: clamp(h.r * K, 3, 46) + 5,
       });
     }
-    if (K <= 1.1) return;
+    if (!show.names || K <= 1.1) return;
     const near = this.mems
       .map(b => ({ b, s: sc(b) }))
       .filter(o => o.s.x > 0 && o.s.y > 0 && o.s.x < env.W && o.s.y < env.H)
@@ -500,6 +503,8 @@ class Pack {
     /* Relations, only for what the pointer is on. Drawing all of them over
        nested circles is the tangle this arrangement exists to avoid, so the
        toggle cannot turn them all on -- what it hides is this highlight. */
+    /* a domain under the pointer is not asking about the relations among
+       what it holds: what joins it to them is the circle they sit in */
     const at = env.hover && env.hover.uid ? env.hover : env.selected;
     if (show.links && at && at.uid) {
       const from = this.byUid.get(at.uid);
@@ -523,8 +528,8 @@ class Pack {
       ring(ctx, s.x, s.y, clamp(b.r * K, 4, 400) + 3, mark.color, mark.width);
     }
 
-    if (!show.titles) return;
-    const named = [...open, ...closed].sort((a, b) => b.r - a.r);
+    if (!show.domains && !show.names) return;
+    const named = show.domains ? [...open, ...closed].sort((a, b) => b.r - a.r) : [];
     for (const n of named.slice(0, 120)) {
       const s = cam.toScreen(n.ax, n.ay), rpx = n.r * K;
       if (rpx < 16) continue;
@@ -538,7 +543,7 @@ class Pack {
         gap: 7, maxW: Math.max(90, rpx * 2),
       });
     }
-    if (K <= 2.2) return;
+    if (!show.names || K <= 2.2) return;
     for (const l of shown.slice(0, 140)) {
       if (env.fade(l.mem.uid) < 1) continue;
       const s = cam.toScreen(l.ax, l.ay);
@@ -742,7 +747,7 @@ class Atlas {
         lines(ctx, set, relColor(palette, type), type === 'relates_to' ? 1.1 : 1.8,
               lit ? 0.18 : 0.9);
     }
-    if (lit) {
+    if (lit && env.hover && env.hover.uid) {
       for (const l of this.links) {
         if (!lit.has(l.a.uid) || !lit.has(l.b.uid)) continue;
         const from = l.e.from_uid === l.a.uid ? l.a : l.b;
@@ -782,8 +787,8 @@ class Atlas {
       ring(ctx, s.x, s.y, clamp(b.r * K, 3, 11) + 4, mark.color, mark.width);
     }
 
-    if (!show.titles) return;
-    if (this.coasts) {
+    if (!show.domains && !show.names) return;
+    if (show.domains && this.coasts) {
       for (const c of this.coasts) {
         const s = cam.toScreen(c.cx, c.cy);
         const w = c.span * K;
@@ -801,7 +806,7 @@ class Atlas {
           });
       }
     }
-    if (K <= 0.5) return;
+    if (!show.names || K <= 0.5) return;
     const ranked = this.bodies
       .map(b => ({ b, s: sc(b), deg: env.D.degree.get(b.uid) || 0 }))
       .filter(o => o.deg > 1 && o.s.x > 0 && o.s.y > 0 && o.s.x < env.W && o.s.y < env.H)

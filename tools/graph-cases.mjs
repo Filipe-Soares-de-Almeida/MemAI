@@ -228,6 +228,106 @@ for (const c of ceiling.coasts) {
   if (atlasHit) break;
 }
 
+/* ------------------------------------------------------------ what draws
+
+   A recording canvas: enough of the 2D context for an arrangement to draw
+   into, counting the text it writes and the gradients it builds. What a
+   toggle does is a property of the drawing, and this is the only way to ask
+   the drawing without a browser. */
+
+function fakeCtx() {
+  const log = { texts: [], gradients: 0, strokes: 0, fills: 0 };
+  const noop = () => {};
+  const ctx = {
+    log,
+    canvas: { width: 1200, height: 800 },
+    globalAlpha: 1, fillStyle: '', strokeStyle: '', lineWidth: 1,
+    lineCap: '', lineJoin: '', font: '', textAlign: '', textBaseline: '',
+    beginPath: noop, closePath: noop, moveTo: noop, lineTo: noop, rect: noop,
+    arc: noop, arcTo: noop, quadraticCurveTo: noop, save: noop, restore: noop,
+    translate: noop, rotate: noop, setTransform: noop, clearRect: noop,
+    fill: () => { log.fills++; },
+    stroke: () => { log.strokes++; },
+    fillText: t => { log.texts.push(String(t)); },
+    strokeText: noop,
+    /* the width a glyph is worth, near enough for a board that only has to
+       decide whether two labels collide */
+    measureText: t => ({ width: String(t).length * 6 }),
+    createLinearGradient: () => { log.gradients++; return { addColorStop: noop }; },
+  };
+  return ctx;
+}
+
+const camAt = k => ({
+  k, x: 600, y: 400,
+  toScreen: (wx, wy) => ({ x: wx * k + 600, y: wy * k + 400 }),
+  toWorld: (sx, sy) => ({ x: (sx - 600) / k, y: (sy - 400) / k }),
+});
+
+const drawEnv = ({ show, hover = null, k = 2 }) => ({
+  D, W: 1200, H: 800, cam: camAt(k),
+  palette: {
+    ink: '#fff', ink2: '#ccc', ink3: '#888', accent: '#bb86fc', accentHi: '#d3b1ff',
+    hot: '#ffffff', tree: 'rgba(255,255,255,.05)', treeHi: 'rgba(255,255,255,.16)',
+    treeHot: 'rgba(255,255,255,.38)', halo: 'rgba(10,10,10,.82)',
+    font: 'sans-serif', mono: 'monospace',
+    rel: { relates_to: 'rgba(255,255,255,.25)', supersedes: '#ffd54f',
+           contradicts: '#e57373', links_to: '#7fb3d5' },
+  },
+  show: { links: false, domains: true, names: true, ...show },
+  hover, selected: null, linkFrom: null, marks: [], taken: [],
+  colorOf: () => '#e86a00',
+  fade: () => 1,
+  inScope: () => true,
+  lit: null,
+  font: (weight, size) => `${weight} ${size}px sans-serif`,
+});
+
+/* what each arrangement writes on the canvas under one set of toggles */
+function drawnWith(arr, opts) {
+  const ctx = fakeCtx();
+  const env = drawEnv(opts);
+  if (opts.lit) env.lit = opts.lit;
+  arr.draw(ctx, env.cam, env);
+  return ctx.log;
+}
+
+const hubMems = hubs.mems;
+const oneMem = hubMems.find(b => (D.degree.get(b.uid) || 0) > 0).n;
+const oneDomain = { domain: 'acme/x100/p200', count: 8 };
+const litOf = path => new Set(D.nodes.filter(n =>
+  n.domain === path || n.domain.startsWith(`${path}/`)).map(n => n.uid));
+
+const shows = {
+  both: drawnWith(hubs, { show: {} }),
+  namesOff: drawnWith(hubs, { show: { names: false } }),
+  domainsOff: drawnWith(hubs, { show: { domains: false } }),
+  neither: drawnWith(hubs, { show: { domains: false, names: false } }),
+};
+
+const hubNames = new Set(hubs.hubs.map(h => h.name));
+const split = out => ({
+  domains: out.texts.filter(t => hubNames.has(t)).length,
+  memories: out.texts.filter(t => !hubNames.has(t)).length,
+});
+
+/* the highlight a hover draws: a memory lights its own relations, a domain
+   lights what is filed in it and nothing between those memories */
+const overMemory = drawnWith(hubs, {
+  show: {}, hover: oneMem, lit: new Set([oneMem.uid,
+    ...(D.adj.get(oneMem.uid) || []).map(e => e.from_uid === oneMem.uid ? e.to_uid : e.from_uid)]),
+});
+const overDomain = drawnWith(hubs, {
+  show: {}, hover: oneDomain, lit: litOf(oneDomain.domain),
+});
+const atlasOverMemory = drawnWith(atlasA, {
+  show: {}, hover: oneMem, k: 1, lit: new Set([oneMem.uid,
+    ...(D.adj.get(oneMem.uid) || []).map(e => e.from_uid === oneMem.uid ? e.to_uid : e.from_uid)]),
+});
+const atlasOverDomain = drawnWith(atlasA, {
+  show: {}, hover: { domain: 'acme', count: 18 }, k: 1, lit: litOf('acme'),
+});
+
 /* ----------------------------------------------------------------- tree */
 
 const tree = buildTree(raw.nodes);
@@ -270,6 +370,18 @@ process.stdout.write(JSON.stringify({
     coasts: (atlasA.coasts || []).length,
   },
   tree: { roots: rootCounts, depth: deepest, nodes: raw.nodes.length },
+  show: {
+    both: split(shows.both),
+    namesOff: split(shows.namesOff),
+    domainsOff: split(shows.domainsOff),
+    neither: split(shows.neither),
+  },
+  highlight: {
+    overMemory: overMemory.gradients,
+    overDomain: overDomain.gradients,
+    atlasOverMemory: atlasOverMemory.gradients,
+    atlasOverDomain: atlasOverDomain.gradients,
+  },
   domainHit: {
     hub: hubHit && (hubHit.domain || null),
     hubIsMemory: !!(hubHit && hubHit.uid),

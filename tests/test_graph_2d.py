@@ -176,6 +176,31 @@ def test_the_settle_ceiling_still_leaves_every_coast_traced(drawn):
     assert drawn["domainHit"]["haltedCoasts"] == len(drawn["tree"]["roots"])
 
 
+# --------------------------------------------------------- what is drawn
+
+def test_the_two_kinds_of_name_are_two_toggles(drawn):
+    """A reader who wants the places named and the memories not is asking one
+    question; a single titles toggle answered a different one."""
+    both = drawn["show"]["both"]
+    assert both["domains"] > 0 and both["memories"] > 0
+    assert drawn["show"]["namesOff"] == {"domains": both["domains"], "memories": 0}
+    assert drawn["show"]["domainsOff"] == {"domains": 0, "memories": both["memories"]}
+    assert drawn["show"]["neither"] == {"domains": 0, "memories": 0}
+
+
+def test_a_hovered_memory_lights_its_own_relations(drawn):
+    """Each is drawn as a gradient, faint at the end it leaves."""
+    assert drawn["highlight"]["overMemory"] > 0
+    assert drawn["highlight"]["atlasOverMemory"] > 0
+
+
+def test_a_hovered_domain_lights_what_is_filed_in_it_and_no_relation(drawn):
+    """What joins a domain to its memories is the tree above them; the
+    relations among those memories answer a different question."""
+    assert drawn["highlight"]["overDomain"] == 0
+    assert drawn["highlight"]["atlasOverDomain"] == 0
+
+
 # ------------------------------------------------------------------ travel
 
 @pytest.mark.parametrize("mode", ["hubs", "nest"])

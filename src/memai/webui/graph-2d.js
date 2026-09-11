@@ -1,8 +1,8 @@
 /* The relations graph, drawn on a 2D canvas.
 
    This file owns the camera, the frame loop, the pointer, the selection and
-   the two show toggles; graph-arrange.js owns where things are and how each
-   of the three arrangements is drawn. Nothing here touches the DOM outside
+   the show toggles; graph-arrange.js owns where things are and how each of
+   the three arrangements is drawn. Nothing here touches the DOM outside
    its own canvas -- hovering, selecting, travelling and link mode are
    reported to the view through callbacks, and the view owns the card, the
    tip, the legend and the toolbar.
@@ -151,7 +151,9 @@ export class GraphCanvas {
      obstacles() for the boxes the chrome occupies in canvas coordinates, so no
      name is drawn where a panel covers it.
 
-     `mode` is the arrangement to open on and `show` the two toggles. */
+     `mode` is the arrangement to open on; `show` is what the drawing carries
+     -- `links` the relations, `domains` the place names, `names` the titles
+     of the memories themselves. */
   constructor(canvas, {
     nodes, edges, colorOf,
     onSelect = () => {}, onSelectDomain = () => {}, onOpen = () => {},
@@ -177,7 +179,14 @@ export class GraphCanvas {
     this.D = deriveStore(this.nodes, edges);
     this.edges = this.D.edges;
 
-    this.show = { links: show.links !== false, titles: show.titles !== false };
+    /* Relations are off unless asked for: at a store's scale they are a mesh
+       over the arrangement, and what a reader wants of them is one memory's
+       own, which the hover draws anyway. */
+    this.show = {
+      links: show.links === true,
+      domains: show.domains !== false,
+      names: show.names !== false,
+    };
     this.hover = null; this.selected = null; this.cameFrom = null;
     this.selectedDomain = null;
     /* The selection's set, which everything outside fades behind, and the
@@ -321,7 +330,11 @@ export class GraphCanvas {
       /* No name is drawn while the arrangement is still moving: the board
          would place each one against a frame that is already out of date,
          and a store's worth of text redrawn per frame reads as flicker. */
-      show: { ...this.show, titles: this.show.titles && this.settled },
+      show: {
+        ...this.show,
+        domains: this.show.domains && this.settled,
+        names: this.show.names && this.settled,
+      },
       hover: this.hover, selected: this.selected, linkFrom: this.linkFrom,
       /* what the pointer is standing on, as uids: the hovered memory and its
          neighbours, or every memory in the hovered domain */

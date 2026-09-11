@@ -8,10 +8,10 @@
    the diagram editor, whose coordinates come from the store; see diagram.js
    for that contrast.
 
-   The arrangement and the two toggles are the reader's settings, not filters:
-   they ride in localStorage so the next session opens where this one left
-   off, and the arrangement also rides in the address so a link carries it. A
-   `mode` in the address wins over the stored one. */
+   The arrangement and the show toggles are the reader's settings, not
+   filters: they ride in localStorage so the next session opens where this one
+   left off, and the arrangement also rides in the address so a link carries
+   it. A `mode` in the address wins over the stored one. */
 
 import { $, esc, fmtInt, debounce } from '../core/dom.js';
 import { api, query } from '../core/api.js';
@@ -69,8 +69,17 @@ export async function renderGraph(view, params, ctx) {
     mode: MODES.includes(asked) ? asked
         : MODES.includes(prefs.mode) ? prefs.mode : DEFAULT_MODE,
   };
-  /* both on unless this browser was told otherwise */
-  const show = { links: prefs.links !== false, titles: prefs.titles !== false };
+  /* The names are on unless this browser said otherwise; the relations are
+     off unless it did. A record left by an older build is read for what it
+     can still answer -- its `titles` stood for both kinds of name -- and its
+     `links` is dropped, because it was stored against a default that said
+     the opposite. */
+  const legacy = prefs.titles !== undefined;
+  const show = {
+    links: !legacy && prefs.links === true,
+    domains: prefs.domains ?? prefs.titles ?? true,
+    names: prefs.names ?? prefs.titles ?? true,
+  };
 
   const [domains, data] = await Promise.all([
     getDomains().catch(() => []),
@@ -112,13 +121,17 @@ export async function renderGraph(view, params, ctx) {
         <button type="button" data-v="active" aria-pressed="${state.status === 'active'}">${t('common.active')}</button>
         <button type="button" data-v="" aria-pressed="${state.status === ''}">${t('common.all')}</button>
       </div>
-      <!-- What the drawing carries. Independent of each other, so two buttons
-           rather than a choice between them. -->
+      <!-- What the drawing carries. Independent of each other, so a button
+           each rather than a choice between them: a reader who wants the
+           places named and the memories not is asking one question, and a
+           single titles toggle answered a different one. -->
       <div class="seg" role="group" aria-label="${t('g.show')}">
         <button type="button" id="gShowLinks" aria-pressed="${show.links}"
-                title="${esc(t('g.show.links'))}">${icon('relation')}${t('g.show.links')}</button>
-        <button type="button" id="gShowTitles" aria-pressed="${show.titles}"
-                title="${esc(t('g.show.titles'))}">${icon('label')}${t('g.show.titles')}</button>
+                title="${esc(t('g.show.links.hint'))}">${icon('relation')}${t('g.show.links')}</button>
+        <button type="button" id="gShowDomains" aria-pressed="${show.domains}"
+                title="${esc(t('g.show.domains.hint'))}">${icon('folder')}${t('g.show.domains')}</button>
+        <button type="button" id="gShowNames" aria-pressed="${show.names}"
+                title="${esc(t('g.show.names.hint'))}">${icon('label')}${t('g.show.names')}</button>
       </div>
       <button type="button" class="btn btn-sm" id="gLink" aria-pressed="false">${icon('pencil')}${t('g.linkMode')}</button>
       <button type="button" class="btn btn-sm" id="gFit">${t('g.center')}</button>
@@ -257,7 +270,8 @@ export async function renderGraph(view, params, ctx) {
     writePrefs({ [key]: on });
   });
   toggle('#gShowLinks', 'links');
-  toggle('#gShowTitles', 'titles');
+  toggle('#gShowDomains', 'domains');
+  toggle('#gShowNames', 'names');
 
   $('#gFit').addEventListener('click', () => engine.fit());
   $('#gLink').addEventListener('click', () => {
