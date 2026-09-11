@@ -214,7 +214,7 @@ user data, created on first run.
 A project is one whole memory: its own domains, relations, diagrams and
 settings. Any name that works as a Windows file name works as a project
 name, and two names that differ only in case are one project. The switch is
-on the dashboard's rail, and every MCP server, hook and dashboard on the
+in the dashboard's top bar, and every MCP server, hook and dashboard on the
 machine opens the active project on its next call — no restart. Every
 write's result and every `pulse()` name the project they touched, and
 `list_projects()` lists them all.

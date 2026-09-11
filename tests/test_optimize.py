@@ -16,7 +16,7 @@ import pytest
 from starlette.testclient import TestClient
 
 from conftest import shaped
-from memai import admin, db
+from memai import admin, db, sections
 
 
 @pytest.fixture
@@ -54,6 +54,188 @@ def _mk_diagram(conn):
     return uid
 
 
+# ------------------------------------------------- a leaked call: scan and kind
+
+# A body the way a leaked call leaves it: the text is right up to the closing
+# tag of the field it was written under, and the fields after it follow as
+# prose. Only a store written before the store refused one holds this, so
+# these tests plant it with restore_memory -- the one writer that reproduces a
+# row instead of judging it.
+LEAKED_BODY = "\n".join((
+    "the warmup drains the queue twice on a cold start</content>",
+    "<domain>acme/x100/p200</domain>",
+    "<tags>cache warmup, queue drain</tags>",
+    "</invoke>",
+))
+
+
+def _plant(conn, uid="a1b2c3d4e5f60718", *, type="note", content=LEAKED_BODY, **kw):
+    db.restore_memory(conn, {"uid": uid, "type": type, "content": content,
+                             "title": "a cache warmup", **kw})
+    return uid
+
+
+def test_the_scan_reports_a_leaked_row_and_counts_every_one(conn):
+    _plant(conn)
+    _plant(conn, "b2c3d4e5f6071829")
+    _mk(conn, content="a body nobody leaked into")
+    res = db.optimization_corpus(conn)
+
+    assert res["stats"]["leaked_calls"] == 2
+    finding = next(f for f in res["leaked_calls"] if f["uid"] == "a1b2c3d4e5f60718")
+    assert finding["fields"]["content"]["marks"] == [
+        "</content>", "</domain>", "</invoke>", "</tags>"]
+    assert finding["fields"]["content"]["removes"] > 0
+    assert finding["fields"]["content"]["clean"] is True
+    assert finding["title"] == "a cache warmup"
+
+
+def test_a_finding_declares_only_the_columns_that_are_still_empty(conn):
+    """What the debris was TRYING to write is the raw material for the
+    redomain beside the unleak -- but only where nothing is filed yet."""
+    _plant(conn, "a1b2c3d4e5f60718")
+    _plant(conn, "b2c3d4e5f6071829", domain="acme/x100", tags="cache warmup")
+    findings = {f["uid"]: f for f in db.optimization_corpus(conn)["leaked_calls"]}
+
+    assert findings["a1b2c3d4e5f60718"]["declares"] == {
+        "domain": "acme/x100/p200", "tags": "cache warmup, queue drain"}
+    assert "declares" not in findings["b2c3d4e5f6071829"]
+
+
+def test_a_mark_inside_prose_is_reported_as_not_clean(conn):
+    """The memory that DOCUMENTS this defect quotes a mark mid-sentence.
+    Cutting it would take a hole out of the sentence, so the finding says the
+    repair does not clear the field."""
+    _plant(conn, content="a call quotes </content> mid-sentence and means to")
+    finding = db.optimization_corpus(conn)["leaked_calls"][0]
+    assert finding["fields"]["content"]["clean"] is False
+
+
+def test_staging_an_unleak_computes_the_repair_from_the_row(conn):
+    """The caller sends the field and nothing else: a payload carrying the
+    body would be the same retyping this kind exists to avoid."""
+    uid = _plant(conn)
+    res = db.stage_optimization(conn, "clean the leaks", [
+        {"kind": "unleak", "target_uid": uid, "payload": {"field": "content"}}])
+
+    assert (res["staged"], res["errors"]) == (1, [])
+    payload = json.loads(db.get_optimization_suggestions(conn, res["run_id"])[0]["payload"])
+    assert payload["field"] == "content"
+    assert payload["new_text"] == "the warmup drains the queue twice on a cold start"
+
+
+def test_an_unleak_defaults_to_the_body(conn):
+    uid = _plant(conn)
+    res = db.stage_optimization(conn, "clean the leaks", [
+        {"kind": "unleak", "target_uid": uid}])
+    payload = json.loads(db.get_optimization_suggestions(conn, res["run_id"])[0]["payload"])
+    assert payload["field"] == "content"
+
+
+def test_an_unleak_on_a_field_with_nothing_leaked_is_refused(conn):
+    uid = _mk(conn, content="a body nobody leaked into")
+    res = db.stage_optimization(conn, "clean the leaks", [
+        {"kind": "unleak", "target_uid": uid, "payload": {"field": "content"}}])
+    assert res["staged"] == 0
+    assert "nothing leaked" in res["errors"][0]["error"]
+
+
+def test_an_unleak_that_would_not_clear_the_field_is_refused(conn):
+    """A mark in the middle of a sentence is a rewrite somebody makes on
+    purpose, so this kind hands it to reword instead of half-cleaning it."""
+    uid = _plant(conn, content="a call quotes </content> mid-sentence")
+    res = db.stage_optimization(conn, "clean the leaks", [
+        {"kind": "unleak", "target_uid": uid, "payload": {"field": "content"}}])
+    assert res["staged"] == 0
+    assert "reword" in res["errors"][0]["error"]
+
+
+def test_an_unleak_of_an_unknown_field_is_refused(conn):
+    uid = _plant(conn)
+    res = db.stage_optimization(conn, "clean the leaks", [
+        {"kind": "unleak", "target_uid": uid, "payload": {"field": "title"}}])
+    assert res["staged"] == 0
+    assert "payload.field" in res["errors"][0]["error"]
+
+
+def test_an_unleak_leaves_a_sectioned_body_reading_as_its_type(conn):
+    """The debris sits between INTENT and ESTABLISHED, so a repair that
+    truncated at the first mark would drop three sections."""
+    body = "\n".join((
+        "INTENT: warm the cache before the queue drains</intent>",
+        "<session>abcd</session>",
+        "ESTABLISHED: it drains twice on a cold start",
+        "PURSUING: nothing",
+        "OPEN QUESTIONS: none",
+    ))
+    uid = _plant(conn, type="checkpoint", content=body)
+    res = db.stage_optimization(conn, "clean the leaks", [
+        {"kind": "unleak", "target_uid": uid, "payload": {"field": "content"}}])
+    assert (res["staged"], res["errors"]) == (1, [])
+
+    sug = db.get_optimization_suggestions(conn, res["run_id"])[0]
+    db.apply_suggestion(conn, sug["id"])
+    row = db.get_memory(conn, uid)
+    assert row["content"].startswith("INTENT: warm the cache before the queue drains")
+    assert "OPEN QUESTIONS: none" in row["content"]
+    assert sections.read("checkpoint", row["content"]).conforms
+
+
+def test_applying_an_unleak_clears_the_field_and_undo_puts_it_back(conn):
+    """Applying an unleak clears the field; the undo puts back the body, which
+    the store would refuse from a writer."""
+    uid = _plant(conn)
+    res = db.stage_optimization(conn, "clean the leaks", [
+        {"kind": "unleak", "target_uid": uid, "payload": {"field": "content"}}])
+    sug_id = db.get_optimization_suggestions(conn, res["run_id"])[0]["id"]
+
+    db.apply_suggestion(conn, sug_id)
+    assert db.get_memory(conn, uid)["content"] == (
+        "the warmup drains the queue twice on a cold start")
+
+    db.revert_suggestion(conn, sug_id)
+    assert db.get_memory(conn, uid)["content"] == LEAKED_BODY
+
+
+def test_an_unleak_of_the_tags_touches_only_the_tags(conn):
+    uid = _plant(conn, content="a clean body", tags="cache warmup</tags>")
+    res = db.stage_optimization(conn, "clean the leaks", [
+        {"kind": "unleak", "target_uid": uid, "payload": {"field": "tags"}}])
+    sug_id = db.get_optimization_suggestions(conn, res["run_id"])[0]["id"]
+    db.apply_suggestion(conn, sug_id)
+
+    row = db.get_memory(conn, uid)
+    assert (row["tags"], row["content"]) == ("cache warmup", "a clean body")
+
+    db.revert_suggestion(conn, sug_id)
+    assert db.get_memory(conn, uid)["tags"] == "cache warmup</tags>"
+
+
+def test_an_unleak_of_a_diagram_body_is_refused(conn):
+    """Same refusal the other content kinds get: the body is the graph's
+    projection, so a repair applied over it lasts until the next edit."""
+    uid = _mk_diagram(conn)
+    res = db.stage_optimization(conn, "clean the leaks", [
+        {"kind": "unleak", "target_uid": uid, "payload": {"field": "content"}}])
+    assert res["staged"] == 0
+    assert "is a diagram" in res["errors"][0]["error"]
+
+
+def test_the_panel_reads_the_leaked_field_as_a_pair(client):
+    """The dashboard draws Before and After for the field the payload names,
+    so the API sends that field's text -- not the memory's content."""
+    with db.connect() as conn:
+        uid = _plant(conn, content="a clean body", tags="cache warmup</tags>")
+        run = db.stage_optimization(conn, "clean the leaks", [
+            {"kind": "unleak", "target_uid": uid, "payload": {"field": "tags"}}])
+
+    res = client.get(
+        f"/api/optimization/suggestions?run={run['run_id']}").json()
+    sug = res["suggestions"][0]
+    assert sug["text_before"] == "cache warmup</tags>"
+    assert sug["chars_after"] == len("cache warmup")
+
+
 def test_stage_validates_and_reports_errors(conn):
     uid = _mk(conn, content="keep me")
     res = db.stage_optimization(conn, "run", [
@@ -66,6 +248,18 @@ def test_stage_validates_and_reports_errors(conn):
     assert {e["index"] for e in res["errors"]} == {1, 2, 3}
     sugs = db.get_optimization_suggestions(conn, res["run_id"])
     assert len(sugs) == 1 and sugs[0]["kind"] == "reword"
+
+
+def test_a_note_over_the_cap_stages_nothing(conn):
+    """The run note holds a summary, so an oversized one raises before any
+    suggestion is written."""
+    uid = _mk(conn, content="keep me")
+    sug = [{"kind": "reword", "target_uid": uid, "payload": {"new_content": "better"}}]
+    with pytest.raises(ValueError, match=f"the limit is {db.RUN_NOTE_MAX}"):
+        db.stage_optimization(conn, "x" * (db.RUN_NOTE_MAX + 1), sug)
+    assert db.list_optimization_runs(conn) == []
+    res = db.stage_optimization(conn, "x" * db.RUN_NOTE_MAX, sug)
+    assert res["staged"] == 1
 
 
 def test_stage_no_valid_suggestions_creates_no_run(conn):
@@ -232,6 +426,57 @@ def test_apply_merge_archives_drop_and_links(conn):
     drow = db.get_memory(conn, drop)
     assert drow["status"] == "active" and drow["superseded_by"] is None
     assert db.get_relations(conn, keep) == []
+
+
+def test_a_rejection_can_be_taken_back(conn):
+    """Reject is a decision a reader can get wrong.
+
+    Nothing was written to any memory, so taking the answer back is only a
+    change of status -- but it has to be possible, or a mis-click in the
+    day rail is a dead end no undo reaches.
+    """
+    uid = _mk(conn, content="original")
+    staged = db.stage_optimization(conn, "reject then think again", [
+        {"kind": "retag", "target_uid": uid, "payload": {"tags": "x"}, "rationale": "r"},
+    ])
+    sug = db.get_optimization_suggestions(conn, staged["run_id"])[0]
+
+    db.reject_suggestion(conn, sug["id"])
+    assert db.get_suggestion(conn, sug["id"])["status"] == "rejected"
+
+    db.revert_suggestion(conn, sug["id"])
+    back = db.get_suggestion(conn, sug["id"])
+    assert back["status"] == "pending"
+    assert back["decided_at"] is None
+    # and it can then be applied for real
+    db.apply_suggestion(conn, sug["id"])
+    assert db.get_memory(conn, uid)["tags"] == "x"
+
+
+def test_reverting_a_pending_suggestion_is_refused(conn):
+    """It is already on the table; saying so beats performing a no-op."""
+    uid = _mk(conn)
+    staged = db.stage_optimization(conn, "nothing decided", [
+        {"kind": "retag", "target_uid": uid, "payload": {"tags": "x"}, "rationale": "r"},
+    ])
+    sug = db.get_optimization_suggestions(conn, staged["run_id"])[0]
+    with pytest.raises(ValueError, match="already pending"):
+        db.revert_suggestion(conn, sug["id"])
+
+
+def test_reverting_a_rejection_writes_nothing_to_the_memory(conn):
+    uid = _mk(conn, content="untouched")
+    before = dict(db.get_memory(conn, uid))
+    staged = db.stage_optimization(conn, "reject and revert", [
+        {"kind": "reword", "target_uid": uid, "payload": {"new_content": "rewritten"},
+         "rationale": "r"},
+    ])
+    sug = db.get_optimization_suggestions(conn, staged["run_id"])[0]
+    db.reject_suggestion(conn, sug["id"])
+    db.revert_suggestion(conn, sug["id"])
+    after = dict(db.get_memory(conn, uid))
+    assert after["content"] == before["content"] == shaped("note", "untouched")
+    assert after["updated_at"] == before["updated_at"]
 
 
 def test_reject_leaves_memory_untouched(conn):
@@ -777,8 +1022,34 @@ def test_api_runs_include_kind_breakdown(client):
 
     run = client.get("/api/optimization/runs").json()["runs"][0]
     kinds = {k["kind"]: k for k in run["kinds"]}
-    assert kinds["retag"] == {"kind": "retag", "total": 2, "pending": 1}
-    assert kinds["set_confidence"] == {"kind": "set_confidence", "total": 1, "pending": 1}
+    assert kinds["retag"] == {"kind": "retag", "total": 2, "pending": 1, "rejected": 0}
+    assert kinds["set_confidence"] == {
+        "kind": "set_confidence", "total": 1, "pending": 1, "rejected": 0}
+
+
+def test_api_kind_breakdown_counts_what_was_turned_down(client):
+    """applied per kind is total minus pending minus rejected.
+
+    Without `rejected` the day's summary reads a turned-down suggestion as
+    applied and claims work nobody accepted.
+    """
+    uid = _new_memory(client)
+    with db.connect() as conn:
+        staged = db.stage_optimization(conn, "three retags", [
+            {"kind": "retag", "target_uid": uid, "payload": {"tags": "a"}, "rationale": "r", "verified": "v"},
+            {"kind": "retag", "target_uid": uid, "payload": {"tags": "b"}, "rationale": "r", "verified": "v"},
+            {"kind": "retag", "target_uid": uid, "payload": {"tags": "c"}, "rationale": "r", "verified": "v"},
+        ])
+    ids = [s["id"] for s in client.get(
+        f"/api/optimization/suggestions?run={staged['run_id']}").json()["suggestions"]]
+    client.post("/api/optimization/apply", json={"id": ids[0]})
+    client.post("/api/optimization/reject", json={"id": ids[1]})
+
+    run = next(r for r in client.get("/api/optimization/runs").json()["runs"]
+               if r["id"] == staged["run_id"])
+    k = {x["kind"]: x for x in run["kinds"]}["retag"]
+    assert k == {"kind": "retag", "total": 3, "pending": 1, "rejected": 1}
+    assert k["total"] - k["pending"] - k["rejected"] == 1     # the applied one
 
 
 def test_api_apply_all_filters_by_kind(client):
@@ -795,6 +1066,503 @@ def test_api_apply_all_filters_by_kind(client):
     sugs = client.get(f"/api/optimization/suggestions?run={staged['run_id']}").json()["suggestions"]
     by_kind = {s["kind"]: s["status"] for s in sugs}
     assert by_kind == {"retag": "applied", "set_confidence": "pending"}
+
+
+def test_api_suggestions_filter_by_kind(client):
+    """A group is its own page, so it fetches its own kind and no other."""
+    uid = _new_memory(client)
+    with db.connect() as conn:
+        staged = db.stage_optimization(conn, "one kind", [
+            {"kind": "retag", "target_uid": uid, "payload": {"tags": "x"}, "rationale": "r", "verified": "v"},
+            {"kind": "retitle", "target_uid": uid, "payload": {"title": "Cache warmup"}, "rationale": "r", "verified": "v"},
+        ])
+    got = client.get(
+        f"/api/optimization/suggestions?run={staged['run_id']}&kind=retag").json()["suggestions"]
+    assert [s["kind"] for s in got] == ["retag"]
+
+
+def test_api_suggestions_across_several_runs(client):
+    """A day holds every run staged that day, and the rail decides across them.
+
+    `runs` is a list of RUN IDS and not a date: created_at is UTC and the
+    calendar's day is the reader's local one, so a date filtered on the
+    server would disagree with the grid that offered it.
+    """
+    uid = _new_memory(client)
+    first = _stage_via_db(uid, "retag", {"tags": "one"})
+    second = _stage_via_db(uid, "retag", {"tags": "two"})
+    third = _stage_via_db(uid, "retag", {"tags": "three"})
+
+    got = client.get("/api/optimization/suggestions"
+                     f"?runs={first['run_id']},{third['run_id']}").json()
+    assert [s["run_id"] for s in got["suggestions"]] == [first["run_id"], third["run_id"]]
+    assert [r["id"] for r in got["runs"]] == [first["run_id"], third["run_id"]]
+    # the single-run key stays for every caller that has always read it
+    assert got["run"]["id"] == first["run_id"]
+    assert second["run_id"] not in [s["run_id"] for s in got["suggestions"]]
+
+
+def test_api_suggestions_across_runs_still_filters_by_status(client):
+    uid = _new_memory(client)
+    a = _stage_via_db(uid, "retag", {"tags": "one"})
+    b = _stage_via_db(uid, "retag", {"tags": "two"})
+    only = client.get(f"/api/optimization/suggestions?runs={a['run_id']}").json()
+    client.post("/api/optimization/apply", json={"id": only["suggestions"][0]["id"]})
+
+    pend = client.get("/api/optimization/suggestions"
+                      f"?runs={a['run_id']},{b['run_id']}&status=pending").json()
+    assert [s["run_id"] for s in pend["suggestions"]] == [b["run_id"]]
+
+
+@pytest.mark.parametrize("qs", ["", "?runs=", "?runs=nope", "?run=abc"])
+def test_api_suggestions_rejects_a_malformed_scope(client, qs):
+    assert client.get(f"/api/optimization/suggestions{qs}").status_code >= 400
+
+
+def test_api_suggestions_rejects_an_unknown_run_in_the_list(client):
+    """One bad id fails the whole request rather than silently returning less."""
+    uid = _new_memory(client)
+    good = _stage_via_db(uid, "retag", {"tags": "x"})
+    assert client.get(
+        f"/api/optimization/suggestions?runs={good['run_id']},9999").status_code >= 400
+
+
+def test_api_summary_counts_verified_and_the_ledger(client):
+    """The run head reports what is written on the rows, not a projected score."""
+    keep, drop = _new_memory(client, domain="acme/x100"), _new_memory(client, domain="zeta/x200")
+    with db.connect() as conn:
+        staged = db.stage_optimization(conn, "head", [
+            # checked, and it rewrites a body: 'api fact' (8) -> 'short' (5)
+            {"kind": "reword", "target_uid": keep, "payload": {"new_content": "short"},
+             "rationale": "r", "verified": "v"},
+            # unchecked, so the head has something to warn about
+            {"kind": "retag", "target_uid": keep, "payload": {"tags": "cache, warmup"},
+             "rationale": "r"},
+            {"kind": "set_confidence", "target_uid": keep,
+             "payload": {"confidence": "confirmed"}, "rationale": "r", "verified": "v"},
+            {"kind": "merge", "payload": {"keep_uid": keep, "drop_uid": drop},
+             "rationale": "r", "verified": "v"},
+        ])
+    got = client.get(f"/api/optimization/summary?run={staged['run_id']}").json()
+
+    assert got["pending"] == 4 and got["verified"] == 3
+    lg = got["ledger"]
+    assert lg["memories"] == 2          # both, reached through the merge payload
+    assert lg["relations"] == 1         # the supersedes the merge creates
+    assert lg["confirmed"] == 1
+    assert lg["archived"] == 1          # the dropped half of the merge
+    assert lg["chars"] == len("short") - len("api fact")
+    assert lg["domains"] == 2
+    assert lg["active"] == 2
+
+    by_kind = {g["kind"]: g for g in got["groups"]}
+    assert by_kind["retag"]["verified"] == 0
+    assert by_kind["reword"]["verified"] == 1
+    # the numbers each kind's sentence is built from
+    assert by_kind["reword"]["facts"]["chars"] == len("short") - len("api fact")
+    assert by_kind["retag"]["facts"]["terms"] == 2
+    assert by_kind["set_confidence"]["facts"]["conf"] == "confirmed"
+
+
+def test_api_summary_leaves_the_field_empty_when_the_batch_disagrees(client):
+    """One destination can be named in the sentence; four cannot."""
+    a, b = _new_memory(client), _new_memory(client)
+    with db.connect() as conn:
+        one = db.stage_optimization(conn, "same", [
+            {"kind": "redomain", "target_uid": a, "payload": {"domain": "acme/x100"}, "rationale": "r"},
+            {"kind": "redomain", "target_uid": b, "payload": {"domain": "acme/x100"}, "rationale": "r"},
+        ])
+        many = db.stage_optimization(conn, "split", [
+            {"kind": "redomain", "target_uid": a, "payload": {"domain": "acme/x100"}, "rationale": "r"},
+            {"kind": "redomain", "target_uid": b, "payload": {"domain": "zeta/x200"}, "rationale": "r"},
+        ])
+    facts = lambda run: {g["kind"]: g["facts"] for g in client.get(
+        f"/api/optimization/summary?run={run}").json()["groups"]}["redomain"]
+    assert facts(one["run_id"]) == {"paths": 1, "to": "acme/x100"}
+    assert facts(many["run_id"]) == {"paths": 2, "to": ""}
+
+
+def test_api_summary_ledger_ignores_what_is_already_decided(client):
+    """The ledger is what is STILL on the table -- an applied row is history."""
+    uid = _new_memory(client)
+    with db.connect() as conn:
+        staged = db.stage_optimization(conn, "half done", [
+            {"kind": "set_confidence", "target_uid": uid,
+             "payload": {"confidence": "confirmed"}, "rationale": "r", "verified": "v"},
+        ])
+    sug = client.get(
+        f"/api/optimization/suggestions?run={staged['run_id']}").json()["suggestions"][0]
+    client.post("/api/optimization/apply", json={"id": sug["id"]})
+
+    got = client.get(f"/api/optimization/summary?run={staged['run_id']}").json()
+    assert got["pending"] == 0 and got["verified"] == 0
+    assert got["ledger"]["confirmed"] == 0 and got["ledger"]["memories"] == 0
+    assert got["groups"][0]["applied"] == 1
+
+
+def test_api_summary_rejects_an_unknown_run(client):
+    assert client.get("/api/optimization/summary?run=9999").status_code >= 400
+
+
+def test_api_apply_all_takes_an_explicit_selection(client):
+    """The level-2 footer acts on what is ticked, not on the whole kind."""
+    uid = _new_memory(client)
+    with db.connect() as conn:
+        staged = db.stage_optimization(conn, "pick some", [
+            {"kind": "retag", "target_uid": uid, "payload": {"tags": "a"}, "rationale": "r", "verified": "v"},
+            {"kind": "retag", "target_uid": uid, "payload": {"tags": "b"}, "rationale": "r", "verified": "v"},
+            {"kind": "retag", "target_uid": uid, "payload": {"tags": "c"}, "rationale": "r", "verified": "v"},
+        ])
+    ids = [s["id"] for s in client.get(
+        f"/api/optimization/suggestions?run={staged['run_id']}").json()["suggestions"]]
+
+    res = client.post("/api/optimization/apply-all",
+                      json={"run": staged["run_id"], "ids": ids[:2]}).json()
+    assert res["applied"] == 2 and not res["failed"]
+    left = client.get(f"/api/optimization/suggestions?run={staged['run_id']}").json()["suggestions"]
+    assert [s["status"] for s in left] == ["applied", "applied", "pending"]
+
+
+def test_api_apply_all_drops_ids_from_another_run(client):
+    """An id is intersected with this run's pending rows before anything runs."""
+    uid = _new_memory(client)
+    mine = _stage_via_db(uid, "retag", {"tags": "mine"})
+    theirs = _stage_via_db(uid, "retag", {"tags": "theirs"})
+    alien = client.get(
+        f"/api/optimization/suggestions?run={theirs['run_id']}").json()["suggestions"][0]["id"]
+
+    res = client.post("/api/optimization/apply-all",
+                      json={"run": mine["run_id"], "ids": [alien]}).json()
+    assert res["applied"] == 0
+    assert client.get(
+        f"/api/optimization/suggestions?run={theirs['run_id']}"
+    ).json()["suggestions"][0]["status"] == "pending"
+
+
+def test_api_apply_all_rejects_a_malformed_ids(client):
+    uid = _new_memory(client)
+    staged = _stage_via_db(uid, "retag", {"tags": "x"})
+    bad = client.post("/api/optimization/apply-all",
+                      json={"run": staged["run_id"], "ids": ["1"]})
+    assert bad.status_code >= 400
+    assert client.get(
+        f"/api/optimization/suggestions?run={staged['run_id']}"
+    ).json()["suggestions"][0]["status"] == "pending"
+
+
+def test_api_apply_all_across_a_set_of_runs(client):
+    """A calendar day holds every run staged that day; deciding it is one call."""
+    uid = _new_memory(client)
+    a = _stage_via_db(uid, "retag", {"tags": "one"})
+    b = _stage_via_db(uid, "retag", {"tags": "two"})
+    c = _stage_via_db(uid, "retag", {"tags": "three"})
+
+    res = client.post("/api/optimization/apply-all",
+                      json={"runs": [a["run_id"], b["run_id"]]}).json()
+    assert res["applied"] == 2 and not res["failed"]
+
+    status = lambda run: client.get(
+        f"/api/optimization/suggestions?run={run}").json()["suggestions"][0]["status"]
+    assert status(a["run_id"]) == "applied"
+    assert status(b["run_id"]) == "applied"
+    assert status(c["run_id"]) == "pending"     # outside the scope, untouched
+
+
+def test_a_decision_over_several_runs_takes_one_backup(client, tmp_path):
+    """Thirteen runs on one day would otherwise copy the database thirteen times."""
+    uid = _new_memory(client)
+    a = _stage_via_db(uid, "retag", {"tags": "one"})
+    b = _stage_via_db(uid, "retag", {"tags": "two"})
+
+    client.post("/api/optimization/apply-all", json={"runs": [a["run_id"], b["run_id"]]})
+
+    runs = {r["id"]: r for r in client.get("/api/optimization/runs").json()["runs"]}
+    first, second = runs[a["run_id"]], runs[b["run_id"]]
+    assert first["backup_path"] and first["backup_path"] == second["backup_path"]
+    assert len(list((tmp_path / "backups").glob("*.db"))) == 1
+
+
+def test_a_run_that_already_has_a_backup_keeps_its_own(client):
+    """That copy is the state before ITS first apply, possibly days ago --
+    reusing today's would hand back a restore point that never existed."""
+    uid = _new_memory(client)
+    old = _stage_via_db(uid, "retag", {"tags": "old"})
+    client.post("/api/optimization/apply-all", json={"run": old["run_id"]})
+    first = next(r for r in client.get("/api/optimization/runs").json()["runs"]
+                 if r["id"] == old["run_id"])["backup_path"]
+    assert first
+
+    fresh = _stage_via_db(uid, "retag", {"tags": "fresh"})
+    client.post("/api/optimization/apply-all",
+                json={"runs": [old["run_id"], fresh["run_id"]]})
+
+    runs = {r["id"]: r for r in client.get("/api/optimization/runs").json()["runs"]}
+    assert runs[old["run_id"]]["backup_path"] == first
+    assert runs[fresh["run_id"]]["backup_path"]
+    assert runs[fresh["run_id"]]["backup_path"] != first
+
+
+def test_api_reject_all_across_a_set_of_runs(client):
+    uid = _new_memory(client)
+    a = _stage_via_db(uid, "retag", {"tags": "one"})
+    b = _stage_via_db(uid, "retag", {"tags": "two"})
+    res = client.post("/api/optimization/reject-all",
+                      json={"runs": [a["run_id"], b["run_id"]]}).json()
+    assert res["rejected"] == 2
+
+
+@pytest.mark.parametrize("body", [
+    {}, {"runs": []}, {"runs": ["1"]}, {"run": "1"}, {"runs": [1], "ids": ["2"]},
+])
+def test_a_bulk_decision_rejects_a_malformed_scope(client, body):
+    for path in ("apply-all", "reject-all"):
+        assert client.post(f"/api/optimization/{path}", json=body).status_code >= 400
+
+
+def test_api_reject_all_by_selection_and_by_kind(client):
+    uid = _new_memory(client)
+    with db.connect() as conn:
+        staged = db.stage_optimization(conn, "reject some", [
+            {"kind": "retag", "target_uid": uid, "payload": {"tags": "a"}, "rationale": "r"},
+            {"kind": "retag", "target_uid": uid, "payload": {"tags": "b"}, "rationale": "r"},
+            {"kind": "retitle", "target_uid": uid, "payload": {"title": "Queue drain"}, "rationale": "r"},
+        ])
+    sugs = client.get(f"/api/optimization/suggestions?run={staged['run_id']}").json()["suggestions"]
+    first = next(s["id"] for s in sugs if s["kind"] == "retag")
+
+    res = client.post("/api/optimization/reject-all",
+                      json={"run": staged["run_id"], "ids": [first]}).json()
+    assert res["rejected"] == 1
+
+    res = client.post("/api/optimization/reject-all",
+                      json={"run": staged["run_id"], "kind": "retag"}).json()
+    assert res["rejected"] == 1        # the other retag; the retitle is untouched
+
+    by_id = {s["id"]: s["status"] for s in client.get(
+        f"/api/optimization/suggestions?run={staged['run_id']}").json()["suggestions"]}
+    assert sorted(by_id.values()) == ["pending", "rejected", "rejected"]
+
+
+def test_api_reject_all_writes_nothing_to_the_memory(client):
+    """Rejecting answers a suggestion; it must not touch what it was about."""
+    uid = _new_memory(client, tags="original")
+    staged = _stage_via_db(uid, "retag", {"tags": "rewritten"})
+    before = client.get(f"/api/memories/{uid}").json()
+
+    client.post("/api/optimization/reject-all", json={"run": staged["run_id"]})
+
+    after = client.get(f"/api/memories/{uid}").json()
+    assert after["tags"] == before["tags"] == "original"
+    assert after["updated_at"] == before["updated_at"]
+
+
+def test_a_rewrite_carries_the_whole_before_and_both_lengths(client):
+    """Before is read beside a complete After, so a preview will not do.
+
+    `snippet` is cut to a fixed width; against the full new body that reads
+    as text the suggestion removes, which is exactly the decision being
+    asked about.
+    """
+    body = ("a body long enough to be worth shortening. " * 40).strip()
+    uid = _new_memory(client, content=body)
+    staged = _stage_via_db(uid, "reword", {"new_content": "shorter"})
+    s = client.get(
+        f"/api/optimization/suggestions?run={staged['run_id']}").json()["suggestions"][0]
+    assert s["content_before"] == body
+    assert len(s["target"]["snippet"]) < len(body)      # the preview really is cut
+    assert s["chars_before"] == len(body)
+    assert s["chars_after"] == len("shorter")
+
+    # a kind that rewrites no body carries none of the three
+    other = _stage_via_db(uid, "retag", {"tags": "x"})
+    s2 = client.get(
+        f"/api/optimization/suggestions?run={other['run_id']}").json()["suggestions"][0]
+    assert not {"content_before", "chars_before", "chars_after"} & set(s2)
+
+
+def test_an_applied_suggestion_still_reports_what_it_replaced(client):
+    """Before is the state the apply left behind, for every kind.
+
+    Applying writes the proposal into the memory, so reading the memory
+    afterwards puts the same value in both panes and the pair says nothing
+    changed. prev_state is the Before once a suggestion is decided.
+    """
+    cases = {
+        "retag": ({"tags": "queue, drain"}, "tags", "cache, warmup"),
+        "retitle": ({"title": "the new name"}, "title", "the old name"),
+        "redomain": ({"domain": "acme/x200"}, "domain", "acme/x100"),
+        "set_confidence": ({"confidence": "confirmed"}, "confidence", "unverified"),
+        "review": ({"review_after": "2027-01-01"}, "review_after", ""),
+        "archive": ({}, "status", "active"),
+    }
+    for kind, (payload, field, before) in cases.items():
+        uid = _new_memory(client, title="the old name", tags="cache, warmup",
+                          domain="acme/x100", confidence="unverified")
+        staged = _stage_via_db(uid, kind, payload)
+        sug = client.get(
+            f"/api/optimization/suggestions?run={staged['run_id']}").json()["suggestions"][0]
+        assert client.post("/api/optimization/apply",
+                           json={"id": sug["id"]}).status_code == 200
+        after = client.get(
+            f"/api/optimization/suggestions?run={staged['run_id']}").json()["suggestions"][0]
+        assert after["status"] == "applied"
+        assert after["target"][field] == before, kind
+
+
+def test_a_peer_card_carries_the_name_the_memory_goes_by(client):
+    """Every preview names a memory by its title and keeps the body behind it.
+
+    The card had only `snippet`, so the relation rail, the diagram's links
+    and these panes previewed a named memory by its opening line.
+    """
+    keep = _new_memory(client, content="the body of the one that stays")
+    drop = _new_memory(client, content="the body of the one that goes")
+    # merge names its pair in the payload and carries no target_uid
+    with db.connect() as conn:
+        staged = db.stage_optimization(conn, "peer names", [
+            {"kind": "merge", "payload": {"keep_uid": keep, "drop_uid": drop},
+             "rationale": "r", "verified": "v"},
+        ])
+    s = client.get(
+        f"/api/optimization/suggestions?run={staged['run_id']}").json()["suggestions"][0]
+
+    for role in ("keep_uid", "drop_uid"):
+        card = s["peers"][role]
+        assert card["title"] == "fixture title"
+        assert card["snippet"]                       # the body is still there
+        assert card["title"] != card["snippet"]
+
+
+@pytest.mark.parametrize("body,shown", [
+    ("The trigger fires **once per shard** and stops.",
+     "The trigger fires once per shard and stops."),
+    ("=== What to check first ===\n\n- `is_identity` on the table",
+     "What to check first is_identity on the table"),
+    ("See [[1790bbfd327c6d6c]] for the mechanism.",
+     "See 1790bbfd327c6d6c for the mechanism."),
+    ("Reproduce:\n\n```sql\nSELECT 1;\n```\n\nDone.", "Reproduce: SELECT 1; Done."),
+    # an opener nothing closed is markup too
+    ("a **run left open", "a run left open"),
+    # and a lone asterisk is not markup at all
+    ("SELECT * FROM t", "SELECT * FROM t"),
+])
+def test_a_preview_shows_prose_not_the_markup_around_it(body, shown):
+    """A preview identifies a memory; it is not read as a document.
+
+    Flattened BEFORE the cut, so a 160-character snippet cannot sever a
+    `**` and leave the stray half on the screen.
+    """
+    assert admin._plain(body) == shown
+
+
+def test_a_peer_snippet_is_flattened_before_it_is_cut(client):
+    uid = _new_memory(client, content="**bold** " + ("filler word " * 40))
+    staged = _stage_via_db(uid, "retag", {"tags": "x"})
+    s = client.get(
+        f"/api/optimization/suggestions?run={staged['run_id']}").json()["suggestions"][0]
+    snippet = s["target"]["snippet"]
+    assert snippet.startswith("bold filler word")
+    assert "*" not in snippet
+    assert snippet.endswith("…")          # it really was long enough to cut
+
+
+def test_a_peer_with_no_title_still_carries_the_field(client):
+    """An empty string, not a missing key: the fallback is the UI's to make.
+
+    /api/memories requires a title, but db.insert_memory does not and the
+    `untitled` defect Health counts is exactly this row -- so a preview
+    cannot assume a name is there.
+    """
+    with db.connect() as conn:
+        uid = db.insert_memory(conn, type="note", title="",
+                               content="a memory nobody named")
+    staged = _stage_via_db(uid, "retag", {"tags": "x"})
+    s = client.get(
+        f"/api/optimization/suggestions?run={staged['run_id']}").json()["suggestions"][0]
+    assert s["target"]["title"] == ""
+    assert s["target"]["snippet"].startswith("a memory nobody named")
+
+
+def test_the_relation_rail_gets_the_peer_name_too(client):
+    """Same card, reached through the memory endpoint rather than a run."""
+    a = _new_memory(client, content="first")
+    b = _new_memory(client, content="second")
+    client.post("/api/relations",
+                json={"from_uid": a, "to_uid": b, "relation_type": "relates_to"})
+    rels = client.get(f"/api/memories/{a}").json()["relations"]
+    assert rels and rels[0]["peer"]["title"] == "fixture title"
+
+
+def test_a_suggestion_resolves_the_wikilinks_its_prose_carries(client):
+    """The panes draw a body with the record's renderer, which needs targets.
+
+    Without the map every `[[uid]]` is drawn as a dead reference, so the
+    three places a card shows prose -- the rationale, the body it replaces
+    and the body it proposes -- are resolved together.
+    """
+    peer = _new_memory(client, domain="acme/x100")
+    other = _new_memory(client)
+    uid = _new_memory(client, content=f"the body cites [[{peer}]] already")
+    with db.connect() as conn:
+        staged = db.stage_optimization(conn, "links", [
+            {"kind": "reword", "target_uid": uid,
+             "payload": {"new_content": f"shorter, still citing [[{other}]]"},
+             "rationale": f"the reasoning behind it is in [[{peer}]]"},
+        ])
+    s = client.get(
+        f"/api/optimization/suggestions?run={staged['run_id']}").json()["suggestions"][0]
+
+    links = s["body_links"]
+    assert set(links) == {peer, other}
+    assert links[peer]["domain"] == "acme/x100"
+    assert links[other]["type"] == "note"
+    assert not links[peer].get("missing")
+
+
+def test_a_wikilink_pointing_nowhere_is_reported_as_missing(client):
+    """The renderer draws a dead reference as dead rather than as a link."""
+    uid = _new_memory(client)
+    staged = _stage_via_db(uid, "reword", {"new_content": "cites [[deadbeefdeadbeef]]"})
+    s = client.get(
+        f"/api/optimization/suggestions?run={staged['run_id']}").json()["suggestions"][0]
+    assert s["body_links"]["deadbeefdeadbeef"] == {
+        "uid": "deadbeefdeadbeef", "missing": True}
+
+
+def test_prose_with_no_references_carries_no_map(client):
+    """An empty map on every card would be payload for nothing."""
+    uid = _new_memory(client)
+    staged = _stage_via_db(uid, "reword", {"new_content": "no references at all"})
+    s = client.get(
+        f"/api/optimization/suggestions?run={staged['run_id']}").json()["suggestions"][0]
+    assert "body_links" not in s
+
+
+def test_an_applied_rewrite_shows_what_it_replaced(client):
+    """Once applied, the memory holds the new body -- so Before is prev_state.
+
+    Reading the memory instead puts the same string in both panes, and the
+    pair says the rewrite changed nothing.
+    """
+    body = ("the paragraph that gets shortened. " * 20).strip()
+    uid = _new_memory(client, content=body)
+    staged = _stage_via_db(uid, "reword", {"new_content": "shorter"})
+    sug = client.get(
+        f"/api/optimization/suggestions?run={staged['run_id']}").json()["suggestions"][0]
+    client.post("/api/optimization/apply", json={"id": sug["id"]})
+
+    after = client.get(
+        f"/api/optimization/suggestions?run={staged['run_id']}").json()["suggestions"][0]
+    assert after["status"] == "applied"
+    assert after["content_before"] == body
+    assert after["chars_before"] == len(body)
+    assert after["chars_after"] == len("shorter")
+
+    # and reverting puts the pair back on the live body
+    client.post("/api/optimization/revert", json={"id": sug["id"]})
+    back = client.get(
+        f"/api/optimization/suggestions?run={staged['run_id']}").json()["suggestions"][0]
+    assert back["status"] == "pending" and back["content_before"] == body
 
 
 def test_api_apply_all_and_discard(client):
@@ -819,12 +1587,17 @@ OPTIMIZATION_JS = (Path(__file__).resolve().parents[1]
 RELATIONAL = {"link", "merge", "distill"}
 
 
+def _kind_set(name: str) -> set[str]:
+    """One of optimization.js's kind sets, read from the file."""
+    body = OPTIMIZATION_JS.read_text(encoding="utf-8")
+    match = re.search(rf"const {name} = new Set\(\[(.*?)\]\)", body, re.S)
+    assert match, f"{name} is not where this test expects it"
+    return set(re.findall(r"'([a-z_]+)'", match.group(1)))
+
+
 def _diff_kinds() -> set[str]:
     """The kinds optimization.js gives a before/after pair, read from the file."""
-    body = OPTIMIZATION_JS.read_text(encoding="utf-8")
-    match = re.search(r"const DIFF_KINDS = new Set\(\[(.*?)\]\)", body, re.S)
-    assert match, "DIFF_KINDS is not where this test expects it"
-    return set(re.findall(r"'([a-z_]+)'", match.group(1)))
+    return _kind_set("DIFF_KINDS")
 
 
 def test_every_staged_kind_reaches_a_renderer():
@@ -836,13 +1609,79 @@ def test_every_staged_kind_reaches_a_renderer():
     assert set(db.SUGGESTION_KINDS) == _diff_kinds() | RELATIONAL
 
 
-@pytest.mark.parametrize("side", ["optBefore", "optAfter"])
-def test_each_diff_kind_has_a_case_on_both_sides(side):
-    """Being in DIFF_KINDS is not enough: both panes switch on the kind."""
+def test_every_diff_kind_is_claimed_by_exactly_one_pane():
+    """A kind's change has a SHAPE, and the five panes divide them up.
+
+    Content is prose and gets two scrolling wells, a flag gets the two
+    marks the rest of the UI draws it with, a set gets both collections as
+    chips, a single value gets one line each, and text losing a piece of
+    itself names the field it lost it from. A kind in DIFF_KINDS that no set
+    claims falls through to the raw payload dump.
+    """
+    groups = {name: _kind_set(name) for name in
+              ("CONTENT_KINDS", "FLAG_KINDS", "SET_KINDS", "LINE_KINDS", "TEXT_KINDS")}
+    union: set[str] = set()
+    for name, kinds in groups.items():
+        assert not (union & kinds), f"{name} claims a kind another pane already draws"
+        union |= kinds
+    assert union == _diff_kinds()
+
+
+def _catalogs():
+    i18n = OPTIMIZATION_JS.parents[1] / "public" / "i18n"
+    return {loc: json.loads((i18n / f"{loc}.json").read_text(encoding="utf-8"))["strings"]
+            for loc in ("en", "pt-BR")}
+
+
+def test_every_kind_has_a_sentence_in_every_catalog():
+    """`op.what.${kind}` is assembled at runtime, so a gap reaches the screen.
+
+    t() falls back to the key itself, and the group row would then read
+    "op.what.merge" where the sentence belongs. groupWhat's own fallback
+    catches only a kind with no entry at all -- it cannot catch one locale
+    missing what the other has.
+    """
+    for loc, strings in _catalogs().items():
+        for kind in db.SUGGESTION_KINDS:
+            assert f"op.what.{kind}" in strings, f"{loc} has no sentence for {kind}"
+        assert "op.what.other" in strings
+
+
+def test_every_kind_has_a_name_in_every_catalog():
+    """`kind.${kind}` is what the reader sees instead of the identifier.
+
+    kindLabel falls back to the raw string, so a gap does not break the
+    screen -- it leaves `set_confidence` on it in one locale and "Definir
+    confianca" in the other, which is the inconsistency the mask exists to
+    remove.
+    """
+    for loc, strings in _catalogs().items():
+        for kind in db.SUGGESTION_KINDS:
+            assert f"kind.{kind}" in strings, f"{loc} has no name for {kind}"
+        assert "kind.raw" in strings, f"{loc} cannot show the stored spelling"
+
+
+def test_the_mixed_variants_exist_for_the_kinds_that_ask_for_one():
+    """A batch with several destinations picks `<kind>Mixed`; it has to be there."""
     body = OPTIMIZATION_JS.read_text(encoding="utf-8")
-    start = body.index(f"function {side}(")
-    arm = body[start:body.index("\n}", start)]
-    assert _diff_kinds() <= set(re.findall(r"case '([a-z_]+)'", arm))
+    match = re.search(r"const WHAT_MIXED = \{(.*?)\}", body, re.S)
+    assert match, "WHAT_MIXED is not where this test expects it"
+    kinds = re.findall(r"(\w+):", match.group(1))
+    assert kinds, "expected at least one kind with a mixed-batch sentence"
+    for loc, strings in _catalogs().items():
+        for kind in kinds:
+            assert f"op.what.{kind}Mixed" in strings, f"{loc} has no mixed sentence for {kind}"
+
+
+def test_the_placeholders_a_sentence_uses_are_ones_the_server_sends():
+    """A {term} the payload never carries prints as literal braces."""
+    known = {"n", "chars", "terms", "paths", "to", "conf", "rel", "sources", "kind"}
+    for loc, strings in _catalogs().items():
+        for key, value in strings.items():
+            if not key.startswith("op.what."):
+                continue
+            unknown = set(re.findall(r"\{(\w+)\}", value)) - known
+            assert not unknown, f"{loc}:{key} uses {unknown}"
 
 
 def test_the_distilled_memory_is_born_with_its_name(conn):

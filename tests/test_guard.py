@@ -6,6 +6,11 @@ that should not have happened costs a session its memory; a refusal that
 does not happen costs a memory its content, with no error anywhere to say
 so. Everything the guard is unsure about therefore goes through, and what
 it does refuse it refuses on a table read from the tools themselves.
+
+The second refusal is for the shape of the typo that arrives: a parameter
+holding the rest of the call as its text. That one is refused twice -- by the
+hook, and by the store on the way in -- so both are exercised here, beside
+the prose that quotes a tag on purpose and has to keep writing.
 """
 
 from __future__ import annotations
@@ -16,8 +21,39 @@ import json
 import re
 
 import pytest
+from starlette.testclient import TestClient
 
-from memai import guard, hook, hook_install, server
+from memai import admin, db, guard, hook, hook_install, server
+
+
+# What a leaked call looks like once it is one parameter's text: the closing
+# tag of the field it was written under, and the fields after it as prose.
+LEAKED = ("a cache warmup runs twice on a cold queue</content>\n"
+          "<domain>acme/x100/p200</domain>\n"
+          "<tags>cache warmup, queue drain</tags>")
+
+# The prefixed form of a closing tag, spelled in pieces. A literal one does
+# not survive being typed: the parser it belongs to reads it.
+PREFIXED = "</" + "antml:parameter>"
+
+
+@pytest.fixture
+def conn(tmp_path):
+    with db.connect(tmp_path / "test.db") as c:
+        yield c
+
+
+@pytest.fixture
+def store(tmp_path, monkeypatch):
+    monkeypatch.setenv("MEMAI_HOME", str(tmp_path))
+    return tmp_path
+
+
+@pytest.fixture
+def client(tmp_path, monkeypatch):
+    monkeypatch.setenv("MEMAI_HOME", str(tmp_path))
+    with TestClient(admin.app) as c:
+        yield c
 
 
 def _run(payload, monkeypatch, capsys) -> tuple[int, str, str]:
@@ -60,6 +96,28 @@ def test_a_watched_field_is_one_its_tool_takes_and_does_not_require(tool):
     for name in guard.WATCHED[tool]:
         assert name in parameters
         assert parameters[name].default is not inspect.Parameter.empty
+
+
+@pytest.mark.parametrize("tool", sorted(guard.OPTIONAL))
+def test_the_optional_fields_are_the_rest_of_the_signature(tool):
+    """The two tables together are the tool's parameter list, in its order.
+
+    The closing tags a leak carries are read from that list, so a name
+    missing here is a mark nothing looks for.
+    """
+    parameters = tuple(inspect.signature(getattr(server, tool)).parameters)
+    assert guard.fields(tool) == parameters
+
+
+@pytest.mark.parametrize("tool", sorted(guard.WATCHED))
+def test_every_watched_field_is_one_of_the_optional_ones(tool):
+    assert set(guard.WATCHED[tool]) <= set(guard.OPTIONAL[tool])
+
+
+def test_a_tool_with_no_table_is_read_against_the_frame_alone():
+    assert guard.fields("forget") == ()
+    assert guard.leak_marks("forget", "a body with </content> in it") == []
+    assert guard.leak_marks("forget", "a body with </invoke> in it") == ["</invoke>"]
 
 
 def test_the_matcher_selects_every_guarded_tool_and_nothing_else():
@@ -139,6 +197,153 @@ def test_debris_is_never_a_refusal(monkeypatch, capsys):
     params["why_wrong"] = "a tag opened as <parameter name=...> is dropped"
     code, _, err = _run(_call("anti_pattern", **params), monkeypatch, capsys)
     assert (code, err) == (0, "")
+
+
+# ------------------------------------ the call a parameter swallowed: marks
+
+def test_a_closing_tag_of_the_call_frame_or_of_the_tools_own_field_is_a_mark():
+    assert guard.leak_marks("note", f"{LEAKED}</invoke>") == [
+        "</content>", "</domain>", "</invoke>", "</tags>"]
+
+
+def test_the_prefixed_closing_tag_is_a_mark_too():
+    """Either half of the typo writes the tag; only one prefixes it."""
+    assert guard.leak_marks("note", f"a fact {PREFIXED}") == [PREFIXED]
+
+
+def test_a_closing_tag_of_a_field_the_tool_does_not_take_is_not_a_mark():
+    """`</result>` is a leak in the tool that has a result and prose in the
+    ones that do not, which is what keeps a body free to quote markup."""
+    assert guard.leak_marks("note", "the endpoint answers <result>0</result>") == []
+    assert guard.leak_marks("reasoning", "<result>0</result>") == ["</result>"]
+    assert guard.leak_marks("note", "<div>the row</div>") == []
+
+
+def test_an_opening_tag_on_its_own_is_not_a_mark():
+    """What a memory ABOUT this defect writes."""
+    assert guard.leak_marks("note", "a tag opened as <parameter name=...> is dropped") == []
+
+
+def test_a_broken_closing_tag_is_not_a_mark():
+    """The escape the refusal offers has to actually work."""
+    assert guard.leak_marks("note", "quote it as </ invoke> and </ content>") == []
+
+
+# ---------------------------------- the call a parameter swallowed: refusals
+
+def test_a_body_holding_the_rest_of_the_call_is_refused(monkeypatch, capsys):
+    params = _full("note")
+    params["content"] = LEAKED
+    code, out, err = _run(_call("note", **params), monkeypatch, capsys)
+    assert code == 2
+    assert out == ""
+    assert "content carries </content>, </domain>, </tags>" in err
+    assert "antml:" in err          # the cause
+    assert "note(title, content)" in err
+
+
+def test_the_leak_refusal_names_the_tool_the_way_the_host_did(monkeypatch, capsys):
+    payload = {"tool_name": "mcp__memai__note",
+               "tool_input": {"title": "a name for it", "content": LEAKED}}
+    code, _, err = _run(payload, monkeypatch, capsys)
+    assert code == 2
+    assert "BLOCKED (mcp__memai__note)" in err
+
+
+def test_every_swallowing_parameter_is_named_not_only_the_first(monkeypatch, capsys):
+    """And with the marks that tool can carry: `content` is not one of its
+    fields, so `</content>` in an anti_pattern is text somebody wrote."""
+    params = _full("anti_pattern")
+    params["why_wrong"] = LEAKED
+    params["instead"] = "</invoke>"
+    _, _, err = _run(_call("anti_pattern", **params), monkeypatch, capsys)
+    assert "instead carries </invoke>" in err
+    assert "why_wrong carries </domain>, </tags>" in err
+
+
+def test_prose_that_quotes_the_tag_still_writes(monkeypatch, capsys):
+    """The same conviction as test_debris_is_never_a_refusal, one tier up: a
+    guard that cannot be written about is one that gets taken out."""
+    params = _full("anti_pattern")
+    params["why_wrong"] = ("a tag opened as <parameter name=...> is dropped, and "
+                           "quoting the closing half as </ parameter> is not a mark")
+    code, _, err = _run(_call("anti_pattern", **params), monkeypatch, capsys)
+    assert (code, err) == (0, "")
+
+
+# ------------------------------------ the call a parameter swallowed: the store
+
+def test_the_store_refuses_a_body_holding_the_rest_of_the_call(conn):
+    """The backstop: a call that reaches the store with no hook in front of
+    it -- an unregistered host, the dashboard, staged text."""
+    with pytest.raises(ValueError, match="tool call's own source"):
+        db.insert_memory(conn, type="note", title="a cache warmup", content=LEAKED)
+
+
+def test_the_store_refuses_a_title_holding_it(conn):
+    with pytest.raises(ValueError, match="tool call's own source"):
+        db.insert_memory(conn, type="note", title=f"a warmup{PREFIXED}", content="a fact")
+
+
+def test_the_store_refuses_leaked_tags_and_a_leaked_source_ref(conn):
+    """Where a leak lands is wherever the typo was typed, and the tags are as
+    common a landing place as the body."""
+    tail = "</tags>\n<source_ref>src/acme/x100/warmup.py</source_ref>"
+    with pytest.raises(ValueError, match="tool call's own source"):
+        db.insert_memory(conn, type="note", title="a cache warmup",
+                         content="a fact", tags=f"cache warmup{tail}")
+    with pytest.raises(ValueError, match="tool call's own source"):
+        db.insert_memory(conn, type="note", title="a cache warmup",
+                         content="a fact", source_ref=f"src/acme{tail}")
+
+
+def test_a_tag_edit_that_leaks_leaves_the_tags_it_had(conn):
+    uid = db.insert_memory(conn, type="note", title="a cache warmup",
+                           content="a fact", tags="cache warmup")
+    with pytest.raises(ValueError, match="tool call's own source"):
+        db.set_tags(conn, uid, "cache warmup</tags>")
+    with pytest.raises(ValueError, match="tool call's own source"):
+        db.set_source_ref(conn, uid, "src/acme/x100/warmup.py</source_ref>")
+    row = db.get_memory(conn, uid)
+    assert (row["tags"], row["source_ref"]) == ("cache warmup", "")
+
+
+def test_an_edit_that_leaks_leaves_the_body_it_had(conn):
+    uid = db.insert_memory(conn, type="note", title="a cache warmup",
+                           content="the warmup drains the queue once")
+    with pytest.raises(ValueError, match="tool call's own source"):
+        db.update_memory_content(conn, uid, LEAKED)
+    assert db.get_memory(conn, uid)["content"] == "the warmup drains the queue once"
+
+
+def test_a_rename_that_leaks_leaves_the_name_it_had(conn):
+    uid = db.insert_memory(conn, type="note", title="a cache warmup", content="a fact")
+    with pytest.raises(ValueError, match="tool call's own source"):
+        db.set_title(conn, uid, f"a cache warmup{PREFIXED}")
+    assert db.get_memory(conn, uid)["title"] == "a cache warmup"
+
+
+def test_the_tool_says_so_instead_of_writing(store):
+    uid = server.note(title="a cache warmup", content="the warmup drains the queue",
+                      domain="acme/x100")["uid"]
+    res = server.edit_memory(uid, new_content=LEAKED)
+    assert res["ok"] is False and "tool call's own source" in res["errors"][0]
+    assert server.get_memory(uid)["content"] == "the warmup drains the queue"
+
+
+def test_the_dashboard_refuses_it(client):
+    res = client.post("/api/memories", json={
+        "title": "a cache warmup", "type": "note", "content": LEAKED})
+    assert res.status_code == 400
+    assert "tool call's own source" in res.json()["error"]
+
+
+def test_a_restore_reproduces_a_row_that_already_carries_it(conn):
+    """A restore reproduces a row whose body carries a leak: a round trip
+    reproduces rows, it does not re-judge them."""
+    db.restore_memory(conn, {"uid": "a1b2c3d4e5f60718", "type": "note",
+                             "title": "a cache warmup", "content": LEAKED})
+    assert db.get_memory(conn, "a1b2c3d4e5f60718")["content"] == LEAKED
 
 
 # ------------------------------------------------- what it will not judge

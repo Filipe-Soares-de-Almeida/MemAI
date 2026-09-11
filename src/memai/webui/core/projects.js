@@ -1,4 +1,4 @@
-/* The project switch on the rail, and the dialog that sends memories to
+/* The project switch in the app bar, and the dialog that sends memories to
    another project.
 
    A project is one SQLite file holding a whole memory. The dashboard reads
@@ -15,8 +15,7 @@ import { $, esc, fmtInt, debounce } from './dom.js';
 import { api } from './api.js';
 import { toast, failed, modalOpen, openModal, closeModal, promptModal } from './ui.js';
 import { pickerFor, pickerValue, setPickerValue, wirePicker, fixedItems } from './pick.js';
-import { route, parseHash } from './router.js';
-import { refreshRail } from './shared.js';
+import { route } from './router.js';
 import { t } from '../i18n.js';
 
 /* The row that is an action rather than a project. A project name is a file
@@ -37,7 +36,7 @@ const newItem = () => ({ value: NEW, label: t('project.new'), cls: 'pick-new' })
 const items = () => [...rows.map(projectItem), newItem()];
 
 export async function mountProjectPicker() {
-  if (!$('#railProject')) return;
+  if (!$('#projectHost')) return;
   try { paint(await api('/api/projects')); }
   catch (err) { failed('err.project', err); }
 }
@@ -46,16 +45,14 @@ function paint(data) {
   active = data.active;
   rows = data.projects;
   const list = items();
-  /* one row like the ones under it: the label, and the value IS the control */
-  $('#railProject').innerHTML = `
-    <div class="rh-row rh-project"><span>${t('project.title')}</span>
-      ${pickerFor({ id: 'projectSel', value: active, items: list,
-                    ariaLabel: t('project.title'), cls: 'project-sel' })}</div>`;
-  /* measured and placed against the ROW rather than against the value inside
-     it: the panel is then the width of the rail's 228px column and stays
-     inside it, instead of spilling onto the view beside it */
+  /* the name IS the control -- there is no room in the bar for a label
+     beside it, and the caret says the same thing the word would */
+  $('#projectHost').innerHTML = pickerFor({
+    id: 'projectSel', value: active, items: list,
+    ariaLabel: t('project.title'), cls: 'project-sel',
+  });
   wirePicker(document, { id: 'projectSel', items: fixedItems(list), onPick: pick,
-                         anchor: '.rh-project', minWidth: 0, panelCls: 'pick-quiet' });
+                         minWidth: 200, panelCls: 'pick-quiet', align: 'right' });
 }
 
 /* The button has already repainted itself to the row that was clicked, so a
@@ -88,11 +85,11 @@ async function create() {
   } catch (err) { failed('err.project', err); }
 }
 
-/* The view repaints against the project that is active now. Overview hands
-   its own payload to the rail; every other view needs the rail fetched apart. */
+/* The view repaints against the project that is active now, and every view
+   fetches what it shows -- so re-rendering it IS reading the other
+   project. */
 function reread() {
   route();
-  if (parseHash().name !== 'overview') refreshRail();
 }
 
 /* ─── sending memories to another project ────────────────────────────────
@@ -165,9 +162,6 @@ export async function moveToProjectModal({ uids = [], domain = '' }) {
         const r = await api('/api/projects/move', { body: body(false) });
         toast(t('mv.done', { n: fmtInt(r.moved), target: esc(r.target) }), 'ok',
               r.backup ? { detail: t('mv.backup', { name: r.backup.split(/[\\/]/).pop() }) } : {});
-        /* the caller repaints its view; the rail's counts are this project's
-           and just changed too */
-        if (r.moved > 0) refreshRail();
         done(r.moved > 0);
       } catch (err) { okBtn.disabled = false; failed('err.move', err); }
     };

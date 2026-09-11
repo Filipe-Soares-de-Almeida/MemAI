@@ -232,8 +232,9 @@ export const copyUid = uid => copyText(uid, t('toast.uidCopied', { uid }));
 export const copyCode = text => copyText(text, t('toast.codeCopied'));
 
 /* ─── toggle state ────────────────────────────────────────────────────
-   A control that stays pressed says so in the accessibility tree too. The
-   UI marked these with a class alone, so the state existed only for eyes. */
+   A control that stays pressed says so in the accessibility tree as well as
+   in its fill. For a .btn; a .seg button wears its own pressed state and
+   sets aria-pressed itself. */
 
 export const setPressed = (el, on) => {
   if (!el) return;
@@ -241,18 +242,16 @@ export const setPressed = (el, on) => {
   el.classList.toggle('btn-solid', !!on);
 };
 
-/* Everything behind the modal stack, taken out of the tab order and out of
-   the accessibility tree for as long as anything is layered over it. A
-   dialog sits over the whole app behind a scrim, so tabbing into the list
-   underneath -- which is what used to happen -- moves an invisible caret
-   through covered content.
+/* Everything behind the modal stack -- the app bar and the view -- taken out
+   of the tab order and out of the accessibility tree for as long as anything
+   is layered over it: a dialog sits over the whole app behind a scrim, and
+   tabbing into what it covers moves an invisible caret through it.
 
    `inert` and not aria-hidden: it does both, and it also stops a click.
-   Applied by openModal/closeModal at the edges of the stack, so it is not
-   a thing a caller can forget: it used to be the record drawer's own call,
-   and every other dialog in the app went without it. */
+   Applied by openModal/closeModal at the edges of the stack, so no caller
+   has to remember it. */
 function inertBackground(on) {
-  for (const sel of ['.rail', '.frame']) {
+  for (const sel of ['.appbar', '.frame']) {
     const el = document.querySelector(sel);
     if (el) el.toggleAttribute('inert', !!on);
   }
@@ -263,11 +262,8 @@ function inertBackground(on) {
    inside itself, and closing it puts the caret back where it was. The
    context menu below is the deliberate opposite -- see its own note.
 
-   Modals STACK. One-at-a-time was the rule until a form grew a form of
-   its own: the memory record is itself a dialog now, and it opens the
-   link picker over the top of itself. Under the old rule opening the
-   picker would have thrown the record away, and closing the picker would
-   have had nothing to go back to.
+   Modals STACK, because a form can open a form of its own: the link picker
+   opens over whatever asked for it, and closing it goes back to that.
 
    So openModal PUSHES and closeModal POPS exactly one level -- Escape
    backs out of a sub-form into the form that raised it, which is the only
@@ -396,10 +392,13 @@ export function promptModal({ title, body = '', label, placeholder = '', value =
   });
 }
 
-/* ─── context menu ───────────────────────────────────────────────────
-   A right-click menu, not a modal: it has no scrim and no focus trap,
-   because it must be dismissable by clicking the thing you actually
-   wanted. Items are `{label, run, danger}` or `{sep: true}`. */
+/* ─── menu of actions ────────────────────────────────────────────────
+   Not a modal: it has no scrim and no focus trap, because it must be
+   dismissable by clicking the thing you actually wanted. Items are
+   `{label, run, danger}` or `{sep: true}`.
+
+   Two ways in, and they differ only in where the menu lands: openCtxMenu at a
+   pointer, openDropMenu under the control that opened it. */
 
 let ctxMenu = null, ctxDrop = null;
 
@@ -410,7 +409,18 @@ export function closeCtxMenu() {
   ctxMenu = null;
 }
 
-export function openCtxMenu(x, y, items) {
+/* At a point -- a right-click, or a canvas the pointer is over. */
+export const openCtxMenu = (x, y, items) => openMenu(items, { x, y });
+
+/* Under the button that opened it: measured against that button, flipped when
+   it does not fit below, and hung off the button's RIGHT edge when `align`
+   says so -- for a control at the end of a row, where a left-aligned menu
+   wider than its button runs off past it. */
+export function openDropMenu(btn, items, { align = 'left' } = {}) {
+  return openMenu(items, { btn, align });
+}
+
+function openMenu(items, at) {
   closeCtxMenu();
   tipHide();            /* same reason as openModal */
   const live = items.filter(Boolean);
@@ -421,15 +431,9 @@ export function openCtxMenu(x, y, items) {
     ? '<div class="ctx-sep"></div>'
     : `<button class="ctx-item${it.danger ? ' danger' : ''}" data-i="${i}">${esc(it.label)}</button>`
   ).join('');
-  el.style.left = `${x}px`;
-  el.style.top = `${y}px`;
   document.body.appendChild(el);
   ctxMenu = el;
-  /* measured after it is in the document, then clamped both ends -- the
-     same reason tipShow does it that way */
-  const r = el.getBoundingClientRect();
-  el.style.left = `${Math.max(8, Math.min(x, innerWidth - r.width - 8))}px`;
-  el.style.top = `${Math.max(8, Math.min(y, innerHeight - r.height - 8))}px`;
+  place(el, at);
 
   el.querySelectorAll('[data-i]').forEach(b => b.addEventListener('click', () => {
     const it = live[Number(b.dataset.i)];
@@ -448,5 +452,26 @@ export function openCtxMenu(x, y, items) {
     removeEventListener('mousedown', away, true);
     removeEventListener('keydown', key, true);
     removeEventListener('wheel', closeCtxMenu, true);
+  };
+}
+
+/* Measured after it is in the document, then clamped both ends -- the same
+   reason tipShow does it that way. */
+function place(el, { x, y, btn, align }) {
+  const box = el.getBoundingClientRect();
+  const at = btn ? dropPoint(btn.getBoundingClientRect(), box, align) : { x, y };
+  el.style.left = `${Math.max(8, Math.min(at.x, innerWidth - box.width - 8))}px`;
+  el.style.top = `${Math.max(8, Math.min(at.y, innerHeight - box.height - 8))}px`;
+}
+
+/* Below the button unless it does not fit and there is more room above. A menu
+   is a list of ACTIONS and not what a control currently holds, so it clears
+   the button by 4px rather than joining it the way a picker's panel does. */
+function dropPoint(r, box, align) {
+  const room = innerHeight - r.bottom - 8;
+  const below = box.height <= room || r.top - 8 < room;
+  return {
+    x: align === 'right' ? r.right - box.width : r.left,
+    y: below ? r.bottom + 4 : r.top - box.height - 4,
   };
 }

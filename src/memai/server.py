@@ -52,7 +52,9 @@ pulse(domain) for the state of a subject, recall(query) or search(query)
 for anything specific, list_domains() for the tree that exists. Write as
 you go, not at the end: note() a durable fact, anti_pattern() a pitfall
 worth not repeating, checkpoint() where the work stands before a pause,
-diagram() a routine start to end. A claim you could not check says so in
+diagram() a routine start to end. One memory holds ONE fact: when a body
+grows into several subjects, write them as separate memories and
+link_memories() them to each other. A claim you could not check says so in
 its own body; set_confidence(uid, 'confirmed'|'contradicted') closes it
 once the evidence turns up.
 
@@ -425,6 +427,15 @@ def note(title: str, content: str, domain: str = "", also: str = "", tags: str =
     characters, and a name that needs more than that is summarizing the
     body instead of naming it.
 
+    content: ONE fact, and what a reader needs to use it -- what holds,
+    where it holds, what it rules out. Retrieval ranks whole memories, so a
+    body answering four questions comes back for all four and is read for
+    one: write the second subject as its own memory, on its own domain, and
+    connect the two with link_memories(). A [[uid]] typed inside a body is
+    a reference a reader can follow, not an edge -- get_relations() and the
+    graph do not see it until link_memories() creates one. Past a couple of
+    thousand characters, a body is usually several memories written as one.
+
     domain: the subject this belongs to, as a path from the outermost
     scope in ('acme/x100/p200'). File it as deep as the fact is specific
     -- a note about one routine goes on the routine, and still comes back
@@ -481,7 +492,10 @@ def checkpoint(
     A summary of where the work stands, so the next session picks up
     the right bearing via pulse(). Fields are free-length; still prefer
     a readable summary here and put timeless detail into note() --
-    checkpoints are read for bearing, not as an archive. Stored as
+    checkpoints are read for bearing, not as an archive. One fact per
+    note(), each cited back here by [[uid]] and linked with
+    link_memories(); pulse() returns the latest checkpoint IN FULL, so
+    every session pays for whatever was parked in these fields. Stored as
     type='checkpoint'.
 
     title: one line naming what this memory is about, in the words someone
@@ -521,6 +535,10 @@ def anti_pattern(
     Stored as type='anti_pattern'; open ones for a domain are surfaced by pulse().
     `also` cross-lists it into further domain paths, `review_after` dates
     when to recheck it and `source_ref` says what it came from -- see note().
+
+    ONE pitfall per memory: a second temptation from the same session is
+    its own anti_pattern(), connected with link_memories(). See note() on
+    what a body holds and when it is two memories.
 
     title: one line naming what this memory is about, in the words someone
     would look for it by. It is what a list shows instead of the opening of
@@ -564,7 +582,9 @@ def reasoning(
 
     For the PROCESS, not the fact it produced -- note() takes the fact.
     Stored as type='reasoning'; filter search/list_* with type='reasoning'
-    to get these back.
+    to get these back. ONE analysis per memory: a second hypothesis tested
+    in the same session is its own reasoning(). See note() on what a body
+    holds and when it is two memories.
 
     title: one line naming what this memory is about, in the words someone
     would look for it by. It is what a list shows instead of the opening of
@@ -605,6 +625,10 @@ def handoff(title: str, content: str, domain: str = "", also: str = "",
 
     Stored as type='handoff'; open ones for a domain are surfaced by pulse().
     `also` cross-lists it into further domain paths -- see note().
+
+    `content` holds the message and what the next agent needs to act on it.
+    Durable knowledge goes to note() and is cited from here -- see note()
+    on when a body is two memories.
 
     title: one line naming what this memory is about, in the words someone
     would look for it by. It is what a list shows instead of the opening of
@@ -1407,7 +1431,10 @@ def edit_memory(uid: str, new_content: str = "", note: str = "", mode: str = "re
     replacing the body. Use it when a memory gains a fact rather than
     turning out to be wrong: the alternative is reading the whole thing,
     restating it and sending it back, which pays for the body twice and
-    stakes the existing text on it being copied faithfully.
+    stakes the existing text on it being copied faithfully. Append what
+    THIS memory gained. A fact about a further subject is a new memory plus
+    an edge, not a line at the bottom -- appended text is ranked as part of
+    the body it lands in and comes back with it.
 
     source_ref points the memory at what its claim came from -- the field
     note() takes at write time, and the one a later pass checks the claim
@@ -1447,9 +1474,14 @@ def edit_memory(uid: str, new_content: str = "", note: str = "", mode: str = "re
                     f"{uid} is a diagram: its content is generated from the graph. "
                     "Use diagram_node/diagram_edge to change the flow."
                 ])
-            if not db.update_memory_content(conn, uid, new_content, note=note,
-                                            append=mode == "append"):
-                return _errors([f"no memory {uid}"])
+            try:
+                if not db.update_memory_content(conn, uid, new_content, note=note,
+                                                append=mode == "append"):
+                    return _errors([f"no memory {uid}"])
+            except ValueError as exc:
+                # a body the store will not hold: one that does not read as its
+                # type's fields, or one carrying a tool call's own source
+                return _errors([str(exc)])
             changed.append("content")
         if source_ref.strip():
             if not db.set_source_ref(conn, uid, source_ref, note=note):
@@ -1481,6 +1513,10 @@ def link_memories(from_uid: str, to_uid: str, relation_type: str, note: str = ""
 
     relation_type is free text but keep it consistent, e.g.
     'supersedes', 'relates_to', 'contradicts', 'links_to'.
+
+    This is what splitting a body into several memories costs: a [[uid]]
+    written inside prose is a reference a reader follows, and only an edge
+    created here is visible to get_relations() and to the graph.
 
     Refuses an unknown uid, a memory related to itself, and an edge that
     already exists with that same type -- each as
@@ -1668,6 +1704,11 @@ def optimize_stage(suggestions: list[dict], note: str = "") -> dict:
     distill) require a non-empty `verified` describing the live-facts
     check behind them. Invalid suggestions are skipped and reported in
     `errors`; the rest are staged. Returns {run_id, staged, errors}.
+
+    `note` is one short summary of the pass, at most 250 characters; a
+    longer one raises and stages nothing. What a single suggestion needs
+    said belongs in its own `rationale` and `verified`, which are not
+    capped.
     help(command='optimize_stage') explains each kind in full.
     """
     with db.connect() as conn:
@@ -1778,7 +1819,7 @@ Step 1 of the "optimize my memories" workflow. Returns every memory's
 curation-relevant fields, the relation edges among them, and
 dedup-candidate pairs as a starting hint. Read this, then decide what
 to compact/reword/retag/redomain/set_confidence/archive/link/merge/
-distill and stage it with optimize_stage.
+distill/unleak and stage it with optimize_stage.
 
 The listing is slim on purpose so a few-hundred-memory store fits one
 response: content is a ~120-char snippet plus `content_len` (tags cut
@@ -1827,7 +1868,19 @@ domain/type to curate one slice at a time. Also included:
     so you can tell a new membership from one that already holds,
   - anchors: per memory, the verifiable references found in its FULL
     content (URLs, file paths, table/field identifiers, constants),
-    space-joined -- the things to go check against live facts.
+    space-joined -- the things to go check against live facts,
+  - leaked_calls: rows whose text carries a tool call's OWN SOURCE. A
+    parameter tag typed without the antml: prefix stays in the text of
+    the parameter before it, so the fields it opened -- the domain, the
+    tags, the source_ref -- were written into the body and their own
+    columns are empty. Per finding: which `fields` carry a mark and
+    what a repair `removes` from each; `clean: false` when the marks
+    sit inside the prose, which `unleak` refuses and a `reword` has to
+    rewrite by hand; and `declares`, what the debris was trying to
+    write, reported only for the columns that are still empty. So one
+    finding is usually an `unleak` per dirty field PLUS the redomain /
+    crosslist / retag that finishes it. stats.leaked_calls counts every
+    one in the window; the list stops at a cap.
 
 Before proposing any change, CHECK IT AGAINST LIVE FACTS -- do not
 rewrite or archive something that was true then but stale now, and do
@@ -1866,6 +1919,20 @@ Kinds and their payload:
   merge              {"keep_uid", "drop_uid", "note"?}   links supersedes + archives drop
   distill            {"source_uids": [uid, ...], "new_type": "note|reasoning|anti_pattern",
                       "new_content": str, "title": str, "tags"?, "domain"?}
+  unleak             {"field": "content|tags|source_ref"}   the repair is computed here
+
+unleak takes a leaked tool call OUT of one field. Its payload names the
+field and nothing else: staging reads the row, removes what is the call's
+own source -- a line that is nothing but a tag, and a closing mark at the
+end of a line of text -- and writes the result into the payload as
+`new_text`, so the panel shows what will hold and no caller retypes a body
+it would have to copy faithfully. One field per suggestion, so a body and a
+tag list are two of them and either can be undone alone. Refused when the
+field carries no mark, and when the marks sit inside its prose: that is a
+`reword`, written by hand. What the debris DECLARED -- the domain, the tags
+the call meant to write -- comes back from the scan as `leaked_calls[].
+declares`, and is staged beside the unleak as a `redomain`, `crosslist` or
+`retag`.
 
 redomain moves where a memory is FILED -- one path, one parent chain.
 crosslist sets what it also BELONGS to: the subjects that cut across
@@ -1896,6 +1963,12 @@ check that justifies them.
 
 Invalid suggestions are skipped and reported in `errors`; the rest are
 staged. Returns {run_id, staged, errors}.
+
+`note` describes the whole run in at most 250 characters -- one or two
+sentences, the shape of "what this pass did and why now". A longer note
+raises and stages nothing. Per-suggestion detail goes in `rationale`
+and `verified`, which have no limit; findings worth keeping go in a
+memory, not in the run note.
 """,
     "get_diagram": """
 TO SHOW THE DIAGRAM TO A USER, pick by what you can actually do with it:

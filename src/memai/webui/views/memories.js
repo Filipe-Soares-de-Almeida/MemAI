@@ -1,21 +1,26 @@
-/* The memory list: filters, paging, and the bulk selection bar.
+/* The memory list, and the inspector beside it.
 
-   The bar is parented to document.body so it can float over the list, so
-   it does NOT go away with the view's innerHTML. It is registered for
-   teardown instead -- without that, selecting rows and then clicking
-   another section in the rail left the bar on screen, still wired to a
-   selection whose list had been replaced. */
+   The list carries the filters, the paging and a roving-tabindex keyboard
+   model. The pane on the right is always there: it shows the memory when
+   exactly one row is ticked, and turns into a batch editor when more are,
+   with what the change will do written out before the button that does
+   it.
 
-import { $, esc, fmtInt, fmtDate, debounce } from '../core/dom.js';
+   Confidence, tags and the filed domain are STAGED: they are chosen here
+   and written by Apply, in one /api/bulk call each. Archive, restore and
+   send-to-project are not -- each is its own act with its own
+   confirmation, and each runs when it is pressed. */
+
+import { $, esc, fmtInt, fmtDate, fmtAgo, debounce } from '../core/dom.js';
 import { api, query } from '../core/api.js';
 import { icon } from '../core/icons.js';
 import { toast, failed, promptModal } from '../core/ui.js';
-import { typeTag, statusTag, confPill, getDomains, inDomainPath,
-         typeItems, confItems } from '../core/shared.js';
-import { pickerHTML, pickerFor, wirePicker, fixedItems } from '../core/pick.js';
+import { typeTag, statusTag, confPill, CONF, getDomains, inDomainPath,
+         typeItems, confItems, invalidateDomains, uidChip, wireCopyChips } from '../core/shared.js';
+import { pickerFor, wirePicker, fixedItems } from '../core/pick.js';
 import { domainPickerHTML, wireDomainPicker } from '../core/domain-picker.js';
 import { moveToProjectModal } from '../core/projects.js';
-import { go, refreshBehind } from '../core/router.js';
+import { go, refreshBehind, parseHash } from '../core/router.js';
 import { onTeardown } from '../core/lifecycle.js';
 import { openRecord, setRecordSequence } from './record.js';
 import { t } from '../i18n.js';
@@ -23,44 +28,30 @@ import { t } from '../i18n.js';
 const PAGE = 50;
 const selection = new Set();
 
-/* `/` from anywhere in the app asks for this view's search field. When the
-   view is not up yet there is nothing to focus, so the request is held and
-   the next render honours it -- which is why this returns whether it could
-   act: app.js navigates here only when it could not. */
-let wantsCaret = false;
+/* What the inspector is holding but has not written. Reset on every render,
+   because a page it was never applied to is not a page it should still be
+   staged over. */
+let staged = { confidence: '', tags: [], domain: '' };
+const clearStaged = () => { staged = { confidence: '', tags: [], domain: '' }; };
 
-export function focusMemorySearch() {
-  const el = document.getElementById('fQ');
-  if (!el) { wantsCaret = true; return false; }
-  el.focus();
-  el.select();
-  return true;
-}
+/* The domain tree, as the last render fetched it -- the inspector's re-home
+   field draws from the same list the filter above it does. */
+let domainTree = [];
 
-/* The toast stack has to clear this bar, so the bar publishes its own height
-   instead of the stylesheet guessing at it -- at 375px it wraps to two rows,
-   and a toast used to land squarely on top of Archive / Restore / clear. */
-let bulkSize = null;
+/* The rows on screen, by uid: the inspector's whole source of truth. A
+   selection cannot outlive the page it was made on (navigating clears it),
+   so everything the pane says about the picked rows is already here and
+   nothing it shows costs a request. */
+let rowData = new Map();
 
-function publishBulkHeight(bar) {
-  document.documentElement.style.setProperty('--bulk-h', bar ? `${bar.offsetHeight + 10}px` : '0px');
-}
+/* The uid the caret sits on. The inspector reads the ticked rows first and
+   falls back to this one, so a single memory is inspected by selecting its
+   row and a tick is only ever needed to build a batch. */
+let caretUid = '';
 
-/* Called three ways: with the bar, with nothing, and as a teardown callback
-   (which may hand it an argument of its own), hence the instanceof rather than
-   a default parameter. */
-function dropBulkbar(bar) {
-  bulkSize?.disconnect();
-  bulkSize = null;
-  (bar instanceof HTMLElement ? bar : document.querySelector('.bulkbar'))?.remove();
-  publishBulkHeight(null);
-  selection.clear();
-}
-
-/* The one place that writes a row's selected-ness. The tick, the row's own
-   wash, the state a screen reader reads off the row, and the set the bulk bar
-   acts on are four faces of one fact, and four call sites used to each set
-   the ones they happened to remember. */
+/* The one place that writes a row's selected-ness: the tick, the row's own
+   wash, the state a screen reader reads off the row, and the set the
+   inspector acts on are four faces of one fact. */
 function selectRow(row, on) {
   row.querySelector('input[type=checkbox]').checked = on;
   row.classList.toggle('selected', on);
@@ -91,22 +82,36 @@ export async function renderMemories(view, params, ctx) {
     /* a domain filter covers its subdomains; 'exact' is the opt-out, and it
        lives in the URL so the narrowed list is a linkable state */
     exact: params.get('exact') || '',
+    /* the defect filters a Health symptom hands over -- see _defect_clauses
+       in admin.py. They are carried, not offered: the button that sets one
+       is on Health, and the chip below is how you take it off again. */
+    linked: params.get('linked') || '',
+    due: params.get('due') || '',
+    stale: params.get('stale') || '',
+    untitled: params.get('untitled') || '',
+    untagged: params.get('untagged') || '',
     sort: params.get('sort') || 'created_at',
     dir: params.get('dir') || 'desc',
     page: parseInt(params.get('page') || '0', 10) || 0,
   };
-  dropBulkbar();
-  onTeardown(dropBulkbar);
+  selection.clear();
+  clearStaged();
+  caretUid = '';
 
   const domains = await getDomains().catch(() => []);
+  domainTree = domains;
   const qs = query({
     q: state.q, domain: state.domain, type: state.type, status: state.status,
     confidence: state.confidence, session: state.session, sort: state.sort, dir: state.dir,
+    linked: state.linked, due: state.due, stale: state.stale,
+    untitled: state.untitled, untagged: state.untagged,
     subtree: state.exact ? '0' : '',
     limit: PAGE, offset: state.page * PAGE,
   });
   const data = await api(`/api/memories?${qs}`);
   if (ctx.stale()) return;
+
+  rowData = new Map(data.items.map(m => [m.uid, m]));
 
   const kids = domains.find(d => d.domain === state.domain)?.children;
   const types = typeItems({ any: t('common.allTypes') });
@@ -127,63 +132,78 @@ export async function renderMemories(view, params, ctx) {
   const sortPair = `${state.sort}:${state.dir}`;
   const activeSort = sorts.some(s => s.value === sortPair) ? sortPair : sorts[0].value;
 
-  view.innerHTML = `<div class="anim">
-    <div class="view-head"><h2 class="view-title">${t('mem.title')}</h2>
-      <div class="view-sub">${t('mem.sub')}</div></div>
+  /* one chip per defect filter in the URL, each one its own way off */
+  const defects = ['linked', 'due', 'stale', 'untitled', 'untagged']
+    .filter(k => state[k])
+    .map(k => `<button type="button" class="chip clickable" data-undefect="${k}"
+         title="${esc(t('mem.defect.off'))}">${t(`mem.defect.${k}`)}${icon('close')}</button>`)
+    .join('');
 
-    <div class="list-toolbar">
-      <input id="fQ" type="search" placeholder="${t('mem.search.placeholder')}" value="${esc(state.q)}" spellcheck="false">
-      <!-- the app's one remaining accelerator, taught where it lands -->
-      <kbd class="toolbar-kbd" aria-hidden="true">/</kbd>
-      <!-- Pickers, not selects (core/pick.js): a type keeps its colour and a
-           confidence its ring in the list where you choose one, and a domain
-           keeps the tree it is. -->
-      ${pickerFor({ id: 'fType', value: state.type, items: types, ariaLabel: t('common.allTypes') })}
-      ${domainPickerHTML({ id: 'fDomain', value: state.domain, ariaLabel: t('common.allDomains') })}
-      <!-- only where the choice exists: a domain with no subdomains reads
-           the same either way, and an inert toggle is noise -->
-      ${kids ? `<button type="button" class="chip clickable" id="fExact" aria-pressed="${Boolean(state.exact)}"
-           title="${esc(t('mem.subtree.title'))}">${t(state.exact ? 'mem.subtree.exact' : 'mem.subtree.incl')}</button>` : ''}
-      <!-- the filter resolved a name that was only the deep end of a path;
-           showing the rows without saying so would claim a filter that was
-           never run -->
-      ${data.domain_scope ? `<span class="chip" title="${esc(t('mem.scope.title'))}">${
-        esc(t('mem.scope.resolved', { list: data.domain_scope.join(', ') }))}</span>` : ''}
-      <div class="seg" id="fStatus" role="group" aria-label="${t('mem.status.aria')}">
-        <button type="button" data-v="active" aria-pressed="${state.status === 'active'}">${t('common.active')}</button>
-        <button type="button" data-v="archived" aria-pressed="${state.status === 'archived'}">${t('common.archived')}</button>
-        <button type="button" data-v="" aria-pressed="${state.status === ''}">${t('common.all')}</button>
+  view.innerHTML = `<div class="mem-shell">
+    <h2 class="sr-only">${t('mem.title')}</h2>
+
+    <div class="mem-work">
+      <div class="mem-pane">
+        <div class="list-toolbar">
+          <!-- how the search behaves, on the field it behaves on. It was a
+               line of prose under the view's title, three inches away. -->
+          <input id="fQ" type="search" placeholder="${t('mem.search.placeholder')}"
+                 aria-label="${esc(t('mem.search.placeholder'))}"
+                 title="${esc(t('mem.sub'))}" value="${esc(state.q)}" spellcheck="false">
+          <!-- Pickers, not selects (core/pick.js): a type keeps its colour and a
+               confidence its ring in the list where you choose one, and a domain
+               keeps the tree it is. -->
+          ${pickerFor({ id: 'fType', value: state.type, items: types, ariaLabel: t('common.allTypes') })}
+          ${domainPickerHTML({ id: 'fDomain', value: state.domain, ariaLabel: t('common.allDomains') })}
+          <!-- only where the choice exists: a domain with no subdomains reads
+               the same either way, and an inert toggle is noise -->
+          ${kids ? `<button type="button" class="chip clickable" id="fExact" aria-pressed="${Boolean(state.exact)}"
+               title="${esc(t('mem.subtree.title'))}">${t(state.exact ? 'mem.subtree.exact' : 'mem.subtree.incl')}</button>` : ''}
+          <!-- the filter resolved a name that was only the deep end of a path;
+               showing the rows without saying so would claim a filter that was
+               never run -->
+          ${data.domain_scope ? `<span class="chip" title="${esc(t('mem.scope.title'))}">${
+            esc(t('mem.scope.resolved', { list: data.domain_scope.join(', ') }))}</span>` : ''}
+          <div class="seg" id="fStatus" role="group" aria-label="${t('mem.status.aria')}">
+            <button type="button" data-v="active" aria-pressed="${state.status === 'active'}">${t('common.active')}</button>
+            <button type="button" data-v="archived" aria-pressed="${state.status === 'archived'}">${t('common.archived')}</button>
+            <button type="button" data-v="" aria-pressed="${state.status === ''}">${t('common.all')}</button>
+          </div>
+          ${pickerFor({ id: 'fConf', value: state.confidence, items: confs, ariaLabel: t('mem.conf.all') })}
+          ${data.searched ? '' : pickerFor({ id: 'fSort', items: sorts, ariaLabel: t('mem.sort.aria'),
+            value: activeSort })}
+          ${defects}
+          ${state.session ? `<button type="button" class="chip clickable" id="fSession" title="${t('mem.session.title')}">${t('mem.session.chip', { s: esc(state.session.slice(0, 18)) })}${icon('close')}</button>` : ''}
+        </div>
+
+        <!-- The header strip is a sibling of the rows and not the first of them:
+             a select-all is a control OVER the list, and putting it inside the
+             grid would have made it a row you can arrow onto and try to open. -->
+        <div class="mem-list">
+          ${data.items.length ? `<div class="mem-head">
+            <div class="mem-check"><input type="checkbox" id="memAll" aria-label="${t('mem.selectAll.aria')}"></div>
+            <label class="mem-head-label" for="memAll" data-selcount>${t('mem.selectAll', { n: data.items.length })}</label>
+            <div class="mem-head-keys" aria-hidden="true">${t('mem.keys.hint')}</div>
+          </div>` : ''}
+          <!-- role="grid" and not listbox: a row owns a checkbox and an open
+               button, which an option is not allowed to contain. The grid is the
+               role that expects widgets in its cells, and it is what licenses the
+               roving tabindex the wiring below installs. -->
+          <div id="memList"${data.items.length ? ` role="grid" aria-multiselectable="true" aria-label="${t('mem.title')}"` : ''}>${renderRows(data.items, state.domain)}</div>
+        </div>
+
+        <div class="list-foot">
+          <span>${data.searched
+            ? t('mem.results', { n: fmtInt(data.total), q: esc(state.q) })
+            : t('mem.range', { a: fmtInt(state.page * PAGE + Math.min(1, data.items.length)), b: fmtInt(state.page * PAGE + data.items.length), c: fmtInt(data.total) })}</span>
+          <span class="pager">
+            <button class="btn btn-sm" id="pgPrev" ${state.page === 0 ? 'disabled' : ''}>${icon('chevron-left')}${t('mem.prev')}</button>
+            <button class="btn btn-sm" id="pgNext" ${(state.page + 1) * PAGE >= data.total ? 'disabled' : ''}>${t('mem.next')}${icon('chevron-right')}</button>
+          </span>
+        </div>
       </div>
-      ${pickerFor({ id: 'fConf', value: state.confidence, items: confs, ariaLabel: t('mem.conf.all') })}
-      ${data.searched ? '' : pickerFor({ id: 'fSort', items: sorts, ariaLabel: t('mem.sort.aria'),
-        value: activeSort })}
-      ${state.session ? `<button type="button" class="chip clickable" id="fSession" title="${t('mem.session.title')}">${t('mem.session.chip', { s: esc(state.session.slice(0, 18)) })}${icon('close')}</button>` : ''}
-    </div>
 
-    <!-- The header strip is a sibling of the rows and not the first of them:
-         a select-all is a control OVER the list, and putting it inside the
-         grid would have made it a row you can arrow onto and try to open. -->
-    <div class="mem-list">
-      ${data.items.length ? `<div class="mem-head">
-        <div class="mem-check"><input type="checkbox" id="memAll" aria-label="${t('mem.selectAll.aria')}"></div>
-        <label class="mem-head-label" for="memAll">${t('mem.selectAll', { n: data.items.length })}</label>
-        <div class="mem-head-keys" aria-hidden="true">${t('mem.keys.hint')}</div>
-      </div>` : ''}
-      <!-- role="grid" and not listbox: a row owns a checkbox and an open
-           button, which an option is not allowed to contain. The grid is the
-           role that expects widgets in its cells, and it is what licenses the
-           roving tabindex the wiring below installs. -->
-      <div id="memList"${data.items.length ? ` role="grid" aria-multiselectable="true" aria-label="${t('mem.title')}"` : ''}>${renderRows(data.items, state.domain)}</div>
-    </div>
-
-    <div class="list-foot">
-      <span>${data.searched
-        ? t('mem.results', { n: fmtInt(data.total), q: esc(state.q) })
-        : t('mem.range', { a: fmtInt(state.page * PAGE + Math.min(1, data.items.length)), b: fmtInt(state.page * PAGE + data.items.length), c: fmtInt(data.total) })}</span>
-      <span class="pager">
-        <button class="btn btn-sm" id="pgPrev" ${state.page === 0 ? 'disabled' : ''}>${icon('chevron-left')}${t('mem.prev')}</button>
-        <button class="btn btn-sm" id="pgNext" ${(state.page + 1) * PAGE >= data.total ? 'disabled' : ''}>${t('mem.next')}${icon('chevron-right')}</button>
-      </span>
+      <aside class="mem-inspect" id="memInspect" aria-live="polite"></aside>
     </div>
   </div>`;
 
@@ -200,8 +220,6 @@ export async function renderMemories(view, params, ctx) {
     else out.status = p.status || '';
     go('memories', out);
   };
-
-  if (wantsCaret) { wantsCaret = false; $('#fQ').focus(); $('#fQ').select(); }
 
   $('#fQ').addEventListener('keydown', e => { if (e.key === 'Enter') navigate({ q: e.target.value.trim(), page: 0 }); });
   $('#fQ').addEventListener('input', debounce(e => {
@@ -225,6 +243,8 @@ export async function renderMemories(view, params, ctx) {
   } });
   $('#fStatus').querySelectorAll('button').forEach(b =>
     b.addEventListener('click', () => navigate({ status: b.dataset.v, page: 0 })));
+  view.querySelectorAll('[data-undefect]').forEach(b =>
+    b.addEventListener('click', () => navigate({ [b.dataset.undefect]: '', page: 0 })));
   const fSession = $('#fSession');
   if (fSession) fSession.addEventListener('click', () => navigate({ session: '', page: 0 }));
   $('#pgPrev').addEventListener('click', () => navigate({ page: state.page - 1 }));
@@ -234,19 +254,35 @@ export async function renderMemories(view, params, ctx) {
   const rows = [...list.querySelectorAll('.mem-row')];
 
   /* What the record steps through when it is opened from here: this page, in
-     the order it is shown. Cleared on the way out, so a record opened from
-     somewhere else does not inherit a list that is no longer on screen. */
+     the order it is shown.
+
+     Cleared on the way out so a record opened from somewhere else does not
+     inherit a list that is no longer on screen -- EXCEPT on the way into the
+     record itself, which is a navigation now and tears this view down as it
+     goes. Clearing there would hand the record an empty list every single
+     time it was opened from one. */
   setRecordSequence(rows.map(r => r.dataset.uid));
-  onTeardown(() => setRecordSequence([]));
+  onTeardown(() => { if (parseHash().name !== 'memory') setRecordSequence([]); });
 
   /* Roving tabindex: the list is ONE tab stop and the arrows move inside it.
      `cursor` is which row currently holds that stop. */
   let cursor = 0;
+  /* The caret is DRAWN as a class rather than left to :focus-visible: a
+     pointer does not raise that pseudo-class, and the caret has to stay on
+     the row it landed on while the hands move to the pane on the right. */
   const setCursor = i => {
-    if (i < 0 || i >= rows.length || i === cursor) return;
+    if (i < 0 || i >= rows.length) return;
     rows[cursor].tabIndex = -1;
     cursor = i;
     rows[i].tabIndex = 0;
+    rows.forEach((row, n) => row.classList.toggle('is-cursor', n === i));
+    if (rows[i].dataset.uid === caretUid) return;
+    caretUid = rows[i].dataset.uid;
+    /* The pane follows the caret only while nothing is ticked -- a batch the
+       user assembled is not something moving the caret takes apart. The
+       staged edits go with the target: they were prepared for the row the
+       pane was showing, and the next row starts clean. */
+    if (!selection.size) { clearStaged(); paintInspector(); }
   };
   const moveTo = i => {
     if (i < 0 || i >= rows.length) return;
@@ -269,24 +305,34 @@ export async function renderMemories(view, params, ctx) {
   const toggle = (i, on = !selection.has(rows[i].dataset.uid)) => {
     selectRow(rows[i], on);
     anchor = i;
-    syncBulkbar();
+    paintInspector();
   };
   const range = (to, on) => {
     const [a, b] = anchor <= to ? [anchor, to] : [to, anchor];
     for (let i = a; i <= b; i++) selectRow(rows[i], on);
-    syncBulkbar();
+    paintInspector();
   };
   const setAll = on => {
     rows.forEach(row => selectRow(row, on));
     anchor = 0;
-    syncBulkbar();
+    paintInspector();
   };
 
   const memAll = $('#memAll');
   if (memAll) memAll.addEventListener('change', () => setAll(memAll.checked));
 
   rows.forEach((row, i) => {
-    row.addEventListener('click', () => openRecord(row.dataset.uid));
+    /* A click moves the CARET to the row; ticking belongs to the box and to
+       Space. `e.detail` is the click count, so the second click of a double
+       click is left to dblclick. */
+    row.addEventListener('click', e => {
+      if (e.detail > 1 || e.target.closest('input[type=checkbox]')) return;
+      /* Shift keeps its meaning on the pointer: it ticks the run from the
+         anchor to here, and a plain click is what plants that anchor. */
+      if (e.shiftKey) range(i, true); else anchor = i;
+      moveTo(i);
+    });
+    row.addEventListener('dblclick', () => openRecord(row.dataset.uid));
     const cb = row.querySelector('input[type=checkbox]');
     cb.addEventListener('click', e => {
       e.stopPropagation();
@@ -339,25 +385,21 @@ export async function renderMemories(view, params, ctx) {
     rows[cursor].focus();
   });
 
-  syncBulkbar();
+  paintInspector();
 }
 
-/* Tags weigh second only to the body in BM25, so a row with none says so.
-   Tags that are only the type count as none: every read filters on it. */
-const tagChip = m => {
-  const tags = (m.tags || '').trim();
-  if (!tags || tags === m.type) {
-    return `<span class="chip untagged" title="${esc(t('mem.noTagsWhy'))}">${t('mem.noTags')}</span>`;
-  }
-  return `<span class="chip" title="${esc(t('mem.tagsWhy', { list: tags }))}">${esc(tags)}</span>`;
-};
+/* ─── the rows ────────────────────────────────────────────────────────────
+   A row says what tells a reader whether to open it: how far it has been
+   vetted, what kind of memory it is, what it is called, and how old.
+   Everything else is a tick away, in the pane that has room to lay it
+   out. */
 
-/* `scope` is the active domain filter, needed to tell a row that LIVES in it
-   from one that is only cross-listed into it. A list that showed both the
-   same way would be claiming the second is filed where it is not. */
 function renderRows(items, scope = '') {
   if (!items.length) return `<div class="empty">${t('mem.empty')}</div>`;
   return items.map(m => {
+    /* `scope` is the active domain filter, needed to tell a row that LIVES
+       in it from one that is only cross-listed into it. A list that showed
+       both the same way would claim the second is filed where it is not. */
     const away = Boolean(scope) && !inDomainPath(m.domain, scope)
       && (m.also || []).some(p => inDomainPath(p, scope));
     /* A badge only for the row a pasted uid pinned: every other row is a
@@ -367,125 +409,307 @@ function renderRows(items, scope = '') {
     /* bm25 on the row, not in a column of its own: a per-row diagnostic,
        read on hover when a result looks out of place. */
     const rank = m.fts_rank != null ? ` title="bm25 ${Number(m.fts_rank).toFixed(2)}"` : '';
-    /* The row keeps its click for the mouse, but the thing that OPENS the
-       record is a real button around the snippet -- the row itself cannot be
-       one, because it already contains a checkbox and a copy button and a
-       control inside a control is a control neither the keyboard nor a
-       screen reader can make sense of. Enter on the button bubbles a click
-       to the row, so there is still exactly one handler. */
+    /* The row is not a button of its own: it holds a checkbox, and a control
+       inside a control is one neither the keyboard nor a screen reader can
+       make sense of. Opening a record is the row's dblclick and Enter. */
     return `<div class="mem-row" role="row" aria-selected="false" tabindex="-1" data-uid="${esc(m.uid)}"${rank}>
-      <!-- The two controls in the row are reachable by pointer and by the
-           row's own keys (Space ticks, Enter opens), and they are OUT of the
-           tab order: fifty rows of them is a hundred stops to cross one page,
-           and it took two tabs to reach the second checkbox. -->
+      <!-- The controls in the row are reachable by pointer and by the row's
+           own keys (Space ticks, Enter opens), and they are OUT of the tab
+           order: fifty rows of them is a hundred stops to cross one page. -->
       <div class="mem-check" role="gridcell"><input type="checkbox" tabindex="-1" aria-label="${t('mem.select.aria', { uid: esc(m.uid) })}"></div>
       <!-- Confidence leads this column. It used to be the second of four
-           whispers stacked in .mem-right, at 60% white, quieter than the uid
+           whispers stacked on the right, at 60% white, quieter than the uid
            beside it -- in a store whose whole point is that a human vets what
            an agent wrote, the vetting was the faintest thing in the row. -->
       <div class="mem-col-type" role="gridcell">${confPill(m.confidence, true)}${typeTag(m.type)}</div>
       <div class="mem-main" role="gridcell">
         <!-- A titled row shows its title alone, with the body on hover.
              A row with no title is the body: it is what names the memory
-             when nothing else does. -->
-        <button type="button" class="row-open mem-snippet${m.title ? ' mem-named' : ''}"
-                tabindex="-1"${m.title ? ` title="${esc(m.content)}"` : ''}
-                aria-label="${esc(t('a11y.openRecord', { uid: m.uid }))}"
-                >${esc(m.title || m.content)}</button>
+             when nothing else does.
+
+             Plain text and not a button: the two ways to open a memory --
+             a double click, or Enter -- belong to the row rather than to one
+             cell of it. The pane on the right carries the visible Open
+             control. -->
+        <span class="mem-snippet${m.title ? ' mem-named' : ''}"${
+          m.title ? ` title="${esc(m.content)}"` : ''}>${esc(m.title || m.content)}</span>
       </div>
       <div class="mem-right" role="gridcell">
         ${match}
         ${statusTag(m.status)}
         ${away ? `<span class="chip" title="${esc(t('mem.alsoWhy', { domain: m.domain }))}">${t('mem.also')}</span>` : ''}
-        ${m.domain ? `<span class="chip">${esc(m.domain)}</span>` : ''}
-        ${tagChip(m)}
-        <!-- Only when it has been read back. A store where nothing has been
-             recalled yet would otherwise wear a "0" on every row, and the
-             rows that matter are found by sorting, not by reading zeros. -->
-        ${m.recalls ? `<span class="chip" title="${esc(t('mem.recallsWhy',
-            { n: m.recalls, when: m.last_recall || '' }))}">${t('mem.recalls', { n: m.recalls })}</span>` : ''}
-        <span title="${esc(m.created_at)}">${fmtDate(m.created_at)}</span>
+        <!-- Only on a window wide enough to have room for it (see the media
+             query in admin.css). Uncapping the page left a run of empty
+             pixels between a short title and its age, and where a memory is
+             filed is the one thing worth putting there -- it is what tells
+             two rows with similar titles apart. -->
+        ${m.domain ? `<span class="mem-domain">${esc(m.domain)}</span>` : ''}
+        <span title="${esc(m.created_at)}">${fmtAgo(m.created_at)}</span>
       </div>
     </div>`;
   }).join('');
 }
 
-/* Built once, then only its count is written. It used to be removed and
-   recreated on every checkbox, which replayed its entrance animation each
-   time and threw away the focus of whoever was tabbing through it. */
-function syncBulkbar() {
-  /* every path that changes the selection ends here, so the header box is
-     brought along from one place rather than from each of them */
-  syncSelectAll();
-  const existing = document.querySelector('.bulkbar');
-  if (!selection.size) { dropBulkbar(existing); return; }
-  if (existing) {
-    /* innerHTML, because bulk.selected marks the number up -- textContent
-       here printed the <b> tags as text on every toggle after the first */
-    existing.querySelector('[data-count]').innerHTML = t('bulk.selected', { n: selection.size });
-    return;
-  }
-  const bar = document.createElement('div');
-  bar.className = 'bulkbar';
-  bar.setAttribute('role', 'toolbar');
-  bar.setAttribute('aria-label', t('bulk.aria'));
-  bar.innerHTML = `
-    <span data-count>${t('bulk.selected', { n: selection.size })}</span>
-    ${pickerHTML({ id: 'bulkConf', label: t('bulk.setConf'), ariaLabel: t('bulk.setConf') })}
-    <button type="button" class="btn btn-sm" id="bulkArch">${t('common.archive')}</button>
-    <button type="button" class="btn btn-sm" id="bulkRest">${t('common.restore')}</button>
-    <button type="button" class="btn btn-sm" id="bulkMove">${t('bulk.move')}</button>
-    <button type="button" class="icon-btn" id="bulkClear"
-            title="${t('bulk.clear.title')}" aria-label="${t('bulk.clear.title')}">${icon('close')}</button>`;
-  document.body.appendChild(bar);
-  publishBulkHeight(bar);
-  bulkSize = new ResizeObserver(() => publishBulkHeight(bar));
-  bulkSize.observe(bar);
+/* ─── the inspector ───────────────────────────────────────────────────── */
 
-  /* keepLabel: this one is an ACTION and not a state -- it says what will
-     happen to the selection, so it goes on saying it after it has happened */
-  wirePicker(bar, {
-    id: 'bulkConf', items: fixedItems(confItems()), keepLabel: true,
-    onPick: value => runBulk({ action: 'confidence', value }),
+function paintInspector() {
+  syncSelectAll();
+  const host = document.getElementById('memInspect');
+  if (!host) return;
+  const ticked = [...selection].map(uid => rowData.get(uid)).filter(Boolean);
+  /* A tick is how a BATCH is assembled; the caret is the one row being read.
+     Ticks win when there are any, and the row under the caret is what the
+     pane shows when there are none. */
+  const caret = rowData.get(caretUid);
+  const picked = ticked.length ? ticked : (caret ? [caret] : []);
+  const label = document.querySelector('[data-selcount]');
+  /* The count over the list reports TICKS, never the caret: it is the label
+     of the select-all box beside it.
+
+     innerHTML: both strings mark their number up, and textContent printed
+     the <b> tags as text on every toggle. */
+  if (label) {
+    label.innerHTML = ticked.length
+      ? t('mem.selectedOf', { n: ticked.length, all: rowData.size })
+      : t('mem.selectAll', { n: rowData.size });
+  }
+  host.innerHTML = picked.length ? editorHTML(picked) : emptyHTML();
+  host.classList.toggle('is-empty', !picked.length);
+  if (picked.length) wireEditor(host, picked);
+}
+
+function emptyHTML() {
+  return `<div class="mi-empty">
+    <div class="mi-empty-title">${t('mem.mi.emptyTitle')}</div>
+    <p class="hint">${t('mem.mi.emptyBody')}</p>
+    <ul class="mi-keys">
+      <li><kbd>Space</kbd> ${t('mem.mi.keySpace')}</li>
+      <li><kbd>Shift</kbd> ${t('mem.mi.keyShift')}</li>
+      <li><kbd>Enter</kbd> ${t('mem.mi.keyEnter')}</li>
+    </ul>
+  </div>`;
+}
+
+/* The head says WHAT is being edited. One memory is named; several are
+   described by the ways they differ, because that is what decides whether a
+   single change is safe to make over all of them. */
+function headHTML(picked) {
+  if (picked.length === 1) {
+    const m = picked[0];
+    return `<div class="mi-head">
+      <div class="mi-head-row">${typeTag(m.type)}${uidChip(m.uid)}${statusTag(m.status)}</div>
+      <div class="mi-title">${esc(m.title || m.content.split('\n', 1)[0])}</div>
+      <div class="mi-facts">
+        <span>${m.domain ? esc(m.domain) : t('mem.mi.noDomain')}</span>
+        <span>${t('mem.mi.written', { when: fmtDate(m.created_at) })}</span>
+      </div>
+      <button type="button" class="btn btn-solid btn-sm" data-open>${t('mem.mi.open')}</button>
+    </div>`;
+  }
+  const domains = new Set(picked.map(m => m.domain || ''));
+  const types = new Set(picked.map(m => m.type));
+  const confs = new Set(picked.map(m => m.confidence));
+  const only = confs.size === 1 ? CONF[[...confs][0]]?.label : '';
+  return `<div class="mi-head">
+    <div class="mg-label">${t('mem.mi.bulkTitle')}</div>
+    <div class="mi-count">${t('mem.mi.nMemories', { n: picked.length })}</div>
+    <div class="mi-facts">
+      <span>${t('mem.mi.nDomains', { n: domains.size })}</span>
+      <span>${t('mem.mi.nTypes', { n: types.size })}</span>
+      <span>${only ? t('mem.mi.allConf', { label: esc(only) }) : t('mem.mi.mixedConf')}</span>
+    </div>
+  </div>`;
+}
+
+function editorHTML(picked) {
+  const n = picked.length;
+  const confRows = Object.keys(CONF).map(c => {
+    const changing = picked.filter(m => m.confidence !== c).length;
+    const on = staged.confidence === c;
+    return `<button type="button" class="mi-conf c-${c}${on ? ' on' : ''}" data-conf="${c}"
+              aria-pressed="${on}">
+      <span class="mi-radio"></span>
+      ${confPill(c)}
+      <span class="mi-conf-n">${changing
+        ? t('mem.mi.nChange', { n: changing })
+        : t('mem.mi.allAlready')}</span>
+    </button>`;
+  }).join('');
+
+  const tagChips = staged.tags.map(tag =>
+    `<button type="button" class="chip clickable" data-untag="${esc(tag)}"
+       title="${esc(t('mem.mi.tagOff'))}">${esc(tag)}${icon('close')}</button>`).join('');
+
+  return `${headHTML(picked)}
+    <div class="mi-body">
+      <div class="mi-field">
+        <div class="mg-label">${t('mem.mi.confidence')}</div>
+        <div class="mi-confs">${confRows}</div>
+      </div>
+
+      <div class="mi-field">
+        <label class="mg-label" for="miTag">${t('mem.mi.addTags')}</label>
+        <div class="mi-tagbox">
+          ${tagChips}
+          <input type="text" id="miTag" autocomplete="off" spellcheck="false"
+                 placeholder="${t('mem.mi.tagPlaceholder')}">
+        </div>
+      </div>
+
+      <div class="mi-field">
+        <div class="mg-label">${t('mem.mi.rehome')}</div>
+        ${domainPickerHTML({ id: 'miDomain', value: staged.domain,
+                             ariaLabel: t('mem.mi.rehome'),
+                             anyLabel: t('mem.mi.rehomeNone') })}
+      </div>
+
+      <div class="mi-field">
+        <div class="mg-label">${t('mem.mi.otherActions')}</div>
+        <div class="mi-actions">
+          <button type="button" class="btn btn-sm" data-act="archive">
+            ${t('mem.mi.archiveN', { n })}<span class="hint-sm">${t('mem.mi.reversible')}</span></button>
+          <button type="button" class="btn btn-sm" data-act="restore">${t('common.restore')}</button>
+          <button type="button" class="btn btn-sm" data-act="project">${t('bulk.move')}</button>
+        </div>
+      </div>
+
+      ${plannedHTML(picked)}
+    </div>
+    <div class="mi-foot">
+      <button type="button" class="btn btn-solid" data-apply${
+        stagedCount(picked) ? '' : ' disabled'}>${t('mem.mi.apply', { n })}</button>
+      <button type="button" class="btn" data-clear>${t('mem.mi.clear')}</button>
+    </div>`;
+}
+
+/* How many WRITES the staged edits amount to. Zero is what keeps Apply
+   disabled -- a button that runs three no-ops is a button that lies. */
+function stagedCount(picked) {
+  let n = 0;
+  if (staged.confidence) n += picked.filter(m => m.confidence !== staged.confidence).length;
+  if (staged.tags.length) n += picked.length;
+  if (staged.domain) n += picked.filter(m => m.domain !== staged.domain).length;
+  return n;
+}
+
+/* Said before it happens, in rows rather than in verbs. The point is not to
+   confirm the action -- Apply does that -- but to show how much of the
+   selection it actually touches, which is the thing a count of ticked rows
+   never tells you. */
+function plannedHTML(picked) {
+  const lines = [];
+  if (staged.confidence) {
+    const n = picked.filter(m => m.confidence !== staged.confidence).length;
+    lines.push(t('mem.mi.planConf', { n, label: esc(CONF[staged.confidence].label) }));
+  }
+  if (staged.tags.length) {
+    lines.push(t('mem.mi.planTags', { n: picked.length, list: esc(staged.tags.join(', ')) }));
+  }
+  if (staged.domain) {
+    const n = picked.filter(m => m.domain !== staged.domain).length;
+    lines.push(t('mem.mi.planDomain', { n, domain: esc(staged.domain) }));
+  }
+  if (!lines.length) return '';
+  lines.push(t('mem.mi.planEdits', { n: stagedCount(picked) }));
+  return `<div class="mi-plan">
+    <div class="mg-label">${t('mem.mi.planTitle')}</div>
+    ${lines.map(l => `<span>${l}</span>`).join('')}
+  </div>`;
+}
+
+function wireEditor(host, picked) {
+  wireCopyChips(host);
+  host.querySelector('[data-open]')?.addEventListener('click',
+    () => openRecord(picked[0].uid));
+
+  host.querySelectorAll('[data-conf]').forEach(b => b.addEventListener('click', () => {
+    /* pressing the chosen one again unstages it -- there is no "leave it
+       alone" row to go back to, and adding one would be a fourth state in a
+       three-state scale */
+    staged.confidence = staged.confidence === b.dataset.conf ? '' : b.dataset.conf;
+    paintInspector();
+  }));
+
+  const tagField = host.querySelector('#miTag');
+  tagField?.addEventListener('keydown', e => {
+    if (e.key !== 'Enter' && e.key !== ',') return;
+    e.preventDefault();
+    const tag = tagField.value.trim().replace(/,+$/, '');
+    if (!tag || staged.tags.includes(tag)) { tagField.value = ''; return; }
+    staged.tags.push(tag);
+    paintInspector();
+    document.getElementById('miTag')?.focus();
   });
-  bar.querySelector('#bulkArch').addEventListener('click', async () => {
-    const reason = await promptModal({
-      title: t('bulk.archive.title'),
-      body: t('bulk.archive.body', { n: selection.size }),
-      label: t('bulk.reason.label'), okLabel: t('common.archive'), danger: true });
-    if (reason === null) return;
-    await runBulk({ action: 'archive', reason });
+  host.querySelectorAll('[data-untag]').forEach(b => b.addEventListener('click', () => {
+    staged.tags = staged.tags.filter(x => x !== b.dataset.untag);
+    paintInspector();
+  }));
+
+  wireDomainPicker(host, {
+    id: 'miDomain', domains: domainTree, anyLabel: t('mem.mi.rehomeNone'),
+    onPick: domain => { staged.domain = domain; paintInspector(); },
   });
-  bar.querySelector('#bulkRest').addEventListener('click', () => runBulk({ action: 'restore' }));
-  /* The selection leaves this project: the dialog previews the move and runs
-     it, and the rows are gone from here once it has. */
-  bar.querySelector('#bulkMove').addEventListener('click', async () => {
-    const moved = await moveToProjectModal({ uids: [...selection] });
+
+  host.querySelector('[data-clear]').addEventListener('click', () => {
+    clearStaged();
+    document.querySelectorAll('#memList .mem-row').forEach(row => selectRow(row, false));
+    selection.clear();
+    paintInspector();
+  });
+
+  host.querySelector('[data-apply]').addEventListener('click', () => applyStaged(picked));
+
+  host.querySelectorAll('[data-act]').forEach(b => b.addEventListener('click', () =>
+    runAction(b.dataset.act, picked)));
+}
+
+/* ─── writing ─────────────────────────────────────────────────────────── */
+
+async function applyStaged(picked) {
+  const uids = picked.map(m => m.uid);
+  const calls = [];
+  if (staged.confidence) calls.push({ action: 'confidence', value: staged.confidence });
+  if (staged.tags.length) calls.push({ action: 'tag', value: staged.tags.join(', ') });
+  if (staged.domain) calls.push({ action: 'rehome', value: staged.domain });
+  try {
+    let affected = 0;
+    /* In order, and not in parallel: a re-home re-runs the cross-listing
+       policy against the domain the memory ends up with, so it has to see
+       the row after the other edits rather than beside them. */
+    for (const body of calls) {
+      affected += (await api('/api/bulk', { body: { ...body, uids } })).affected;
+    }
+    if (staged.domain) invalidateDomains();
+    toast(t('bulk.updated', { n: affected }), 'ok');
+    clearStaged();
+    refreshBehind();
+  } catch (err) { failed('err.bulk', err); }
+}
+
+async function runAction(action, picked) {
+  const uids = picked.map(m => m.uid);
+  if (action === 'project') {
+    const moved = await moveToProjectModal({ uids });
     if (!moved) return;
     selection.clear();
     refreshBehind();
-  });
-  /* Clearing a selection changes no data, so it unticks the boxes in place.
-     It used to call refreshBehind(), which re-ran the whole route -- a fetch
-     and a full repaint to undo three checkboxes. */
-  bar.querySelector('#bulkClear').addEventListener('click', () => {
-    document.querySelectorAll('#memList .mem-row').forEach(row => selectRow(row, false));
-    selection.clear();          /* rows from a page that has since been left */
-    syncBulkbar();
-  });
-}
-
-async function runBulk(body) {
-  /* captured before the selection is cleared, so the Undo below acts on exactly
-     the set that was archived and not on whatever is ticked by then */
-  const uids = [...selection];
+    return;
+  }
+  let reason = '';
+  if (action === 'archive') {
+    reason = await promptModal({
+      title: t('bulk.archive.title'),
+      body: t('bulk.archive.body', { n: uids.length }),
+      label: t('bulk.reason.label'), okLabel: t('common.archive'), danger: true });
+    if (reason === null) return;
+  }
   try {
-    const r = await api('/api/bulk', { body: { ...body, uids } });
-    /* Archiving fifty rows behind a single confirm was a one-way door. Restore
-       over the same set is the exact inverse, so it is offered rather than
-       leaving you to find those fifty rows again. The reverse direction gets no
-       Undo -- see the note on the record's Restore in record.js. */
-    toast(t('bulk.updated', { n: r.affected }), 'ok', body.action === 'archive' ? {
+    const r = await api('/api/bulk', { body: { action, reason, uids } });
+    /* Archiving fifty rows behind a single confirm was a one-way door.
+       Restore over the same set is the exact inverse, so it is offered
+       rather than leaving you to find those fifty rows again. The reverse
+       direction gets no Undo -- see the note on the record's Restore. */
+    toast(t('bulk.updated', { n: r.affected }), 'ok', action === 'archive' ? {
       action: {
         label: t('common.undo'),
         run: () => api('/api/bulk', { body: { action: 'restore', uids } })
@@ -494,6 +718,6 @@ async function runBulk(body) {
       },
     } : {});
     selection.clear();
-    refreshBehind();   /* the rows themselves changed, so the list is refetched */
+    refreshBehind();
   } catch (err) { failed('err.bulk', err); }
 }

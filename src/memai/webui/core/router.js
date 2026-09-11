@@ -13,13 +13,18 @@
    before its first write, and again here around the post-render steps. */
 
 import { $ } from './dom.js';
-import { t } from '../i18n.js';
 import { teardownView } from './lifecycle.js';
 import { closeCtxMenu, modalOpen } from './ui.js';
 import { failedHTML } from './shared.js';
 
 let VIEWS = {};
 let onRecord = null;
+
+/* The views laid out as panes that fill the window instead of as a page
+   that scrolls. Named here rather than by each view, because it is the
+   shell's box they are filling and the shell is what has to be told. */
+const FILLS = new Set(['memories', 'diagrams', 'domains', 'memory', 'maintenance',
+                       'optimization']);
 
 export function registerViews(map, { onRecord: recordHook = null } = {}) {
   VIEWS = map;
@@ -37,10 +42,46 @@ export function go(view, params = {}) {
   location.hash = `#/${view}${qs ? '?' + qs : ''}`;
 }
 
+/* Rewrite the current route's params without navigating. For a control the
+   view has already applied in place: the address has to agree with the screen
+   and survive a reload, and re-running the route would throw the applied work
+   away. `lastHash` moves with it, or the next navigation would file this hash
+   as the one to go BACK to. */
+export function replaceParams(view, params = {}) {
+  const qs = new URLSearchParams(params).toString();
+  const hash = `#/${view}${qs ? '?' + qs : ''}`;
+  if (hash === location.hash) return;
+  history.replaceState(history.state, '', `${location.pathname}${location.search}${hash}`);
+  lastHash = hash;
+}
+
+/* The hash the last route ran on. Kept so a view can go BACK to the one it
+   came from with whatever that one was filtered and paged to -- which
+   go(view) cannot do, because it would land on an unfiltered first page. */
+let previous = '';
+
+/* The route the last navigation came FROM, as {name, hash}. `name` is ''
+   when there is nothing behind this one -- a reload straight onto a view,
+   or the first paint. A view uses it to offer its own way back instead of
+   leaving the browser button as the only one. */
+export function previousRoute() {
+  const [name, qs] = previous.replace(/^#\/?/, '').split('?');
+  return { name: VIEWS[name] ? name : '', hash: previous, qs: qs || '' };
+}
+
+/* Back to `view`, keeping its state when that is where you came from.
+   history.back() replays the exact URL, filters and page included; when the
+   previous entry is something else -- a record opened from a link, a reload
+   straight onto one -- there is nothing to replay and this opens the view
+   fresh. */
+export function backTo(view, params = {}) {
+  if (previousRoute().name === view) history.back();
+  else go(view, params);
+}
+
 let generation = 0;
 let currentView = '';
-
-export const activeView = () => currentView;
+let lastHash = '';
 
 /* `focus` moves the caret into the new view, which is right for a
    navigation and wrong for refreshBehind() -- that one repaints the view
@@ -49,10 +90,14 @@ export const activeView = () => currentView;
 export async function route({ focus = true } = {}) {
   const mine = ++generation;
   const { name, params } = parseHash();
+  /* only a real navigation moves the trail: refreshBehind() re-runs this
+     on the same hash, and treating that as a step would make Back return to
+     the record you are already on */
+  if (location.hash !== lastHash) { previous = lastHash; lastHash = location.hash; }
   currentView = name;
   document.querySelectorAll('.nav a').forEach(a => {
     /* aria-current is also the styling hook (see admin.css): one attribute,
-       so the rail cannot show one section and announce another */
+       so the bar cannot show one section and announce another */
     if (a.dataset.view === name) a.setAttribute('aria-current', 'page');
     else a.removeAttribute('aria-current');
   });
@@ -63,6 +108,9 @@ export async function route({ focus = true } = {}) {
   const view = $('#view');
   /* the diagram editor runs full-bleed: see .view.wide */
   view.classList.toggle('wide', name === 'diagram');
+  /* a list beside its inspector fills the window and scrolls inside its own
+     panes rather than as a page: see .view.fill */
+  view.classList.toggle('fill', FILLS.has(name));
   view.innerHTML = '<div class="loading"><span class="spin"></span></div>';
   const ctx = { stale: () => mine !== generation };
   try {
@@ -77,18 +125,16 @@ export async function route({ focus = true } = {}) {
   }
   if (ctx.stale()) return;
   view.scrollTop = 0;
-  /* Put the caret in what was just navigated to. Without this the focus
-     stays on the rail link that was pressed: a screen reader announces
-     nothing, and Tab walks the rail again instead of entering the view.
-     #view is tabindex="-1" for exactly this, and programmatic focus on it
-     draws no ring. Never while something is layered over the view -- which
-     since the record became a dialog is one check rather than two -- and
-     never over a view that already put the caret somewhere inside itself:
-     `/` asks Memories for its search field, and this used to take it
-     straight back. A view that has aimed the caret has aimed it better. */
+  /* Put the caret in what was just navigated to: without it the focus stays
+     on the bar link that was pressed, a screen reader announces nothing, and
+     Tab walks the bar again instead of entering the view. #view is
+     tabindex="-1" for exactly this, and programmatic focus on it draws no
+     ring. Skipped while something is layered over the view, and while the
+     view has already aimed the caret somewhere inside itself. */
   if (focus && !modalOpen() && !view.contains(document.activeElement))
     view.focus({ preventScroll: true });
-  /* deep link: #/any-view?record=<uid> opens the record dialog on top */
+  /* `record` is a legacy deep-link param: it names a record to open over
+     whichever view the address asked for. */
   if (params.get('record')) onRecord?.(params.get('record'));
 }
 

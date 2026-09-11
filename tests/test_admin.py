@@ -8,8 +8,11 @@ endpoint opens its own db.connect() against default_db_path().
 from __future__ import annotations
 
 import re
+import threading
 
 import pytest
+from starlette.applications import Starlette
+from starlette.routing import Route
 from starlette.testclient import TestClient
 
 from conftest import unmigrated
@@ -157,6 +160,77 @@ def test_bulk_operations(client):
     res = client.post("/api/bulk", json={"uids": uids, "action": "archive", "reason": "batch"})
     assert res.json()["affected"] == 3
     assert client.get("/api/memories?status=archived").json()["total"] == 3
+
+
+def test_bulk_tag_adds_and_never_replaces(client):
+    """Replacing the field over a selection would wipe every synonym those
+    rows carry, which is the half of the index a keyword search runs on."""
+    a = _create(client, tags="cache warmup, F100_TOTAL")
+    b = _create(client, tags="")
+    res = client.post("/api/bulk", json={
+        "uids": [a, b], "action": "tag", "value": "queue drain, F100_TOTAL"})
+    assert res.json()["affected"] == 2
+    assert client.get(f"/api/memories/{a}").json()["tags"] ==         "cache warmup, F100_TOTAL, queue drain"
+    assert client.get(f"/api/memories/{b}").json()["tags"] == "queue drain, F100_TOTAL"
+
+
+def test_bulk_tag_counts_only_the_rows_it_changed(client):
+    uid = _create(client, tags="queue drain")
+    res = client.post("/api/bulk", json={
+        "uids": [uid], "action": "tag", "value": "Queue Drain"})
+    assert res.json()["affected"] == 0
+
+
+def test_bulk_rehome_moves_the_filed_path_and_audits_it(client):
+    uids = [_create(client, domain="acme/x100/p200") for _ in range(2)]
+    res = client.post("/api/bulk", json={
+        "uids": uids, "action": "rehome", "value": "zeta/x300"})
+    assert res.json()["affected"] == 2
+    for uid in uids:
+        detail = client.get(f"/api/memories/{uid}").json()
+        assert detail["domain"] == "zeta/x300"
+        assert any("domain" in e["note"] for e in detail["edit_history"])
+
+
+def test_bulk_rehome_drops_a_cross_listing_the_new_path_covers(client):
+    """The link policy reads the domain the memory ENDS UP with: a
+    cross-listing at 'zeta' is redundant once the row is filed under it."""
+    uid = _create(client, domain="acme/x100", also="zeta/x300")
+    assert client.get(f"/api/memories/{uid}").json()["also"] == ["zeta/x300"]
+    client.post("/api/bulk", json={
+        "uids": [uid], "action": "rehome", "value": "zeta/x300"})
+    # the mirror is dropped whole rather than emptied, so the key goes too
+    assert "also" not in client.get(f"/api/memories/{uid}").json()
+
+
+def test_bulk_refuses_a_bad_value_before_touching_anything(client):
+    """An action that cannot work on any row must not archive the first
+    forty and raise on the forty-first."""
+    uids = [_create(client, content=f"note {i}") for i in range(3)]
+    assert client.post("/api/bulk", json={
+        "uids": uids, "action": "rehome", "value": "  "}).status_code == 400
+    assert client.post("/api/bulk", json={
+        "uids": uids, "action": "confidence", "value": "maybe"}).status_code == 400
+    assert client.get("/api/memories?confidence=unverified").json()["total"] == 3
+
+
+def test_domain_detail_separates_what_is_filed_from_what_belongs(client):
+    """The pane beside the columns shows two different facts, and running
+    them together would claim the cross-listed rows are filed here."""
+    mine = _create(client, domain="acme/x100/p200", content="filed here")
+    _create(client, domain="acme/x100/p200/p210", content="one level down")
+    guest = _create(client, domain="zeta/x300", also="acme/x100/p200",
+                    content="belongs here, lives elsewhere")
+
+    data = client.get("/api/domains/detail?domain=acme/x100/p200").json()
+    assert [m["uid"] for m in data["filed"]] == [mine]
+    assert data["filed_total"] == 1
+    assert [m["uid"] for m in data["crossing"]] == [guest]
+    assert data["crossing"][0]["domain"] == "zeta/x300"
+
+
+def test_domain_detail_needs_a_domain(client):
+    assert client.get("/api/domains/detail").status_code == 400
 
 
 def test_domains_rename_and_collision(client):
@@ -707,3 +781,31 @@ def test_a_query_that_is_not_a_uid_is_unchanged(client):
     _create(client, content="database tuning guide")
     hits = client.get("/api/memories?q=database tuning").json()
     assert hits["searched"] is True and hits["total"] >= 1
+
+
+def test_handlers_run_off_the_event_loop():
+    """A slow handler leaves the loop free to answer another request.
+
+    The slow handler blocks on an Event only a second request can set, so
+    it returns at all only if that second request was routed while it was
+    still running. A handler called inside the event loop would hold the
+    loop and time out waiting.
+    """
+    entered, released = threading.Event(), threading.Event()
+
+    def slow(request, payload):
+        entered.set()
+        assert released.wait(timeout=10), "the second request never arrived"
+        return {"slow": True}
+
+    app = Starlette(routes=[Route("/slow", admin.api(slow)),
+                            Route("/quick", admin.api(lambda req, pay: {"quick": True}))])
+    with TestClient(app) as c:
+        answered: dict = {}
+        worker = threading.Thread(target=lambda: answered.update(c.get("/slow").json()))
+        worker.start()
+        assert entered.wait(timeout=10), "the slow handler never started"
+        assert c.get("/quick").json() == {"quick": True}
+        released.set()
+        worker.join(timeout=10)
+    assert answered == {"slow": True}

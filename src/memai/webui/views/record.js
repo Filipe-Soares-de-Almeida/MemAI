@@ -1,169 +1,91 @@
-/* The memory record: a centred dialog over whatever view is showing, plus
-   its metadata editor and the edit-history diff.
+/* The memory record: a view with an address of its own.
 
-   It was a 760px drawer down the right-hand edge. Everything in it fitted
-   in one column and nothing was meant to: the content of a memory is a
-   wall of prose, and beside that wall the metadata, the curation controls,
-   the relations and the whole edit history were queued underneath it,
-   below the fold, on a screen with 500 unused pixels to the left. It is a
-   wide two-column dialog now -- the memory on one side, everything ABOUT
-   the memory on the other -- and it opens over the middle of the window
-   because that is where a form belongs.
+   It is #/memory?uid=…, reached through openRecord(uid), so a record can be
+   linked to, reloaded and left with browser Back.
 
-   That also makes it a member of the modal stack (core/ui.js), which is
-   what lets it raise the link picker as a sub-form instead of having a
-   lookup field wedged into a column.
+   Editing is per FIELD. A memory of a sectioned type is a handful of named
+   fields; a field opens on its own, full width, with the source on one side
+   and the rendering on the other, and the save bar pinned under the pair.
+   `Edit all` opens every field at once, for a rewrite that touches all of
+   them.
 
-   Every lookup below is scoped to the dialog (dq) rather than to the
-   document. The record and a modal it raised are on screen at once, so a
-   bare getElementById is a collision waiting for the day two of them pick
-   the same id. */
+   There is no draft: Save writes the version immediately, with its note,
+   and the previous text is kept inside that version -- which is what the
+   API does anyway. */
 
-import { esc, fmtDate, fmtInt } from '../core/dom.js';
+import { esc, fmtDate, fmtInt, debounce } from '../core/dom.js';
 import { api, seg } from '../core/api.js';
 import { icon } from '../core/icons.js';
 import { toast, failed, openModal, closeModal, confirmModal, promptModal,
-         copyCode } from '../core/ui.js';
-import { typeTag, typeClass, confPill, uidChip, statusTag, wireCopyChips,
-         failedHTML, CONF, REL_SUGGEST, typeItems, sectionLabel, sectionLabelHTML,
+         openDropMenu, copyCode, copyUid, modalOpen } from '../core/ui.js';
+import { typeTag, uidChip, statusTag, wireCopyChips,
+         CONF, REL_SUGGEST, relLabel, relTypeTitle, peerName, typeItems,
+         sectionLabel, sectionLabelHTML, sectionHue,
          cachedDomains, invalidateDomains, domainDatalist } from '../core/shared.js';
 import { pickerFor, pickerValue, wirePicker, fixedItems } from '../core/pick.js';
 import { pickMemories } from '../core/link-picker.js';
-import { go, refreshBehind } from '../core/router.js';
-import { renderRich, wireRich } from '../core/richtext.js';
+import { go, backTo, refreshBehind, previousRoute } from '../core/router.js';
+import { onTeardown } from '../core/lifecycle.js';
+import { renderRich, wireRich, headings } from '../core/richtext.js';
 import { highlightIn } from '../core/highlight.js';
 import { DiagramEditor } from '../diagram-engine.js';
 import { t } from '../i18n.js';
 
-/* The record's own scrim while it is open, so a re-render can write into
-   the dialog that is already there rather than closing and reopening it --
-   which would lose the reader's place and, once a sub-form is open above,
-   the sub-form with it. */
-let rec = null;
-const dq = s => rec.querySelector(s);
+/* Where every other view sends a reader who clicked a memory. It is a
+   navigation, so Back works and the URL is shareable. */
+export const openRecord = uid => go('memory', { uid });
 
 /* The read-only canvas a diagram record draws itself on. It listens on
    window and holds a ResizeObserver, so dropping the subtree that carries
-   its <canvas> is not enough -- every repaint and every close has to end
-   it by hand. */
+   its <canvas> is not enough -- every repaint has to end it by hand. */
 let recEngine = null;
 const endRecordCanvas = () => {
   try { recEngine?.destroy(); } catch (err) { console.error(err); }
   recEngine = null;
 };
 
-/* Where you have been inside this dialog, oldest first.
-
-   The dialog is ONE panel, so opening the memory on the other end of a
-   relation replaces what is on screen. Without a trail that cost you the
-   memory you were reading it from: checking a link meant losing the record
-   the link was on, and the only way back was to go and find it again --
-   which is the whole reason you were following the link.
-
-   Entries are {uid, label}; the label is filled in once that record has
-   rendered, so the button naming it can name it. */
-let trail = [];
-const trailTop = () => trail[trail.length - 1] || null;
+/* The title's height is measured from its content, so it has to be measured
+   again whenever the column changes width -- a height computed at 1400px
+   clips the same text at 375px. Held here and ended by hand for the same
+   reason as the canvas: dropping the subtree does not stop an observer. */
+let titleWatch = null;
+const endTitleWatch = () => {
+  try { titleWatch?.disconnect(); } catch (err) { console.error(err); }
+  titleWatch = null;
+};
 
 /* The list this record can step through, in the order it was shown.
    Registered by whoever put the record on screen -- views/memories.js hands
    over the page it just rendered and clears it on the way out.
 
-   Without it the dialog is a dead end: curating a page of memories meant
-   closing it, finding the next row, opening it again, fifty times over. It
-   is a plain array of uids and not the rows themselves, so a record that
-   was opened from anywhere else simply finds itself absent from it and
-   shows no stepper. */
+   Without it the record is a dead end: curating a page of memories meant
+   going back, finding the next row, opening it again, fifty times over. It
+   is a plain array of uids and not the rows themselves, so a record reached
+   from anywhere else simply finds itself absent from it and shows no
+   stepper. */
 let seq = [];
-export const setRecordSequence = uids => {
-  seq = Array.isArray(uids) ? [...uids] : [];
-  syncStepper();
-};
+export const setRecordSequence = uids => { seq = Array.isArray(uids) ? [...uids] : []; };
 
-/* Which memory the dialog is currently SHOWING -- not which one it is on its
-   way to. The trail is pushed before the fetch, so a sequence arriving in that
-   gap would patch the head of the record still on screen with the index of the
-   next one.
-
-   `slot` is where that memory sat in the sequence the last time the sequence
-   still held it, and it is what keeps the stepper alive across a write that
-   drops the row: archiving from a list filtered to active memories takes the
-   record the dialog is on out of the list under it. Without an anchor that
-   ended the walk -- the one act you perform while curating a page cost you the
-   page. It is per-record and reset whenever a DIFFERENT memory is shown, so
-   following a relation to something off-list is still a dead end with a Back
-   button rather than a stepper pointing at where the last record was. */
-let shown = null;
+/* Where the memory on screen sat in that list the last time the list still
+   held it. It is what keeps the stepper alive across a write that drops the
+   row: archiving from a list filtered to active memories takes the record
+   out of the list under it, and without an anchor that ended the walk --
+   the one act you perform while curating a page cost you the page. */
 let slot = null;
+let anchored = null;
 
-/* Which memory the dialog SHOWS, where the arrows go from it, and whether the
-   list still holds it. Everything after a dropped row shifted up by one, so the
-   record that took the slot IS the next one and the slot itself is where to
-   resume; that also covers a row that fell off the end of a shrinking page. */
-function stepPos() {
-  const at = seq.indexOf(shown);
+/* Which memory the record SHOWS, where the arrows go from it, and whether
+   the list still holds it. Everything after a dropped row shifted up by one,
+   so the record that took the slot IS the next one and the slot itself is
+   where to resume; that also covers a row that fell off the end of a
+   shrinking page. */
+function stepPos(uid) {
+  if (anchored !== uid) { anchored = uid; slot = null; }
+  const at = seq.indexOf(uid);
   if (at >= 0) { slot = at; return { at, prev: at - 1, next: at + 1, gone: false }; }
   if (slot === null || !seq.length) return null;
   const anchor = Math.min(slot, seq.length - 1);
   return { at: anchor, prev: anchor - 1, next: anchor, gone: true };
-}
-
-/* Stepping is not the same move as following a link: the memory it lands on
-   is the one the list itself would have opened, so it starts a trail of its
-   own rather than stacking a Back button that walks the page a row at a time. */
-function stepRecord(delta) {
-  const pos = stepPos();
-  if (!pos) return;
-  const to = delta < 0 ? pos.prev : pos.next;
-  if (to < 0 || to >= seq.length) return;
-  trail.length = 0;
-  openRecord(seq[to]);
-}
-
-/* Where this memory sits in the list that opened it, and the way to the ones
-   either side of it. Empty when the record was reached from somewhere with no
-   list behind it (a relation, the audit trail, the canvas) or when there is
-   nowhere left to step -- a stepper that cannot step is a lie about context.
-   A record the list no longer holds counts its position out rather than
-   claiming a row that now belongs to another memory. */
-function stepperHTML() {
-  const pos = stepPos();
-  if (!pos) return '';
-  const noPrev = pos.prev < 0, noNext = pos.next >= seq.length;
-  if (noPrev && noNext) return '';
-  return `<div class="record-step" role="group" aria-label="${esc(t('dr.step.aria'))}"
-               ${pos.gone ? `title="${esc(t('dr.step.gone'))}"` : ''}>
-    <button type="button" class="icon-btn" id="dPrev" ${noPrev ? 'disabled' : ''}
-            title="${esc(t('dr.step.prev'))}" aria-label="${esc(t('dr.step.prev'))}">${icon('chevron-left')}</button>
-    <span class="record-step-at">${pos.gone
-      ? t('dr.step.atGone', { n: seq.length })
-      : t('dr.step.at', { i: pos.at + 1, n: seq.length })}</span>
-    <button type="button" class="icon-btn" id="dNext" ${noNext ? 'disabled' : ''}
-            title="${esc(t('dr.step.next'))}" aria-label="${esc(t('dr.step.next'))}">${icon('chevron-right')}</button>
-  </div>`;
-}
-
-const wireStepper = () => {
-  dq('#dPrev')?.addEventListener('click', () => stepRecord(-1));
-  dq('#dNext')?.addEventListener('click', () => stepRecord(1));
-};
-
-/* Every write in here ends with openRecord(uid) AND refreshBehind(), and the
-   refresh tears the old page down -- clearing the sequence -- before it has
-   fetched the new one. The record repaints inside that gap, so the stepper it
-   built had nothing to step through: curating a record cost you the way to the
-   next one until the dialog was closed and reopened. The sequence tells the
-   open record when it lands instead of being read once at paint time. */
-function syncStepper() {
-  if (!recordOpen() || !shown) return;
-  const head = rec.querySelector('.record-head');
-  if (!head) return;
-  const html = stepperHTML();
-  const cur = head.querySelector('.record-step');
-  if (!html) { cur?.remove(); return; }
-  if (cur) cur.outerHTML = html;
-  else dq('#dClose').insertAdjacentHTML('beforebegin', html);
-  wireStepper();
 }
 
 /* One path per write, shared by the button that performs it and by the Undo
@@ -173,9 +95,9 @@ const setStatus = (uid, status, reason) =>
   api(`/api/memories/${seg(uid)}/status`,
       { body: reason === undefined ? { status } : { status, reason } });
 
-/* A relation is recreatable from what its own row already knew, so deleting one
-   is reversible without asking you to find the pair again. `direction` is which
-   end this record is on. */
+/* A relation is recreatable from what its own row already knew, so deleting
+   one is reversible without asking you to find the pair again. `direction`
+   is which end this record is on. */
 const relink = (uid, rel) => api('/api/relations', {
   body: {
     from_uid: rel.direction === 'out' ? uid : rel.peer.uid,
@@ -185,407 +107,629 @@ const relink = (uid, rel) => api('/api/relations', {
   },
 });
 
-export const recordOpen = () => Boolean(rec && document.contains(rec));
+/* Where you have been inside the record, oldest first, and the route the
+   walk started from.
 
-/* Closes the record AND anything it raised: a confirmation opened from it
-   sits above it in the stack, and leaving that behind over a dialog that
-   no longer exists is not a state this app should be able to reach. */
-export function closeRecord() {
-  endRecordCanvas();
-  while (recordOpen()) closeModal();
-  rec = null;
-  trail = [];
-  shown = null;
-  slot = null;
+   Following a relation replaces what is on screen, so the trail is what
+   keeps the record it was followed FROM reachable from inside the page.
+   Browser Back reaches the same place; the trail puts it on screen.
+
+   `origin` is the view the first record was opened from -- Memories, the
+   graph, an optimization run -- so the bottom of the trail goes back THERE
+   rather than always to the memory list.
+
+   Entries are {uid, label}; the label is filled in once that record has
+   rendered, so the button naming it can name it. */
+let trail = [];
+let origin = null;
+
+/* Raised by step() for the one navigation it starts and consumed by the walk
+   that navigation runs. The arrows move ACROSS the list, not INTO a relation:
+   the record they land on takes the slot of the one it replaced, so the trail
+   keeps its depth and the way out stays the way out. */
+let stepped = false;
+
+/* One step of the walk. Four cases have to be told apart, and the uid plus
+   that flag is what tells them: the same record re-rendering after a write
+   (nothing moves), a step across the list (the top of the trail is replaced),
+   the record BELOW this one on the trail (the reader went back, by this
+   button or by the browser's), and anything else (a step forward). */
+function walk(uid) {
+  const across = stepped;
+  stepped = false;
+  const from = previousRoute();
+  if (from.name && from.name !== 'memory') { trail = []; origin = from; }
+  if (trail[trail.length - 1]?.uid === uid) return;
+  if (across && trail.length) { trail[trail.length - 1] = { uid }; return; }
+  if (trail[trail.length - 2]?.uid === uid) { trail.pop(); return; }
+  trail.push({ uid });
 }
 
-/* Where a render writes. The dialog exists once; opening the same record
-   again, or saving from inside it, repaints these two rather than tearing
-   the dialog down -- see the note on `rec`. */
-const paint = (head, body) => {
+/* Which field is open for editing, by section key -- '' for the body of a
+   type that has no fields, and null for none. `all` is the rewrite mode:
+   every field open at once, sharing one save bar.
+
+   Module-level and reset per uid, so a save (which re-renders the view)
+   comes back with the same field open, and stepping to another memory
+   does not land you in its editor. */
+let editing = { uid: null, key: null, all: false };
+const resetEditing = uid => { editing = { uid, key: null, all: false }; };
+
+/* Which block the panel SHOWS, by section key. One block is on screen at a
+   time and the index picks it; module-level and reset per uid, like
+   `editing`, so a save comes back on the block it was made from and
+   stepping to another memory opens at its first.
+
+   A key the memory does not have -- stepping from a checkpoint to a note --
+   falls back to the first block rather than showing nothing. */
+let picked = { uid: null, key: null };
+const resetPicked = uid => { picked = { uid, key: null }; };
+
+/* The opening of a block, for its row in the index. Whitespace is collapsed
+   because a body's own line breaks would make a two-line clamp show one
+   word and a blank line. */
+const peekOf = text => String(text || '').replace(/\s+/g, ' ').trim().slice(0, 180);
+
+export async function renderRecord(view, params, ctx) {
+  const uid = params.get('uid') || '';
+  if (!uid) { go('memories'); return; }
+  if (editing.uid !== uid) resetEditing(uid);
+  if (picked.uid !== uid) resetPicked(uid);
+
+  walk(uid);
   endRecordCanvas();
-  rec.querySelector('.modal-head').innerHTML = head;
-  rec.querySelector('.modal-body').innerHTML = body;
-};
+  endTitleWatch();
+  const m = await api(`/api/memories/${seg(uid)}`);
+  if (ctx.stale()) return;
+  /* named now that it has been read, so the record one step further in can
+     put its name on the button that comes back here */
+  const here = trail[trail.length - 1];
+  if (here?.uid === uid) here.label = (m.title || m.content.split('\n', 1)[0]).slice(0, 60);
 
-export async function openRecord(uid) {
-  /* Opening and re-rendering are the same call here -- every save ends with
-     openRecord(uid) -- so the two have to be told apart. A re-render must
-     not yank the caret back to the top of the dialog, and must not lose the
-     place the reader had scrolled to. */
-  const reopening = recordOpen();
-  const keepScroll = reopening ? (rec.querySelector('.modal-body')?.scrollTop || 0) : 0;
-  /* A save re-renders the SAME record -- every write here ends with
-     openRecord(uid) -- and that is not a step in the trail. Only a move to
-     a different memory is. */
-  if (!reopening) trail = [{ uid }];
-  /* `?.` because stepping through the sequence empties the trail first: the
-     memory it lands on is a starting point, not somewhere you followed a
-     link to */
-  else if (trailTop()?.uid !== uid) trail.push({ uid });
-  if (!reopening) {
-    rec = openModal({
-      ariaLabel: t('dr.dialogAria'),
-      title: '',
-      bodyHTML: '<div class="loading"><span class="spin"></span></div>',
-      wide: true, tall: true,
-    });
-    /* Left and right step through the list the record was opened from. Bound
-       to the dialog rather than the document, so a sub-form raised over it
-       keeps its own arrows; skipped wherever a caret or a listbox already
-       owns them. */
-    rec.addEventListener('keydown', e => {
-      if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
-      if (e.target.closest('input, textarea, select, [contenteditable], [role=listbox]')) return;
-      e.preventDefault();
-      stepRecord(e.key === 'ArrowRight' ? 1 : -1);
-    });
-  }
-  let m;
-  try { m = await api(`/api/memories/${seg(uid)}`); }
-  catch (err) {
-    /* the dialog may have been dismissed while this was in flight */
-    if (!recordOpen()) return;
-    paint('', failedHTML(err));
-    dq('[data-retry]').addEventListener('click', () => openRecord(uid));
-    return;
-  }
-  if (!recordOpen()) return;
-
-  /* a diagram's content is generated from its graph, so the drawer shows
-     it read-only and sends editing to the canvas; every other type gets
-     the reverse view -- which flows have a step pointing at it */
+  /* a diagram's content is generated from its graph, so the record shows it
+     read-only and sends editing to the canvas; every other type gets the
+     reverse view -- which flows have a step pointing at it */
   const isDiagram = m.type === 'diagram';
-  const refs = m.referenced_by_diagrams || [];
-
-  /* Some types are written field by field. `spec` is what this one should
-     hold -- empty for a type with none -- and `sections` what was read out of
-     the body, so a field that never arrived shows as itself rather than as a
-     gap. A body the parser could not read at all keeps its <pre>: the fields
-     would be empty and the text is the only copy of what it says. */
-  const spec = m.spec || [];
-  const isSectioned = spec.length > 0;
+  const spec = isDiagram ? [] : (m.spec || []);
   const sectionText = Object.fromEntries((m.sections || []).map(s => [s.key, s.text]));
-  const sectionPanes = () => spec.map(s => `
-    <div class="sec-field">
-      <div class="sec-label">${sectionLabelHTML(m.type, s)}</div>
-      ${s.key in sectionText
-        ? `<div class="content-pre content-prose sec-text rt">${renderRich(sectionText[s.key], m.body_links)}</div>`
-        : `<div class="sec-absent">${t('dr.sections.missing')}</div>`}
-    </div>`).join('');
-  /* A ceiling is shown as a count, never enforced by `maxlength`: the
-     attribute truncates on paste without a word on screen, and the server
-     refuses the same body anyway. */
-  const sectionEditors = () => spec.map(s => `
-    <label class="sec-edit"><span class="sec-label">${sectionLabelHTML(m.type, s)}
-      ${s.max_len ? `<span class="sec-count" data-count="${esc(s.key)}"></span>` : ''}</span>
-      <textarea id="dSec-${esc(s.key)}" rows="4"
-                aria-label="${esc(sectionLabel(m.type, s))}"></textarea></label>`).join('');
+  /* One entry per editable field. A type with no spec has exactly one, whose
+     key is '' -- so the card, the editor and the save path are written once
+     and a sectioned body is not a second code path. */
+  const fields = spec.length && !m.section_problem
+    ? spec.map(s => ({ key: s.key, max: s.max_len,
+                       labelHTML: sectionLabelHTML(m.type, s),
+                       label: sectionLabel(m.type, s),
+                       text: sectionText[s.key], present: s.key in sectionText }))
+    : [{ key: '', max: 0, labelHTML: t('dr.content'), label: t('dr.content'),
+         text: m.content, present: true }];
 
+  /* Which block is on screen. `Edit all` is the one mode that shows them
+     all at once, so it has no selection and no index. */
+  let sel = fields.findIndex(f => f.key === picked.key);
+  if (sel < 0) { sel = 0; picked = { uid, key: fields[0].key }; }
+
+  view.innerHTML = `<div class="rec-shell">
+    ${barHTML(m, uid)}
+    <div class="rec-work">
+      <div class="rec-main">
+        <h2 class="rec-title"><textarea id="dTitle" rows="1"
+              placeholder="${esc(t('dr.title.placeholder'))}"
+              aria-label="${esc(t('mm.name.label'))}" spellcheck="false"
+              >${esc(m.title || '')}</textarea></h2>
+        ${m.section_problem
+          ? `<div class="sec-problem">${t('dr.sections.problem',
+               { detail: esc(m.section_problem) })}</div>` : ''}
+        ${isDiagram ? diagramHTML(m, uid) : editing.all
+          ? `<div class="rec-stack">${fields.map(f => fieldHTML(f, m)).join('')}</div>
+             ${saveBarHTML(t('dr.saveAll'), 'dSaveAll')}`
+          : `<div class="rec-stage">
+               ${indexHTML(fields, m, sel)}
+               ${fieldHTML(fields[sel], m)}
+             </div>`}
+        ${refsHTML(m)}
+      </div>
+      ${sideHTML(m, uid)}
+    </div>
+  </div>`;
+
+  wire(view, m, uid, fields, isDiagram);
+}
+
+/* ─── the bar ─────────────────────────────────────────────────────────── */
+
+function barHTML(m, uid) {
+  const pos = stepPos(uid);
+  const stepper = !pos || (pos.prev < 0 && pos.next >= seq.length) ? '' : `
+    <span class="rec-step" role="group" aria-label="${esc(t('dr.step.aria'))}"
+          ${pos.gone ? `title="${esc(t('dr.step.gone'))}"` : ''}>
+      <button type="button" class="icon-btn" id="dPrev" ${pos.prev < 0 ? 'disabled' : ''}
+              title="${esc(t('dr.step.prev'))}" aria-label="${esc(t('dr.step.prev'))}">${icon('chevron-left')}</button>
+      <span class="rec-step-at">${pos.gone
+        ? t('dr.step.atGone', { n: seq.length })
+        : t('dr.step.at', { i: pos.at + 1, n: seq.length })}</span>
+      <button type="button" class="icon-btn" id="dNext" ${pos.next >= seq.length ? 'disabled' : ''}
+              title="${esc(t('dr.step.next'))}" aria-label="${esc(t('dr.step.next'))}">${icon('chevron-right')}</button>
+    </span>`;
+  const back = backTarget();
+  return `<div class="rec-bar">
+    <button type="button" class="btn btn-sm rec-back" id="dBack"
+            title="${esc(t('dr.back.title', { label: back.label }))}"
+            >${icon('chevron-left')}<span class="rec-back-text">${esc(back.label)}</span></button>
+    ${m.domain ? `<button type="button" class="rec-crumb" data-fdomain="${esc(m.domain)}"
+        aria-label="${esc(t('a11y.filterDomain', { domain: m.domain }))}">${esc(m.domain)}</button>` : ''}
+    <span class="rec-bar-end">
+      ${stepper}
+      ${m.type === 'diagram' ? '' : `<button type="button" class="btn btn-sm" id="dEditAll"
+        aria-pressed="${editing.all}">${icon('pencil')}${t('dr.editAll')}</button>`}
+      <button type="button" class="icon-btn" id="dMore" title="${t('dr.more')}"
+              aria-label="${t('dr.more')}">${icon('maintenance')}</button>
+    </span>
+  </div>`;
+}
+
+/* The one view whose nav entry is not named after it: the diagram EDITOR is
+   reached from the Diagrams list and has no section of its own. */
+const NAV_LABEL = { diagram: 'nav.diagrams' };
+
+/* Where the back button goes, and what it is called. A record reached by
+   following a relation goes back to the record it was followed from, by
+   name; the first record of a walk goes back to whatever opened it. */
+function backTarget() {
+  const under = trail[trail.length - 2];
+  if (under) return { label: under.label || under.uid, hash: '' };
+  if (origin?.name) return { label: t(NAV_LABEL[origin.name] || `nav.${origin.name}`), hash: origin.hash };
+  return { label: t('nav.memories'), hash: '' };
+}
+
+function goBack() {
+  const under = trail[trail.length - 2];
+  if (under) { trail.pop(); openRecord(under.uid); return; }
+  /* the exact URL, so a list comes back on the page and under the filters
+     it was left on */
+  if (origin?.hash) { location.hash = origin.hash; return; }
+  go('memories');
+}
+
+/* ─── the index ───────────────────────────────────────────────────────── */
+
+/* The blocks a memory is made of, as a column beside the one on screen:
+   each row names a block, and under the SELECTED row come the headings its
+   own body opens, which is the only navigation a 19.000-character block
+   has. A body with no heading adds no row.
+
+   The row and its headings are grouped in the markup because together they
+   are one card -- the row is its head, the headings its body -- and a
+   continuous fill and radius cannot be drawn by siblings each carrying
+   their own. */
+function indexHTML(fields, m, sel) {
+  const marks = headings(fields[sel].text);
+  const row = (f, i) => `
+    <button type="button" class="rec-pick" role="tab" data-pick="${esc(f.key)}"
+            style="${sectionHue(m.type, f.key)}"
+            aria-selected="${i === sel}" tabindex="${i === sel ? 0 : -1}">
+      <span class="rf-dot" aria-hidden="true"></span>
+      <span class="rec-pick-text">
+        <span class="rec-pick-name">${f.labelHTML}</span>
+        <span class="rec-peek">${esc(peekOf(f.text))}</span>
+      </span>
+    </button>`;
+  return `<div class="rec-index" role="tablist" aria-label="${esc(t('dr.blocks.aria'))}">
+    ${fields.map((f, i) => {
+      if (i !== sel || !marks.length) return row(f, i);
+      return `<div class="rec-group" style="${sectionHue(m.type, f.key)}">${row(f, i)}
+        ${marks.map((h, j) => `
+        <button type="button" class="rec-mark" data-mark="${j}" title="${esc(h)}">
+          <span class="rec-bullet" aria-hidden="true"></span>
+          <span class="rec-mark-text">${esc(h)}</span>
+        </button>`).join('')}</div>`;
+    }).join('')}
+  </div>`;
+}
+
+/* ─── one field ───────────────────────────────────────────────────────── */
+
+const countHTML = f => (f.max
+  ? `<span class="rf-count" data-count>${t('dr.sections.count', { n: (f.text || '').length, max: f.max })}</span>`
+  : `<span class="rf-count">${t('dr.chars', { n: fmtInt((f.text || '').length) })}</span>`);
+
+function fieldHTML(f, m) {
+  const open = editing.all || editing.key === f.key;
+  if (!open) {
+    return `<section class="rf" data-field="${esc(f.key)}"
+                     style="${sectionHue(m.type, f.key)}">
+      <header class="rf-head">
+        <span class="rf-dot" aria-hidden="true"></span>
+        <span class="rf-label">${f.labelHTML}</span>
+        ${countHTML(f)}
+        <button type="button" class="rf-edit" data-edit="${esc(f.key)}">${icon('pencil')}${t('common.edit')}</button>
+      </header>
+      ${f.present
+        /* The box that SCROLLS and the box that holds the reading measure
+           are two: with both on one element the scrollbar is drawn where
+           the measure ends, which on a panel wider than 68ch leaves it
+           floating in the middle of the card. */
+        ? `<div class="rf-body"><div class="content-prose rt">${renderRich(f.text, m.body_links)}</div></div>`
+        : `<div class="sec-absent">${t('dr.sections.missing')}</div>`}
+    </section>`;
+  }
+  /* Open: the source and what it becomes, side by side, and the save bar
+     attached to the pair. In `all` mode there is no preview -- every field
+     is open at once and one save bar serves them all, so the column has no
+     room to double each of them. */
+  return `<section class="rf is-open" data-field="${esc(f.key)}"
+                   style="${sectionHue(m.type, f.key)}">
+    <header class="rf-head">
+      <span class="rf-dot" aria-hidden="true"></span>
+      <span class="rf-label">${f.labelHTML}</span>
+      ${countHTML(f)}
+      ${editing.all ? '' : `<span class="rf-keys">
+        <kbd>${t('dr.key.save')}</kbd><kbd>${t('dr.key.close')}</kbd></span>`}
+    </header>
+    <div class="rf-split${editing.all ? ' rf-solo' : ''}">
+      <div class="rf-pane">
+        <span class="rf-sub">${t('dr.source')}</span>
+        <textarea data-src="${esc(f.key)}" rows="10" spellcheck="false"
+                  aria-label="${esc(f.label)}">${esc(f.text || '')}</textarea>
+      </div>
+      ${editing.all ? '' : `<div class="rf-pane">
+        <span class="rf-sub">${t('dr.asRead')}</span>
+        <div class="rf-preview content-prose rt" data-preview></div>
+      </div>`}
+    </div>
+    ${editing.all ? '' : saveBarHTML(t('dr.saveVersion'), 'dSave')}
+  </section>`;
+}
+
+const saveBarHTML = (label, id) => `<div class="rf-save">
+  <span class="hint-sm">${t('dr.prevKept')}</span>
+  <input type="text" data-note placeholder="${t('dr.editNote.placeholder')}"
+         aria-label="${t('dr.editNote.placeholder')}">
+  <button type="button" class="btn btn-solid btn-sm" id="${id}">${label}</button>
+  <button type="button" class="btn btn-sm" data-cancel>${t('common.cancel')}</button>
+</div>`;
+
+function diagramHTML(m, uid) {
+  return `<div class="rf">
+    <header class="rf-head">
+      <span class="rf-label">${t('dr.content')}</span>
+      <button type="button" class="rf-edit" id="dOpenEditor">${icon('pencil')}${t('dr.openEditor')}</button>
+    </header>
+    <div class="dg-stage dg-stage-record" id="dRecordStage">
+      <canvas id="dRecordCanvas" role="img"
+              aria-label="${esc(t('dr.canvasAlt', { title: m.title || uid }))}"></canvas>
+    </div>
+    <!-- the projection stays in the DOM as the fallback: it is what shows if
+         the graph cannot be fetched, and it is still the text the index was
+         built from -->
+    <pre class="content-pre" id="dContent" hidden>${esc(m.content)}</pre>
+    <div class="dg-empty">${t('dr.generated')}</div>
+  </div>`;
+}
+
+function refsHTML(m) {
+  const refs = m.referenced_by_diagrams || [];
+  if (!refs.length) return '';
+  return `<div class="rf">
+    <header class="rf-head"><span class="rf-label">${t('dr.inDiagrams')}</span>
+      <span class="rf-count">${refs.length}</span></header>
+    <div class="dg-links">
+      ${refs.map(r => `<div class="dg-link">
+        <span class="dg-key">${esc(r.node_key)}</span>
+        <button type="button" class="snippet clickable" data-open="${esc(r.memory_uid)}"
+                >${esc(r.title)}${r.label ? ` · ${esc(r.label)}` : ''}</button>
+      </div>`).join('')}
+    </div>
+  </div>`;
+}
+
+/* ─── the side ────────────────────────────────────────────────────────── */
+
+function sideHTML(m, uid) {
+  const chip = (value, kind, label) => `<span class="rs-chip">${esc(value)}
+    <button type="button" class="rs-chip-x" data-drop="${kind}" data-value="${esc(value)}"
+            title="${esc(label)}" aria-label="${esc(label)}">${icon('close')}</button></span>`;
+  const tags = (m.tags || '').split(',').map(x => x.trim()).filter(Boolean);
+
+  /* The note says WHY these two belong together, so it is text on the row
+     rather than a title on a span -- unreachable by keyboard, invisible on
+     touch, announced by nothing. It takes a line of its own: the column is
+     368px and the peer's own name already fills it. */
   const rels = m.relations.map(r => `
-    <div class="rel-row">
+    <div class="rs-rel">
       <span class="rel-dir" title="${r.direction === 'out' ? t('dr.rel.out.title') : t('dr.rel.in.title')}">${icon(r.direction === 'out' ? 'arrow-right' : 'arrow-left')}</span>
-      <span class="rel-type-chip">${esc(r.relation_type)}</span>
+      <span class="rel-type-chip" title="${esc(relTypeTitle(r.relation_type))}"
+        >${esc(relLabel(r.relation_type))}</span>
       ${r.peer.missing
-        ? `<span class="rel-peer"><span class="snippet rel-gone">${t('dr.rel.missing', { uid: esc(r.peer.uid) })}</span></span>`
-        : `<span class="rel-peer" data-open="${esc(r.peer.uid)}">
-             <span class="type-tag ${typeClass(r.peer.type)}"><span class="dot"></span>${esc(r.peer.type)}</span>
-             ${/* The peer is nowrap + ellipsis and truncates in most rows; the
-                  note beside it already carried a title and this did not, so
-                  the identity of the memory on the other end of a relation was
-                  the one thing on the row you could not recover. */''}
-             <span class="snippet" title="${esc(r.peer.snippet)}">${esc(r.peer.snippet)}</span>
-             ${r.peer.status === 'archived' ? statusTag('archived') : ''}
-           </span>`}
-      ${r.note ? `<span class="rel-note" title="${esc(r.note)}">${esc(r.note)}</span>` : ''}
+        ? `<span class="snippet rel-gone">${t('dr.rel.missing', { uid: esc(r.peer.uid) })}</span>`
+        : (() => { const p = peerName(r.peer); return `
+          <button type="button" class="snippet${p.named ? ' mem-named' : ''}"
+             data-open="${esc(r.peer.uid)}"
+             title="${esc(p.hover || p.text)}">${esc(p.text)}</button>`; })()}
       <button type="button" class="icon-btn danger" data-delrel="${r.id}"
               title="${t('dr.rel.remove.title')}"
               aria-label="${t('dr.rel.remove.title')}">${icon('close')}</button>
-    </div>`).join('') || `<div class="empty" style="padding:18px">${t('dr.rel.empty')}</div>`;
+      ${r.note ? `<span class="rs-rel-note">${esc(r.note)}</span>` : ''}
+    </div>`).join('') || `<div class="hint-sm">${t('dr.rel.empty')}</div>`;
 
   const hist = m.edit_history.slice().reverse().map((e, i) => `
-    <div class="hist-item">
-      <div class="hist-when">${fmtDate(e.edited_at)} <span style="opacity:.6">· ${esc(e.edited_at)}</span></div>
-      <div class="hist-note">${esc(e.note || '') || (e.prev_content !== e.new_content ? t('dr.hist.contentEdited') : t('dr.hist.entry'))}</div>
+    <div class="rs-hist">
+      <span class="rs-hist-when" title="${esc(e.edited_at)}">${fmtDate(e.edited_at)}</span>
+      <span class="rs-hist-note">${esc(e.note || '')
+        || (e.prev_content !== e.new_content ? t('dr.hist.contentEdited') : t('dr.hist.entry'))}</span>
       ${e.prev_content !== e.new_content
-        ? `<button type="button" class="btn btn-sm" data-diff="${i}" aria-expanded="false"
-                   aria-controls="histDiff${i}" style="margin-top:6px">${t('dr.hist.viewBtn')}</button>
+        ? `<button type="button" class="rs-hist-diff" data-diff="${i}" aria-expanded="false"
+                   aria-controls="histDiff${i}">${t('dr.hist.show')}</button>
            <div class="hist-diff" id="histDiff${i}" data-diffbody="${i}" hidden></div>` : ''}
-    </div>`).join('') || `<div class="empty" style="padding:18px">${t('dr.hist.empty')}</div>`;
+    </div>`).join('') || `<div class="hint-sm">${t('dr.hist.empty')}</div>`;
 
-  /* what a back button one step further in would call this record */
-  const here = trailTop();
-  if (here?.uid === uid) here.label = (m.title || m.content.split('\n', 1)[0]).slice(0, 70);
-  const behind = trail.length > 1 ? trail[trail.length - 2] : null;
-  /* A re-render of the same memory keeps the slot it was walking; landing on a
-     different one starts from that memory's own place in the list, or from no
-     place at all when the list does not hold it. */
-  if (shown !== uid) { shown = uid; slot = null; }
-
-  paint(`
-    <div class="record-head">
-      ${behind ? `<button type="button" class="btn btn-sm record-back" id="dBack"
-              title="${esc(t('dr.back.title', { label: behind.label || behind.uid }))}"
-              aria-label="${esc(t('dr.back.title', { label: behind.label || behind.uid }))}"
-              >${icon('arrow-left')}<span class="record-back-text"
-              >${esc(behind.label || behind.uid)}</span></button>` : ''}
-      ${typeTag(m.type)}
-      ${uidChip(m.uid)}
-      ${statusTag(m.status)}
-      ${confPill(m.confidence)}
-      <span class="spacer"></span>
-      ${stepperHTML()}
-      <button type="button" class="icon-btn" id="dClose" title="${t('dr.close.title')}"
-              aria-label="${t('dr.close.title')}" style="--ico:17px">${icon('close')}</button>
+  return `<aside class="rec-side">
+    <div class="rs-head">
+      <div class="rs-head-row">
+        ${typeTag(m.type)}${uidChip(m.uid)}
+        <span class="rs-status">${m.status === 'archived'
+          ? statusTag('archived') : t('common.active')}</span>
+      </div>
+      <div class="seg rs-conf" id="dConf" role="group" aria-label="${t('dr.curation')}">
+        ${Object.keys(CONF).map(c => `<button type="button" data-c="${c}"
+            aria-pressed="${m.confidence === c}"><span class="conf-pill c-${c}">${
+            icon(CONF[c].icon)}</span>${CONF[c].label}</button>`).join('')}
+      </div>
     </div>
-    <!-- The record's own name, above everything done to it. A memory with
-         no title is headed by the opening line of its body. -->
-    <h2 class="record-title">${esc(m.title || m.content.split('\n', 1)[0].slice(0, 110))}</h2>`, `
-    <!-- The memory on the left, everything ABOUT it on the right. One
-         column put five panels of metadata under a wall of prose, so
-         curating a record meant scrolling past the record to reach the
-         controls for it and back up to check what they applied to. -->
-    <div class="record-grid">
-      <div class="record-col">
 
-      <div class="section">
-        <div class="section-label">${t('dr.content')}
-          ${isDiagram
-            ? `<button class="btn btn-sm btn-solid" id="dOpenEditor">${t('dr.openEditor')}</button>`
-            : `<button type="button" class="btn btn-sm" id="dEdit" aria-expanded="false" aria-controls="dEditBox">${t('common.edit')}</button>`}
-        </div>
-        ${m.section_problem
-          ? `<div class="sec-problem">${t('dr.sections.problem',
-               { detail: esc(m.section_problem) })}</div>`
-          : ''}
-        ${isSectioned && !m.section_problem ? sectionPanes() : `
-        ${isDiagram
-          ? `<div class="dg-stage dg-stage-record" id="dRecordStage">
-               <canvas id="dRecordCanvas" role="img"
-                       aria-label="${esc(t('dr.canvasAlt', { title: m.title || uid }))}"></canvas>
-             </div>
-             <!-- the projection stays in the DOM as the fallback: it is what
-                  shows if the graph cannot be fetched, and it is still the
-                  text the index was built from -->
-             <pre class="content-pre" id="dContent" hidden>${esc(m.content)}</pre>`
-          : `<div class="content-pre content-prose rt" id="dContent">${renderRich(m.content, m.body_links)}</div>`}`}
-        ${isDiagram ? `<div class="dg-empty" style="margin-top:8px">${t('dr.generated')}</div>` : `
-        <div id="dEditBox" hidden style="display:grid;gap:9px;margin-top:10px">
-          <!-- a placeholder is a hint, not a name: it is gone the moment
-               anything is typed, and it is never announced as a label -->
-          ${isSectioned ? sectionEditors() : `
-          <textarea id="dEditText" rows="10" aria-label="${t('dr.content')}"></textarea>`}
-          <input type="text" id="dEditNote" placeholder="${t('dr.editNote.placeholder')}"
-                 aria-label="${t('dr.editNote.placeholder')}">
-          <div class="act-row">
-            <button class="btn btn-solid" id="dEditSave">${t('dr.saveVersion')}</button>
-            <button class="btn" id="dEditCancel">${t('common.cancel')}</button>
-            <span class="hint-sm">${t('dr.prevKept')}</span>
-          </div>
-        </div>`}
-      </div>
-      ${refs.length ? `
-      <div class="section">
-        <div class="section-label">${t('dr.inDiagrams')} <span class="panel-aside">(${refs.length})</span></div>
-        <div class="dg-links">
-          ${refs.map(r => `
-            <div class="dg-link">
-              <span class="dg-key">${esc(r.node_key)}</span>
-              <span class="snippet clickable" data-open="${esc(r.memory_uid)}">${esc(r.title)}${r.label ? ` · ${esc(r.label)}` : ''}</span>
-            </div>`).join('')}
-        </div>
-      </div>` : ''}
-
-      </div>
-      <div class="record-col">
-
-      <div class="section">
-        <div class="section-label">${t('dr.metadata')}
-          <button class="btn btn-sm" id="dMeta">${t('common.edit')}</button>
-        </div>
-        <div class="meta-grid">
-          <div><div class="mg-label">${t('dr.meta.domain')}</div><div class="mg-val">${m.domain ? `<button type="button" class="chip clickable" data-fdomain="${esc(m.domain)}" aria-label="${esc(t('a11y.filterDomain', { domain: m.domain }))}">${esc(m.domain)}</button>` : '—'}</div></div>
-          <!-- the domains this belongs to beside the one it is filed at: one
-               chip each, filtering the same way, because a cross-listing is
-               a scope you can go and read, not a label -->
-          ${(m.also || []).length ? `<div><div class="mg-label">${t('dr.meta.also')}</div><div class="mg-val">${
-            m.also.map(p => `<button type="button" class="chip clickable" data-fdomain="${esc(p)}" aria-label="${esc(t('a11y.filterDomain', { domain: p }))}">${esc(p)}</button>`).join(' ')
-          }</div></div>` : ''}
-          <div><div class="mg-label">${t('dr.meta.session')}</div><div class="mg-val">${m.session ? `<button type="button" class="chip clickable" data-fsession="${esc(m.session)}" title="${esc(m.session)}" aria-label="${esc(t('a11y.filterSession', { session: m.session }))}">${esc(m.session.length > 24 ? m.session.slice(0, 24) + '…' : m.session)}</button>` : '—'}</div></div>
-          <div><div class="mg-label">${t('dr.meta.tags')}</div><div class="mg-val">${esc(m.tags || '—')}</div></div>
-          <div><div class="mg-label">${t('dr.meta.created')}</div><div class="mg-val" title="${esc(m.created_at)}">${fmtDate(m.created_at)}</div></div>
-          <div><div class="mg-label">${t('dr.meta.updated')}</div><div class="mg-val" title="${esc(m.updated_at)}">${fmtDate(m.updated_at)}</div></div>
-          <div><div class="mg-label">${t('dr.meta.size')}</div><div class="mg-val">${fmtInt(m.content.length)} ${t('common.chars')}</div></div>
-          ${m.superseded_by ? `<div><div class="mg-label">${t('dr.meta.supersededBy')}</div><div class="mg-val"><button type="button" class="uid-chip" data-open="${esc(m.superseded_by)}" style="cursor:pointer" aria-label="${esc(t('a11y.openRecord', { uid: m.superseded_by }))}">${esc(m.superseded_by)}</button></div></div>` : ''}
-        </div>
+    <div class="rs-body">
+      <div class="rs-field">
+        <div class="rs-field-head"><span class="mg-label">${t('dr.meta.domain')}</span>
+          <button type="button" class="rs-more" id="dMeta">${t('dr.meta.change')}</button></div>
+        <button type="button" class="rs-value" data-fdomain="${esc(m.domain)}"
+          ${m.domain ? '' : 'disabled'}>${esc(m.domain || t('mem.mi.noDomain'))}</button>
       </div>
 
-      <!-- Archive rides in the heading with every other section's action,
-           not in the body beside the confidence scale: down there it ended
-           wherever the scale happened to end, so the one button in this
-           column that is an action sat short of the two that are. -->
-      <div class="section">
-        <div class="section-label">${t('dr.curation')}
-          ${m.status === 'active'
-            ? `<button class="btn btn-sm" id="dArchive">${t('dr.archiveSoft')}</button>`
-            : `<button class="btn btn-sm" id="dRestore">${t('common.restore')}</button>`}
-        </div>
-        <div class="seg" id="dConf" role="group" aria-label="${t('dr.curation')}">
-          ${Object.keys(CONF).map(c => `<button type="button" data-c="${c}" aria-pressed="${m.confidence === c}"><span class="conf-pill c-${c}">${icon(CONF[c].icon)}</span>${CONF[c].label}</button>`).join('')}
-        </div>
+      <div class="rs-field">
+        <div class="rs-field-head"><span class="mg-label">${t('dr.meta.also')}</span>
+          <span class="rs-n">${(m.also || []).length}</span>
+          <button type="button" class="rs-more" data-add="also">${t('dr.meta.addDomain')}</button></div>
+        <div class="rs-chips">${(m.also || []).map(p => chip(p, 'also', t('dr.meta.dropAlso'))).join('')
+          || `<span class="hint-sm">${t('dr.meta.noAlso')}</span>`}</div>
       </div>
 
-      <!-- Linking opens a form of its own (core/link-picker.js). What was
-           here -- a lookup field, a type select, a note field and an error
-           line -- asked for the type and the note of a relation before the
-           memory it describes had been chosen, offered one pick per pass,
-           and showed 280 characters of the candidate to decide on. -->
-      <div class="section">
-        <div class="section-label">${t('dr.relations')} <span class="panel-aside">(${m.relations.length})</span>
-          <button class="btn btn-sm" id="relAdd">${t('dr.rel.link')}</button>
-        </div>
+      <div class="rs-field">
+        <div class="rs-field-head"><span class="mg-label">${t('dr.meta.tags')}</span>
+          <span class="rs-n">${tags.length}</span>
+          <button type="button" class="rs-more" data-add="tag">${t('dr.meta.addTag')}</button></div>
+        <div class="rs-chips">${tags.map(x => chip(x, 'tag', t('dr.meta.dropTag'))).join('')
+          || `<span class="hint-sm">${t('mem.noTags')}</span>`}</div>
+      </div>
+
+      <div class="rs-rows">
+        <div><span>${t('dr.meta.session')}</span>${m.session
+          ? `<button type="button" class="rs-mono" data-fsession="${esc(m.session)}"
+               title="${esc(m.session)}"
+               aria-label="${esc(t('a11y.filterSession', { session: m.session }))}"
+               >${esc(m.session)}</button>`
+          : `<b class="rs-mono">—</b>`}</div>
+        <div><span>${t('dr.meta.created')}</span><b class="rs-mono"
+          title="${esc(m.created_at)}">${fmtDate(m.created_at)}</b></div>
+        <div><span>${t('dr.meta.updated')}</span><b class="rs-mono"
+          title="${esc(m.updated_at)}">${fmtDate(m.updated_at)}</b></div>
+        <div><span>${t('dr.meta.size')}</span><b class="rs-mono">${
+          t('dr.chars', { n: fmtInt(m.content.length) })}</b></div>
+        ${m.superseded_by ? `<div><span>${t('dr.meta.supersededBy')}</span>
+          <button type="button" class="rs-mono" data-open="${esc(m.superseded_by)}"
+          >${esc(m.superseded_by)}</button></div>` : ''}
+      </div>
+
+      <div class="rs-field">
+        <div class="rs-field-head"><span class="mg-label">${t('dr.relations')}</span>
+          <span class="rs-n">${m.relations.length}</span>
+          <button type="button" class="rs-more" id="relAdd">${t('dr.rel.link')}</button></div>
         ${rels}
       </div>
 
-      <div class="section">
-        <div class="section-label">${t('dr.history')} <span class="panel-aside">(${m.edit_history.length})</span></div>
+      <div class="rs-field">
+        <div class="rs-field-head"><span class="mg-label">${t('dr.history')}</span>
+          <span class="rs-n">${m.edit_history.length}</span></div>
         ${hist}
       </div>
+    </div>
 
-      <div class="section section-bare">
-        <details class="danger-zone">
-          <summary>${t('dz.summary')}</summary>
-          <div class="dz-body">
-            <div class="dz-hint">${t('dz.hint')}</div>
-            <!-- The phrase is printed HERE and nowhere else. It used to be
-                 the field's placeholder as well, so an empty field showed
-                 the exact text you were being asked for: nothing on screen
-                 told a typed phrase from an untyped one, and the button
-                 beside it read as broken rather than as waiting. -->
-            <div class="dz-type">${t('dz.typeThis', { phrase: `<code>DELETE ${esc(m.uid)}</code>` })}</div>
-            <div class="dz-row">
-              <input type="text" id="dzPhrase" aria-label="${t('dz.phrase.aria')}" autocomplete="off">
-              <button class="btn btn-danger" id="dzGo" disabled>${t('dz.button')}</button>
-            </div>
-            <div class="dz-state" id="dzState" role="status"></div>
-          </div>
-        </details>
-      </div>
+    <div class="rs-foot">
+      ${m.status === 'active'
+        ? `<button class="btn btn-sm" id="dArchive">${t('dr.archiveSoft')}</button>`
+        : `<button class="btn btn-sm" id="dRestore">${t('common.restore')}</button>`}
+      <button class="btn btn-sm btn-danger" id="dDelete">${icon('trash')}${t('dz.button')}</button>
+    </div>
+  </aside>`;
+}
 
-      </div>
-    </div>`);
+/* ─── wiring ──────────────────────────────────────────────────────────── */
 
-  /* the dialog takes the caret, so a screen reader announces it and its
-     label instead of staying on the covered list behind it. openModal has
-     already done that for a fresh one; a re-render must not repeat it. */
-  if (reopening && keepScroll) rec.querySelector('.modal-body').scrollTop = keepScroll;
+function wire(view, m, uid, fields, isDiagram) {
+  const q = s => view.querySelector(s);
+  const save = () => refreshBehind();
 
-  wireCopyChips(rec);
-  wireRich(rec, { open: openRecord, copy: copyCode });
+  wireCopyChips(view);
+  wireRich(view, { open: openRecord, copy: copyCode });
   /* the text is on screen already; colour arrives when the grammar does */
-  highlightIn(rec).catch(() => {});
-  dq('#dClose').addEventListener('click', closeRecord);
-  /* Drops the step being left rather than pushing another one, so walking
-     three links deep and back leaves the trail where it started instead of
-     six entries long. openRecord() below sees the previous uid already on
-     top and does not re-push it. */
-  dq('#dBack')?.addEventListener('click', () => {
-    trail.pop();
-    const prev = trailTop();
-    if (prev) openRecord(prev.uid);
-  });
-  wireStepper();
-  rec.querySelectorAll('[data-open]').forEach(el =>
-    el.addEventListener('click', () => openRecord(el.dataset.open)));
-  rec.querySelectorAll('[data-fdomain]').forEach(el =>
-    el.addEventListener('click', () => { closeRecord(); go('memories', { domain: el.dataset.fdomain }); }));
-  rec.querySelectorAll('[data-fsession]').forEach(el =>
-    el.addEventListener('click', () => { closeRecord(); go('memories', { session: el.dataset.fsession, status: '' }); }));
+  highlightIn(view).catch(() => {});
 
-  /* edit content — a diagram is edited on its canvas instead */
+  q('#dBack').addEventListener('click', goBack);
+  q('#dPrev')?.addEventListener('click', () => step(uid, -1));
+  q('#dNext')?.addEventListener('click', () => step(uid, 1));
+
+  /* The same two steps from the keyboard, which is what the arrows in those
+     two tooltips name: Left goes back through the list, Right goes on.
+
+     The listener is on the document, so the keys reach the record from
+     anywhere in it, and it stands down wherever an arrow already means
+     something else: in a form control the caret walks the text, a modifier
+     belongs to another shortcut (Alt+Left is browser Back), a modal over
+     the record is what is being read, and an open field editor holds text
+     no version has yet -- a click on the button is aimed at it, a key
+     pressed with the caret parked anywhere is not. */
+  const stepKeys = e => {
+    const delta = { ArrowLeft: -1, ArrowRight: 1 }[e.key];
+    if (delta === undefined) return;
+    if (e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return;
+    if (modalOpen() || editing.all || editing.key !== null) return;
+    const el = document.activeElement;
+    if (el && (/^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName) || el.isContentEditable)) return;
+    e.preventDefault();
+    step(uid, delta);
+  };
+  document.addEventListener('keydown', stepKeys);
+  onTeardown(() => document.removeEventListener('keydown', stepKeys));
+  view.querySelectorAll('[data-open]').forEach(el =>
+    el.addEventListener('click', () => openRecord(el.dataset.open)));
+  view.querySelectorAll('[data-fdomain]').forEach(el =>
+    el.addEventListener('click', () => go('memories', { domain: el.dataset.fdomain })));
+  view.querySelectorAll('[data-fsession]').forEach(el =>
+    el.addEventListener('click', () => go('memories', { session: el.dataset.fsession, status: '' })));
+
+  /* ── the title, edited where it is read ── */
+  const title = q('#dTitle');
+  /* It is a box that GROWS, not a one-line field: half the titles in a
+     store this size are longer than the column, and what does not fit in an
+     input is simply off screen. Measured after it is in the document, and
+     again on every keystroke. */
+  const growTitle = () => {
+    title.style.height = 'auto';
+    title.style.height = `${title.scrollHeight}px`;
+  };
+  growTitle();
+  title.addEventListener('input', growTitle);
+  /* Only a change of WIDTH re-measures: setting the height fires the
+     observer again, and re-measuring on that is the loop. */
+  let titleWidth = title.clientWidth;
+  titleWatch = new ResizeObserver(() => {
+    if (title.clientWidth === titleWidth) return;
+    titleWidth = title.clientWidth;
+    growTitle();
+  });
+  titleWatch.observe(title);
+  onTeardown(endTitleWatch);
+  const saveTitle = async () => {
+    const value = title.value.trim();
+    if (value === (m.title || '')) return;
+    if (!value) { title.value = m.title || ''; return; }   /* the API refuses an empty one */
+    try {
+      await api(`/api/memories/${seg(uid)}/meta`, { body: { title: value } });
+      toast(t('dr.titleUpdated'), 'ok');
+      save();
+    } catch (err) { title.value = m.title || ''; failed('err.save', err); }
+  };
+  title.addEventListener('blur', saveTitle);
+  title.addEventListener('keydown', e => {
+    if (e.key === 'Enter') { e.preventDefault(); title.blur(); }
+    if (e.key === 'Escape') { title.value = m.title || ''; title.blur(); }
+  });
+
+  /* ── the index ── */
+  const picks = [...view.querySelectorAll('[data-pick]')];
+  const pick = key => { picked = { uid, key }; resetEditing(uid); refreshBehind(); };
+  picks.forEach(b => b.addEventListener('click', () => pick(b.dataset.pick)));
+  /* A tablist is walked with the arrows, and the roving tabindex in the
+     markup is what makes Tab leave the group instead of stepping through
+     every block in it. */
+  picks.forEach((b, i) => b.addEventListener('keydown', e => {
+    const to = e.key === 'ArrowDown' ? i + 1 : e.key === 'ArrowUp' ? i - 1 : -1;
+    if (to < 0 || to >= picks.length) return;
+    e.preventDefault();
+    pick(picks[to].dataset.pick);
+  }));
+  /* A heading in the index scrolls the body to the nth `.rt-h`, which is
+     the same order headings() listed them in. */
+  view.querySelectorAll('[data-mark]').forEach(b => b.addEventListener('click', () => {
+    const body = view.querySelector('.rf-body');
+    const mark = body?.querySelectorAll('.rt-h')[+b.dataset.mark];
+    if (!mark) return;
+    body.scrollTop += mark.getBoundingClientRect().top
+      - body.getBoundingClientRect().top - 8;
+  }));
+
+  /* ── the fields ── */
+  view.querySelectorAll('[data-edit]').forEach(b => b.addEventListener('click', () => {
+    editing = { uid, key: b.dataset.edit, all: false };
+    refreshBehind();
+  }));
+  q('#dEditAll')?.addEventListener('click', () => {
+    editing = { uid, key: null, all: !editing.all };
+    refreshBehind();
+  });
+  view.querySelectorAll('[data-cancel]').forEach(b => b.addEventListener('click', () => {
+    resetEditing(uid);
+    refreshBehind();
+  }));
+
+  /* the preview follows the source, and the counter follows both */
+  view.querySelectorAll('[data-src]').forEach(box => {
+    const card = box.closest('.rf');
+    const preview = card.querySelector('[data-preview]');
+    const count = card.querySelector('[data-count]');
+    const field = fields.find(f => f.key === box.dataset.src);
+    const draw = () => {
+      if (preview) {
+        preview.innerHTML = renderRich(box.value, m.body_links);
+        wireRich(preview, { open: openRecord, copy: copyCode });
+        highlightIn(preview).catch(() => {});
+      }
+      if (count && field?.max) {
+        count.textContent = t('dr.sections.count', { n: box.value.length, max: field.max });
+        count.classList.toggle('over', box.value.length > field.max);
+      }
+    };
+    draw();
+    box.addEventListener('input', debounce(draw, 180));
+    box.addEventListener('keydown', e => {
+      if (e.key === 'Escape') { resetEditing(uid); refreshBehind(); return; }
+      if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
+        e.preventDefault();
+        saveFields(view, m, uid, fields);
+      }
+    });
+  });
+  const first = view.querySelector('[data-src]');
+  if (first) { first.focus(); first.setSelectionRange(first.value.length, first.value.length); }
+  q('#dSave')?.addEventListener('click', () => saveFields(view, m, uid, fields));
+  q('#dSaveAll')?.addEventListener('click', () => saveFields(view, m, uid, fields));
+
+  /* ── the diagram canvas ── */
   if (isDiagram) {
-    dq('#dOpenEditor').addEventListener('click', () => { closeRecord(); go('diagram', { uid }); });
+    q('#dOpenEditor').addEventListener('click', () => go('diagram', { uid }));
     /* The graph is a second request, so the canvas fills in after the rest
        of the record. DiagramEditor is read-only unless told otherwise, and
        the layout is whatever was arranged in the editor -- this draws it,
        it does not re-derive it. */
-    const stage = dq('#dRecordStage');
+    const stage = q('#dRecordStage');
     api(`/api/diagrams/${seg(uid)}`).then(data => {
-      /* the dialog may have been closed, or repainted onto another record,
-         while this was in flight */
-      if (!recordOpen() || !document.contains(stage)) return;
+      if (!document.contains(stage)) return;   /* navigated away mid-flight */
       recEngine = new DiagramEditor(stage.querySelector('canvas'), data, {});
     }).catch(err => {
       console.error(err);
       if (!document.contains(stage)) return;
       stage.hidden = true;
-      stage.parentElement.querySelector('#dContent').hidden = false;
-    });
-  } else {
-    const editBtn = dq('#dEdit');
-    const syncEdit = open => {
-      dq('#dEditBox').hidden = !open;
-      editBtn.setAttribute('aria-expanded', open ? 'true' : 'false');
-    };
-    editBtn.addEventListener('click', () => {
-      const opening = dq('#dEditBox').hidden;
-      syncEdit(opening);
-      if (!opening) return;
-      if (isSectioned) {
-        /* seeded from what was read, which for a body the parser could not
-           read is nothing -- the <pre> above is still on screen to copy from */
-        spec.forEach(s => {
-          const box = dq(`#dSec-${s.key}`);
-          box.value = sectionText[s.key] || '';
-          if (!s.max_len) return;
-          const out = dq(`[data-count="${s.key}"]`);
-          const tick = () => {
-            out.textContent = t('dr.sections.count', { n: box.value.length, max: s.max_len });
-            out.classList.toggle('over', box.value.length > s.max_len);
-          };
-          box.addEventListener('input', tick);
-          tick();
-        });
-        dq(`#dSec-${spec[0].key}`).focus();
-      } else {
-        dq('#dEditText').value = m.content;
-        dq('#dEditText').focus();
-      }
-    });
-    dq('#dEditCancel').addEventListener('click', () => { syncEdit(false); editBtn.focus(); });
-    dq('#dEditSave').addEventListener('click', async () => {
-      /* a sectioned body is built from its fields rather than typed, so the
-         server can hold it to the shape its type is supposed to have */
-      const [path, body] = isSectioned
-        ? [`/api/memories/${seg(uid)}/sections`,
-           { sections: Object.fromEntries(spec.map(s => [s.key, dq(`#dSec-${s.key}`).value])),
-             note: dq('#dEditNote').value }]
-        : [`/api/memories/${seg(uid)}/content`,
-           { content: dq('#dEditText').value, note: dq('#dEditNote').value }];
-      try {
-        await api(path, { body });
-        toast(t('dr.contentUpdated'), 'ok');
-        openRecord(uid); refreshBehind();
-      } catch (err) { failed('err.save', err); }
+      view.querySelector('#dContent').hidden = false;
     });
   }
 
-  /* edit metadata */
-  dq('#dMeta').addEventListener('click', () => openMetaModal(m));
+  /* ── metadata ── */
+  q('#dMeta').addEventListener('click', () => openMetaModal(m));
+  view.querySelectorAll('[data-add]').forEach(b => b.addEventListener('click',
+    () => addMeta(m, b.dataset.add)));
+  view.querySelectorAll('[data-drop]').forEach(b => b.addEventListener('click',
+    () => dropMeta(m, b.dataset.drop, b.dataset.value)));
 
-  /* confidence */
-  dq('#dConf').querySelectorAll('button').forEach(b => b.addEventListener('click', async () => {
+  /* ── confidence ── */
+  q('#dConf').querySelectorAll('button').forEach(b => b.addEventListener('click', async () => {
     if (b.dataset.c === m.confidence) return;
     try {
       await api(`/api/memories/${seg(uid)}/confidence`, { body: { confidence: b.dataset.c } });
       toast(t('dr.confSet', { label: CONF[b.dataset.c].label }), 'ok');
-      openRecord(uid); refreshBehind();
+      save();
     } catch (err) { failed('err.save', err); }
   }));
 
-  /* archive / restore */
-  const dArch = dq('#dArchive');
-  if (dArch) dArch.addEventListener('click', async () => {
+  /* ── archive / restore / delete ── */
+  q('#dArchive')?.addEventListener('click', async () => {
     const reason = await promptModal({
       title: t('dr.archiveModal.title'),
       body: t('dr.archiveModal.body'),
@@ -593,22 +737,21 @@ export async function openRecord(uid) {
     if (reason === null) return;
     try {
       await setStatus(uid, 'archived', reason);
-      /* Archiving is reversible in the data model and was not reversible in the
-         UI: the toast said "archived" and left. Restoring is the exact inverse
-         and needs nothing this screen has thrown away, so it is offered here. */
+      /* Archiving is reversible in the data model and was not reversible in
+         the UI: the toast said "archived" and left. Restoring is the exact
+         inverse and needs nothing this screen has thrown away. */
       toast(t('dr.archived'), 'ok', {
         action: {
           label: t('common.undo'),
           run: () => setStatus(uid, 'active')
-            .then(() => { toast(t('dr.restored'), 'ok'); openRecord(uid); refreshBehind(); })
+            .then(() => { toast(t('dr.restored'), 'ok'); save(); })
             .catch(err => failed('err.status', err)),
         },
       });
-      openRecord(uid); refreshBehind();
+      save();
     } catch (err) { failed('err.status', err); }
   });
-  const dRest = dq('#dRestore');
-  if (dRest) dRest.addEventListener('click', async () => {
+  q('#dRestore')?.addEventListener('click', async () => {
     try {
       await setStatus(uid, 'active');
       /* No Undo on this one, deliberately: putting a record back to archived
@@ -616,12 +759,20 @@ export async function openRecord(uid) {
          screen still knows. An "undo" that silently rewrites the reason would
          be worse than no undo at all. */
       toast(t('dr.restored'), 'ok');
-      openRecord(uid); refreshBehind();
+      save();
     } catch (err) { failed('err.status', err); }
   });
+  q('#dDelete').addEventListener('click', () => openPurgeModal(uid));
 
-  /* relations */
-  rec.querySelectorAll('[data-delrel]').forEach(b => b.addEventListener('click', async () => {
+  q('#dMore').addEventListener('click', e => {
+    openDropMenu(e.currentTarget, [
+      { label: t('mm.title'), run: () => openMetaModal(m) },
+      { label: t('a11y.copyUid', { uid }), run: () => copyUid(uid) },
+    ], { align: 'right' });
+  });
+
+  /* ── relations ── */
+  view.querySelectorAll('[data-delrel]').forEach(b => b.addEventListener('click', async () => {
     const ok = await confirmModal({
       title: t('dr.rel.removeModal.title'),
       body: t('dr.rel.removeModal.body'),
@@ -634,11 +785,11 @@ export async function openRecord(uid) {
         action: {
           label: t('common.undo'),
           run: () => relink(uid, rel)
-            .then(() => { toast(t('dr.rel.created'), 'ok'); openRecord(uid); })
+            .then(() => { toast(t('dr.rel.created'), 'ok'); save(); })
             .catch(err => failed('err.relation', err)),
         },
       } : {});
-      openRecord(uid);
+      save();
     } catch (err) { failed('err.relation', err); }
   }));
 
@@ -650,7 +801,7 @@ export async function openRecord(uid) {
      Peers already related are deliberately NOT excluded: two memories can
      be tied twice under different types ('relates_to' and 'supersedes'),
      and only an identical triple is refused by the API. */
-  dq('#relAdd').addEventListener('click', async () => {
+  q('#relAdd').addEventListener('click', async () => {
     const chosen = await pickMemories({
       title: t('dr.rel.pickTitle'),
       exclude: uid,
@@ -674,42 +825,88 @@ export async function openRecord(uid) {
          says how far it got rather than implying all or nothing */
       failed('err.relation', err, made ? { detail: t('dr.rel.createdN', { n: made }) } : {});
     }
-    openRecord(uid);
+    save();
   });
 
-  /* history diffs (lazy) */
+  /* ── history diffs (lazy) ── */
   const histRev = m.edit_history.slice().reverse();
-  rec.querySelectorAll('[data-diff]').forEach(b => b.addEventListener('click', () => {
+  view.querySelectorAll('[data-diff]').forEach(b => b.addEventListener('click', () => {
     const i = b.dataset.diff;
-    const body = rec.querySelector(`[data-diffbody="${i}"]`);
+    const body = view.querySelector(`[data-diffbody="${i}"]`);
     if (body.hidden && !body.innerHTML)
       body.innerHTML = renderDiff(histRev[i].prev_content, histRev[i].new_content);
     body.hidden = !body.hidden;
     b.setAttribute('aria-expanded', body.hidden ? 'false' : 'true');
     b.textContent = body.hidden ? t('dr.hist.show') : t('dr.hist.hide');
   }));
+}
 
-  /* purge */
-  const dzPhrase = dq('#dzPhrase'), dzGo = dq('#dzGo'), dzState = dq('#dzState');
-  const dzWant = `DELETE ${uid}`;
-  dzPhrase.addEventListener('input', () => {
-    const typed = dzPhrase.value;
-    const ok = typed === dzWant;
-    dzGo.disabled = !ok;
-    /* A greyed-out button cannot say why it is grey, and this one guards the
-       only irreversible act in the app. So the field answers for it: silent
-       until something is typed, then either what is still wrong or that the
-       button is now live. */
-    dzState.className = `dz-state${ok ? ' armed' : ''}`;
-    dzState.textContent = ok ? t('dz.armed') : typed ? t('dz.mismatch') : '';
+function step(uid, delta) {
+  const pos = stepPos(uid);
+  if (!pos) return;
+  const to = delta < 0 ? pos.prev : pos.next;
+  if (to < 0 || to >= seq.length) return;
+  stepped = true;
+  openRecord(seq[to]);
+}
+
+/* ─── writing a version ───────────────────────────────────────────────── */
+
+async function saveFields(view, m, uid, fields) {
+  const boxes = [...view.querySelectorAll('[data-src]')];
+  if (!boxes.length) return;
+  const note = view.querySelector('[data-note]')?.value || '';
+  const sectioned = fields.length > 1 || (fields[0] && fields[0].key !== '');
+  /* A sectioned body is built from its fields rather than typed, so the
+     server can hold it to the shape its type is supposed to have. Editing
+     ONE field still sends the whole set -- the others come back from what
+     was read, unchanged. */
+  const [path, body] = sectioned
+    ? [`/api/memories/${seg(uid)}/sections`, {
+        sections: Object.fromEntries(fields.map(f => {
+          const box = boxes.find(b => b.dataset.src === f.key);
+          return [f.key, box ? box.value : (f.text || '')];
+        })),
+        note,
+      }]
+    : [`/api/memories/${seg(uid)}/content`, { content: boxes[0].value, note }];
+  try {
+    await api(path, { body });
+    toast(t('dr.contentUpdated'), 'ok');
+    resetEditing(uid);
+    refreshBehind();
+  } catch (err) { failed('err.save', err); }
+}
+
+/* ─── metadata, edited in place ───────────────────────────────────────── */
+
+async function addMeta(m, kind) {
+  const value = await promptModal({
+    title: kind === 'also' ? t('dr.meta.addDomain') : t('dr.meta.addTag'),
+    label: kind === 'also' ? t('dr.meta.domain') : t('dr.meta.tags'),
+    okLabel: t('common.add'),
   });
-  dzGo.addEventListener('click', async () => {
-    try {
-      await api(`/api/memories/${seg(uid)}/purge`, { body: { confirm: dzPhrase.value } });
-      toast(t('dz.purged'), 'ok');
-      closeRecord(); refreshBehind();
-    } catch (err) { failed('err.purge', err); }
-  });
+  if (value === null || !value.trim()) return;
+  const body = kind === 'also'
+    ? { also: [...(m.also || []), value.trim()].join(', ') }
+    : { tags: [...(m.tags || '').split(',').map(x => x.trim()).filter(Boolean),
+               value.trim()].join(', ') };
+  await writeMeta(m.uid, body);
+}
+
+async function dropMeta(m, kind, value) {
+  const body = kind === 'also'
+    ? { also: (m.also || []).filter(p => p !== value).join(', ') }
+    : { tags: (m.tags || '').split(',').map(x => x.trim()).filter(x => x && x !== value).join(', ') };
+  await writeMeta(m.uid, body);
+}
+
+async function writeMeta(uid, body) {
+  try {
+    await api(`/api/memories/${seg(uid)}/meta`, { body });
+    invalidateDomains();
+    refreshBehind();
+  } catch (err) { failed('err.save', err); }
 }
 
 function openMetaModal(m) {
@@ -750,13 +947,58 @@ function openMetaModal(m) {
       closeModal();
       toast(r.changed.length ? t('mm.updated', { list: r.changed.join(', ') }) : t('mm.nothing'), 'ok');
       invalidateDomains();
-      openRecord(m.uid); refreshBehind();
+      refreshBehind();
     } catch (err) { failed('err.save', err); }
   };
 }
 
+/* ─── the one irreversible act ────────────────────────────────────────────
+   It was a <details> at the bottom of a column. As a button in the footer it
+   asks for the same thing it always did: the phrase typed out, printed once
+   and never pre-filled, with the reversible option named beside it. */
+
+function openPurgeModal(uid) {
+  const want = `DELETE ${uid}`;
+  const modal = openModal({
+    title: t('dz.summary'),
+    bodyHTML: `
+      <div class="dz-hint">${t('dz.hint')}</div>
+      <!-- The phrase is printed here and is not the field's placeholder: an
+           empty field has to read as empty. -->
+      <div class="dz-type">${t('dz.typeThis', { phrase: `<code>DELETE ${esc(uid)}</code>` })}</div>
+      <div class="dz-row">
+        <input type="text" id="dzPhrase" aria-label="${t('dz.phrase.aria')}" autocomplete="off">
+      </div>
+      <div class="dz-state" id="dzState" role="status"></div>`,
+    footHTML: `<button class="btn" data-x>${t('common.cancel')}</button>
+               <button class="btn btn-danger" data-ok disabled>${t('dz.button')}</button>`,
+  });
+  const phrase = modal.querySelector('#dzPhrase');
+  const state = modal.querySelector('#dzState');
+  const okBtn = modal.querySelector('[data-ok]');
+  /* A greyed-out button cannot say why it is grey, and this one guards the
+     only irreversible act in the app. So the field answers for it: silent
+     until something is typed, then either what is still wrong or that the
+     button is now live. */
+  phrase.addEventListener('input', () => {
+    const ok = phrase.value === want;
+    okBtn.disabled = !ok;
+    state.className = `dz-state${ok ? ' armed' : ''}`;
+    state.textContent = ok ? t('dz.armed') : phrase.value ? t('dz.mismatch') : '';
+  });
+  modal.querySelector('[data-x]').onclick = closeModal;
+  okBtn.onclick = async () => {
+    try {
+      await api(`/api/memories/${seg(uid)}/purge`, { body: { confirm: phrase.value } });
+      closeModal();
+      toast(t('dz.purged'), 'ok');
+      backTo('memories');
+    } catch (err) { failed('err.purge', err); }
+  };
+}
+
 /* line diff — plain LCS, plenty for memory-sized content */
-export function renderDiff(a, b) {
+function renderDiff(a, b) {
   const A = a.split('\n'), B = b.split('\n');
   if (A.length * B.length > 250000)
     return `<span class="diff-del">− ${esc(a.slice(0, 800))}…</span><span class="diff-add">+ ${esc(b.slice(0, 800))}…</span>`;

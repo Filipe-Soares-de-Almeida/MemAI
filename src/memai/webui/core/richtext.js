@@ -166,6 +166,16 @@ function list(lines, at, links) {
   };
 }
 
+/* The headings a body opens, in the order renderRich emits them as
+   `<h4 class="rt-h">`. A caller that lists them and then scrolls to the
+   nth `.rt-h` relies on that order, and on this reading the same lines the
+   renderer does -- both match against HEADING. */
+export function headings(body) {
+  return String(body ?? '').split('\n')
+    .map(line => HEADING.exec(line)?.[1].trim())
+    .filter(Boolean);
+}
+
 export function renderRich(body, links) {
   const lines = String(body ?? '').split('\n');
   const out = [];

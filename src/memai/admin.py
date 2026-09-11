@@ -9,11 +9,12 @@ make sense for a human curator -- bulk confidence triage, domain
 renames/merges, relation pruning, dedup review, FTS rebuilds,
 VACUUM/backup, and an audit trail over the edits table.
 
-Handlers do blocking SQLite work directly inside async endpoints; this
-is deliberate. The server is a single-user localhost tool, requests
-are short (the store is a few MB), and staying synchronous end-to-end
-preserves db.py's one-transaction-per-connect model: an exception
-before the context manager exits means nothing is committed.
+Handlers are written synchronously against db.py, and `api` runs each
+one in a worker thread. The whole handler -- connect, work, commit --
+stays on one thread, which preserves both db.py's
+one-transaction-per-connect model and sqlite3's same-thread rule. It
+also keeps a slow handler off the event loop, so a scan does not stop
+the server from answering anything else (see maintenance/dedup).
 
 Destructive parity with the MCP tools is kept: archive (forget) is the
 default "delete", and purge demands the literal confirmation phrase
@@ -32,16 +33,18 @@ import errno
 import json
 import mimetypes
 import os
+import re
 import signal
 import socket
 import sqlite3
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import urlsplit
 
 import uvicorn
 from starlette.applications import Starlette
+from starlette.concurrency import run_in_threadpool
 from starlette.middleware import Middleware
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import FileResponse, JSONResponse, Response
@@ -84,6 +87,12 @@ GRAPH_LIMIT_MAX = 200_000
 
 LOOPBACK_HOSTS = {"localhost", "127.0.0.1", "::1", "[::1]"}
 
+# How far back the health index compares itself. The store keeps no history
+# of a confidence or a relation, so the comparison is against a SNAPSHOT the
+# dashboard wrote on an earlier day (db.health_daily) -- and there is no
+# delta at all until one that old exists.
+HEALTH_DELTA_DAYS = 30
+
 
 # ---------------------------------------------------------------- helpers
 
@@ -91,6 +100,43 @@ def _snip(text: str, limit: int = SNIPPET_LIMIT) -> str:
     if len(text) <= limit:
         return text
     return text[:limit].rstrip() + "…"
+
+
+# The markup a body carries, as the renderer reads it (webui/core/richtext.js):
+# a heading between rules of '=', bold between '**', a code span between
+# backticks, a fence line, and a [[uid]] reference.
+_MARKUP = (
+    (re.compile(r"^\s*={2,}\s+(.+?)\s+={2,}\s*$", re.M), r"\1"),   # heading
+    (re.compile(r"^\s*```[A-Za-z0-9_+#-]*\s*$", re.M), ""),        # fence line
+    (re.compile(r"\*\*([^*\n]+)\*\*"), r"\1"),                     # bold
+    (re.compile(r"`([^`\n]+)`"), r"\1"),                           # code span
+    (re.compile(r"\[\[([^\]\n]+)\]\]"), r"\1"),                    # reference
+)
+
+
+def _plain(text: str) -> str:
+    """A body flattened to one line of prose, for a PREVIEW of it.
+
+    A preview identifies a memory; it is not read as a document. Left as
+    stored it put `**`, `===` and backticks on the screen -- and cutting
+    first, as a snippet must, could sever a `**` and leave the stray half
+    visible. So the markup goes before the cut, and the line breaks with it:
+    a preview sits on one line wherever one is shown.
+
+    Deliberately NOT applied to every _snip: the memories list, a diagram's
+    node label and the MCP payloads each have their own reason to hold what
+    was stored, and one sweep over all of them is a different change.
+    """
+    out = str(text or "")
+    for pattern, repl in _MARKUP:
+        out = pattern.sub(repl, out)
+    # a bullet is structure, and structure does not survive one line
+    out = re.sub(r"^\s*[-*+]\s+", "", out, flags=re.M)
+    # An opener nothing closed is markup too, and the pairs above leave it.
+    # A run of two or more asterisks is bold by construction; a single one is
+    # not, and `SELECT *` has to survive a preview intact.
+    out = re.sub(r"\*{2,}", "", out).replace("`", "")
+    return " ".join(out.split())
 
 
 def _paths(d: dict) -> dict:
@@ -146,10 +192,16 @@ def _peer_card(conn: sqlite3.Connection, uid: str) -> dict | None:
     row = db.get_memory(conn, uid)
     if row is None:
         return None
+    # `title` is what a peer is CALLED, and every view that previews one
+    # names it by that and keeps the body as the fallback and the tooltip
+    # (see shared.peerName). Without it here, the relation rail, the
+    # diagram's links and the optimization panes had only the body to show
+    # -- so a named memory was previewed by its opening line.
     return {
         "uid": row["uid"], "type": row["type"], "domain": row["domain"],
+        "title": row["title"],
         "status": row["status"], "confidence": row["confidence"],
-        "snippet": _snip(row["content"], 160), "created_at": row["created_at"],
+        "snippet": _snip(_plain(row["content"]), 160), "created_at": row["created_at"],
     }
 
 
@@ -211,6 +263,17 @@ def _backup(kind: str = "") -> Path:
 def api(handler):
     """Wrap a sync (request, payload) handler into an async JSON endpoint.
 
+    The handler runs in a worker thread, so a long one leaves the event
+    loop free to accept and route everything else. Its whole body --
+    including the db.connect block -- runs on that one thread, which is
+    what sqlite3's same-thread connections require.
+
+    A CPU-bound handler still slows a concurrent one down through the
+    GIL, but it does not stop the server. Handlers therefore reach the
+    store concurrently: writes serialize on SQLite itself, and
+    db.connect opens WAL with a 30s busy timeout, so a writer waits for
+    a writer rather than failing.
+
     ValueError -> 400 with the message (validation/guardrail failures);
     anything else -> 500. Body is parsed as JSON for mutating methods.
     """
@@ -222,7 +285,7 @@ def api(handler):
             except Exception:
                 payload = {}
         try:
-            return JSONResponse(handler(request, payload))
+            return JSONResponse(await run_in_threadpool(handler, request, payload))
         except ValueError as exc:
             return JSONResponse({"error": str(exc)}, status_code=400)
         except Exception as exc:  # pragma: no cover - defensive
@@ -231,6 +294,83 @@ def api(handler):
 
 
 # ---------------------------------------------------------------- overview
+
+# What pulls the health index down, as one countable defect each. `where` is
+# the predicate over active memories; `params` is the memory-list filter that
+# shows exactly those rows, so the number on the dashboard and the list the
+# button opens are the same set by construction. Order is the order they are
+# shown in: worst first, then by how much of the store each one covers.
+_SYMPTOMS: tuple[tuple[str, str, str, dict], ...] = (
+    ("contradicted", "bad",
+     "confidence = 'contradicted' AND (superseded_by IS NULL OR superseded_by = '')",
+     {"confidence": "contradicted"}),
+    ("stale", "warn",
+     "confidence = 'unverified' AND updated_at < :stale",
+     {"stale": "1", "sort": "updated_at", "dir": "asc"}),
+    ("due", "warn",
+     "review_after <> '' AND review_after <= :today",
+     {"due": "1"}),
+    ("unlinked", "warn",
+     "uid NOT IN (SELECT from_uid FROM relations UNION SELECT to_uid FROM relations)",
+     {"linked": "no"}),
+    ("untitled", "info",
+     "TRIM(title) = ''",
+     {"untitled": "1"}),
+    # A row whose tags are empty, or are nothing but the type every read
+    # already filters on: either way it carries no synonym, and BM25 can
+    # only reach it by quoting its own wording.
+    ("untagged", "info",
+     "TRIM(tags) = '' OR TRIM(tags) = type",
+     {"untagged": "1"}),
+)
+
+
+def _symptoms(conn: sqlite3.Connection, active: int) -> list[dict]:
+    """One row per countable defect, with the filter that lists it.
+
+    Deliberately NOT here: likely duplicates. Finding them is an O(n^2)
+    difflib sweep (db.dedup_candidates), which is a scan the operator asks
+    for -- /api/maintenance/dedup -- and not something a landing page runs
+    on every paint. The dashboard shows that row without a count until it
+    has been scanned.
+    """
+    today = db.today_iso()
+    stale = (datetime.fromisoformat(today)
+             - timedelta(days=db.STALE_DAYS)).isoformat()
+    out = []
+    for key, severity, clause, params in _SYMPTOMS:
+        count = conn.execute(
+            f"SELECT COUNT(*) FROM memories WHERE status = 'active' AND ({clause})",
+            {"today": today, "stale": stale}).fetchone()[0]
+        out.append({
+            "key": key, "severity": severity, "count": count,
+            "share": round(count / active, 4) if active else 0.0,
+            "params": {"status": "active", **params},
+        })
+    # A flow whose shape is broken is a defect of the same kind, counted in
+    # diagrams rather than in memories -- so it carries its own denominator
+    # and no share of the store.
+    flows = db.diagram_overview(conn)
+    broken = sum(1 for d in flows if d["issues"])
+    out.append({
+        "key": "diagrams", "severity": "info", "count": broken,
+        "of": len(flows), "share": 0.0, "params": {},
+    })
+    # Same shape, over the relations table: an edge whose endpoint no longer
+    # exists. There is no memory list to open -- both its endpoints are the
+    # problem -- so it carries an empty filter, and the view sends its
+    # button to the operation that clears them.
+    total_rels = conn.execute("SELECT COUNT(*) FROM relations").fetchone()[0]
+    orphans = conn.execute(
+        """SELECT COUNT(*) FROM relations
+           WHERE from_uid NOT IN (SELECT uid FROM memories)
+              OR to_uid NOT IN (SELECT uid FROM memories)""").fetchone()[0]
+    out.append({
+        "key": "orphans", "severity": "warn", "count": orphans,
+        "of": total_rels, "share": 0.0, "params": {},
+    })
+    return out
+
 
 def overview(request, payload) -> dict:
     dbfile = db.default_db_path()
@@ -252,6 +392,20 @@ def overview(request, payload) -> dict:
                 """SELECT substr(created_at, 1, 10) AS day, COUNT(*)
                    FROM memories GROUP BY day ORDER BY day DESC LIMIT 45""").fetchall())
         ]
+        # Confidence within each type: where the vetting is behind, which
+        # the store-wide split cannot say.
+        by_type_conf: dict[str, dict[str, int]] = {}
+        for tp, conf, n in conn.execute(
+                """SELECT type, confidence, COUNT(*) FROM memories
+                   WHERE status = 'active' GROUP BY type, confidence"""):
+            by_type_conf.setdefault(tp, {})[conf] = n
+        health = db.health_axes(conn)
+        db.health_snapshot(conn, health)
+        was = db.health_since(conn, HEALTH_DELTA_DAYS)
+        health["delta"] = health["score"] - was["score"] if was else None
+        health["delta_days"] = HEALTH_DELTA_DAYS
+        health["since"] = was["day"] if was else None
+        symptoms = _symptoms(conn, health["active"])
         domains = db.list_domains(conn)
         recent = [_summary(r, 150) for r in db.list_recent(conn, limit=8)]
     return {
@@ -269,6 +423,9 @@ def overview(request, payload) -> dict:
         },
         "by_type": by_type,
         "by_confidence": by_confidence,
+        "by_type_confidence": by_type_conf,
+        "health": health,
+        "symptoms": symptoms,
         "activity": activity,
         "domains": domains[:10],
         "recent": recent,
@@ -330,6 +487,34 @@ def project_move(request, payload) -> dict:
 
 # ---------------------------------------------------------------- memories
 
+def _defect_clauses(qp) -> tuple[list[str], list]:
+    """The defect filters a health symptom hands over, as SQL and its params.
+
+    One predicate per symptom that names a set of MEMORIES, worded exactly
+    as _SYMPTOMS words it -- the number on the dashboard and the list its
+    button opens have to be the same rows, and two spellings of "stale" is
+    how they stop being.
+    """
+    today = db.today_iso()
+    stale = (datetime.fromisoformat(today) - timedelta(days=db.STALE_DAYS)).isoformat()
+    clauses: list[str] = []
+    params: list = []
+    if qp.get("linked") == "no":
+        clauses.append("AND uid NOT IN (SELECT from_uid FROM relations "
+                       "UNION SELECT to_uid FROM relations)")
+    if qp.get("due") == "1":
+        clauses.append("AND review_after <> '' AND review_after <= ?")
+        params.append(today)
+    if qp.get("stale") == "1":
+        clauses.append("AND confidence = 'unverified' AND updated_at < ?")
+        params.append(stale)
+    if qp.get("untitled") == "1":
+        clauses.append("AND TRIM(title) = ''")
+    if qp.get("untagged") == "1":
+        clauses.append("AND (TRIM(tags) = '' OR TRIM(tags) = type)")
+    return clauses, params
+
+
 def list_memories(request, payload) -> dict:
     qp = request.query_params
     q = qp.get("q", "").strip()
@@ -338,6 +523,9 @@ def list_memories(request, payload) -> dict:
     status = qp.get("status", "")           # "" = all
     confidence = qp.get("confidence", "")
     session = qp.get("session", "")
+    # 'linked=no', 'due=1', 'stale=1', 'untitled=1', 'untagged=1'
+    # -- see _defect_clauses
+    defects, defect_params = _defect_clauses(qp)
     sort = qp.get("sort", "created_at")
     if sort not in _MEMORY_SORTS:
         sort = "created_at"
@@ -355,6 +543,11 @@ def list_memories(request, payload) -> dict:
                 hits = [h for h in hits if h["confidence"] == confidence]
             if session:
                 hits = [h for h in hits if h["session"] == session]
+            if defects:
+                keep = {r["uid"] for r in conn.execute(
+                    "SELECT uid FROM memories WHERE 1=1 " + " ".join(defects),
+                    defect_params)}
+                hits = [h for h in hits if h["uid"] in keep]
             # A pasted uid names one row, and nothing in the keyword index
             # matches on it: a uid appears in OTHER bodies as [[uid]], so the
             # search answers "what points at this" and never "this". Both are
@@ -380,6 +573,8 @@ def list_memories(request, payload) -> dict:
             if value:
                 where.append(f"AND {field} = ?")
                 params.append(value)
+        where.extend(defects)
+        params.extend(defect_params)
         clause = " ".join(where)
         total = conn.execute(f"SELECT COUNT(*) FROM memories WHERE {clause}", params).fetchone()[0]
         # The join is what makes 'recalls' sortable; the filters above name
@@ -616,13 +811,17 @@ def bulk(request, payload) -> dict:
     if len(uids) > BULK_MAX:
         raise ValueError(f"at most {BULK_MAX} uids per operation")
     reason = (payload.get("reason") or "").strip()
+    value = str(payload.get("value") or "").strip()
+    # Validated once, before the loop: an action that would fail on every row
+    # must not archive the first forty and then raise on the forty-first.
+    if action == "confidence" and value not in CONFIDENCES:
+        raise ValueError(f"value must be one of {CONFIDENCES}")
+    if action in ("tag", "rehome") and not value:
+        raise ValueError(f"{action} needs a value")
     done = 0
     with db.connect() as conn:
         for uid in uids:
             if action == "confidence":
-                value = payload.get("value", "")
-                if value not in CONFIDENCES:
-                    raise ValueError(f"value must be one of {CONFIDENCES}")
                 done += 1 if db.set_confidence(conn, uid, value) else 0
             elif action == "archive":
                 done += 1 if db.set_status(
@@ -632,8 +831,21 @@ def bulk(request, payload) -> dict:
                 done += 1 if db.set_status(
                     conn, uid, "active",
                     note=f"restored: {reason}" if reason else "") else 0
+            elif action == "tag":
+                # ADDS. Replacing the field over a selection would wipe every
+                # synonym those rows already carry, which is the half of the
+                # index a keyword search runs on.
+                row = db.get_memory(conn, uid)
+                if row is None:
+                    continue
+                merged = db.merge_tags(row["tags"], value)
+                if merged != row["tags"]:
+                    done += 1 if db.set_tags(conn, uid, merged, note="bulk") else 0
+            elif action == "rehome":
+                done += 1 if db.set_domain(conn, uid, value, note="bulk") else 0
             else:
-                raise ValueError("action must be confidence|archive|restore")
+                raise ValueError(
+                    "action must be confidence|archive|restore|tag|rehome")
     return {"ok": True, "affected": done}
 
 
@@ -1030,6 +1242,46 @@ def domains(request, payload) -> dict:
     return {"domains": result}
 
 
+def domain_detail(request, payload) -> dict:
+    """What one level of the tree holds, for the pane beside the columns.
+
+    Two lists, because they are two different facts and a pane that ran
+    them together would claim the second is filed where it is not:
+
+      filed     the memories whose OWN domain is exactly this path. Not the
+                subtree -- the columns are how you walk into a child.
+      crossing  the memories cross-listed here that live somewhere else.
+                memory_domains never holds a memory's own path or an
+                ancestor of it (see the schema), so every row it returns
+                for this path is filed outside it, and each carries the
+                branch it does live in.
+
+    Both are capped: this is a preview under a set of columns, and the
+    memory list is where a whole scope is read.
+    """
+    domain = db.normalize_domain(request.query_params.get("domain", ""))
+    if not domain:
+        raise ValueError("domain is required")
+    limit = _int_param(request, "limit", 6, 1, 30)
+    with db.connect() as conn:
+        filed = conn.execute(
+            """SELECT * FROM memories WHERE domain = ? AND status = 'active'
+               ORDER BY created_at DESC LIMIT ?""", (domain, limit)).fetchall()
+        filed_total = conn.execute(
+            "SELECT COUNT(*) FROM memories WHERE domain = ? AND status = 'active'",
+            (domain,)).fetchone()[0]
+        crossing = conn.execute(
+            """SELECT m.* FROM memory_domains dl JOIN memories m ON m.uid = dl.memory_uid
+               WHERE dl.domain = ? AND m.status = 'active'
+               ORDER BY m.created_at DESC LIMIT ?""", (domain, limit)).fetchall()
+    return {
+        "domain": domain,
+        "filed": [_summary(r, 160) for r in filed],
+        "filed_total": filed_total,
+        "crossing": [_summary(r, 160) for r in crossing],
+    }
+
+
 def rename_domain(request, payload) -> dict:
     """Rename, re-home or merge a domain, subdomains included.
 
@@ -1375,6 +1627,119 @@ def backup(request, payload) -> dict:
             "size": _file_size(dest)}
 
 
+def _shelf_row(path, meta: dict | None = None) -> dict:
+    row = {"name": path.name, "size": _file_size(path),
+           "mtime": datetime.fromtimestamp(path.stat().st_mtime,
+                                           tz=timezone.utc).isoformat()}
+    for key in ("label", "pinned"):
+        value = (meta or {}).get(key)
+        if value:
+            row[key] = value
+    return row
+
+
+def backups(request, payload) -> dict:
+    """The whole backup shelf of the active project, and its archives.
+
+    `health` carries a short list of backups for the summary strip; this is
+    the one the shelf is drawn from, so it is not truncated -- a file the
+    list does not show cannot be selected or archived. Each archive reports
+    what it costs on disk and what it holds uncompressed, because the second
+    number is what archiving it saved.
+    """
+    project = db.active_project()
+    meta = db.shelf_meta(project)
+    archives = []
+    for path in db.archive_files(project):
+        members = [{**m, **{k: v for k, v in (meta.get(m["name"]) or {}).items()
+                            if k == "label"}}
+                   for m in db.archive_members(path)]
+        archives.append({**_shelf_row(path), "count": len(members),
+                         "raw": sum(m["size"] for m in members),
+                         "members": members})
+    return {"project": project,
+            "shelf": [_shelf_row(p, meta.get(p.name)) for p in db.backup_files(project)],
+            "archives": archives}
+
+
+def archive(request, payload) -> dict:
+    """Zip the named backups into this month's archive and take them off the
+    shelf. Merges into the archive when one is already there for the month."""
+    names = payload.get("names") or []
+    if not isinstance(names, list) or not names:
+        raise ValueError("names must be a non-empty list")
+    project = db.active_project()
+    raw = 0
+    shelf = db.backups_dir(project)
+    for name in names:
+        path = shelf / str(name)
+        if path.is_file():
+            raw += _file_size(path)
+    dest = db.archive_backups(project, [str(n) for n in names])
+    return {"ok": True, "archive": dest.name, "added": len(names),
+            "raw": raw, "size": _file_size(dest)}
+
+
+def name_backup(request, payload) -> dict:
+    """Give one backup a name, or take the one it has away."""
+    name = str(payload.get("name") or "")
+    label = str(payload.get("label") or "").strip()[:120]
+    entry = db.set_shelf_meta(db.active_project(), name, label=label)
+    return {"ok": True, "name": name, "label": entry.get("label", "")}
+
+
+def pin_backup(request, payload) -> dict:
+    """Pin or unpin one backup. A pinned backup cannot be ticked, so nothing
+    that acts on a selection can reach it."""
+    name = str(payload.get("name") or "")
+    pinned = bool(payload.get("pinned"))
+    entry = db.set_shelf_meta(db.active_project(), name, pinned=pinned)
+    return {"ok": True, "name": name, "pinned": bool(entry.get("pinned"))}
+
+
+def delete_backups(request, payload) -> dict:
+    """Remove backups from the shelf for good."""
+    names = payload.get("names") or []
+    if not isinstance(names, list) or not names:
+        raise ValueError("names must be a non-empty list")
+    project = db.active_project()
+    freed = 0
+    shelf = db.backups_dir(project)
+    for name in names:
+        path = shelf / str(name)
+        if path.is_file():
+            freed += _file_size(path)
+    count = db.delete_backups(project, [str(n) for n in names])
+    return {"ok": True, "deleted": count, "freed": freed}
+
+
+def restore_backup(request, payload) -> dict:
+    """Put a backup back over the active project, keeping the current state.
+
+    The copy is taken FIRST and named for what it is: restoring replaces
+    every memory in the store, and this file is the only way back to what
+    was there a moment ago.
+    """
+    name = str(payload.get("name") or "")
+    kept = _backup("pre-restore")
+    db.restore_backup(db.active_project(), name)
+    return {"ok": True, "name": name, "kept": kept.name}
+
+
+def unarchive(request, payload) -> dict:
+    """Put an archive's files back on the shelf and remove the archive."""
+    name = str(payload.get("name") or "")
+    restored = db.unarchive(db.active_project(), name)
+    return {"ok": True, "name": name, "restored": restored}
+
+
+def archive_delete(request, payload) -> dict:
+    """Remove an archive and everything inside it."""
+    name = str(payload.get("name") or "")
+    count = db.delete_archive(db.active_project(), name)
+    return {"ok": True, "name": name, "count": count}
+
+
 def sectionize(request, payload) -> dict:
     """Read every sectioned body in the store into its fields, once.
 
@@ -1493,6 +1858,11 @@ def lookup(request, payload) -> dict:
 
 # ---------------------------------------------------------------- optimization
 
+# The kinds whose payload rewrites the body, so a character count means
+# something for them and for nothing else.
+_CONTENT_KINDS = ("compact", "reword")
+
+
 def _suggestion_json(conn, row) -> dict:
     """Serialize a staged suggestion for the UI, decorated with target/peer cards."""
     d = {
@@ -1507,11 +1877,48 @@ def _suggestion_json(conn, row) -> dict:
         if target is not None:
             trow = db.get_memory(conn, row["target_uid"])
             target["tags"] = trow["tags"]
-            target["title"] = trow["title"]
             target["review_after"] = trow["review_after"]
+            # A rewrite is read as a pair, so Before has to be the whole body:
+            # `snippet` is cut to a preview, and against a complete After that
+            # reads as text the suggestion removes. The lengths come with it
+            # because neither pane can be counted from what it shows.
+            #
+            # Once it is applied the memory HOLDS the new body, so the row is
+            # no longer the Before of anything -- prev_state is. Reading the
+            # memory then puts the same string in both panes, and the pair
+            # says the rewrite changed nothing.
+            if row["kind"] in _CONTENT_KINDS:
+                before = trow["content"]
+                if row["status"] == "applied" and row["prev_state"]:
+                    before = json.loads(row["prev_state"]).get("content", before)
+                d["content_before"] = before
+                d["chars_before"] = len(before)
+                d["chars_after"] = len(d["payload"].get("new_content", ""))
+            # An unleak is read as a pair too, but of ONE field the payload
+            # names -- a body, a tag list, a source reference -- so the
+            # Before pane is that field rather than the content.
+            if row["kind"] == "unleak":
+                field = str(d["payload"].get("field", db.LEAK_FIELDS[0]))
+                before = trow[field] if field in db.LEAK_FIELDS else ""
+                if row["status"] == "applied" and row["prev_state"]:
+                    before = json.loads(row["prev_state"]).get(field, before)
+                d["text_before"] = before or ""
+                d["chars_before"] = len(d["text_before"])
+                d["chars_after"] = len(str(d["payload"].get("new_text", "")))
             # a crosslist suggestion replaces the whole set, so the Before
             # pane needs the whole set, not only the filed path
             target["also"] = db.get_domain_links(conn, row["target_uid"])
+            # Once a suggestion is applied the memory HOLDS what it proposed,
+            # so the target row is no longer the Before of anything --
+            # prev_state is. `_revert_kind` names its keys after the fields
+            # this card carries, so the overlay is the same one for every
+            # kind; a key the card does not carry is ignored.
+            if row["status"] == "applied" and row["prev_state"]:
+                prev = json.loads(row["prev_state"])
+                for field in ("tags", "title", "domain", "also", "confidence",
+                              "review_after", "status"):
+                    if field in prev:
+                        target[field] = prev[field]
         d["target"] = target
     peers = {}
     for key in ("from_uid", "to_uid", "keep_uid", "drop_uid"):
@@ -1527,6 +1934,18 @@ def _suggestion_json(conn, row) -> dict:
         ]
         if row["status"] == "applied" and row["prev_state"]:
             d["new_uid"] = json.loads(row["prev_state"]).get("new_uid")
+    # What each [[uid]] written in this card's prose points at. The bodies and
+    # the rationale are memory text, drawn by the same renderer the record
+    # uses, and that renderer needs the targets resolved to draw a link
+    # instead of the brackets somebody typed. One map for the whole card,
+    # because the three are read together.
+    prose = "\n".join(p for p in (
+        d["rationale"], d.get("content_before", ""),
+        str(d["payload"].get("new_content", "")),
+    ) if p)
+    links = db.body_links(conn, row["target_uid"] or "", prose)
+    if links:
+        d["body_links"] = links
     return d
 
 
@@ -1537,7 +1956,8 @@ def optimization_runs(request, payload) -> dict:
     kinds_by_run: dict[int, list[dict]] = {}
     for k in kind_rows:
         kinds_by_run.setdefault(k["run_id"], []).append(
-            {"kind": k["kind"], "total": k["total"], "pending": k["pending"]}
+            {"kind": k["kind"], "total": k["total"], "pending": k["pending"],
+             "rejected": k["rejected"]}
         )
     runs = []
     for r in rows:
@@ -1548,18 +1968,196 @@ def optimization_runs(request, payload) -> dict:
 
 
 def optimization_suggestions(request, payload) -> dict:
+    """A run's staged suggestions, or those of several runs at once.
+
+    `runs` takes a comma-separated list and is what the calendar's day rail
+    asks with: a day holds every run the agent staged that day -- thirteen
+    of them on one day of this store -- and the rail decides across all of
+    them. It is a list of RUN IDS and not a date on purpose: `created_at` is
+    UTC and the calendar's day is the reader's local one, so a date filtered
+    here would disagree with the grid that offered it. The client owns which
+    runs a day holds; this only serves them.
+    """
+    runs_param = (request.query_params.get("runs") or "").strip()
+    run_ids: list[int] = []
+    if runs_param:
+        try:
+            run_ids = [int(p) for p in runs_param.split(",") if p.strip()]
+        except ValueError:
+            raise ValueError("runs must be a comma-separated list of ints")
+        if not run_ids:
+            raise ValueError("runs was empty")
+    else:
+        try:
+            run_ids = [int(request.query_params.get("run", ""))]
+        except (TypeError, ValueError):
+            raise ValueError("run (int) or runs (comma-separated ints) required")
+    status = request.query_params.get("status", "")
+    # one kind at a time, because that is how the dashboard reviews them:
+    # a group is its own page, and pulling the other kinds' bodies with it
+    # would fetch every rewritten body in the run to show one of them
+    kind = request.query_params.get("kind", "")
+    items, runs = [], []
+    with db.connect() as conn:
+        for rid in run_ids:
+            run = db.get_optimization_run(conn, rid)
+            if run is None:
+                raise ValueError(f"unknown run: {rid}")
+            runs.append(dict(run))
+            for row in db.get_optimization_suggestions(conn, rid, status=status, kind=kind):
+                items.append(_suggestion_json(conn, row))
+    # `run` stays for the single-run callers that have always read it; `runs`
+    # is the whole set, in the order asked for.
+    return {"run": runs[0], "runs": runs, "suggestions": items}
+
+
+def _tag_terms(s: str) -> set[str]:
+    return {t.strip().casefold() for t in str(s or "").split(",") if t.strip()}
+
+
+def _run_ledger(conn: sqlite3.Connection, pending: list) -> dict:
+    """What the still-undecided half of a run would do to the store.
+
+    Every figure is COUNTED from the staged payloads next to the rows they
+    target -- nothing here projects a future state or scores it. `chars` is
+    negative when the run removes text, which is the normal direction.
+    """
+    uids: set[str] = set()
+    domains: set[str] = set()
+    relations = confirmed = archived = chars = 0
+    for row in pending:
+        payload = json.loads(row["payload"]) if row["payload"] else {}
+        kind, target = row["kind"], row["target_uid"]
+        if target:
+            uids.add(target)
+            trow = db.get_memory(conn, target)
+            if trow is not None and trow["domain"]:
+                domains.add(trow["domain"])
+        if kind in _CONTENT_KINDS and target:
+            trow = db.get_memory(conn, target)
+            if trow is not None:
+                chars += len(payload.get("new_content", "")) - len(trow["content"])
+        elif kind == "unleak":
+            field = str(payload.get("field", db.LEAK_FIELDS[0]))
+            trow = db.get_memory(conn, target) if target else None
+            if trow is not None and field in db.LEAK_FIELDS:
+                chars += len(str(payload.get("new_text", ""))) - len(trow[field] or "")
+        elif kind == "redomain":
+            domains.add(str(payload.get("domain", "")).strip())
+        elif kind == "crosslist":
+            domains.update(p for p in payload.get("also", []) if p)
+        elif kind == "set_confidence":
+            confirmed += payload.get("confidence") == "confirmed"
+        elif kind == "archive":
+            archived += 1
+        elif kind == "link":
+            relations += 1
+            uids.update(u for u in (payload.get("from_uid"), payload.get("to_uid")) if u)
+        elif kind == "merge":
+            relations += 1
+            archived += 1
+            uids.update(u for u in (payload.get("keep_uid"), payload.get("drop_uid")) if u)
+        elif kind == "distill":
+            sources = [u for u in payload.get("source_uids", []) if u]
+            relations += len(sources)
+            archived += len(sources)
+            uids.update(sources)
+            if payload.get("domain"):
+                domains.add(str(payload["domain"]).strip())
+    active = conn.execute(
+        "SELECT COUNT(*) FROM memories WHERE status = 'active'").fetchone()[0]
+    return {
+        "memories": len(uids), "active": active, "domains": len(domains - {""}),
+        "relations": relations, "confirmed": confirmed,
+        "archived": archived, "chars": chars,
+    }
+
+
+def _group_facts(conn: sqlite3.Connection, kind: str, rows: list) -> dict:
+    """The numbers one kind's sentence needs, beyond how many are pending.
+
+    The sentence itself is a catalog string (`op.what.<kind>`): the server
+    counts, the dashboard words it in the reader's language.
+    """
+    payloads = [json.loads(r["payload"]) if r["payload"] else {} for r in rows]
+    if kind in _CONTENT_KINDS:
+        chars = 0
+        for row, payload in zip(rows, payloads):
+            trow = db.get_memory(conn, row["target_uid"]) if row["target_uid"] else None
+            if trow is not None:
+                chars += len(payload.get("new_content", "")) - len(trow["content"])
+        return {"chars": chars}
+    if kind == "unleak":
+        chars = 0
+        for row, payload in zip(rows, payloads):
+            trow = db.get_memory(conn, row["target_uid"]) if row["target_uid"] else None
+            field = str(payload.get("field", db.LEAK_FIELDS[0]))
+            if trow is not None and field in db.LEAK_FIELDS:
+                chars += len(str(payload.get("new_text", ""))) - len(trow[field] or "")
+        return {"chars": chars}
+    if kind == "retag":
+        terms = 0
+        for row, payload in zip(rows, payloads):
+            trow = db.get_memory(conn, row["target_uid"]) if row["target_uid"] else None
+            before = _tag_terms(trow["tags"]) if trow is not None else set()
+            terms += len(_tag_terms(payload.get("tags", "")) - before)
+        return {"terms": terms}
+    if kind == "redomain":
+        paths = {str(p.get("domain", "")).strip() for p in payloads}
+        # `to` names the destination only when the group has exactly one
+        return {"paths": len(paths), "to": paths.pop() if len(paths) == 1 else ""}
+    if kind == "crosslist":
+        return {"paths": len({p for pl in payloads for p in pl.get("also", []) if p})}
+    if kind == "set_confidence":
+        levels = {p.get("confidence", "") for p in payloads}
+        return {"conf": levels.pop() if len(levels) == 1 else ""}
+    if kind == "link":
+        types = {str(p.get("relation_type", "relates_to")).strip() for p in payloads}
+        return {"rel": types.pop() if len(types) == 1 else ""}
+    if kind == "distill":
+        return {"sources": sum(len(p.get("source_uids", [])) for p in payloads)}
+    return {}
+
+
+def optimization_summary(request, payload) -> dict:
+    """The run's own head: how much of it was checked, and what it would do.
+
+    Everything here is read off the staged rows. No projection of the health
+    index: one suggestion moves it by 100/active/4 of a point, so a per-group
+    or per-suggestion "gain" rounds to zero on every row and a whole run
+    reaches +1 at best. The head reports `verified` instead, which varies
+    from one suggestion to the next.
+    """
     try:
         run_id = int(request.query_params.get("run", ""))
     except (TypeError, ValueError):
         raise ValueError("run query param (int) required")
-    status = request.query_params.get("status", "")
     with db.connect() as conn:
         run = db.get_optimization_run(conn, run_id)
         if run is None:
             raise ValueError(f"unknown run: {run_id}")
-        rows = db.get_optimization_suggestions(conn, run_id, status=status)
-        items = [_suggestion_json(conn, r) for r in rows]
-    return {"run": dict(run), "suggestions": items}
+        rows = db.get_optimization_suggestions(conn, run_id)
+        pending = [r for r in rows if r["status"] == "pending"]
+        ledger = _run_ledger(conn, pending)
+        groups = []
+        for kind in sorted({r["kind"] for r in rows}):
+            mine = [r for r in rows if r["kind"] == kind]
+            still = [r for r in mine if r["status"] == "pending"]
+            groups.append({
+                "kind": kind, "total": len(mine), "pending": len(still),
+                "applied": sum(r["status"] == "applied" for r in mine),
+                "rejected": sum(r["status"] == "rejected" for r in mine),
+                "verified": sum(bool((r["verified"] or "").strip()) for r in still),
+                "facts": _group_facts(conn, kind, still or mine),
+            })
+    return {
+        "run": dict(run),
+        "total": len(rows),
+        "pending": len(pending),
+        "verified": sum(bool((r["verified"] or "").strip()) for r in pending),
+        "ledger": ledger,
+        "groups": groups,
+    }
 
 
 def _ensure_run_backup(run_id: int) -> str | None:
@@ -1581,6 +2179,36 @@ def _ensure_run_backup(run_id: int) -> str | None:
     return str(dest)
 
 
+def _ensure_backup_for(run_ids: list[int]) -> str | None:
+    """One backup for a decision that spans several runs.
+
+    A day can hold thirteen runs, and taking a whole-database copy per run
+    would copy the same file thirteen times for one press. The runs in the
+    scope that have no backup yet share ONE fresh copy -- it is the state
+    before this action, which is what an undo of this action needs.
+
+    A run that already carries a backup keeps it: that copy is the state
+    before ITS first apply, which may have been days ago, and reusing it
+    here would hand back a restore point that never existed.
+    """
+    fresh = [rid for rid in run_ids if not _run_backup_path(rid)]
+    if not fresh:
+        return _run_backup_path(run_ids[0])
+    dest = str(_backup(f"optimize-run{fresh[0]}"))
+    with db.connect() as conn:
+        for rid in fresh:
+            db.set_run_backup(conn, rid, dest)
+    return _run_backup_path(run_ids[0]) or dest
+
+
+def _run_backup_path(run_id: int) -> str | None:
+    with db.connect() as conn:
+        run = db.get_optimization_run(conn, run_id)
+        if run is None:
+            raise ValueError(f"unknown run: {run_id}")
+        return run["backup_path"]
+
+
 def optimization_apply(request, payload) -> dict:
     sug_id = payload.get("id")
     if not isinstance(sug_id, int):
@@ -1596,21 +2224,59 @@ def optimization_apply(request, payload) -> dict:
     return {"ok": True, "backup": backup}
 
 
-def optimization_apply_all(request, payload) -> dict:
-    run_id = payload.get("run")
-    if not isinstance(run_id, int):
-        raise ValueError("run (int) required")
+def _decision_scope(payload) -> tuple[list[int], str, list[int] | None]:
+    """Which pending suggestions a bulk decision is about: (run_ids, kind, ids).
+
+    `run` names one run and `runs` a set of them -- a calendar day holds
+    every run staged that day, and deciding the day is one request rather
+    than one per run. `kind` narrows to a group. `ids` narrows to an explicit
+    selection and is INTERSECTED with the pending rows of those runs, so an
+    id from somewhere else, or one already decided, is dropped rather than
+    acted on; an `ids` that survives as empty decides nothing, which is what
+    an empty selection means.
+    """
+    runs = payload.get("runs")
+    if runs is not None:
+        if not (isinstance(runs, list) and runs
+                and all(isinstance(i, int) for i in runs)):
+            raise ValueError("runs must be a non-empty list of ints")
+        run_ids = list(runs)
+    else:
+        run_id = payload.get("run")
+        if not isinstance(run_id, int):
+            raise ValueError("run (int) or runs (list of ints) required")
+        run_ids = [run_id]
     kind = payload.get("kind", "")
     if not isinstance(kind, str):
         raise ValueError("kind must be a string")
+    ids = payload.get("ids")
+    if ids is not None and not (isinstance(ids, list)
+                                and all(isinstance(i, int) for i in ids)):
+        raise ValueError("ids must be a list of ints")
+    return run_ids, kind, ids
+
+
+def _pending_in_scope(conn, run_ids: list[int], kind: str, ids: list[int] | None) -> list:
+    rows = []
+    for rid in run_ids:
+        if db.get_optimization_run(conn, rid) is None:
+            raise ValueError(f"unknown run: {rid}")
+        rows.extend(db.get_optimization_suggestions(conn, rid, status="pending", kind=kind))
+    if ids is not None:
+        chosen = set(ids)
+        rows = [s for s in rows if s["id"] in chosen]
+    return rows
+
+
+def optimization_apply_all(request, payload) -> dict:
+    """Apply the pending suggestions of a run, a kind, a day, or a selection."""
+    run_ids, kind, ids = _decision_scope(payload)
     with db.connect() as conn:
-        run = db.get_optimization_run(conn, run_id)
-        if run is None:
-            raise ValueError(f"unknown run: {run_id}")
-        pending = db.get_optimization_suggestions(conn, run_id, status="pending", kind=kind)
+        pending = _pending_in_scope(conn, run_ids, kind, ids)
+        run = db.get_optimization_run(conn, run_ids[0])
     if not pending:
         return {"ok": True, "applied": 0, "failed": [], "backup": run["backup_path"]}
-    backup = _ensure_run_backup(run_id)
+    backup = _ensure_backup_for(run_ids)
     applied, failed = 0, []
     for s in pending:
         try:
@@ -1629,6 +2295,20 @@ def optimization_reject(request, payload) -> dict:
     with db.connect() as conn:
         db.reject_suggestion(conn, sug_id)
     return {"ok": True}
+
+
+def optimization_reject_all(request, payload) -> dict:
+    """Reject the pending suggestions of a scope, the way apply-all applies them.
+
+    Takes no backup: rejecting writes nothing to any memory, it only marks
+    the suggestion as answered.
+    """
+    run_ids, kind, ids = _decision_scope(payload)
+    with db.connect() as conn:
+        pending = _pending_in_scope(conn, run_ids, kind, ids)
+        for s in pending:
+            db.reject_suggestion(conn, s["id"])
+    return {"ok": True, "rejected": len(pending)}
 
 
 def optimization_revert(request, payload) -> dict:
@@ -1819,6 +2499,7 @@ routes = [
     Route("/api/config", api(get_config), methods=["GET"]),
     Route("/api/config", api(set_config), methods=["POST"]),
     Route("/api/domains", api(domains)),
+    Route("/api/domains/detail", api(domain_detail)),
     Route("/api/domains/rename", api(rename_domain), methods=["POST"]),
     Route("/api/domains/normalize", api(normalize_domains), methods=["POST"]),
     Route("/api/domains/status", api(domain_status), methods=["POST"]),
@@ -1829,6 +2510,14 @@ routes = [
     Route("/api/maintenance/prune-renders", api(prune_renders), methods=["POST"]),
     Route("/api/maintenance/vacuum", api(vacuum), methods=["POST"]),
     Route("/api/maintenance/backup", api(backup), methods=["POST"]),
+    Route("/api/maintenance/backups", api(backups)),
+    Route("/api/maintenance/archive", api(archive), methods=["POST"]),
+    Route("/api/maintenance/unarchive", api(unarchive), methods=["POST"]),
+    Route("/api/maintenance/archive-delete", api(archive_delete), methods=["POST"]),
+    Route("/api/maintenance/backup-name", api(name_backup), methods=["POST"]),
+    Route("/api/maintenance/backup-pin", api(pin_backup), methods=["POST"]),
+    Route("/api/maintenance/backup-delete", api(delete_backups), methods=["POST"]),
+    Route("/api/maintenance/backup-restore", api(restore_backup), methods=["POST"]),
     Route("/api/projects", api(projects), methods=["GET"]),
     Route("/api/projects", api(project_create), methods=["POST"]),
     Route("/api/projects/active", api(project_activate), methods=["POST"]),
@@ -1841,9 +2530,11 @@ routes = [
     Route("/api/optimization/runs", api(optimization_runs), methods=["GET"]),
     Route("/api/optimization/runs/{run_id:int}", api(optimization_delete_run), methods=["DELETE"]),
     Route("/api/optimization/suggestions", api(optimization_suggestions), methods=["GET"]),
+    Route("/api/optimization/summary", api(optimization_summary), methods=["GET"]),
     Route("/api/optimization/apply", api(optimization_apply), methods=["POST"]),
     Route("/api/optimization/apply-all", api(optimization_apply_all), methods=["POST"]),
     Route("/api/optimization/reject", api(optimization_reject), methods=["POST"]),
+    Route("/api/optimization/reject-all", api(optimization_reject_all), methods=["POST"]),
     Route("/api/optimization/revert", api(optimization_revert), methods=["POST"]),
     Route("/api/audit", api(audit)),
     Route("/api/lookup", api(lookup)),

@@ -6,7 +6,7 @@
    Display labels bake once per page load -- t() is resolved at import
    time, which is safe because a language switch reloads the page. */
 
-import { $, esc, cssVar, fmtBytes, fmtInt } from './dom.js';
+import { $, esc, cssVar } from './dom.js';
 import { api } from './api.js';
 import { icon } from './icons.js';
 import { fixedItems, pickerFor, wirePicker } from './pick.js';
@@ -39,6 +39,74 @@ export const REL_SUGGEST = ['relates_to', 'supersedes', 'contradicts', 'duplicat
 export const DG_REL_SUGGEST = ['explains', 'contradicts', 'relates_to'];
 
 const REL_OTHER = '__other';
+
+/* What a relation type is CALLED, wherever one is shown.
+
+   The picker has translated its options since it was built; every place that
+   READ a relation back printed the stored string instead, so the same edge
+   was "Substitui" while you were choosing it and `supersedes` once it
+   existed. The stored value is what queries and the MCP tools use, so it is
+   not replaced -- it moves to the title (see relTypeTitle).
+
+   The set is open: db accepts any string and relations predating either
+   suggestion list are still editable, so a type with no entry falls back to
+   itself rather than to the key. */
+export function relLabel(type) {
+  const raw = String(type || '').trim();
+  if (!raw) return '';
+  const key = `rel.${raw}`;
+  const label = t(key);
+  return label === key ? raw : label;
+}
+
+/* Empty when the label IS the stored string -- a tooltip repeating what is
+   already on screen is noise. */
+export const relTypeTitle = type => {
+  const raw = String(type || '').trim();
+  return relLabel(raw) === raw ? '' : t('rel.raw', { type: raw });
+};
+
+/* What a curation KIND is called on screen.
+
+   Same arrangement as relLabel above, and for the same reason: `retag` and
+   `set_confidence` are the identifiers the MCP tool takes and the database
+   stores, and a reader deciding whether to apply one should not have to
+   read them as English. The stored spelling moves to the title.
+
+   The set is open -- db.SUGGESTION_KINDS grows, and a run staged by an
+   older build can carry a kind this catalog has never heard of -- so a kind
+   with no entry falls back to itself rather than to the key. */
+export function kindLabel(kind) {
+  const raw = String(kind || '').trim();
+  if (!raw) return '';
+  const key = `kind.${raw}`;
+  const label = t(key);
+  return label === key ? raw : label;
+}
+
+/* Empty when the label IS the stored string, like relTypeTitle. */
+export const kindTitle = kind => {
+  const raw = String(kind || '').trim();
+  return kindLabel(raw) === raw ? '' : t('kind.raw', { kind: raw });
+};
+
+/* How a peer memory is NAMED wherever one is previewed.
+
+   Its title, with its body as the fallback for a memory that has none --
+   `untitled` is a defect Health counts, so a name cannot be assumed -- and
+   as the tooltip when a title is there. `named` says which of the two came
+   back, so a row naming itself reads at full contrast and one falling back
+   to its body stays as quiet as the body it shows (.mem-named).
+
+   The memories list has worked this way since it was built. The relation
+   rail, the diagram's links and the optimization panes previewed a peer by
+   its opening line even when it had a name, because _peer_card did not
+   send one. */
+export const peerName = peer => {
+  const title = String(peer?.title || '').trim();
+  const body = String(peer?.snippet || '').trim();
+  return { text: title || body, hover: title ? body : '', named: !!title };
+};
 
 /* A relation type was a text input behind a <datalist>, and admin.css hides
    the native datalist indicator -- so the field looked like free text and
@@ -84,9 +152,36 @@ export function wireRelTypeField(root, { selId, customId, options, onPick }) {
   return () => (btn.dataset.v === REL_OTHER ? custom.value.trim() : btn.dataset.v);
 }
 
+/* What a suggestion KIND does to a memory, as one of the six field roles the
+   theme already declares (--f-*, see admin.css).
+
+   Not a palette of its own: the hues the comp picked for these ARE that
+   ramp, and what a kind's colour has to say is what it DOES -- connect,
+   rewrite, decide, name, defer, remove -- which is exactly what the roles
+   are for. Two kinds doing the same kind of thing share a hue, and the
+   label beside the mark says which one it is.
+
+   Deliberately NOT the --t-* type ramp: painting a `reword` in the orange
+   that means "note" everywhere else in this UI is a bug this file has
+   already fixed once (see the note on .opt-kind). */
+export const KIND_ROLE = {
+  link: 'aim', crosslist: 'aim',
+  reword: 'hold', compact: 'hold', distill: 'hold', unleak: 'hold',
+  set_confidence: 'ask', redomain: 'ask',
+  retitle: 'go', retag: 'go',
+  review: 'next',
+  archive: 'stop', merge: 'stop',
+};
+
+export const kindColor = kind => `var(--f-${KIND_ROLE[kind] || 'aim'})`;
+
 export const typeColor = tp => (TYPES[tp] || {}).color || '#9e9e9e';
 export const typeClass = tp => TYPES[tp] ? `t-${tp}` : '';
 
+/* The dot inside the chip is the type's FILL colour and the name is its
+   ink -- both steps of one ramp, one class setting both (see .type-tag).
+   `.dot` on its own stays for the places that are a mark beside something
+   else: a legend, a picker row, a graph card. */
 export const typeTag = tp =>
   `<span class="type-tag ${typeClass(tp)}"><span class="dot"></span>${esc(tp)}</span>`;
 
@@ -125,6 +220,31 @@ export const sectionLabel = (type, section) => {
 export const sectionLabelHTML = (type, section) =>
   `<span class="sec-label-text" title="${esc(section.label)}">`
   + `${esc(sectionLabel(type, section))}</span>`;
+
+/* What a field DOES, keyed by the section key it is written under. The type
+   palette says what a memory IS; this says what one of its blocks is for,
+   and the meaning is the same across types: what not to do, what to do
+   instead, what is settled, what is still in flight, what is waiting on a
+   decision, what is left for next time.
+   The twelve keys of SECTION_SPEC do not collide between types, so one flat
+   map covers all of them. A type with no sections has no key and falls back
+   to its own colour. */
+const SECTION_ROLE = {
+  pattern: 'stop', why_wrong: 'hold', instead: 'go',
+  intent: 'aim', established: 'go', pursuing: 'hold', open_questions: 'ask',
+  hypothesis: 'hold', reasoning: 'aim', result: 'go',
+  revised_belief: 'ask', next_time: 'next',
+};
+
+/* The pair of custom properties a block's mark and label are drawn from:
+   --h is the fill (the dot), --h-ink the letter. Both steps, because one
+   colour cannot do both jobs on this ground -- see the note on --t-*. */
+export const sectionHue = (type, key) => {
+  const role = SECTION_ROLE[key];
+  return role
+    ? `--h: var(--f-${role}); --h-ink: var(--f-${role}-ink)`
+    : `--h: var(--t-${type}); --h-ink: var(--t-${type}-ink)`;
+};
 
 /* ─── the two closed vocabularies, as picker rows ────────────────────────
    A type and a confidence are identified everywhere else in this UI by a
@@ -300,18 +420,3 @@ export const invalidateDomains = () => { cache = null; };
 /* The last fetched list without a round-trip, for a datalist that is only
    a convenience -- an empty one is not worth blocking a modal on. */
 export const cachedDomains = () => cache || [];
-
-/* ─── rail ───────────────────────────────────────────────────────────── */
-
-export function updateRail(o) {
-  $('#railHealth').innerHTML = `
-    <div class="rh-row"><span>${t('rail.db')}</span><b>${fmtBytes(o.db.size)}</b></div>
-    <div class="rh-row"><span>${t('rail.active')}</span><b>${fmtInt(o.totals.active)}</b></div>`;
-  $('#dbBadge').textContent = t('badge.active', { n: fmtInt(o.totals.active) });
-  $('#dbBadge').title = o.db.path;
-}
-
-/* The rail from /api/overview, for the moments no view is about to hand the
-   payload over itself: the first paint off Overview, a project switch, a
-   move to another project. */
-export const refreshRail = () => api('/api/overview').then(updateRail).catch(() => {});

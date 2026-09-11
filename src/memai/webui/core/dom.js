@@ -43,6 +43,27 @@ export function fmtDate(iso) {
   return `${pad2(d.getDate())} ${MONTHS[d.getMonth()]}${year} · ${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
 }
 
+/* A LOCAL calendar day as YYYY-MM-DD, and the way back.
+
+   Timestamps are stored UTC (db.now_iso), and a day is the day the reader
+   was living: a run staged at 23:30 belongs to that evening, not to the
+   next morning in Greenwich. Grouping by a slice of the ISO string, or by
+   `date(created_at)` on the server, files it under the wrong day for every
+   reader west of it.
+
+   fromKey is the inverse, and it is a real constructor rather than
+   `new Date(key)`: that parses a bare date as UTC and lands on the previous
+   day west of Greenwich -- the same bug from the other side.  */
+export const dayKey = d =>
+  `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+
+export const monthKey = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+
+export function fromKey(key) {
+  const [y, m, d] = String(key).split('-').map(Number);
+  return new Date(y, (m || 1) - 1, d || 1);
+}
+
 /* A calendar day (YYYY-MM-DD), for an axis label. Uses the same month names
    as fmtDate: this was a slice into the string, which numbered the month in
    every language whether or not that language numbers months. */

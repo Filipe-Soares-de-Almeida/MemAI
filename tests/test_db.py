@@ -152,3 +152,92 @@ def test_list_recent_tag_filter(conn):
     db.insert_memory(conn, type="note", content="two", tags="loader")
     rows = db.list_recent(conn, tag="schema")
     assert [r["uid"] for r in rows] == [a]
+
+
+# Two paragraphs on unrelated engineering subjects, same language, similar
+# length: the shape a character-multiset measure cannot tell from a copy.
+_UNRELATED_A = (
+    "The queue drain worker retries a failed batch three times before it moves "
+    "the batch to the dead letter table. Each retry waits twice as long as the "
+    "one before, starting at two seconds, and the third failure writes the "
+    "batch id and the last error into the audit row."
+)
+_UNRELATED_B = (
+    "The report export runs on a schedule and rebuilds the search index while "
+    "it holds no lock, so a reader never waits for it. When a column is added "
+    "the whole index is dropped and written again, because the engine has no "
+    "statement that alters one in place."
+)
+
+
+def test_dedup_candidates_ignore_unrelated_prose(conn):
+    """Same language and length is not similarity -- only a shared sequence is."""
+    db.insert_memory(conn, type="note", content=_UNRELATED_A)
+    db.insert_memory(conn, type="note", content=_UNRELATED_B)
+    assert db.dedup_candidates(conn, threshold=0.6) == []
+
+
+def test_dedup_candidates_score_is_the_word_sequence_overlap(conn):
+    """The reported ratio is what the two texts actually share, not a bound."""
+    db.insert_memory(conn, type="note", content=_UNRELATED_A)
+    db.insert_memory(conn, type="note", content=_UNRELATED_A + " A fourth attempt never happens.")
+    pairs = db.dedup_candidates(conn, threshold=0.6)
+    assert len(pairs) == 1
+    assert pairs[0][2] > 0.9
+    assert pairs[0][2] == pytest.approx(db.text_ratio(pairs[0][0]["content"], pairs[0][1]["content"]))
+
+
+def test_ratio_bound_never_undercuts_the_ratio_it_gates():
+    """_pair_ratio drops no pair that would have reached the threshold.
+
+    The gate is only sound if the bound it applies cannot fall below the
+    ratio. Evenly spread edits are the hard shape: replacing every Nth
+    word leaves no window of N consecutive tokens intact while (N-1)/N of
+    the sequence still matches.
+    """
+    words = [f"palavra{i}" for i in range(300)]
+    base = " ".join(words)
+    for step in range(2, 13):
+        other = " ".join(w if i % step else "xxx" for i, w in enumerate(words))
+        a, b = db._Prepared(base), db._Prepared(other)
+        ratio = db.text_ratio(base, other)
+        assert db._ratio_bound(a, b) >= ratio - 1e-12, step
+        assert db._pair_ratio(a, b, 0.6) == (ratio if ratio >= 0.6 else 0.0), step
+
+
+def test_similar_memories_stay_quiet_on_unrelated_neighbours(conn):
+    """A write in a busy domain is only warned about a real collision."""
+    for i in range(6):
+        db.insert_memory(conn, type="note", domain="acme/x100",
+                         content=f"{_UNRELATED_B} Run {i} finished.")
+    uid = db.insert_memory(conn, type="note", domain="acme/x100", content=_UNRELATED_A)
+    assert db.similar_memories(conn, uid) == []
+    twin = db.insert_memory(conn, type="note", domain="acme/x100", content=_UNRELATED_A)
+    assert [h["uid"] for h in db.similar_memories(conn, twin)] == [uid]
+
+
+def test_search_collapse_keeps_unrelated_results(conn):
+    """Collapsing hides a copy of one fact, never a second fact."""
+    db.insert_memory(conn, type="note", domain="acme", content=_UNRELATED_A)
+    db.insert_memory(conn, type="note", domain="acme", content=_UNRELATED_B)
+    results = db.search_ranked(conn, "batch index table", limit=10, collapse=True)
+    assert len(results) == 2
+    assert all(not r.get("collapsed") for r in results)
+
+
+def test_bound_of_one_is_not_a_score_of_one(conn):
+    """A pair the bound cannot rule out is still scored, not accepted.
+
+    Two texts holding the same words in a different order: every measure
+    over an unordered bag of characters or tokens reads them as identical,
+    so the bound is 1.0 and only the sequence separates them.
+    """
+    shuffled = " ".join(sorted(_UNRELATED_B.split()))
+    assert db._ratio_bound(db._Prepared(_UNRELATED_B), db._Prepared(shuffled)) == 1.0
+    assert db.text_ratio(_UNRELATED_B, shuffled) < 0.5
+
+    db.insert_memory(conn, type="note", domain="acme", content=_UNRELATED_B)
+    db.insert_memory(conn, type="note", domain="acme", content=shuffled)
+    assert db.dedup_candidates(conn, threshold=0.6) == []
+    results = db.search_ranked(conn, "index lock reader", limit=10, collapse=True)
+    assert all(not r.get("collapsed") for r in results)

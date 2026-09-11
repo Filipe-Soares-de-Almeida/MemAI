@@ -23,20 +23,27 @@ import { t } from '../i18n.js';
 
 export { closePicker as closeDomainPicker };
 
-export const domainPickerHTML = ({ id, value = '', ariaLabel }) => pickerHTML({
-  id,
-  value,
-  label: value || t('common.allDomains'),
-  ariaLabel: ariaLabel || t('common.allDomains'),
-  title: value || t('common.allDomains'),
-});
+/* `anyLabel` is what the empty value says. It is "All domains" for a filter
+   and something else wherever '' does not mean "no filter" -- the bulk
+   re-home field, where it means "leave each memory where it is". */
+export const domainPickerHTML = ({ id, value = '', ariaLabel, anyLabel = '', cls = '' }) => {
+  const none = anyLabel || t('common.allDomains');
+  return pickerHTML({
+    id,
+    value,
+    cls,
+    label: value || none,
+    ariaLabel: ariaLabel || none,
+    title: value || none,
+  });
+};
 
 /* `domains` is the tree as the API hands it over; `onPick` gets a full path
    or '' and is what filters. */
-export function wireDomainPicker(root, { id, domains, onPick }) {
+export function wireDomainPicker(root, { id, domains, onPick, anyLabel = '' }) {
   wirePicker(root, {
     id,
-    items: query => rows(domains, query),
+    items: query => rows(domains, query, anyLabel),
     onPick,
     search: true,
     minWidth: 280,
@@ -66,12 +73,13 @@ function matching(domains, query) {
    root first of all -- in from the edge of its own list. Which means a column
    of the rail is anchored on the NAME of the level above it rather than on
    that level's twist, and .pick-row.dom-row says so with --dom-line. */
-function rows(domains, query) {
+function rows(domains, query, anyLabel = '') {
   const shown = matching(domains, query);
   const guides = domainGuides(shown);
+  const none = anyLabel || t('common.allDomains');
   return [
-    { value: '', label: t('common.allDomains'), cls: 'dom-row',
-      html: `<span class="dom-leaf any">${t('common.allDomains')}</span>` },
+    { value: '', label: none, cls: 'dom-row',
+      html: `<span class="dom-leaf any">${esc(none)}</span>` },
     ...shown.map((d, i) => ({
       value: d.domain,
       /* the whole path is what the filter matches and what the button shows;

@@ -21,20 +21,19 @@ import { $ } from './core/dom.js';
 import { paintIcons } from './core/icons.js';
 import { modalOpen, closeModal, toast } from './core/ui.js';
 import { pickerFor, setPickerValue, wirePicker, fixedItems } from './core/pick.js';
-import { refreshRail } from './core/shared.js';
 import { mountProjectPicker } from './core/projects.js';
-import { registerViews, route, go, parseHash } from './core/router.js';
+import { registerViews, route } from './core/router.js';
 import { I18N, t } from './i18n.js';
 
 import { renderOverview } from './views/overview.js';
-import { renderMemories, focusMemorySearch } from './views/memories.js';
+import { renderMemories } from './views/memories.js';
 import { renderGraph } from './views/graph.js';
 import { renderDiagrams } from './views/diagrams.js';
 import { renderDiagram } from './views/diagram.js';
 import { renderDomains } from './views/domains.js';
 import { renderMaintenance } from './views/maintenance.js';
 import { renderOptimization } from './views/optimization.js';
-import { openRecord } from './views/record.js';
+import { renderRecord, openRecord } from './views/record.js';
 import { openNewMemory } from './views/new-memory.js';
 
 registerViews({
@@ -46,25 +45,20 @@ registerViews({
   domains: renderDomains,
   maintenance: renderMaintenance,
   optimization: renderOptimization,
+  memory: renderRecord,
 }, { onRecord: openRecord });
 
-/* draw the shell's icons before the first route, so the rail is never
+/* draw the shell's icons before the first route, so the app bar is never
    shown mid-assembly (i18n does the same for its text, at import time) */
 paintIcons();
-/* the project switch on the rail needs a fetch of its own, so it fills in
+/* the project switch in the bar needs a fetch of its own, so it fills in
    when that lands */
 mountProjectPicker();
 
 $('#btnNew').addEventListener('click', openNewMemory);
 
-/* Language. The reload that applies it discards whatever is on screen and
-   unsaved, so it refuses while a dialog is holding a form -- including the
-   memory record, which is one of them now. Asking instead is not an option:
-   the confirmation would itself be a dialog over the form it is asking
-   about, and answering it would leave the stack pointing at nothing. */
-/* The language switch. Built here and not in i18n.js: switching RELOADS the
-   page, so it has to ask first when a form is open -- and asking means the
-   modal machinery, which imports i18n.js. */
+/* The language switch. Applying a language reloads the page, which discards
+   whatever a form is holding, so it refuses while a dialog is open. */
 const langItems = Object.entries(I18N.locales).map(([value, label]) => ({ value, label }));
 $('#langHost').innerHTML = pickerFor({
   id: 'langSel', value: I18N.locale, items: langItems,
@@ -80,31 +74,14 @@ wirePicker(document, { id: 'langSel', items: fixedItems(langItems), onPick: code
     return;
   }
   I18N.set(code);
-} });
-
+}, align: 'right' });
 
 document.addEventListener('keydown', e => {
-  if (e.key === 'Escape') {
-    /* One level, innermost first: a sub-form opened from the record closes
-       back to the record rather than dismissing both. */
-    if (modalOpen()) closeModal();
-    return;
-  }
-  /* `/` reaches the search wherever you are. It used to focus a field in the
-     topbar that only forwarded you here anyway; it takes the caret to the
-     real one now, and brings the view along when you are somewhere else.
-     focusMemorySearch() claims the caret on the next render when the field
-     does not exist yet, so the order is: ask first, then navigate. */
-  if (e.key === '/' && !/^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement.tagName)) {
-    e.preventDefault();
-    if (!focusMemorySearch()) go('memories');
-  }
+  /* One level, innermost first: a sub-form opened from the record closes
+     back to the record rather than dismissing both. */
+  if (e.key === 'Escape' && modalOpen()) closeModal();
 });
 
 /* wrapped, so the hashchange Event is not read as route's options */
 addEventListener('hashchange', () => route());
 route();
-/* Rail health on first paint. Overview renders from /api/overview and hands
-   the same payload to updateRail itself, so asking for it here as well put
-   two copies of one request in flight on the landing view. */
-if (parseHash().name !== 'overview') refreshRail();

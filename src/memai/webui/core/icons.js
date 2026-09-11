@@ -197,16 +197,54 @@ const ICONS = {
     body: `<path d="M6 3.2L10.8 8 6 12.8"/>`,
   },
 
-  /* free flight in the relations graph: a body and the path around it,
-     tilted, so it reads as depth rather than as a target */
-  'orbit': {
+  /* the handle a domain level is dragged by: two columns of dots, the
+     convention for "this can be picked up and moved" */
+  'grip': {
     viewBox: '0 0 16 16',
-    body: `<circle cx="8" cy="8" r="2.2" fill="currentColor" stroke="none"/>
-           <ellipse cx="8" cy="8" rx="6.8" ry="3" transform="rotate(-24 8 8)"/>`,
+    body: `<path d="M5.5 4h.01M10.5 4h.01M5.5 8h.01M10.5 8h.01M5.5 12h.01M10.5 12h.01"/>`,
+  },
+
+  /* a shelf of backups: the folder that holds one project's files */
+  'folder': {
+    viewBox: '0 0 16 16',
+    body: `<path d="M2 4.2a1 1 0 011-1h3.2l1.3 1.5H13a1 1 0 011 1v6.1a1 1 0 01-1 1H3a1 1 0 01-1-1z"/>`,
+  },
+  /* held back from a sweep: a diamond, filled when it is pinned and an
+     outline when it is not, so the two states differ in weight and not
+     only in colour */
+  'pin': {
+    viewBox: '0 0 16 16',
+    body: `<path d="M8 2.6l5.4 5.4L8 13.4 2.6 8z"/>`,
+  },
+  /* a zip of backups: the same box the folder is, closed down the middle */
+  'archive': {
+    viewBox: '0 0 16 16',
+    body: `<rect x="2.5" y="3.2" width="11" height="9.6" rx="1"/>
+           <path d="M8 3.4v9.2" stroke-dasharray="1.6 1.4"/>`,
+  },
+  /* one backup: a sheet with rows, the last one short */
+  'db-file': {
+    viewBox: '0 0 16 16',
+    body: `<rect x="2.5" y="2.5" width="11" height="11" rx="1.4"/>
+           <path d="M5.2 6.4h5.6M5.2 8.6h5.6M5.2 10.8h3.4"/>`,
+  },
+
+  /* the relations graph's two show toggles: one relation, and one name.
+     Two dots joined is the line the toggle hides; the tag is what a title
+     sits on. */
+  'relation': {
+    viewBox: '0 0 16 16',
+    body: `<circle cx="3.6" cy="8" r="2"/><circle cx="12.4" cy="8" r="2"/>
+           <path d="M5.7 8h4.6"/>`,
+  },
+  'label': {
+    viewBox: '0 0 16 16',
+    body: `<path d="M2.6 7.6V3.3a.8.8 0 01.8-.8h4.3l5.8 5.8a.8.8 0 010 1.1l-3.5 3.5a.8.8 0 01-1.1 0z"/>
+           <circle cx="5.5" cy="5.5" r="1"/>`,
   },
 };
 
-export const iconNames = () => Object.keys(ICONS);
+
 
 /* Markup for a template string.
 

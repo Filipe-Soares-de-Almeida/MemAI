@@ -20,16 +20,18 @@ carrying them, since a restore is a copy into place and nothing else.
 
 from __future__ import annotations
 
+import difflib
 import json
 import os
 import re
 import secrets
 import sqlite3
+import zipfile
 from contextlib import contextmanager
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
-from memai import sections
+from memai import guard, sections
 
 # Domain-casing policy. Stored in the `meta` table under DOMAIN_CASE_KEY and
 # enforced at every domain write path. 'preserve' keeps free-text casing;
@@ -338,6 +340,21 @@ CREATE TABLE IF NOT EXISTS optimization_suggestions (
 
 CREATE INDEX IF NOT EXISTS idx_optsug_run ON optimization_suggestions(run_id);
 CREATE INDEX IF NOT EXISTS idx_optsug_status ON optimization_suggestions(status);
+
+-- One row per day the dashboard was opened, holding that day's health index
+-- and its four axes. The store keeps no history of a confidence or a
+-- relation, so "is this getting better" cannot be reconstructed after the
+-- fact -- it has to be written down as it happens. The writer is
+-- health_snapshot(); a day already written is left alone, so the number is
+-- the first reading of the day and not the last.
+CREATE TABLE IF NOT EXISTS health_daily (
+    day            TEXT PRIMARY KEY,          -- YYYY-MM-DD, UTC
+    score          INTEGER NOT NULL,
+    curation       INTEGER NOT NULL,
+    connectivity   INTEGER NOT NULL,
+    freshness      INTEGER NOT NULL,
+    organization   INTEGER NOT NULL
+);
 """
 
 
@@ -354,6 +371,8 @@ GENERAL_FILE = "memai.db"
 PROJECTS_DIRNAME = "projects"
 ACTIVE_FILE = "active"
 BACKUPS_DIRNAME = "backups"
+ARCHIVES_DIRNAME = "archive"
+SHELF_META_FILE = "shelf.json"
 PROJECT_NAME_MAX = 80
 # A project's name is its file name, so it follows the rules of the strictest
 # filesystem the home may sit on, which is Windows: none of these characters,
@@ -582,6 +601,240 @@ def backup_files(project: str) -> list[Path]:
     return sorted(files, key=lambda p: p.stat().st_mtime, reverse=True)
 
 
+def _shelf_meta_path(project: str) -> Path:
+    return backups_dir(project) / SHELF_META_FILE
+
+
+def shelf_meta(project: str = GENERAL_PROJECT) -> dict:
+    """What has been written ABOUT a project's backups: `{filename: {...}}`.
+
+    A backup's own name carries when it was taken and what took it; a name
+    somebody typed for it, and whether it is pinned, have nowhere in the file
+    to live. They sit beside the shelf in `shelf.json`, keyed by filename --
+    so an entry follows its file into an archive and back out.
+
+    Missing or unreadable, the shelf simply has nothing written about it.
+    """
+    path = _shelf_meta_path(project)
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _write_shelf_meta(project: str, data: dict) -> None:
+    """Replace the sidecar, or remove it once nothing is written about the
+    shelf. Written to a temp file and moved into place, so a reader never
+    sees half of it."""
+    path = _shelf_meta_path(project)
+    if not data:
+        path.unlink(missing_ok=True)
+        return
+    tmp = path.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(data, indent=2, sort_keys=True), encoding="utf-8")
+    tmp.replace(path)
+
+
+def set_shelf_meta(project: str, name: str, **fields) -> dict:
+    """Write `fields` about one backup and return what it now holds.
+
+    A field set back to its default -- an empty label, an unpinned file --
+    is removed rather than stored, and an entry with nothing left in it goes
+    with it, so the sidecar never grows a row per backup ever taken.
+    """
+    _inside(Path(name), backups_dir(project))
+    data = shelf_meta(project)
+    entry = dict(data.get(name) or {})
+    for key, value in fields.items():
+        if value in ("", None, False):
+            entry.pop(key, None)
+        else:
+            entry[key] = value
+    if entry:
+        data[name] = entry
+    else:
+        data.pop(name, None)
+    _write_shelf_meta(project, data)
+    return entry
+
+
+def forget_shelf_meta(project: str, names: list[str]) -> None:
+    """Drop what was written about backups that no longer exist."""
+    data = shelf_meta(project)
+    if not any(n in data for n in names):
+        return
+    for n in names:
+        data.pop(n, None)
+    _write_shelf_meta(project, data)
+
+
+def archives_dir(project: str = GENERAL_PROJECT) -> Path:
+    """Where a project's zipped backups go, created if needed:
+    `<backups_dir>/archive`. A subfolder, so backup_files() -- which globs
+    `*.db` one level deep -- never sees what has been archived."""
+    out = backups_dir(project) / ARCHIVES_DIRNAME
+    out.mkdir(parents=True, exist_ok=True)
+    return out
+
+
+def archive_files(project: str) -> list[Path]:
+    """A project's archives, newest first: the `.zip` files in archives_dir()."""
+    files = [p for p in archives_dir(project).glob("*.zip") if p.is_file()]
+    return sorted(files, key=lambda p: p.stat().st_mtime, reverse=True)
+
+
+def archive_name(project: str, when: date | None = None) -> str:
+    """`<project>-<YYYY-MM>.zip`: the archive a backup taken in that month
+    joins. One per month per project, so archiving twice in September adds to
+    the same file rather than making a second one."""
+    stamp = (when or datetime.now(timezone.utc).date()).strftime("%Y-%m")
+    return f"{project}-{stamp}.zip"
+
+
+def _inside(path: Path, root: Path) -> Path:
+    """`path` resolved, or ValueError when it lands outside `root`.
+
+    Every name below arrives from an HTTP payload, so a name is treated as
+    hostile until it resolves under the folder it is supposed to be in.
+    """
+    full = (root / path).resolve()
+    if not full.is_relative_to(root.resolve()):
+        raise ValueError(f"path escapes its folder: {path}")
+    return full
+
+
+def _member_mtime(info: zipfile.ZipInfo) -> datetime:
+    """A member's timestamp as an aware datetime.
+
+    A zip stores a DOS timestamp: local wall-clock time, no zone, rounded to
+    two seconds. It is read back as local, which is the only reading that
+    round-trips the file it was written from.
+    """
+    return datetime(*info.date_time).astimezone()
+
+
+def archive_members(path: Path) -> list[dict]:
+    """What one archive holds: name, uncompressed size and stored timestamp
+    per member, in the order the zip lists them."""
+    with zipfile.ZipFile(path) as zf:
+        return [{"name": i.filename, "size": i.file_size,
+                 "mtime": _member_mtime(i).isoformat()}
+                for i in zf.infolist() if not i.is_dir()]
+
+
+def archive_backups(project: str, names: list[str], when: date | None = None) -> Path:
+    """Move the named backups into this month's archive and return it.
+
+    Each name is a file in the project's backups_dir; anything that is not
+    there, or that resolves outside it, raises. The archive is created on the
+    first call of the month and appended to afterwards. Each backup is
+    deleted only after it is in the zip, so an interrupted run leaves the
+    file on the shelf rather than nowhere.
+    """
+    if not names:
+        raise ValueError("no backups named")
+    shelf = backups_dir(project)
+    sources = []
+    for name in names:
+        full = _inside(Path(name), shelf)
+        if full.suffix != ".db" or not full.is_file():
+            raise ValueError(f"not a backup on this shelf: {name}")
+        sources.append(full)
+
+    dest = archives_dir(project) / archive_name(project, when)
+    with zipfile.ZipFile(dest, "a", zipfile.ZIP_DEFLATED) as zf:
+        held = set(zf.namelist())
+        for src in sources:
+            if src.name in held:
+                raise ValueError(f"already archived: {src.name}")
+            zf.write(src, src.name)
+    for src in sources:
+        src.unlink()
+    return dest
+
+
+def delete_backups(project: str, names: list[str]) -> int:
+    """Remove the named backups from the shelf, and what was written about
+    them. Returns how many files went. Nothing is deleted until every name
+    has been checked."""
+    if not names:
+        raise ValueError("no backups named")
+    shelf = backups_dir(project)
+    targets = []
+    for name in names:
+        full = _inside(Path(name), shelf)
+        if full.suffix != ".db" or not full.is_file():
+            raise ValueError(f"not a backup on this shelf: {name}")
+        targets.append(full)
+    for path in targets:
+        path.unlink()
+    forget_shelf_meta(project, [p.name for p in targets])
+    return len(targets)
+
+
+def restore_backup(project: str, name: str) -> None:
+    """Copy a backup over the project it belongs to, through SQLite.
+
+    Uses the online backup API rather than replacing the file: the live
+    database has a WAL beside it and readers open on it, and a file swapped
+    underneath that leaves the two out of step. The caller takes a copy of
+    the current state first -- restoring is not undoable from here.
+    """
+    full = _inside(Path(name), backups_dir(project))
+    if full.suffix != ".db" or not full.is_file():
+        raise ValueError(f"not a backup on this shelf: {name}")
+    src = sqlite3.connect(str(full), timeout=30.0)
+    try:
+        dst = sqlite3.connect(str(project_path(project)), timeout=30.0)
+        try:
+            src.backup(dst)
+        finally:
+            dst.close()
+    finally:
+        src.close()
+
+
+def unarchive(project: str, name: str) -> list[str]:
+    """Put an archive's files back on the shelf and remove the archive.
+
+    Returns the names restored. A member whose name is a path, or that would
+    land on a file already on the shelf, raises before anything is written.
+    """
+    archives = archives_dir(project)
+    full = _inside(Path(name), archives)
+    if full.suffix != ".zip" or not full.is_file():
+        raise ValueError(f"not an archive: {name}")
+    shelf = backups_dir(project)
+    with zipfile.ZipFile(full) as zf:
+        members = [i for i in zf.infolist() if not i.is_dir()]
+        for i in members:
+            member = Path(i.filename)
+            if member.name != i.filename:
+                raise ValueError(f"archive holds a path, not a name: {i.filename}")
+            if (shelf / member.name).exists():
+                raise ValueError(f"already on the shelf: {member.name}")
+        for i in members:
+            zf.extract(i, shelf)
+            # extract() leaves the file stamped with the moment it was
+            # written, so a restored backup would read as taken just now and
+            # sort to the top of a shelf ordered by when it was taken.
+            stamp = _member_mtime(i).timestamp()
+            os.utime(shelf / i.filename, (stamp, stamp))
+    full.unlink()
+    return [i.filename for i in members]
+
+
+def delete_archive(project: str, name: str) -> int:
+    """Remove an archive and everything in it. Returns how many files went."""
+    full = _inside(Path(name), archives_dir(project))
+    if full.suffix != ".zip" or not full.is_file():
+        raise ValueError(f"not an archive: {name}")
+    count = len(archive_members(full))
+    full.unlink()
+    return count
+
+
 def backup_to(dest: Path, *, project: str | None = None) -> Path:
     """Copy a project into `dest` with VACUUM INTO: `project`, or the active one.
 
@@ -800,6 +1053,86 @@ def due_for_review(
     sql.append("ORDER BY review_after ASC LIMIT ?")
     params.append(limit)
     return conn.execute(" ".join(sql), params).fetchall()
+
+
+# ---------------------------------------------------------------- health
+
+# How long a memory nobody has vetted may sit before it counts as stale.
+# Deliberately the same span the writing tools suggest for review_after.
+STALE_DAYS = 90
+
+# The four axes of the health index, each a percentage of the ACTIVE
+# memories that satisfy it. Every one is a fact the store can check today,
+# and the SQL is written out here rather than assembled, so what an axis
+# measures can be read off it.
+#
+#   curation      vetted by a human. A contradicted memory is not confirmed,
+#                 so it weighs exactly like an unverified one until it is
+#                 superseded or archived -- it is not penalised twice.
+#   connectivity  reachable from something else. An island is a memory only
+#                 an exact query finds.
+#   freshness     not overdue: no review date in the past, and not left
+#                 unvetted for STALE_DAYS.
+#   organization  findable by something other than its own wording -- a
+#                 title, tags that are not just the type, and a domain.
+_HEALTH_AXES: tuple[tuple[str, str], ...] = (
+    ("curation", "confidence = 'confirmed'"),
+    ("connectivity",
+     "uid IN (SELECT from_uid FROM relations UNION SELECT to_uid FROM relations)"),
+    ("freshness",
+     "(review_after = '' OR review_after > :today) "
+     "AND NOT (confidence = 'unverified' AND updated_at < :stale)"),
+    ("organization",
+     "TRIM(title) <> '' AND TRIM(tags) <> '' AND TRIM(tags) <> type "
+     "AND TRIM(domain) <> ''"),
+)
+
+
+def health_axes(conn: sqlite3.Connection, *, at: str | None = None) -> dict:
+    """The four axes and the index over them, each 0-100 over active memories.
+
+    `at` is the day the spans are measured from (YYYY-MM-DD), defaulting to
+    today. An empty store scores 100 on every axis: nothing is wrong with
+    it, and 0 would read as a store in trouble on the day it is created.
+    """
+    today = at or today_iso()
+    stale = (datetime.fromisoformat(today) - timedelta(days=STALE_DAYS)).isoformat()
+    active = conn.execute(
+        "SELECT COUNT(*) FROM memories WHERE status = 'active'").fetchone()[0]
+    axes = {}
+    for name, clause in _HEALTH_AXES:
+        if not active:
+            axes[name] = 100
+            continue
+        met = conn.execute(
+            f"SELECT COUNT(*) FROM memories WHERE status = 'active' AND ({clause})",
+            {"today": today, "stale": stale}).fetchone()[0]
+        axes[name] = round(met * 100 / active)
+    return {"score": round(sum(axes.values()) / len(axes)), "axes": axes, "active": active}
+
+
+def health_snapshot(conn: sqlite3.Connection, health: dict, *, day: str = "") -> None:
+    """Record today's index, once. A day already written is left as it was."""
+    conn.execute(
+        """INSERT OR IGNORE INTO health_daily
+           (day, score, curation, connectivity, freshness, organization)
+           VALUES (?, ?, ?, ?, ?, ?)""",
+        (day or today_iso(), health["score"], health["axes"]["curation"],
+         health["axes"]["connectivity"], health["axes"]["freshness"],
+         health["axes"]["organization"]))
+
+
+def health_since(conn: sqlite3.Connection, days: int = 30) -> sqlite3.Row | None:
+    """The newest snapshot at least `days` old, or None if none is that old.
+
+    A delta against a younger reading would say "over the {days} days" about
+    a shorter window, so a store the dashboard has not been open on for long
+    enough reports no delta rather than a misdated one.
+    """
+    cutoff = (datetime.fromisoformat(today_iso()) - timedelta(days=days)).date().isoformat()
+    return conn.execute(
+        "SELECT * FROM health_daily WHERE day <= ? ORDER BY day DESC LIMIT 1",
+        (cutoff,)).fetchone()
 
 
 def new_uid() -> str:
@@ -1107,6 +1440,47 @@ def _refuse_unreadable(conn: sqlite3.Connection, type: str, content: str) -> Non
         raise ValueError(error)
 
 
+def leak_error(type: str, text: str) -> str | None:
+    """Say why `text` cannot be stored, or None if it can.
+
+    Refuses a body or a title carrying a tool call's own source -- a closing
+    tag naming the call frame or one of the writer's own parameters. That
+    text is a call whose parameter tags were typed without the antml:
+    prefix: the fields after the first one are inside this text instead of
+    in their own columns. The marks, and what is not one, are
+    memai.guard.leak_marks; `type` selects the parameter names, so a type
+    with no writer is read against the frame alone.
+
+    The PreToolUse guard refuses such a call before it is made. This is the
+    same refusal for one that arrives another way -- the dashboard, an
+    import of staged text, a host with no hooks registered.
+    """
+    marks = guard.leak_marks(type, text)
+    if not marks:
+        return None
+    return (
+        f"the text carries a tool call's own source ({', '.join(marks)}): a "
+        f"parameter tag typed without the antml: prefix stays in the text of "
+        f"the parameter before it, so the fields it opened -- the domain, the "
+        f"tags -- are in this text instead of their own columns. Retype the "
+        f"call with every tag prefixed. If the memory is ABOUT this defect, "
+        f"put a space inside the closing tag so the quote is not a mark."
+    )
+
+
+def _refuse_leak(type: str, *texts: str) -> None:
+    """Refuse any of `texts` that carries a tool call's own source.
+
+    Every text field a writer fills goes through this: the body, the title,
+    the tags and the source_ref. A leaked call lands in whichever one it was
+    typed under, and the tags are as common a landing place as the body.
+    """
+    for text in texts:
+        error = leak_error(type, text)
+        if error:
+            raise ValueError(error)
+
+
 def title_error(value: str) -> str | None:
     """Say why `value` cannot title a memory, or None if it can.
 
@@ -1406,6 +1780,7 @@ def insert_memory(
     source_ref: str = "",
 ) -> str:
     _refuse_unreadable(conn, type, content)
+    _refuse_leak(type, content, title, tags, source_ref)
     error = title_error(title)
     if error:
         raise ValueError(error)
@@ -1552,7 +1927,7 @@ def get_memory(conn: sqlite3.Connection, uid: str) -> sqlite3.Row | None:
 
 def update_memory_content(
     conn: sqlite3.Connection, uid: str, new_content: str, note: str = "",
-    *, append: bool = False,
+    *, append: bool = False, leaked_ok: bool = False,
 ) -> bool:
     """Replace a memory's content, or add to the end of it.
 
@@ -1561,6 +1936,10 @@ def update_memory_content(
     the body twice and stakes the existing text on it being copied
     faithfully. The edit history records the same thing either way: what it
     said before, and what it says now.
+
+    leaked_ok writes a body carrying a tool call's own source, which every
+    other caller is refused (see leak_error). It is for restoring a body that
+    was already stored -- undoing an `unleak` puts back what the row held.
     """
     row = get_memory(conn, uid)
     if row is None:
@@ -1568,6 +1947,8 @@ def update_memory_content(
     if append:
         new_content = f"{row['content']}\n{new_content}" if row["content"] else new_content
     _refuse_unreadable(conn, row["type"], new_content)
+    if not leaked_ok:
+        _refuse_leak(row["type"], new_content)
     conn.execute(
         "INSERT INTO edits (memory_uid, edited_at, prev_content, new_content, note) VALUES (?, ?, ?, ?, ?)",
         (uid, now_iso(), row["content"], new_content, note),
@@ -1665,6 +2046,7 @@ def set_source_ref(conn: sqlite3.Connection, uid: str, value: str, note: str = "
     value = value.strip()
     if value == row["source_ref"]:
         return True
+    _refuse_leak(row["type"], value)
     conn.execute(
         "UPDATE memories SET source_ref = ?, updated_at = ? WHERE uid = ?",
         (value, now_iso(), uid))
@@ -1691,6 +2073,7 @@ def set_tags(conn: sqlite3.Connection, uid: str, value: str, note: str = "") -> 
     value = value.strip()
     if value == row["tags"]:
         return True
+    _refuse_leak(row["type"], value)
     conn.execute(
         "UPDATE memories SET tags = ?, updated_at = ? WHERE uid = ?",
         (value, now_iso(), uid))
@@ -1717,6 +2100,7 @@ def set_title(conn: sqlite3.Connection, uid: str, value: str, note: str = "") ->
     value = value.strip()
     if not value or value == row["title"]:
         return bool(value)
+    _refuse_leak(row["type"], value)
     error = title_error(value)
     if error:
         raise ValueError(error)
@@ -3018,9 +3402,9 @@ def diagram_overview(
     ):
         jumps_by[r["uid"]] = r["n"]
 
-    # the flows cross-listed into other subjects: the Diagrams view groups by
-    # branch, and a flow that is a step of an end-to-end process belongs
-    # under that process's branch as well as its own
+    # the subjects a flow also belongs to: the Diagrams view matches its
+    # filter against them, so a flow that is a step of an end-to-end process
+    # is found by that process's name as well as by its own
     also_by = domain_links_for(conn, [r["uid"] for r in rows])
 
     out = []
@@ -3419,8 +3803,86 @@ def search_ranked(
     return results
 
 
-# Above this difflib ratio two results are the same text, not two takes on
-# one subject. Near-identity on purpose: this drops copies of one fact, it
+# -------------------------------------------------------------- similarity
+
+# Similarity between two memories is measured over WORD tokens. difflib's
+# quick_ratio is a character-multiset bound, not a text measure: on prose
+# in one language it reads high for every pair, duplicate or not.
+_WORD_RE = re.compile(r"\w+", re.UNICODE)
+
+
+def _tokens(text: str) -> list[str]:
+    """The lowercased word tokens a similarity measure runs over."""
+    return _WORD_RE.findall(text.lower())
+
+
+class _Prepared:
+    """One memory's text, tokenized once for repeated comparison.
+
+    A sweep is quadratic in the rows and compares each text against many
+    others; tokenizing inside the loop would redo that work n times per
+    row. `counts` is the token multiset the ratio's upper bound needs.
+    """
+
+    __slots__ = ("tokens", "counts")
+
+    def __init__(self, text: str) -> None:
+        self.tokens = _tokens(text)
+        self.counts: dict[str, int] = {}
+        for token in self.tokens:
+            self.counts[token] = self.counts.get(token, 0) + 1
+
+
+def _ratio_bound(a: _Prepared, b: _Prepared) -> float:
+    """The highest ratio two prepared texts could have, 0..1.
+
+    difflib matches each token at most once, so the size of the token
+    MULTISET intersection caps the number of matches an alignment can
+    find, whatever order the tokens appear in. Costs one dict lookup per
+    distinct token against the ratio's own quadratic cost, and reads far
+    lower than the same bound over characters: an alphabet is shared by
+    every text in a language, a vocabulary is not.
+
+    At least one of the two has to hold a token.
+    """
+    smaller, larger = (a.counts, b.counts) if len(a.counts) <= len(b.counts) else (b.counts, a.counts)
+    matches = 0
+    for token, count in smaller.items():
+        other = larger.get(token)
+        if other is not None:
+            matches += count if count < other else other
+    return 2.0 * matches / (len(a.tokens) + len(b.tokens))
+
+
+def _pair_ratio(a: _Prepared, b: _Prepared, threshold: float) -> float:
+    """How much of two prepared texts is the same word sequence, 0..1.
+
+    Returns 0.0 for a pair ruled out by a bound instead of scored, so a
+    caller compares the result against `threshold` and nothing else. No
+    pair that would reach `threshold` is ruled out: both gates are upper
+    bounds on the ratio -- token counts too far apart for any alignment
+    to reach it, then the multiset bound of _ratio_bound.
+
+    1.0 is the same text, and it is the same sequence being compared in
+    any language, so one threshold holds across a mixed store.
+    """
+    la, lb = len(a.tokens), len(b.tokens)
+    if not la or not lb:
+        return 0.0
+    if 2.0 * (la if la < lb else lb) < threshold * (la + lb):
+        return 0.0
+    if _ratio_bound(a, b) < threshold:
+        return 0.0
+    return difflib.SequenceMatcher(None, a.tokens, b.tokens).ratio()
+
+
+def text_ratio(a: str, b: str) -> float:
+    """The word-sequence ratio of two raw strings, with no gate in front."""
+    return difflib.SequenceMatcher(None, _tokens(a), _tokens(b)).ratio()
+
+
+# Above this ratio two results are the same text, not two takes on one
+# subject. Near-identity on purpose: this drops copies of one fact, it
 # does not judge whether two related memories are each worth a slot.
 _COPY_RATIO = 0.92
 
@@ -3428,21 +3890,19 @@ _COPY_RATIO = 0.92
 def _collapse_near_copies(ranked: list[dict]) -> list[dict]:
     """Drop a result that repeats one already kept, and say so on the keeper.
 
-    Lexical, the same measure dedup_candidates uses: it matches
-    near-identical text, not paraphrases.
+    Lexical, the same measure dedup_candidates uses (see _pair_ratio): it
+    matches near-identical text, not paraphrases.
     """
-    import difflib
-
-    kept: list[dict] = []
+    kept: list[tuple[dict, _Prepared]] = []
     for d in ranked:
-        content = d.get("content") or ""
-        for k in kept:
-            if difflib.SequenceMatcher(None, content, k.get("content") or "").quick_ratio() >= _COPY_RATIO:
-                k.setdefault("collapsed", []).append(d["uid"])
+        prepared = _Prepared(d.get("content") or "")
+        for keeper, kept_prepared in kept:
+            if _pair_ratio(prepared, kept_prepared, _COPY_RATIO) >= _COPY_RATIO:
+                keeper.setdefault("collapsed", []).append(d["uid"])
                 break
         else:
-            kept.append(d)
-    return kept
+            kept.append((d, prepared))
+    return [d for d, _ in kept]
 
 
 def _attach_succession(conn: sqlite3.Connection, results: list[dict]) -> None:
@@ -4019,6 +4479,60 @@ def set_domain_links(
     return paths
 
 
+def set_domain(conn: sqlite3.Connection, uid: str, domain: str, note: str = "") -> bool:
+    """Re-home a memory: change the path it is FILED at, and audit it.
+
+    The cross-listings are re-run afterwards even when the caller named
+    none, because the policy that drops a redundant one reads the domain
+    the memory ends up with -- a membership the old path needed can be
+    covered by the new path's own prefix (apply_link_policy).
+
+    Returns whether the row exists. Filing it where it already is is not a
+    change and writes nothing.
+    """
+    row = get_memory(conn, uid)
+    if row is None:
+        return False
+    domain = apply_domain_policy(conn, domain)
+    if domain == row["domain"]:
+        return True
+    conn.execute(
+        "UPDATE memories SET domain = ?, updated_at = ? WHERE uid = ?",
+        (domain, now_iso(), uid))
+    audit = f"meta: domain '{row['domain']}' -> '{domain}'"
+    conn.execute(
+        "INSERT INTO edits (memory_uid, edited_at, prev_content, new_content, note) "
+        "VALUES (?, ?, ?, ?, ?)",
+        (uid, now_iso(), row["content"], row["content"],
+         f"{audit} ({note})" if note else audit))
+    links = get_domain_links(conn, uid)
+    if links:
+        set_domain_links(conn, uid, links)
+    return True
+
+
+TAG_SEP = ", "
+
+
+def merge_tags(existing: str, added: str) -> str:
+    """`existing` with `added` appended, keeping order and dropping repeats.
+
+    Case-insensitive on the comparison and case-preserving on the value: a
+    store that already says 'F100_TOTAL' does not gain 'f100_total' beside
+    it. Tags are free text separated by commas, which is what BM25 indexes,
+    so nothing here reshapes a tag beyond trimming it.
+    """
+    out: list[str] = []
+    seen: set[str] = set()
+    for tag in (*existing.split(","), *added.split(",")):
+        tag = tag.strip()
+        if not tag or tag.casefold() in seen:
+            continue
+        seen.add(tag.casefold())
+        out.append(tag)
+    return TAG_SEP.join(out)
+
+
 def add_domain_link(conn: sqlite3.Connection, uid: str, domain: str) -> list[str]:
     """Cross-list a memory into one more domain. Returns the resulting set."""
     if not normalize_domain(domain):
@@ -4049,10 +4563,10 @@ def latest_by_type(
 def _timeline_pair(a: sqlite3.Row, b: sqlite3.Row) -> bool:
     """Checkpoint x checkpoint inside the same effort is a timeline, not a dup.
 
-    Consecutive checkpoints of one ticket/session share the same skeleton
-    (intent/established/next-steps) and score high on any similarity
-    measure while narrating different moments -- the dominant source of
-    dedup false positives in the field.
+    True for two checkpoints sharing a domain or a session, whatever they
+    score: consecutive checkpoints of one effort narrate different
+    moments through the same skeleton, and a later one extending an
+    earlier one is a bearing being kept, not a memory to merge.
     """
     if a["type"] != "checkpoint" or b["type"] != "checkpoint":
         return False
@@ -4093,17 +4607,16 @@ def similar_memories(
     if row is None or row["type"] == DIAGRAM_TYPE:
         return []
 
-    import difflib
-
     # A scan, so it stays inside the scope the memory was filed under -- a
     # write must not get slower as the store grows in branches it has
     # nothing to do with.
+    prepared = _Prepared(row["content"])
     scored: list[tuple[sqlite3.Row, float, str]] = []
     clause, params = domain_clause(row["domain"], alias="") if row["domain"] else ("", [])
     for other in conn.execute(
         f"SELECT * FROM memories WHERE uid <> ? {clause}", [uid, *params]
     ).fetchall():
-        ratio = difflib.SequenceMatcher(None, row["content"], other["content"]).quick_ratio()
+        ratio = _pair_ratio(prepared, _Prepared(other["content"]), threshold)
         if ratio >= threshold:
             scored.append((other, ratio, "lexical"))
 
@@ -4130,11 +4643,12 @@ def dedup_candidates(
 ) -> list[tuple[sqlite3.Row, sqlite3.Row, float, str]]:
     """Surface likely-duplicate/contradictory pairs for the agent to review.
 
-    Candidate pairs come from lexical difflib overlap (method 'lexical'),
-    which `threshold` applies to. It matches near-identical text, not
-    paraphrases: two takes on one subject in different words do not surface
-    here. Not a merge, just a candidate list -- the agent judges whether
-    pairs are actually duplicates, the same split search uses.
+    Candidate pairs come from lexical overlap of the word sequence
+    (method 'lexical'), which `threshold` applies to -- see _pair_ratio.
+    It matches near-identical text, not paraphrases: two takes on one
+    subject in different words do not surface here. Not a merge, just a
+    candidate list -- the agent judges whether pairs are actually
+    duplicates, the same split search uses.
 
     `since` makes the hints directional for incremental runs: at least
     one side of every pair is new (created/updated at/after `since`),
@@ -4166,7 +4680,9 @@ def dedup_candidates(
     rows = conn.execute(" ".join(sql), params).fetchall()
     is_new = (lambda r: r["updated_at"] >= since) if since else (lambda r: True)
 
-    import difflib
+    # Tokenized once per row, not once per pair: the sweep is quadratic in
+    # the rows and would otherwise redo this work n times for each.
+    prepared = [_Prepared(r["content"]) for r in rows]
 
     pairs: list[tuple[sqlite3.Row, sqlite3.Row, float, str]] = []
     for i in range(len(rows)):
@@ -4174,7 +4690,7 @@ def dedup_candidates(
             a, b = rows[i], rows[j]
             if not (is_new(a) or is_new(b)):
                 continue
-            ratio = difflib.SequenceMatcher(None, a["content"], b["content"]).quick_ratio()
+            ratio = _pair_ratio(prepared[i], prepared[j], threshold)
             if ratio >= threshold:
                 pairs.append((a, b, ratio, "lexical"))
 
@@ -4194,7 +4710,14 @@ CONFIDENCE_VALUES = ("unverified", "confirmed", CONFIDENCE_CONTRADICTED)
 SUGGESTION_KINDS = (
     "compact", "reword", "retag", "retitle", "redomain", "crosslist",
     "set_confidence", "review", "archive", "link", "merge", "distill",
+    "unleak",
 )
+# The text fields a leaked tool call lands in, and the ones `unleak` repairs
+# -- one field per suggestion, so a reviewer decides the body and the tags
+# separately and either can be undone on its own.
+LEAK_FIELDS = ("content", "tags", "source_ref")
+# Findings a scan reports; the count of what it left behind comes with it.
+LEAK_SCAN_CAP = 40
 # distill targets must be durable knowledge types -- distilling INTO a
 # checkpoint/handoff would just recreate the ephemera it exists to retire
 DISTILL_TYPES = ("note", "reasoning", "anti_pattern")
@@ -4341,6 +4864,60 @@ def _nesting_hints(domain_counts: dict[str, int]) -> list[dict]:
     return hints
 
 
+def _leak_findings(
+    conn: sqlite3.Connection, where_sql: str, params: list, *, cap: int = LEAK_SCAN_CAP,
+) -> tuple[list[dict], int]:
+    """Rows whose text carries a tool call's own source, and how many exist.
+
+    SQL narrows to the rows holding a closing tag at all, which is the cheap
+    half of the test; guard.leak_marks judges each candidate, because which
+    marks count depends on the row's own type.
+
+    A finding names the fields that carry a mark, what a repair takes out of
+    each, and whether the repair CLEARS the field -- `clean: false` is a
+    field whose marks sit inside prose, which `unleak` refuses and a reword
+    has to rewrite by hand. `declares` is what the debris was trying to
+    write, reported only for the columns that are still empty: those are the
+    ones with a `redomain`, `crosslist` or `retag` waiting beside the
+    `unleak`.
+    """
+    like = " OR ".join(f"{f} LIKE '%</%'" for f in LEAK_FIELDS)
+    rows = conn.execute(
+        f"""SELECT uid, type, title, content, tags, source_ref, domain
+            FROM memories WHERE {where_sql} AND ({like})
+            ORDER BY created_at DESC""", params).fetchall()
+    findings, total = [], 0
+    for r in rows:
+        marks = {f: guard.leak_marks(r["type"], r[f] or "") for f in LEAK_FIELDS}
+        marks = {f: m for f, m in marks.items() if m}
+        if not marks:
+            continue
+        total += 1
+        if len(findings) >= cap:
+            continue
+        fields, declares = {}, {}
+        for f, found in marks.items():
+            clean, dropped = guard.strip_leak(r["type"], r[f])
+            declares.update(guard.declared(dropped))
+            fields[f] = {
+                "marks": found,
+                "removes": len(r[f]) - len(clean),
+                "clean": not guard.leak_marks(r["type"], clean),
+            }
+        # `also` is read from memory_domains, never from the one-field
+        # mirror beside it: the rows are where a membership lives
+        held = {"domain": r["domain"], "also": get_domain_links(conn, r["uid"]),
+                "tags": r["tags"], "source_ref": r["source_ref"]}
+        entry = {"uid": r["uid"], "type": r["type"], "fields": fields}
+        if r["title"]:
+            entry["title"] = r["title"][:CORPUS_SNIPPET_LEN]
+        empty = {k: v for k, v in declares.items() if k in held and not held[k]}
+        if empty:
+            entry["declares"] = empty
+        findings.append(entry)
+    return findings, total
+
+
 def optimization_corpus(
     conn: sqlite3.Connection, *, domain: str = "", type: str = "",
     since: str = "", include_archived: bool = False, limit: int = 500,
@@ -4376,9 +4953,11 @@ def optimization_corpus(
     `domain_hints` clusters likely-variant domain strings,
     `domain_nesting` proposes a path for each flat domain that already
     spells a hierarchy out (see _nesting_hints -- the raw material for
-    `redomain` suggestions), and `truncated` flags when the listing
-    stopped before the corpus ended -- page onward with offset (offset +
-    count is the next page's offset).
+    `redomain` suggestions), `leaked_calls` lists the rows carrying a tool
+    call's own source with `stats.leaked_calls` counting them all (see
+    _leak_findings -- the raw material for `unleak`), and `truncated` flags
+    when the listing stopped before the corpus ended -- page onward with
+    offset (offset + count is the next page's offset).
 
     `since` makes curation incremental: only memories created OR updated
     at/after the given ISO timestamp (a date like '2026-07-01' works --
@@ -4535,6 +5114,12 @@ def optimization_corpus(
         hints = _domain_hints(by_domain)
         nesting = _nesting_hints(by_domain)
 
+    # Leaked calls are read over the scan's own window, not the page: a
+    # finding is about one row, so pagination would hide the rest of them
+    # behind an offset a curation pass has no reason to walk.
+    leaked, leaked_total = _leak_findings(conn, where_sql, params)
+    stats["leaked_calls"] = leaked_total
+
     return {
         "memories": mems,
         "relations": edges,
@@ -4544,6 +5129,7 @@ def optimization_corpus(
         "stats": stats,
         "domain_hints": hints,
         "domain_nesting": nesting,
+        "leaked_calls": leaked,
     }
 
 
@@ -4594,6 +5180,37 @@ def _validate_suggestion(conn: sqlite3.Connection, s: object) -> tuple[dict | No
         err = section_error(conn, row["type"], str(payload["new_content"]))
         if err:
             return None, err
+    elif kind == "unleak":
+        err = target_err()
+        if err:
+            return None, err
+        field = str(payload.get("field", "")).strip() or LEAK_FIELDS[0]
+        if field not in LEAK_FIELDS:
+            return None, (f"payload.field must be one of: {', '.join(LEAK_FIELDS)}; "
+                          f"got {field!r}")
+        if field == "content":
+            err = _diagram_content_error(conn, target_uid)
+            if err:
+                return None, err
+        row = get_memory(conn, target_uid)
+        text = row[field] or ""
+        if not guard.leak_marks(row["type"], text):
+            return None, f"nothing leaked in {field} of {target_uid}: no marks to remove"
+        # the repair is computed HERE, from the row itself, and travels in the
+        # payload: the panel shows what will hold, the ledger counts the
+        # characters, and the caller never retypes a body it would have to
+        # copy faithfully -- which is the defect this kind exists to clean up
+        clean, _ = guard.strip_leak(row["type"], text)
+        left = guard.leak_marks(row["type"], clean)
+        if left:
+            return None, (f"{field} of {target_uid} still carries {', '.join(left)} "
+                          "after the pass -- the marks are inside its prose. Rewrite "
+                          "it with a reword instead")
+        if field == "content":
+            err = section_error(conn, row["type"], clean)
+            if err:
+                return None, err
+        payload = {"field": field, "new_text": clean}
     elif kind == "retag":
         err = target_err()
         if err:
@@ -4745,15 +5362,26 @@ def _validate_suggestion(conn: sqlite3.Connection, s: object) -> tuple[dict | No
     }, None
 
 
+# Characters a run note may hold. A longer note is refused, not truncated.
+RUN_NOTE_MAX = 250
+
+
 def stage_optimization(conn: sqlite3.Connection, note: str, suggestions: list) -> dict:
     """Validate a batch of suggestions and write them to a new run.
 
     Invalid suggestions are skipped and reported in `errors`; only valid
     ones are staged. Returns {run_id, staged, errors}. No run is created
     when nothing validates.
+
+    `note` summarises the run in at most RUN_NOTE_MAX characters; a longer
+    one raises and nothing is staged.
     """
     if not isinstance(suggestions, list) or not suggestions:
         raise ValueError("suggestions must be a non-empty list")
+    note = str(note or "")
+    if len(note) > RUN_NOTE_MAX:
+        raise ValueError(
+            f"note is {len(note)} characters; the limit is {RUN_NOTE_MAX}")
     valid, errors = [], []
     for i, s in enumerate(suggestions):
         norm, err = _validate_suggestion(conn, s)
@@ -4766,7 +5394,7 @@ def stage_optimization(conn: sqlite3.Connection, note: str, suggestions: list) -
     ts = now_iso()
     cur = conn.execute(
         "INSERT INTO optimization_runs (created_at, note, status) VALUES (?, ?, 'open')",
-        (ts, note or ""),
+        (ts, note),
     )
     run_id = cur.lastrowid
     for v in valid:
@@ -4792,11 +5420,18 @@ def list_optimization_runs(conn: sqlite3.Connection) -> list[sqlite3.Row]:
 
 
 def optimization_run_kind_counts(conn: sqlite3.Connection) -> list[sqlite3.Row]:
-    """Per-run, per-kind suggestion counts (total / pending) across all runs."""
+    """Per-run, per-kind suggestion counts across all runs.
+
+    All three states, because a reader of the counts alone has to be able to
+    say how many of a kind were APPLIED -- total minus pending minus
+    rejected. Without `rejected` a rejected suggestion counts as applied,
+    and the day's summary claims work that was turned down.
+    """
     return conn.execute(
         """SELECT run_id, kind,
                   COUNT(*) AS total,
-                  SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) AS pending
+                  SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) AS pending,
+                  SUM(CASE WHEN status = 'rejected' THEN 1 ELSE 0 END) AS rejected
            FROM optimization_suggestions
            GROUP BY run_id, kind
            ORDER BY run_id, kind"""
@@ -4873,6 +5508,16 @@ def _apply_kind(conn: sqlite3.Connection, kind: str, target_uid: str | None, pay
         row = get_memory(conn, target_uid)
         prev = {"content": row["content"]}
         update_memory_content(conn, target_uid, payload["new_content"], note=f"optimize:{kind}")
+        return prev
+    if kind == "unleak":
+        field = str(payload.get("field", "")).strip() or LEAK_FIELDS[0]
+        row = get_memory(conn, target_uid)
+        prev = {field: row[field]}
+        text = str(payload["new_text"])
+        if field == "content":
+            update_memory_content(conn, target_uid, text, note=f"optimize:{kind}")
+        else:
+            _update_meta_field(conn, target_uid, field, text)
         return prev
     if kind == "retag":
         row = get_memory(conn, target_uid)
@@ -4951,6 +5596,16 @@ def _revert_kind(
 ) -> None:
     if kind in ("compact", "reword"):
         update_memory_content(conn, target_uid, prev["content"], note=f"optimize:undo {kind}")
+    elif kind == "unleak":
+        field = str(payload.get("field", "")).strip() or LEAK_FIELDS[0]
+        if field == "content":
+            # the body being restored is the leaked one, which the store no
+            # longer accepts from a writer: an undo puts back what was there,
+            # not what would be allowed in now
+            update_memory_content(conn, target_uid, prev["content"],
+                                  note=f"optimize:undo {kind}", leaked_ok=True)
+        else:
+            _update_meta_field(conn, target_uid, field, prev[field])
     elif kind == "retag":
         _update_meta_field(conn, target_uid, "tags", prev["tags"])
     elif kind == "retitle":
@@ -5014,14 +5669,23 @@ def reject_suggestion(conn: sqlite3.Connection, sug_id: int) -> bool:
 
 
 def revert_suggestion(conn: sqlite3.Connection, sug_id: int) -> bool:
+    """Put a decided suggestion back on the table.
+
+    An APPLIED one is undone in the store first, from the prev_state its
+    apply recorded. A REJECTED one wrote nothing to any memory, so taking
+    the answer back is only a change of status.
+
+    Raises ValueError for an unknown id and for one that is already pending.
+    """
     row = get_suggestion(conn, sug_id)
     if row is None:
         raise ValueError(f"unknown suggestion: {sug_id}")
-    if row["status"] != "applied":
-        raise ValueError("only applied suggestions can be reverted")
-    payload = json.loads(row["payload"])
-    prev = json.loads(row["prev_state"]) if row["prev_state"] else {}
-    _revert_kind(conn, row["kind"], row["target_uid"], payload, prev)
+    if row["status"] == "pending":
+        raise ValueError("suggestion is already pending")
+    if row["status"] == "applied":
+        payload = json.loads(row["payload"])
+        prev = json.loads(row["prev_state"]) if row["prev_state"] else {}
+        _revert_kind(conn, row["kind"], row["target_uid"], payload, prev)
     conn.execute(
         "UPDATE optimization_suggestions SET status = 'pending', prev_state = NULL, decided_at = NULL WHERE id = ?",
         (sug_id,),

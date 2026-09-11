@@ -945,6 +945,26 @@ def _create(client, **kw):
     return res.json()["uid"]
 
 
+def test_a_linked_memory_is_named_by_its_title(client):
+    """The links panel previews a peer the way every other preview does.
+
+    _peer_card sent only `snippet`, so a named memory attached to a step was
+    listed by its opening line -- and with the markup still in it.
+    """
+    uid = _create(client)
+    mem = client.post("/api/memories", json={
+        "type": "note", "title": "Cache warmup skips the cold shard",
+        "content": "The trigger fires **once per shard** and stops.",
+    }).json()["uid"]
+    res = client.post(f"/api/diagrams/{uid}/link",
+                      json={"node_key": NODES[0]["key"], "target_uid": mem})
+    assert res.status_code == 200, res.text
+
+    link = client.get(f"/api/diagrams/{uid}").json()["links"][0]
+    assert link["peer"]["title"] == "Cache warmup skips the cold shard"
+    assert link["peer"]["snippet"] == "The trigger fires once per shard and stops."
+
+
 def test_api_creates_and_reads_a_diagram(client):
     uid = _create(client, domain="proj-1042", summary="One file per store.")
     data = client.get(f"/api/diagrams/{uid}").json()
