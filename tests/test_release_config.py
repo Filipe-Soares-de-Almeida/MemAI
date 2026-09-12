@@ -39,6 +39,14 @@ def test_the_manifest_matches_the_package_version():
     assert MANIFEST["."] == memai.__version__
 
 
+def test_the_release_rewrites_the_python_package():
+    assert PACKAGE["release-type"] == "python"
+
+
+def test_a_tag_is_the_version_alone():
+    assert PACKAGE["include-component-in-tag"] is False
+
+
 def test_the_release_is_cut_from_dev():
     assert "target-branch: dev" in WORKFLOW
 
