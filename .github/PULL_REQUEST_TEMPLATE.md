@@ -17,3 +17,11 @@ Link any issue this addresses. Use "fixes #123" to close it on merge.
 <!-- How was it checked? The commands you ran, and what they showed. -->
 
 <!-- Screenshots when the dashboard changes. -->
+
+## Checklist
+
+- [ ] Commits follow Conventional Commits, and a breaking change carries `!` or a `BREAKING CHANGE:` footer
+- [ ] Tests cover the change, and they fail without it
+- [ ] `pytest -q` passes
+- [ ] Docs are updated where the change is visible to someone using MemAI
+- [ ] The dashboard builds with `npm run build` — only when `src/memai/webui` changed
