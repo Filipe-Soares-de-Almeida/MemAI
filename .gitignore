@@ -19,6 +19,10 @@ dist/
 # what was found and when, not repo content
 /.impeccable/
 
+# design specs written by the superpowers skills -- local working documents,
+# not repo content
+/docs/superpowers/
+
 # private working rules -- the documented spot for uncommitted project instructions
 /CLAUDE.local.md
 

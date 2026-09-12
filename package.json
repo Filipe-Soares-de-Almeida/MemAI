@@ -1,6 +1,6 @@
 {
   "name": "memai-webui",
-  "version": "0.1.0",
+  "version": "0.0.0",
   "private": true,
   "type": "module",
   "description": "Build tooling for the MemAI admin dashboard under src/memai/webui.",
