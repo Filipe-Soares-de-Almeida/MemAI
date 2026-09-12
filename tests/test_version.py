@@ -8,6 +8,7 @@ is skipped without failing.
 
 from __future__ import annotations
 
+import json
 import tomllib
 from pathlib import Path
 
@@ -39,3 +40,11 @@ def test_the_version_line_carries_the_release_annotation():
     line = _version_line()
     assert "x-release-please-version" in line
     assert f'"{memai.__version__}"' in line
+
+
+def test_the_dashboard_package_version_is_frozen():
+    package = json.loads((ROOT / "package.json").read_text(encoding="utf-8"))
+    lock = json.loads((ROOT / "package-lock.json").read_text(encoding="utf-8"))
+    assert package["version"] == "0.0.0"
+    assert lock["version"] == "0.0.0"
+    assert lock["packages"][""]["version"] == "0.0.0"
