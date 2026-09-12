@@ -16,9 +16,9 @@
 ## Checklist
 
 - [ ] Commits follow Conventional Commits, and a breaking change carries `!` or a `BREAKING CHANGE:` footer
-- [ ] `.venv/Scripts/python -m pytest -q` is green
+- [ ] `pytest -q` is green (`.venv/Scripts/python -m pytest -q` on Windows, `.venv/bin/python -m pytest -q` elsewhere)
 - [ ] Everything written is in English — code, comments, docstrings, tests, docs
-- [ ] No real store content and no personal data in tests, fixtures or docs
+- [ ] No memory title, body, domain or tag copied out of a live store, and no personal data, in tests, fixtures or docs
 - [ ] Comments say what the code does, not what changed
 
 ## Screenshots

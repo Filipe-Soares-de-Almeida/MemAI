@@ -191,6 +191,23 @@ what `pip install` is for, and the rule at the top of this file applies to it:
 4. `memai-hook install --check`, and reinstall what it reports as outdated
 5. reopen the hosts
 
+## 8. Cutting a release
+
+`.github/workflows/release-please.yml` runs on every push to `dev` and keeps
+one release pull request open, updating it as commits land. Merging that
+pull request tags the commit, publishes the release, and fast-forwards
+`main` to it.
+
+The workflow needs a fine-grained personal access token in the repository
+secret `RELEASE_PLEASE_TOKEN`, scoped to this repository with Contents:
+write and Pull requests: write.
+
+**The token is a PAT and not `GITHUB_TOKEN`.** A pull request opened under
+the built-in token triggers no further workflow runs, so the release pull
+request would never get a CI run — a branch rule on `dev` that requires one
+would leave it permanently unmergeable. Keep the PAT even while debugging a
+failing run; swapping in `github.token` reintroduces exactly that deadlock.
+
 ## Failure modes
 
 | symptom | cause | fix |
