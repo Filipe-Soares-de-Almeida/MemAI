@@ -48,6 +48,7 @@ def test_a_tag_is_the_version_alone():
 
 
 def test_the_release_is_cut_from_dev():
+    assert "branches: [dev]" in WORKFLOW
     assert "target-branch: dev" in WORKFLOW
 
 

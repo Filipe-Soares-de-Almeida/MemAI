@@ -8,6 +8,10 @@ permissions:
   contents: write
   pull-requests: write
 
+concurrency:
+  group: release-please-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   release:
     runs-on: ubuntu-latest
@@ -20,8 +24,8 @@ jobs:
           manifest-file: .release-please-manifest.json
           target-branch: dev
 
-      # A release created with GITHUB_TOKEN triggers no further workflow, so
-      # the fast-forward runs here rather than on a release event.
+      # The fast-forward is a step of this job, so one place carries the push
+      # that moves main; no workflow listens for the release event.
       - uses: actions/checkout@v4
         if: ${{ steps.release.outputs.release_created }}
         with:
