@@ -22,6 +22,7 @@ import { paintIcons } from './core/icons.js';
 import { modalOpen, closeModal, toast } from './core/ui.js';
 import { pickerFor, setPickerValue, wirePicker, fixedItems } from './core/pick.js';
 import { mountProjectPicker } from './core/projects.js';
+import { mountVersionChip } from './core/version.js';
 import { registerViews, route } from './core/router.js';
 import { I18N, t } from './i18n.js';
 
@@ -33,6 +34,7 @@ import { renderDiagram } from './views/diagram.js';
 import { renderDomains } from './views/domains.js';
 import { renderMaintenance } from './views/maintenance.js';
 import { renderOptimization } from './views/optimization.js';
+import { renderChangelog } from './views/changelog.js';
 import { renderRecord, openRecord } from './views/record.js';
 import { openNewMemory } from './views/new-memory.js';
 
@@ -45,6 +47,7 @@ registerViews({
   domains: renderDomains,
   maintenance: renderMaintenance,
   optimization: renderOptimization,
+  changelog: renderChangelog,
   memory: renderRecord,
 }, { onRecord: openRecord });
 
@@ -54,6 +57,9 @@ paintIcons();
 /* the project switch in the bar needs a fetch of its own, so it fills in
    when that lands */
 mountProjectPicker();
+/* the version mark does the same: one read of the release check's cache,
+   painted into the bar when it lands */
+mountVersionChip();
 
 $('#btnNew').addEventListener('click', openNewMemory);
 

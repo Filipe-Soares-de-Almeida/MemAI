@@ -188,6 +188,12 @@ const ICONS = {
     body: `<path d="M3 8.4l3.2 3.2L13 4.8" fill="none" stroke="currentColor"
                  stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>`,
   },
+  update: {   /* something to bring down onto this machine */
+    viewBox: '0 0 16 16',
+    body: `<path d="M8 2.4v6.6"/>
+           <path d="M5 6.3l3 3 3-3"/>
+           <path d="M3 12.8h10"/>`,
+  },
   'chevron-left': {
     viewBox: '0 0 16 16',
     body: `<path d="M10 3.2L5.2 8l4.8 4.8"/>`,

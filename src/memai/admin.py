@@ -51,7 +51,7 @@ from starlette.responses import FileResponse, JSONResponse, Response
 from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 
-from memai import __version__, autostart, db, portable, sections
+from memai import __version__, autostart, changelog, db, portable, sections, update
 
 # Windows' registry-derived mimetypes map serves .js as text/plain, which
 # browsers refuse to execute as an ES module. Force the correct types.
@@ -2331,6 +2331,71 @@ def optimization_delete_run(request, payload) -> dict:
 
 # ---------------------------------------------------------------- wiring
 
+# ---------------------------------------------------------------- releases
+
+# Where a version sits relative to the one running.
+INSTALLED = "installed"
+AHEAD = "ahead"        # published, and not what this process is running
+PAST = "past"
+
+
+def _state_of(version: str, current: str) -> str:
+    if update.parse_version(version) == update.parse_version(current):
+        return INSTALLED
+    return AHEAD if update.is_newer(version, current) else PAST
+
+
+def update_state(request=None, payload=None) -> dict:
+    """What the release check knows, without asking it anything.
+
+    The cache is filled by a hook process (see memai.update); a dashboard
+    request never reaches the network, so this answers the same whether the
+    machine is online or not.
+    """
+    record = update.cached()
+    latest = update.newest(record)
+    behind = update.ahead(record)
+    return {"current": __version__,
+            "latest": latest if update.is_newer(latest, __version__) else "",
+            "behind": len(behind),
+            "url": str(record.get("url") or update.RELEASES_PAGE),
+            "checked_at": str(record.get("checked_at", "")),
+            "enabled": update.enabled(),
+            # The dashboard runs on the machine these would run on, so it can
+            # show them. It never runs them: they rewrite the environment the
+            # servers around it are running from.
+            "commands": update.commands()}
+
+
+def changelog_page(request, payload) -> dict:
+    """Every release this installation can name, newest first.
+
+    Two sources, one shape. `CHANGELOG.md` ships with the package and is the
+    history; the release check's cache carries what was published after this
+    version, which no local file can know about. Each release says whether it
+    is the one installed, one published since, or one already passed.
+    """
+    current = __version__
+    rows: dict[tuple, dict] = {}
+    for release in update.ahead():
+        version = str(release.get("version", ""))
+        rows[update.parse_version(version)] = {
+            "version": version.lstrip("v"),
+            "date": str(release.get("published_at", "")),
+            "url": str(release.get("url", "")),
+            "sections": changelog.sections_of(release.get("notes")),
+            "state": AHEAD,
+        }
+    # Second, and deliberately overwriting: for a version that appears in both,
+    # the shipped file is the copy this installation can be held to.
+    for entry in changelog.releases():
+        rows[update.parse_version(entry["version"])] = {
+            **entry, "state": _state_of(entry["version"], current)}
+    releases = [rows[key] for key in sorted(rows, reverse=True)]
+    return {"current": current, "releases": releases,
+            "update": update_state(), "source": changelog.source() is not None}
+
+
 async def index(request):
     """The built dashboard, or what to run when it has not been built."""
     page = WEBUI_DIR / "index.html"
@@ -2496,6 +2561,8 @@ routes = [
     Route("/api/diagrams/{uid}/link", api(diagram_link), methods=["POST"]),
     Route("/api/diagrams/{uid}/jump", api(diagram_jump), methods=["POST"]),
     Route("/api/diagrams/{uid}/mermaid", api(diagram_mermaid), methods=["GET"]),
+    Route("/api/changelog", api(changelog_page), methods=["GET"]),
+    Route("/api/update", api(update_state), methods=["GET"]),
     Route("/api/config", api(get_config), methods=["GET"]),
     Route("/api/config", api(set_config), methods=["POST"]),
     Route("/api/domains", api(domains)),
