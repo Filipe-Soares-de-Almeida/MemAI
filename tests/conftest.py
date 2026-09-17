@@ -2,7 +2,20 @@
 
 from __future__ import annotations
 
-from memai import db, sections
+import pytest
+
+from memai import db, sections, update
+
+
+@pytest.fixture(autouse=True)
+def no_release_request(monkeypatch):
+    """Nothing in the suite asks GitHub for the latest release.
+
+    `memai.update._fetch` is the one call that leaves the machine, and the
+    stop hook makes it. A test that wants an answer replaces this stub with
+    its own.
+    """
+    monkeypatch.setattr(update, "_fetch", lambda timeout=update.TIMEOUT: {})
 
 
 def shaped(type_: str, text: str) -> str:

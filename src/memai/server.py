@@ -39,7 +39,8 @@ import os
 
 from mcp.server.fastmcp import FastMCP
 
-from memai import autostart, brief, db, diagram_svg, hook_install, portable, sections
+from memai import (autostart, brief, db, diagram_svg, hook_install, portable,
+                   sections, update)
 
 # Sent to the host in the initialize handshake, and injected into the
 # model's context by the hosts that support it. Kept to a paragraph on
@@ -138,24 +139,32 @@ def _stale_note(command: str) -> str:
 
 
 def _instructions() -> str:
-    """INSTRUCTIONS, with a note appended when the installation needs a hand.
+    """INSTRUCTIONS, with a note appended for each way the install needs a hand.
 
     HOOKS_MISSING when the user's settings register no memai hook,
     INSTALL_STALE when they do but an event is unregistered, a registered
     command has left the disk, an entry is not the one an install writes, or
-    an installed skill is not the version this package ships.
+    an installed skill is not the version this package ships. Then
+    update.notice() when a release above this version is known.
 
     Read once, at import, from the user's settings alone -- the scope memai
-    installs into. Unreadable settings are read as no registration.
+    installs into. Unreadable settings are read as no registration. The
+    release is read from the cache a hook writes and never fetched here: see
+    memai.update.
     """
+    notes: list[str] = []
     try:
         command = _quoted(hook_install.hook_command())
-        note = (_stale_note(command)
-                if hook_install.registered(hook_install.user_settings_path())
-                else HOOKS_MISSING.format(command=command))
+        notes.append(_stale_note(command)
+                     if hook_install.registered(hook_install.user_settings_path())
+                     else HOOKS_MISSING.format(command=command))
     except Exception:
-        return INSTRUCTIONS
-    return f"{INSTRUCTIONS}\n\n{note}" if note else INSTRUCTIONS
+        pass
+    try:
+        notes.append(update.notice())
+    except Exception:
+        pass
+    return "\n\n".join([INSTRUCTIONS, *(note for note in notes if note)])
 
 
 mcp = FastMCP("memai", instructions=_instructions())

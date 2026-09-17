@@ -4724,6 +4724,229 @@ input.pick-q:focus { box-shadow: inset 0 -2px 0 var(--accent); }
   .dgl-work { grid-template-columns: 1fr; }
 }
 
+/* ── releases ────────────────────────────────────────────────────────────
+   A document rather than a dashboard: entries at reading measure in one
+   column, with the version, its date and its standing in a gutter beside
+   them. The gutter is sticky, so a release long enough to fill the window
+   keeps saying which version is being read.
+
+   The only tone above --surface here is the update block: --raised is this
+   stylesheet's "this card wants a decision from you", and an update is the
+   one thing on the page that asks for something. Everything else sits on
+   the page itself, separated by rules, because a changelog is read top to
+   bottom and boxing each release would cut the thread. */
+
+.rl { max-width: 920px; }
+
+.rl-head { margin-bottom: var(--sp-6); }
+.rl-title { font: 500 var(--fs-xl)/1.25 var(--font-ui); margin: 0 0 var(--sp-4); }
+
+/* The two numbers ARE the answer, so they are drawn at the size of an
+   answer and not written into a sentence. Installed on the left in plain
+   white, what it is behind on the right in the accent, the step between them
+   pointing from one to the other; up to date, there is one number and no
+   step, because there is nowhere to point. */
+.rl-versions {
+  display: grid; grid-template-columns: auto auto auto;
+  justify-content: start; align-items: center;
+  column-gap: var(--sp-5); row-gap: var(--sp-2);
+}
+.rl-versions.is-current { grid-template-columns: auto; }
+.rl-v { display: flex; flex-direction: column; gap: var(--sp-0); }
+.rl-v-num { font: 500 var(--fs-num)/1.1 var(--font-m); color: var(--ink); }
+.rl-v.is-latest .rl-v-num { color: var(--accent); }
+.rl-v-label {
+  font: 500 var(--fs-label)/1.4 var(--font-ui);
+  letter-spacing: .08em; text-transform: uppercase;
+  color: var(--ink-3);
+}
+.rl-v-step { display: inline-flex; color: var(--ink-3); }
+.rl-v-step svg {
+  width: 18px; height: 18px;
+  fill: none; stroke: currentColor;
+  stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round;
+}
+.rl-checked { grid-column: 1 / -1; font-size: var(--fs-sm); color: var(--ink-3); }
+
+/* the update */
+
+.rl-update {
+  background: var(--raised);
+  border-radius: var(--r-lg);
+  padding: var(--sp-5);
+  margin-bottom: var(--sp-6);
+}
+.rl-update-title {
+  font: 500 var(--fs-md)/1.3 var(--font-ui);
+  color: var(--ink);
+  margin: 0 0 var(--sp-2);
+}
+.rl-update-lead, .rl-update-foot {
+  max-width: 70ch;
+  font-size: var(--fs-body); line-height: 1.6; color: var(--ink-2);
+}
+.rl-update-foot { margin-top: var(--sp-3); }
+
+/* The order is the instruction -- pull, then install -- so the step numbers
+   are drawn rather than left to a marker the list-style: none removes. */
+.rl-cmds {
+  list-style: none; counter-reset: step;
+  margin: var(--sp-4) 0 0; padding: 0;
+  display: grid; gap: var(--sp-2);
+}
+.rl-cmd {
+  display: flex; align-items: center; gap: var(--sp-3);
+  background: var(--inset);
+  border-radius: var(--r-md);
+  padding: var(--sp-1) var(--sp-1) var(--sp-1) var(--sp-3);
+}
+.rl-cmd::before {
+  counter-increment: step; content: counter(step);
+  flex: none;
+  font: 500 var(--fs-label) var(--font-m);
+  color: var(--ink-3);
+}
+/* A checkout path is long and a command that wraps stops being one line to
+   copy: it scrolls on its own axis instead. */
+.rl-cmd code {
+  flex: 1; min-width: 0;
+  font: 400 var(--fs-sm)/1.6 var(--font-m);
+  color: var(--ink);
+  white-space: pre; overflow-x: auto;
+}
+.rl-cmd .icon-btn { flex: none; }
+
+/* one release */
+
+.rl-item {
+  display: grid;
+  grid-template-columns: 9rem minmax(0, 1fr);
+  gap: var(--sp-5);
+  padding: var(--sp-5) 0;
+  border-top: 1px solid var(--line-soft);
+}
+.rl-item:first-child { border-top: 0; padding-top: 0; }
+
+.rl-mark {
+  position: sticky; top: 0; align-self: start;
+  display: flex; flex-direction: column; align-items: flex-start; gap: var(--sp-1);
+}
+.rl-ver { font: 500 var(--fs-lg)/1.2 var(--font-m); color: var(--ink-2); }
+.rl-item.is-here .rl-ver { color: var(--accent); }
+.rl-date { font: 400 var(--fs-label)/1.4 var(--font-m); color: var(--ink-3); }
+
+/* Two states, told apart by weight rather than by two colours: the version
+   running is the emphatic one, and a version published since is stated
+   plainly -- the update block above it is where that news belongs. */
+.rl-tag {
+  margin-top: var(--sp-1);
+  border-radius: var(--r-pill);
+  padding: var(--sp-0) var(--sp-2);
+  font: 500 var(--fs-label)/1.5 var(--font-ui);
+  letter-spacing: .08em; text-transform: uppercase;
+}
+.rl-tag.is-here { background: var(--accent-dim); color: var(--accent); }
+.rl-tag.is-ahead { border: 1px solid var(--line); color: var(--ink-2); }
+
+.rl-group + .rl-group { margin-top: var(--sp-4); }
+.rl-group-title {
+  margin: 0 0 var(--sp-2);
+  font: 500 var(--fs-label)/1.4 var(--font-ui);
+  letter-spacing: .08em; text-transform: uppercase;
+  color: var(--ink-3);
+}
+.rl-list {
+  max-width: 72ch;
+  margin: 0; padding-left: var(--sp-4);
+  display: grid; gap: var(--sp-2);
+}
+.rl-list li { font: 400 var(--fs-read)/1.6 var(--font-ui); color: var(--ink); }
+.rl-list li::marker { color: var(--ink-3); }
+
+.rl-quiet { font-size: var(--fs-body); color: var(--ink-3); }
+.rl-src {
+  display: inline-block; margin-top: var(--sp-3);
+  font-size: var(--fs-sm); color: var(--ink-3);
+  transition: color .15s;
+}
+.rl-src:hover { color: var(--accent); }
+/* A link inside prose says so: the underline is the affordance, and the
+   offset keeps it off the descenders. */
+.rl-link { color: var(--accent); text-decoration: underline; text-underline-offset: 3px; }
+.rl-link:hover { color: var(--accent-hi); }
+.rl-empty { max-width: 60ch; margin: 0 auto; display: grid; gap: var(--sp-2); }
+
+/* ── the version mark in the app bar ──────────────────────────────────────
+   At the head of the controls, with a divider after it: a version is a fact
+   about the program and the three things beside it are things to operate, and
+   without the rule the number read as one more of them -- the project switch
+   is set in the same data font.
+
+   An update shows as the icon, not as a count: the bar has one thing to say
+   here, which is that there is one. Which release, and how many, are on the
+   page it opens. */
+
+#verHost {
+  display: flex; align-items: center; flex: none;
+  padding-right: var(--sp-3);
+  border-right: 1px solid var(--line-soft);
+}
+
+.ver-chip {
+  display: inline-flex; align-items: center; gap: var(--sp-1);
+  height: var(--ctl-h-sm);
+  padding: 0 var(--sp-2);
+  border-radius: var(--r-md);
+  white-space: nowrap;
+  font: 500 var(--fs-label)/1.4 var(--font-m);
+  color: var(--ink-3);
+  transition: color .15s, background-color .15s;
+}
+.ver-chip:hover { color: var(--ink); background: var(--hover-2); }
+
+/* Drawn like the section icons -- same grid, same stroke -- so the one glyph
+   that appears in this row does not read as coming from somewhere else. */
+.ver-chip svg {
+  width: 15px; height: 15px; flex: none;
+  fill: none; stroke: currentColor;
+  stroke-width: 1.4; stroke-linecap: round; stroke-linejoin: round;
+}
+/* The accent is on the glyph alone: a filled pill here is what the current
+   section wears, and two things wearing it would be two current things. */
+.ver-chip.is-behind { color: var(--ink-2); }
+.ver-chip.is-behind svg { color: var(--accent); }
+.ver-chip.is-behind:hover { color: var(--ink); }
+
+/* The gutter stops being a gutter: version, date and standing sit in a row
+   above the entries they belong to. A command stops scrolling on its own
+   axis and wraps instead -- at this width a line to scroll sideways is a
+   line you cannot read, and the copy button is what runs it anyway. */
+@media (max-width: 860px) {
+  .rl-item { grid-template-columns: minmax(0, 1fr); gap: var(--sp-3); }
+  .rl-mark {
+    position: static;
+    flex-direction: row; align-items: baseline; gap: var(--sp-3);
+  }
+  .rl-tag { margin-top: 0; }
+  .rl-cmd { align-items: flex-start; }
+  .rl-cmd::before { padding-top: var(--sp-1); }
+  .rl-cmd code { white-space: pre-wrap; overflow-wrap: anywhere; overflow-x: visible; }
+}
+
+/* The bar is two rows here and the controls fit their row with nothing to
+   spare. The number gives way to the icon, which is the half that is news;
+   with no news there is nothing here worth the width. */
+@media (max-width: 720px) {
+  #verHost { padding-right: var(--sp-2); }
+  /* 16 + 4 + 4: the tap-target floor exactly (WCAG 2.5.8), and the row it
+     sits in has nothing to spare for more. */
+  .ver-chip { padding: 0 var(--sp-1); }
+  .ver-chip svg { width: 16px; height: 16px; }
+  .ver-num { display: none; }
+  .ver-chip:not(.is-behind) { display: none; }
+  #verHost:not(:has(.is-behind)) { border-right: 0; padding-right: 0; }
+}
+
 /* ── responsive squeeze ──────────────────────────────────────────────── */
 
 /* Seven labels, a wordmark, a project and two controls stop fitting one row

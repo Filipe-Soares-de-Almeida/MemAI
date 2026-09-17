@@ -61,6 +61,11 @@
   </nav>
 
   <div class="appbar-right">
+    <!-- the version this dashboard runs, and the way into the releases; it
+         keeps a divider between itself and the controls, because a version is
+         a fact about the program and they are things to operate. Built and
+         wired in core/version.js. -->
+    <span id="verHost"></span>
     <!-- which project the dashboard, and every MCP server on this machine,
          reads and writes right now; built and wired in core/projects.js -->
     <span id="projectHost"></span>
