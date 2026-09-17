@@ -3,10 +3,12 @@
 Three events, each reading the host's hook payload on stdin and writing one
 JSON object on stdout:
 
-  session-start   the store's state, and the instruction to open the subject
+  session-start   the store's state, the instruction to open the subject, and
+                  a note when a newer memai has been released
   pre-compact     a reminder to checkpoint before the context is summarised
-  stop            a nudge to checkpoint when nothing was written, and a
-                  request for the warden subagent when one is owed
+  stop            a nudge to checkpoint when nothing was written, a request
+                  for the warden subagent when one is owed, and the release
+                  check memai.update caches for the next session
 
 A fourth reads the call the host is about to make instead of the store, and
 is the one exception to everything the last paragraph of this docstring says:
@@ -42,7 +44,7 @@ import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from memai import brief, db, guard, hook_install, warden
+from memai import brief, db, guard, hook_install, update, warden
 
 # How long after the last write a Stop hook assumes the session already
 # recorded what it learned. Long enough to cover a stretch of reading and
@@ -88,6 +90,11 @@ def _emit(event: str, context: str, *, system: str = "") -> None:
 
 
 def _session_start(args, payload) -> None:
+    """The store's state, and a note when a newer memai has been released.
+
+    `--budget` governs the brief; the update note is outside it, the way the
+    warden's ask is outside what `stop` says about the store.
+    """
     # Both before the brief and never at its expense. `began` is what later
     # tells an agent the host loaded from one installed behind its back, and
     # a warden state left by a session that ended is nobody else's to clean up.
@@ -96,9 +103,16 @@ def _session_start(args, payload) -> None:
         warden.prune()
     except Exception:
         pass
+    # The one request a session start makes, and only when nothing has ever
+    # been cached: every other refresh happens at the end of a turn, where
+    # nobody is waiting on it.
+    known = update.refresh(unseen_only=True)
+    release = update.notice(known)
     with db.connect() as conn:
-        _emit("SessionStart", brief.session_brief(
-            conn, domain=args.domain, budget=args.budget, project=db.active_project()))
+        text = brief.session_brief(
+            conn, domain=args.domain, budget=args.budget, project=db.active_project())
+    _emit("SessionStart", "\n\n".join(part for part in (text, release) if part),
+          system=update.banner(known) if release else "")
 
 
 def _pre_compact(args, payload) -> None:
@@ -186,7 +200,8 @@ def _stop(args, payload) -> None:
     """Whatever the store has to say at the end of a turn, as one result.
 
     Both notes read state before they speak, and either can be silent, so a
-    turn with nothing to say emits nothing at all.
+    turn with nothing to say emits nothing at all. Then the release check
+    refreshes what it caches, which is read by the sessions after this one.
     """
     if payload.get("stop_hook_active"):
         return
@@ -198,6 +213,10 @@ def _stop(args, payload) -> None:
             systems.append(system)
     if notes:
         _emit("Stop", "\n\n".join(notes), system="MemAI: " + "; ".join(systems) + ".")
+    # After the emit, and never part of it: the answer is for the next session
+    # to read, and this is the end of a turn, where the request costs nobody
+    # anything it has to wait for.
+    update.refresh()
 
 
 def _line(text: str) -> None:
@@ -332,6 +351,10 @@ def _check(path, *, skills: bool = False, agents: bool = False) -> int:
     A skill and an agent are each reported against the install receipt beside
     them -- installed, outdated, edited or missing. Anything but `installed`
     fails the gate, an edited copy included.
+
+    The last line is the released version against this one. A person is
+    reading, so it asks GitHub when the cached answer is due rather than
+    reporting an old one; it never gates the exit code.
     """
     found = hook_install.registered(path)
     events = hook_install.event_state(path)
@@ -373,6 +396,8 @@ def _check(path, *, skills: bool = False, agents: bool = False) -> int:
         also = (" -- and an update shipped since"
                 if how == "edited" and name in agents_behind else "")
         print(f"  {name}: {how}{also}")
+
+    print(update.state_line(update.refresh()))
 
     if skills or agents:
         gated = (list(state.values()) if skills else []) + \
