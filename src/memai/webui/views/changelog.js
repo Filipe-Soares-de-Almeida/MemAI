@@ -89,24 +89,32 @@ function checkedText(state) {
 
 /* ─── the update ──────────────────────────────────────────────────────────
    On --raised, which in this stylesheet is the tone of a card that wants a
-   decision from the reader. The commands are numbered because the order is
-   the instruction: pull, then install. */
+   decision from the reader. Closing the sessions, the commands and opening
+   the host again are steps of one order, so they are one numbered list and
+   not a sentence, a list and another sentence. The release page is a control
+   under the steps: left in the prose it reads as part of it, and it is what a
+   reader reaches for after the instruction rather than before it. */
 
 function updateHTML(state) {
-  const commands = state.commands.length
-    ? `<ol class="rl-cmds">${state.commands.map(commandHTML).join('')}</ol>`
-    : `<p class="rl-quiet">${t('rls.noCommands')}</p>`;
+  const steps = state.commands.length
+    ? [textStep(t('rls.stepClose')),
+       ...state.commands.map(commandStep),
+       textStep(t('rls.stepReopen'))]
+    : [];
   return `<section class="rl-update">
     <h3 class="rl-update-title">${t('rls.updateTitle', { v: esc(bare(state.latest)) })}</h3>
-    <p class="rl-update-lead">${t('rls.howBody')}</p>
-    ${commands}
-    <p class="rl-update-foot">${t('rls.howFoot')}
-      <a href="${esc(state.url)}" target="_blank" rel="noopener noreferrer"
-         class="rl-link">${t('rls.page')}</a></p>
+    <p class="rl-update-lead">${steps.length ? t('rls.updateLead') : t('rls.noCommands')}</p>
+    ${steps.length ? `<ol class="rl-steps">${steps.join('')}</ol>` : ''}
+    <div class="rl-update-foot">
+      <a class="btn btn-sm" href="${esc(state.url)}" target="_blank"
+         rel="noopener noreferrer">${t('rls.page')}</a>
+    </div>
   </section>`;
 }
 
-const commandHTML = command => `<li class="rl-cmd">
+const textStep = text => `<li class="rl-step"><p class="rl-step-text">${text}</p></li>`;
+
+const commandStep = command => `<li class="rl-step is-cmd">
   <code>${esc(command)}</code>
   <button type="button" class="icon-btn" data-copy="${esc(command)}"
           title="${t('rls.copy')}" aria-label="${t('rls.copy')}">
