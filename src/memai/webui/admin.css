@@ -4782,8 +4782,10 @@ input.pick-q:focus { box-shadow: inset 0 -2px 0 var(--accent); }
   color: var(--ink);
   margin: 0;
 }
+/* No reading measure on one sentence: the card is already narrower than the
+   page, and capping it again breaks the line with the width to spare. */
 .rl-update-lead {
-  max-width: 70ch; margin: 0;
+  margin: 0;
   font-size: var(--fs-body); line-height: 1.6; color: var(--ink-2);
 }
 /* Where the release is published is not part of the instruction, so it is a

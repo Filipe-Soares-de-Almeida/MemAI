@@ -1031,6 +1031,6 @@
     "type.reasoning": "Reasoning",
     "uid.copyTitle": "Copy uid",
     "ver.behind": "Update available: {latest}",
-    "ver.title": "MemAI {v} — releases"
+    "ver.title": "MemAI {v}: releases"
   }
 }
