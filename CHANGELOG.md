@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.2.0](https://github.com/Filipe-Soares-de-Almeida/MemAI/compare/v0.1.1...v0.2.0) (2026-09-17)
+
+
+### Features
+
+* check for new releases and read the release history in the dashboard ([110bdb0](https://github.com/Filipe-Soares-de-Almeida/MemAI/commit/110bdb0b608f5efc2383d2086dbfe70980dd6f46))
+* check for new releases and read the release history in the dashboard ([1647b2e](https://github.com/Filipe-Soares-de-Almeida/MemAI/commit/1647b2e5b5c53634bec29da3e389c85251c3929a))
+
+
+### Bug Fixes
+
+* **webui:** lay the update card out as one numbered instruction ([61a218d](https://github.com/Filipe-Soares-de-Almeida/MemAI/commit/61a218da5e9af687f5e3d91c1d5bb6cc64688f11))
+* **webui:** let the update card's lead run the width of the card ([5495b42](https://github.com/Filipe-Soares-de-Almeida/MemAI/commit/5495b422e16118ef3ae231c2e90e454840c36d6c))
+
 ## [0.1.1](https://github.com/Filipe-Soares-de-Almeida/MemAI/compare/v0.1.0...v0.1.1) (2026-09-12)
 
 
