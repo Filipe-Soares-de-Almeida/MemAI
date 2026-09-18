@@ -42,6 +42,7 @@ import os
 import socket
 import subprocess
 import sys
+import sysconfig
 from pathlib import Path
 
 from memai import db
@@ -58,10 +59,10 @@ PROBE_TIMEOUT = 0.5
 
 _TRUE = {"1", "true", "yes", "on"}
 
-# Windows: run without a console and without a parent to die with. The
-# dashboard is meant to outlive the agent session that opened it, the same
-# way run-admin.bat does.
-_DETACHED_PROCESS = 0x00000008
+# Windows: the child gets a console of its own that is never put on
+# screen. Its own, so console control events sent to this process's group
+# do not reach it.
+_CREATE_NO_WINDOW = 0x08000000
 
 
 def _log(message: str) -> None:
@@ -179,40 +180,34 @@ def find_running() -> tuple[str, int] | None:
 
 
 def interpreter() -> str:
-    """The Python to start the dashboard with: pythonw where there is one.
+    """The Python to start the dashboard with: the base interpreter.
 
-    DETACHED_PROCESS is not enough to keep a console window off the
-    screen. It denies the child its parent's console, but a venv's
-    python.exe is a redirector that launches the real interpreter itself,
-    with ordinary flags -- and Windows gives a console-subsystem process
-    with no inherited console a brand new one. The result is a terminal
-    that flashes up on the desktop every time an agent session starts.
+    On Windows a venv's python.exe and pythonw.exe are launchers: each
+    one starts the interpreter named in pyvenv.cfg and then blocks
+    waiting on it, so running one costs a second process that lives as
+    long as the dashboard does. sys._base_executable is that interpreter
+    directly, and is sys.executable itself outside a venv.
 
-    CREATE_NO_WINDOW does not fix it either: the documentation is
-    explicit that the flag is ignored when combined with
-    DETACHED_PROCESS. What fixes it is not being a console program.
-    pythonw.exe is the same interpreter built for the GUI subsystem, so
-    no console is ever allocated, for it or for what it spawns. Output
-    still reaches the log file, because that is an explicit handle rather
-    than an inherited console.
+    What it does not carry is the venv's site-packages -- _spawn_admin
+    puts that on PYTHONPATH.
 
-    Falls back to sys.executable where pythonw is absent -- some
-    embedded and Linux-style layouts ship only the one binary, and a
-    console nobody sees beats a dashboard that never starts.
+    Returns sys.executable where _base_executable is unset or names a
+    file that is not there.
     """
     if sys.platform != "win32":
         return sys.executable
-    windowless = Path(sys.executable).with_name("pythonw.exe")
-    return str(windowless) if windowless.is_file() else sys.executable
+    base = getattr(sys, "_base_executable", "")
+    return base if base and Path(base).is_file() else sys.executable
 
 
 def _spawn_admin(host: str, port: int) -> None:
     """Start the dashboard as a process of its own.
 
-    Detached, because the point is to outlive this MCP server: hosts kill
-    their MCP subprocesses at session end, and a dashboard that vanished
-    with whichever of the three happened to have started it would be
-    worse than not having one.
+    The child outlives this MCP server, which hosts kill at session end.
+    Nothing here ties the two together: Windows does not kill a child
+    when its parent dies, creation flags neither join nor leave a job, and
+    CREATE_NO_WINDOW gives the child a console of its own rather than a
+    share of this process's.
 
     stdout and stderr go to a file and never to inherited handles. This
     process's stdout IS the MCP protocol stream; a child writing a uvicorn
@@ -226,9 +221,15 @@ def _spawn_admin(host: str, port: int) -> None:
     # on Windows a live process's cwd cannot be renamed or deleted, and an
     # orphaned dashboard would pin the operator's project folder. That
     # move is also why src/ is spelled out on PYTHONPATH.
+    #
+    # site-packages is spelled out because interpreter() returns the base
+    # interpreter, which resolves nothing from this venv. PYTHONPATH is
+    # not scanned for .pth files, so a dependency that reaches the
+    # dashboard only through one is not on this path.
     src_root = str(Path(__file__).resolve().parents[1])
+    site_packages = sysconfig.get_paths()["purelib"]
     env["PYTHONPATH"] = os.pathsep.join(
-        p for p in (src_root, env.get("PYTHONPATH")) if p)
+        p for p in (src_root, site_packages, env.get("PYTHONPATH")) if p)
 
     argv = [interpreter(), "-u", "-X", "utf8", "-m", "memai.admin",
             "--host", host, "--port", str(port), "--autostarted"]
@@ -238,8 +239,8 @@ def _spawn_admin(host: str, port: int) -> None:
     # job, but on a job without BREAKAWAY_OK the CreateProcess call fails
     # outright -- trading "the dashboard dies with the session" for "the
     # MCP server does not start". Measured here: each host process gets
-    # its own job with SILENT_BREAKAWAY_OK, so DETACHED_PROCESS is enough.
-    flags = {"creationflags": _DETACHED_PROCESS} if sys.platform == "win32" \
+    # its own job with SILENT_BREAKAWAY_OK, so the flag below is enough.
+    flags = {"creationflags": _CREATE_NO_WINDOW} if sys.platform == "win32" \
         else {"start_new_session": True}
 
     log = None
