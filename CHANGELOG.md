@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.2.1](https://github.com/Filipe-Soares-de-Almeida/MemAI/compare/v0.2.0...v0.2.1) (2026-09-18)
+
+
+### Bug Fixes
+
+* **autostart:** stop the dashboard from hanging on Windows shutdown ([7a7a993](https://github.com/Filipe-Soares-de-Almeida/MemAI/commit/7a7a9931d4bb0e645749d4d3f38bb1cfe902a108))
+* **autostart:** stop the dashboard from hanging on Windows shutdown ([18ac71b](https://github.com/Filipe-Soares-de-Almeida/MemAI/commit/18ac71bd4d9c2fb5461c438df4e18877c0a06772))
+
 ## [0.2.0](https://github.com/Filipe-Soares-de-Almeida/MemAI/compare/v0.1.1...v0.2.0) (2026-09-17)
 
 
