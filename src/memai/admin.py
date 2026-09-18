@@ -2694,13 +2694,12 @@ def _cmd_status() -> int:
 
 
 def _cmd_stop() -> int:
-    """Stop a dashboard started detached.
+    """Stop the running dashboard by the pid it reports over HTTP.
 
-    Needed because DETACHED_PROCESS means no console, so there is no
-    console control event to send and uvicorn's own signal handling is
-    out of reach. The store survives a hard stop -- SQLite in WAL mode is
-    the whole reason this project keeps its state in a database rather
-    than in the server's memory.
+    The dashboard holds a console of its own, so no console control
+    event reaches it and uvicorn's signal handling is out of reach: this
+    terminates the process. The store is SQLite in WAL mode and survives
+    a hard stop.
     """
     found = autostart.find_running()
     if not found:
