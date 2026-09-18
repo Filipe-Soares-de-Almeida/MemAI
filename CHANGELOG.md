@@ -5,7 +5,6 @@
 
 ### Bug Fixes
 
-* **autostart:** stop the dashboard from hanging on Windows shutdown ([7a7a993](https://github.com/Filipe-Soares-de-Almeida/MemAI/commit/7a7a9931d4bb0e645749d4d3f38bb1cfe902a108))
 * **autostart:** stop the dashboard from hanging on Windows shutdown ([18ac71b](https://github.com/Filipe-Soares-de-Almeida/MemAI/commit/18ac71bd4d9c2fb5461c438df4e18877c0a06772))
 
 ## [0.2.0](https://github.com/Filipe-Soares-de-Almeida/MemAI/compare/v0.1.1...v0.2.0) (2026-09-17)
@@ -13,7 +12,6 @@
 
 ### Features
 
-* check for new releases and read the release history in the dashboard ([110bdb0](https://github.com/Filipe-Soares-de-Almeida/MemAI/commit/110bdb0b608f5efc2383d2086dbfe70980dd6f46))
 * check for new releases and read the release history in the dashboard ([1647b2e](https://github.com/Filipe-Soares-de-Almeida/MemAI/commit/1647b2e5b5c53634bec29da3e389c85251c3929a))
 
 
