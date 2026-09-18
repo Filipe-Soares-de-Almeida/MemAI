@@ -10,7 +10,7 @@
         { "type": "generic", "path": "src/memai/__init__.py" }
       ],
       "pull-request-title-pattern": "chore: release ${version}",
-      "pull-request-header": "Merging this cuts the release: the commit is tagged, the release is published, and `main` is fast-forwarded to it.",
+      "pull-request-header": "Everything that landed on `dev` since the last tag. Merging turns it into a MemAI release.",
       "pull-request-footer": "The version comes from the conventional commits since the last tag -- a `fix` moves the patch, a `feat` the minor, and below 1.0.0 a breaking change moves the minor too."
     }
   }
