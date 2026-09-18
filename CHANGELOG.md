@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.2](https://github.com/Filipe-Soares-de-Almeida/MemAI/compare/v0.2.1...v0.2.2) (2026-09-18)
+
+
+### Documentation
+
+* the release pull request says what the block below it is ([#51](https://github.com/Filipe-Soares-de-Almeida/MemAI/issues/51)) ([e5089a0](https://github.com/Filipe-Soares-de-Almeida/MemAI/commit/e5089a071e78d72485d8a4a67b8d3e86aa5ee4b7))
+
 ## [0.2.1](https://github.com/Filipe-Soares-de-Almeida/MemAI/compare/v0.2.0...v0.2.1) (2026-09-18)
 
 
