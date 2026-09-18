@@ -12,9 +12,11 @@ MEMAI_HOME is a tmp dir per test, which is where the registry file lives.
 from __future__ import annotations
 
 import json
+import os
 import socket
 import struct
 import sys
+import sysconfig
 import threading
 from pathlib import Path
 
@@ -300,31 +302,65 @@ def test_a_failure_looking_up_what_is_running_is_survivable(monkeypatch, capsys)
     assert "could not start the dashboard" in capsys.readouterr().err
 
 
-# --- no console window on the desktop --------------------------------
+# --- what the dashboard is started as --------------------------------
 
 @pytest.mark.skipif(sys.platform != "win32", reason="console windows are Windows")
-def test_it_starts_the_dashboard_with_a_windowless_interpreter():
-    """DETACHED_PROCESS alone left a terminal flashing up every session.
-
-    A venv's python.exe relaunches the real interpreter itself, and
-    Windows hands a console-subsystem process with no inherited console a
-    fresh one. The fix is not being a console program.
-    """
+def test_it_starts_the_dashboard_with_the_base_interpreter():
+    """interpreter() picks a console interpreter, never a venv launcher."""
     chosen = Path(autostart.interpreter())
-    assert chosen.name == "pythonw.exe"
     assert chosen.is_file()
-    assert _pe_subsystem(chosen) == 2, "pythonw.exe should be the GUI subsystem"
-    # and the thing it replaced is what caused the window
-    assert _pe_subsystem(Path(sys.executable)) == 3
+    assert chosen == Path(sys._base_executable)
+    if sys.prefix != sys.base_prefix:        # these tests run inside a venv
+        assert chosen != Path(sys.executable), "must not be the venv's launcher"
+    assert _pe_subsystem(chosen) == 3, "the base interpreter is a console program"
 
 
 @pytest.mark.skipif(sys.platform != "win32", reason="console windows are Windows")
-def test_it_falls_back_when_there_is_no_pythonw(monkeypatch, tmp_path):
-    """Better a console nobody looks at than no dashboard at all."""
+def test_it_falls_back_when_there_is_no_base_executable(monkeypatch, tmp_path):
+    """An interpreter with no _base_executable is used as it is."""
     lonely = tmp_path / "python.exe"
     lonely.write_bytes(b"")
     monkeypatch.setattr(sys, "executable", str(lonely))
+    monkeypatch.delattr(sys, "_base_executable", raising=False)
     assert autostart.interpreter() == str(lonely)
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="console windows are Windows")
+def test_it_falls_back_when_the_base_executable_is_gone(monkeypatch, tmp_path):
+    """A _base_executable naming a missing file is not returned."""
+    lonely = tmp_path / "python.exe"
+    lonely.write_bytes(b"")
+    monkeypatch.setattr(sys, "executable", str(lonely))
+    monkeypatch.setattr(sys, "_base_executable", str(tmp_path / "gone.exe"))
+    assert autostart.interpreter() == str(lonely)
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="creation flags are Windows")
+def test_the_spawn_asks_for_a_console_of_its_own_and_hides_it(monkeypatch, tmp_path):
+    """The child is created with CREATE_NO_WINDOW, in MEMAI_HOME."""
+    seen = {}
+    monkeypatch.setattr(autostart, "home", lambda: tmp_path)
+    monkeypatch.setattr(autostart.subprocess, "Popen",
+                        lambda argv, **kw: seen.update(argv=argv, kwargs=kw))
+
+    autostart._spawn_admin("127.0.0.1", 8888)
+
+    assert seen["kwargs"]["creationflags"] == autostart._CREATE_NO_WINDOW
+    assert seen["kwargs"]["cwd"] == str(tmp_path)
+
+
+def test_the_spawn_carries_the_venv_on_pythonpath(monkeypatch, tmp_path):
+    """The child's PYTHONPATH names both src/ and this venv's site-packages."""
+    seen = {}
+    monkeypatch.setattr(autostart, "home", lambda: tmp_path)
+    monkeypatch.setattr(autostart.subprocess, "Popen",
+                        lambda argv, **kw: seen.update(kwargs=kw))
+
+    autostart._spawn_admin("127.0.0.1", 8888)
+
+    entries = seen["kwargs"]["env"]["PYTHONPATH"].split(os.pathsep)
+    assert str(Path(autostart.__file__).resolve().parents[1]) in entries
+    assert sysconfig.get_paths()["purelib"] in entries
 
 
 def _pe_subsystem(path: Path) -> int:
