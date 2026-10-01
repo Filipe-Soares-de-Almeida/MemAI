@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.3.0](https://github.com/Filipe-Soares-de-Almeida/MemAI/compare/v0.2.1...v0.3.0) (2026-10-01)
+
+
+### Features
+
+* **admin:** check for a new release on demand and choose how often it is checked ([#54](https://github.com/Filipe-Soares-de-Almeida/MemAI/issues/54)) ([aa3521a](https://github.com/Filipe-Soares-de-Almeida/MemAI/commit/aa3521aebfca6bf0f81d9739a6670090c4fda225))
+* **admin:** delete memories in bulk, choose how backups are zipped, back up each optimizer run ([#53](https://github.com/Filipe-Soares-de-Almeida/MemAI/issues/53)) ([82a2ff5](https://github.com/Filipe-Soares-de-Almeida/MemAI/commit/82a2ff5a1cef057a17c455b626680dfefdc08e48))
+
+
+### Documentation
+
+* the release pull request says what the block below it is ([#51](https://github.com/Filipe-Soares-de-Almeida/MemAI/issues/51)) ([e5089a0](https://github.com/Filipe-Soares-de-Almeida/MemAI/commit/e5089a071e78d72485d8a4a67b8d3e86aa5ee4b7))
+
 ## [0.2.1](https://github.com/Filipe-Soares-de-Almeida/MemAI/compare/v0.2.0...v0.2.1) (2026-09-18)
 
 
