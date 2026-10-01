@@ -3,9 +3,11 @@
 
    Two sources arrive as one list from /api/changelog -- the CHANGELOG.md that
    ships with the package, and, for versions published after it, the release
-   check's cache, which a hook process fills (memai/update.py). Nothing here
-   reaches the network, so the page reads the same offline; what it cannot
-   know is dated by when the check last ran rather than left unsaid.
+   check's cache, which a hook process fills (memai/update.py). The page reads
+   that cache, so it reads the same offline; what it cannot know is dated by
+   when the check last ran rather than left unsaid. Check now asks GitHub
+   through the server, and the picker beside it sets how long an answer is
+   used before a hook asks again.
 
    It is also the only place in the dashboard that prints a command, and it
    runs none: an install rewrites the environment the MCP servers around it
@@ -15,7 +17,8 @@
 
 import { esc, fmtAgo, fmtDay } from '../core/dom.js';
 import { api } from '../core/api.js';
-import { copyCode } from '../core/ui.js';
+import { copyCode, toast, failed } from '../core/ui.js';
+import { pickerFor, wirePicker, fixedItems } from '../core/pick.js';
 import { icon } from '../core/icons.js';
 import { t } from '../i18n.js';
 
@@ -37,6 +40,7 @@ export async function renderChangelog(view, params, ctx) {
     <header class="rl-head">
       <h2 class="rl-title">${t('rls.title')}</h2>
       ${versionsHTML(state)}
+      ${checkHTML(state)}
     </header>
     ${state.behind ? updateHTML(state) : ''}
     ${data.releases.length
@@ -47,6 +51,66 @@ export async function renderChangelog(view, params, ctx) {
   for (const button of view.querySelectorAll('[data-copy]')) {
     button.addEventListener('click', () => copyCode(button.dataset.copy));
   }
+  wireCheck(view, state, () => renderChangelog(view, params, ctx));
+}
+
+/* ─── asking again ────────────────────────────────────────────────────────
+   Check now, and how long an answer is used before a hook asks on its own.
+   The presets are the ones worth a click; the server takes any whole number
+   of hours it allows, and a value outside the list is shown as itself rather
+   than as the first preset. */
+
+const EVERY_HOURS = [1, 3, 6, 12, 24, 48, 168];
+
+const hoursLabel = n => n >= 24 && n % 24 === 0
+  ? t('rls.every.d', { n: n / 24 })
+  : t('rls.every.h', { n });
+
+function everyItems(current) {
+  const hours = EVERY_HOURS.includes(current)
+    ? EVERY_HOURS
+    : [...EVERY_HOURS, current].sort((a, b) => a - b);
+  return hours.map(n => ({ value: String(n), label: hoursLabel(n) }));
+}
+
+function checkHTML(state) {
+  const items = everyItems(state.interval_hours);
+  return `<div class="rl-check">
+    <button type="button" class="btn btn-sm" id="rlCheck"
+            ${state.enabled ? '' : `disabled title="${t('rls.checkOff')}"`}>${t('rls.checkNow')}</button>
+    <label class="inline-label">${t('rls.every')}
+      ${pickerFor({ id: 'rlEvery', value: String(state.interval_hours), items,
+                    ariaLabel: t('rls.every') })}</label>
+  </div>`;
+}
+
+function wireCheck(view, state, reload) {
+  const button = view.querySelector('#rlCheck');
+  button?.addEventListener('click', async () => {
+    button.disabled = true;
+    button.textContent = t('rls.checking');
+    try {
+      const next = await api('/api/update/check', { body: {} });
+      if (next.failed) toast(t('rls.msg.failed'), 'warn');
+      else if (next.behind) toast(t('rls.msg.behind', { latest: bare(next.latest) }), 'ok');
+      else toast(t('rls.msg.current'), 'ok');
+      reload();
+    } catch (err) {
+      failed('err.update', err);
+      button.disabled = false;
+      button.textContent = t('rls.checkNow');
+    }
+  });
+
+  wirePicker(view, {
+    id: 'rlEvery', items: fixedItems(everyItems(state.interval_hours)),
+    onPick: async value => {
+      try {
+        await api('/api/update/interval', { body: { hours: Number(value) } });
+        toast(t('rls.msg.every', { every: hoursLabel(Number(value)) }), 'ok');
+      } catch (err) { failed('err.update', err); }
+    },
+  });
 }
 
 /* ─── where this installation stands ──────────────────────────────────────
@@ -84,6 +148,7 @@ function versionsHTML(state) {
 function checkedText(state) {
   if (!state.enabled) return t('rls.checkOff');
   if (!state.checked_at) return t('rls.checkNever');
+  if (Date.now() - new Date(state.checked_at).getTime() < 60000) return t('rls.checkedNow');
   return t('rls.checked', { ago: fmtAgo(state.checked_at) });
 }
 

@@ -115,8 +115,8 @@ the shell's, not the user's. The variables are `MEMAI_HOME`,
 `MEMAI_TOOLS`; all have defaults, so set only what the user wants to differ.
 
 `MEMAI_UPDATE_CHECK` is the one variable that does not belong in that block: it
-gates the daily release check, which a hook process makes and the server only
-reads the cached answer of. Turning it off means setting it in the environment
+gates the release check, which a hook process or the dashboard makes and the
+server only reads the cached answer of. Turning it off means setting it in the environment
 the host itself runs in.
 
 ```json
