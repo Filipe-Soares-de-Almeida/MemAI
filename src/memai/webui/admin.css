@@ -3033,6 +3033,25 @@ button.rs-mono:hover { color: var(--accent); }
   padding: var(--sp-0) var(--sp-1); border-radius: var(--r-sm);
   white-space: nowrap;
 }
+/* The bulk delete's preview: a few of the titles about to go, and the count
+   of active ones, which is the part worth reading twice. */
+.dz-warn { font-size: var(--fs-sm); color: var(--bad-ink); font-weight: 500; margin: 0; }
+.dz-list {
+  margin: 0; padding: var(--sp-2) var(--sp-3) var(--sp-2) var(--sp-5);
+  font-size: var(--fs-sm); color: var(--ink-2);
+  background: var(--inset); border: 1px solid var(--line-soft); border-radius: var(--r-md);
+}
+.dz-list li { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* The strip under the select-all that offers to extend a full page to every
+   row the filter matches. */
+.mem-banner {
+  display: flex; flex-wrap: wrap; align-items: center; justify-content: center;
+  gap: var(--sp-2); padding: var(--sp-2) var(--sp-4);
+  border-bottom: 1px solid var(--line);
+  background: var(--accent-dim); font-size: var(--fs-label); color: var(--ink);
+}
+.mem-banner[hidden] { display: none; }
 
 /* ── graph ───────────────────────────────────────────────────────────── */
 
@@ -3697,6 +3716,29 @@ input.pick-q:focus { box-shadow: inset 0 -2px 0 var(--accent); }
   --ico: 13px; color: var(--zip); border-color: var(--zip-line);
 }
 .mnt-sel-zip:hover:not(:disabled) { background: var(--zip-wash); border-color: var(--zip); }
+
+/* The archive dialog: four ways to say where the ticked backups go, the one
+   field the chosen way needs, and the zips that choice would write. */
+.arch-opts { display: flex; flex-direction: column; gap: var(--sp-2); }
+.arch-opt {
+  display: flex; gap: var(--sp-3); align-items: flex-start;
+  padding: var(--sp-2) var(--sp-3); border: 1px solid var(--line-soft);
+  border-radius: var(--r-md); cursor: pointer;
+}
+.arch-opt:has(input:checked) { border-color: var(--zip); background: var(--zip-wash); }
+.arch-opt:has(input:disabled) { opacity: .55; cursor: not-allowed; }
+.arch-opt input { margin-top: 3px; }
+.arch-opt-main { display: flex; flex-direction: column; gap: var(--sp-0); }
+.arch-field { width: 100%; }
+.arch-field[hidden] { display: none; }
+.arch-plan {
+  margin-top: var(--sp-3); padding: var(--sp-2) var(--sp-3); min-height: 2.4em;
+  background: var(--inset); border-radius: var(--r-md);
+  font-size: var(--fs-sm); color: var(--ink-2);
+}
+.arch-plan.is-bad { color: var(--bad-ink); }
+.arch-plan-row { display: flex; justify-content: space-between; gap: var(--sp-3); }
+.arch-plan-name { font-family: var(--font-m); color: var(--ink); overflow-wrap: anywhere; }
 
 /* ── storage ─────────────────────────────────────────────────────────── */
 

@@ -12,7 +12,7 @@
 
 import { $, esc, fmtInt, fmtBytes, fmtDate, fmtAgo } from '../core/dom.js';
 import { api, seg } from '../core/api.js';
-import { toast, failed, confirmModal, promptModal } from '../core/ui.js';
+import { toast, failed, confirmModal, promptModal, openModal, closeModal } from '../core/ui.js';
 import { typeTag, typeClass, uidChip, statusTag, wireCopyChips, failedHTML, retryable,
          getDomains, typeItems, domainDatalist } from '../core/shared.js';
 import { pickerFor, pickerValue, setPickerValue, wirePicker, fixedItems } from '../core/pick.js';
@@ -240,6 +240,7 @@ export async function renderMaintenance(view, params) {
   let bkZip = null;          /* the archive being read, or null for the shelf */
   let bkSel = new Set();
   let bkRenaming = null;     /* the file whose name is being typed */
+  let bkArchiveBy = 'month'; /* where the last archive dialog sent backups */
   let shelf = null;          /* /api/maintenance/backups, in full */
 
   /* health carries a SHORT list of backups for the summary strip. The shelf
@@ -317,7 +318,7 @@ export async function renderMaintenance(view, params) {
     $('#bkArchives').innerHTML = shelf.archives.length
       ? shelf.archives.map(a => `<button type="button" class="mnt-shelf is-zip" data-shelf="${esc(a.name)}"
           aria-current="${archive === a}" title="${esc(a.name)}">${icon('archive')}
-          <span class="mnt-shelf-name">${esc(archiveLabel(a.name, shelf.project))}</span>
+          <span class="mnt-shelf-name">${esc(zipLabel(a.name, shelf.project))}</span>
           <span class="mnt-shelf-count">${fmtInt(a.count)}</span></button>`).join('')
       : `<p class="mnt-rail-empty">${t('mn.bk.noZips')}</p>`;
 
@@ -343,13 +344,14 @@ export async function renderMaintenance(view, params) {
 
   function paintShelfHead(archive, files, loose) {
     $('#bkTitle').textContent = archive
-      ? archiveLabel(archive.name, shelf.project) : shelf.project;
+      ? zipLabel(archive.name, shelf.project) : shelf.project;
     $('#bkMeta').textContent = archive
       ? t('mn.bk.zipMeta', { n: fmtInt(archive.count), size: fmtBytes(archive.size),
                              raw: fmtBytes(archive.raw) })
       : t('mn.bk.shelfMeta', { n: fmtInt(files.length), size: fmtBytes(loose) });
     $('#bkActs').innerHTML = archive
-      ? `<button class="btn btn-sm" id="bkUnzip">${t('mn.bk.unzip')}</button>
+      ? `<button class="btn btn-sm" id="bkRenameZip">${t('mn.bk.renameZip')}</button>
+         <button class="btn btn-sm" id="bkUnzip">${t('mn.bk.unzip')}</button>
          <button class="btn btn-sm btn-danger" id="bkDropZip">${t('mn.bk.deleteZip')}</button>`
       : `<span class="inline-label">${t('mn.bk.groupBy')}
            <span class="seg" id="bkGroupSeg" role="group" aria-label="${t('mn.bk.groupBy')}">
@@ -359,6 +361,18 @@ export async function renderMaintenance(view, params) {
          <button class="btn btn-solid btn-sm" data-op="backup">${t('mn.op.backup')}</button>`;
 
     if (archive) {
+      $('#bkRenameZip').addEventListener('click', async () => {
+        const label = await promptModal({ title: t('mn.bk.renameZip'),
+          label: t('mn.bk.renameZipLabel'), value: archiveLabel(archive.name, shelf.project),
+          placeholder: t('mn.arch.namePh'), okLabel: t('mn.bk.renameZip') });
+        if (label === null || label.trim() === archiveLabel(archive.name, shelf.project)) return;
+        try {
+          const r = await api('/api/maintenance/archive-rename',
+                              { body: { name: archive.name, label } });
+          bkZip = r.name;
+          await afterShelfWrite(t('mn.msg.zipRenamed', { name: zipLabel(r.name, shelf.project) }));
+        } catch (err) { failed('err.maintenance', err); }
+      });
       $('#bkUnzip').addEventListener('click', async () => {
         if (!(await confirmModal({ title: t('mn.bk.unzip'),
           body: t('mn.confirm.unzip', { n: archive.count, name: archive.name }),
@@ -576,15 +590,125 @@ export async function renderMaintenance(view, params) {
 
     $('#bkArchive').addEventListener('click', async () => {
       const names = picked.map(f => f.name);
-      if (!(await confirmModal({ title: t('mn.bk.archiveSel'),
-        body: t('mn.confirm.archive', { n: names.length, size: fmtBytes(size) }),
-        okLabel: t('mn.bk.archiveSel') }))) return;
+      const where = await archiveDialog(names, size);
+      if (!where) return;
       try {
-        const r = await api('/api/maintenance/archive', { body: { names } });
+        const r = await api('/api/maintenance/archive', { body: { names, ...where } });
         await afterShelfWrite(t('mn.msg.archived', {
-          n: fmtInt(r.added), name: r.archive,
+          n: fmtInt(r.added),
+          name: r.archives.map(a => zipLabel(a.name, shelf.project)).join(', '),
           raw: fmtBytes(r.raw), size: fmtBytes(r.size) }));
       } catch (err) { failed('err.maintenance', err); }
+    });
+  }
+
+  /* Where the ticked backups go. Month and week split them into one zip per
+     period each was taken in; a name puts them all in one new zip; an
+     existing zip takes them as they are. The line under the choices says
+     which zips will be written -- for month and week it asks the server,
+     which owns the grouping. Resolves to the request fields, or null. */
+  const ZIP_NAME = /^[\p{L}\p{N}_]([\p{L}\p{N}_ .\-]*[\p{L}\p{N}_])?$/u;
+  const ZIP_NAME_MAX = 60;
+
+  function archiveDialog(names, size) {
+    return new Promise(resolve => {
+      const zips = shelf.archives.map(a => a.name);
+      const taken = new Set(zips);
+      const ways = ['month', 'week', 'name', 'existing'];
+      if (bkArchiveBy === 'existing' && !zips.length) bkArchiveBy = 'month';
+      const m = openModal({
+        title: t('mn.bk.archiveSel'),
+        bodyHTML: `<p class="intro">${t('mn.arch.intro', { n: names.length, size: fmtBytes(size) })}</p>
+          <div class="arch-opts" role="radiogroup" aria-label="${esc(t('mn.arch.where'))}">
+            ${ways.map(w => `<label class="arch-opt">
+              <input type="radio" name="archWay" value="${w}" ${bkArchiveBy === w ? 'checked' : ''}
+                     ${w === 'existing' && !zips.length ? 'disabled' : ''}>
+              <span class="arch-opt-main"><b>${t(`mn.arch.${w}`)}</b>
+                <span class="hint-sm">${t(w === 'existing' && !zips.length
+                  ? 'mn.bk.noZips' : `mn.arch.${w}Hint`)}</span></span>
+            </label>`).join('')}
+            <input type="text" id="archName" class="arch-field" autocomplete="off" spellcheck="false"
+                   maxlength="${ZIP_NAME_MAX}" placeholder="${esc(t('mn.arch.namePh'))}"
+                   aria-label="${esc(t('mn.arch.name'))}">
+            <select id="archInto" class="arch-field" aria-label="${esc(t('mn.arch.existing'))}">
+              ${zips.map(z => `<option value="${esc(z)}">${esc(zipLabel(z, shelf.project))}</option>`).join('')}
+            </select>
+          </div>
+          <div class="arch-plan" id="archPlan" role="status" aria-live="polite"></div>`,
+        footHTML: `<button class="btn" data-x>${t('common.cancel')}</button>
+                   <button class="btn btn-solid" data-ok disabled>${t('mn.arch.ok')}</button>`,
+      });
+      const way = () => m.querySelector('input[name=archWay]:checked')?.value || 'month';
+      const nameBox = m.querySelector('#archName');
+      const intoBox = m.querySelector('#archInto');
+      const plan = m.querySelector('#archPlan');
+      const ok = m.querySelector('[data-ok]');
+      let seq = 0;
+
+      const lines = rows => {
+        plan.className = 'arch-plan';
+        plan.innerHTML = rows.map(r => `<div class="arch-plan-row">
+          <span class="arch-plan-name">${esc(zipLabel(r.name, shelf.project))}</span>
+          <span>${t('mn.arch.planN', { n: fmtInt(r.added) })} · ${t(r.exists ? 'mn.arch.planAdds' : 'mn.arch.planNew')}</span>
+        </div>`).join('');
+      };
+      const problem = text => {
+        plan.className = 'arch-plan is-bad';
+        plan.textContent = text;
+        ok.disabled = true;
+      };
+
+      const refresh = async () => {
+        const w = way();
+        nameBox.hidden = w !== 'name';
+        intoBox.hidden = w !== 'existing';
+        const mine = ++seq;
+        if (w === 'name') {
+          const label = nameBox.value.trim();
+          if (!label) { plan.className = 'arch-plan'; plan.textContent = ''; ok.disabled = true; return; }
+          if (label.length > ZIP_NAME_MAX || !ZIP_NAME.test(label)) {
+            return problem(t('mn.arch.nameBad', { max: ZIP_NAME_MAX }));
+          }
+          const file = `${shelf.project}-${label}.zip`;
+          if (taken.has(file)) return problem(t('mn.arch.nameTaken'));
+          lines([{ name: file, added: names.length, exists: false }]);
+          ok.disabled = false;
+        } else if (w === 'existing') {
+          lines([{ name: intoBox.value, added: names.length, exists: true }]);
+          ok.disabled = !intoBox.value;
+        } else {
+          ok.disabled = true;
+          plan.className = 'arch-plan';
+          plan.textContent = '…';
+          try {
+            const r = await api('/api/maintenance/archive', { body: { names, group: w, dry_run: true } });
+            if (mine !== seq) return;
+            lines(r.plan);
+            ok.disabled = false;
+          } catch (err) {
+            if (mine === seq) problem(t('err.maintenance'));
+          }
+        }
+      };
+
+      m.querySelectorAll('input[name=archWay]').forEach(r => r.addEventListener('change', () => {
+        bkArchiveBy = way();
+        refresh();
+        if (bkArchiveBy === 'name') nameBox.focus();
+      }));
+      nameBox.addEventListener('input', refresh);
+      nameBox.addEventListener('keydown', e => { if (e.key === 'Enter' && !ok.disabled) ok.click(); });
+      intoBox.addEventListener('change', refresh);
+      m.querySelector('[data-x]').onclick = () => { closeModal(); resolve(null); };
+      ok.onclick = () => {
+        const w = way();
+        const where = w === 'name' ? { group: 'name', label: nameBox.value.trim() }
+          : w === 'existing' ? { group: 'existing', into: intoBox.value }
+          : { group: w };
+        closeModal();
+        resolve(where);
+      };
+      refresh();
     });
   }
 
@@ -592,6 +716,14 @@ export async function renderMaintenance(view, params) {
      shelf it sits under and the extension is how it is stored. */
   const archiveLabel = (name, project) =>
     name.replace(/\.zip$/, '').replace(new RegExp(`^${project}-`), '');
+
+  /* What a zip is called on screen: a week archive reads in the language of
+     the interface, anything else is its own name. */
+  const zipLabel = (name, project) => {
+    const raw = archiveLabel(name, project);
+    const week = /^(\d{4})-W(\d{2})$/.exec(raw);
+    return week ? t('mn.zip.week', { week: +week[2], year: week[1] }) : raw;
+  };
 
   /* ── storage ───────────────────────────────────────────────────────── */
 

@@ -392,6 +392,38 @@ export function promptModal({ title, body = '', label, placeholder = '', value =
   });
 }
 
+/* The dialog for an act with no way back. The phrase is printed in the
+   dialog and never pre-filled, and the button stays disabled until the field
+   holds it exactly; the field says why while it does not. Resolves true on
+   the button and false on Cancel. */
+export function typedConfirmModal({ title, bodyHTML = '', phrase, okLabel }) {
+  return new Promise(resolve => {
+    const m = openModal({
+      title,
+      bodyHTML: `${bodyHTML}
+        <div class="dz-type">${t('dz.typeThis', { phrase: `<code>${esc(phrase)}</code>` })}</div>
+        <div class="dz-row">
+          <input type="text" data-phrase aria-label="${esc(t('dz.phrase.aria'))}" autocomplete="off">
+        </div>
+        <div class="dz-state" data-state role="status"></div>`,
+      footHTML: `<button class="btn" data-x>${t('common.cancel')}</button>
+                 <button class="btn btn-danger" data-ok disabled>${esc(okLabel)}</button>`,
+    });
+    const field = m.querySelector('[data-phrase]');
+    const state = m.querySelector('[data-state]');
+    const ok = m.querySelector('[data-ok]');
+    field.focus();
+    field.addEventListener('input', () => {
+      const match = field.value === phrase;
+      ok.disabled = !match;
+      state.className = `dz-state${match ? ' armed' : ''}`;
+      state.textContent = match ? t('dz.armed') : field.value ? t('dz.mismatch') : '';
+    });
+    m.querySelector('[data-x]').onclick = () => { closeModal(); resolve(false); };
+    ok.onclick = () => { closeModal(); resolve(true); };
+  });
+}
+
 /* ─── menu of actions ────────────────────────────────────────────────
    Not a modal: it has no scrim and no focus trap, because it must be
    dismissable by clicking the thing you actually wanted. Items are
