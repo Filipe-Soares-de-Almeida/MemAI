@@ -2284,6 +2284,18 @@ def purge_memory(conn: sqlite3.Connection, uid: str) -> bool:
     return True
 
 
+def purge_memories(conn: sqlite3.Connection, uids: list[str]) -> dict:
+    """purge_memory over many uids in the caller's transaction.
+
+    Returns `{"purged": n, "missing": [uids that named no memory]}`. A uid
+    that is already gone is reported, not an error, and a failure part-way
+    rolls the whole batch back with the transaction. The same gate as
+    purge_memory applies: the caller confirms before calling.
+    """
+    missing = [uid for uid in uids if not purge_memory(conn, uid)]
+    return {"purged": len(uids) - len(missing), "missing": missing}
+
+
 # ----------------------------------------------------------------- usage
 
 def record_recall(

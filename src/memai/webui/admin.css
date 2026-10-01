@@ -3033,6 +3033,25 @@ button.rs-mono:hover { color: var(--accent); }
   padding: var(--sp-0) var(--sp-1); border-radius: var(--r-sm);
   white-space: nowrap;
 }
+/* The bulk delete's preview: a few of the titles about to go, and the count
+   of active ones, which is the part worth reading twice. */
+.dz-warn { font-size: var(--fs-sm); color: var(--bad-ink); font-weight: 500; margin: 0; }
+.dz-list {
+  margin: 0; padding: var(--sp-2) var(--sp-3) var(--sp-2) var(--sp-5);
+  font-size: var(--fs-sm); color: var(--ink-2);
+  background: var(--inset); border: 1px solid var(--line-soft); border-radius: var(--r-md);
+}
+.dz-list li { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* The strip under the select-all that offers to extend a full page to every
+   row the filter matches. */
+.mem-banner {
+  display: flex; flex-wrap: wrap; align-items: center; justify-content: center;
+  gap: var(--sp-2); padding: var(--sp-2) var(--sp-4);
+  border-bottom: 1px solid var(--line);
+  background: var(--accent-dim); font-size: var(--fs-label); color: var(--ink);
+}
+.mem-banner[hidden] { display: none; }
 
 /* ── graph ───────────────────────────────────────────────────────────── */
 

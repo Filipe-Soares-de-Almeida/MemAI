@@ -530,7 +530,9 @@ def list_memories(request, payload) -> dict:
     if sort not in _MEMORY_SORTS:
         sort = "created_at"
     direction = "ASC" if qp.get("dir", "desc").lower() == "asc" else "DESC"
-    limit = _int_param(request, "limit", 50, 1, 200)
+    # A page can be as long as one bulk call takes, so "every row this filter
+    # matches" is a single request.
+    limit = _int_param(request, "limit", 50, 1, BULK_MAX)
     offset = _int_param(request, "offset", 0, 0, 1_000_000)
     subtree = _subtree_param(request)
 
@@ -801,6 +803,30 @@ def purge(request, payload) -> dict:
     if not ok:
         raise ValueError(f"unknown memory: {uid}")
     return {"ok": True}
+
+
+def purge_many(request, payload) -> dict:
+    """Permanently delete many memories at once.
+
+    The guardrail is the per-memory purge's, scaled: the operator types the
+    literal phrase 'DELETE <n>', n being how many memories are named, and the
+    UI never pre-fills it. A copy of the store is taken first, since a bulk
+    delete is the one act in the app with no per-row way back.
+    """
+    uids = payload.get("uids")
+    if not (isinstance(uids, list) and uids
+            and all(isinstance(u, str) and u for u in uids)):
+        raise ValueError("uids must be a non-empty list of strings")
+    uids = list(dict.fromkeys(uids))
+    if len(uids) > BULK_MAX:
+        raise ValueError(f"at most {BULK_MAX} uids per operation")
+    expected = f"DELETE {len(uids)}"
+    if payload.get("confirm", "") != expected:
+        raise ValueError(f"confirm phrase must exactly equal '{expected}'")
+    dest = _backup("pre-purge")
+    with db.connect() as conn:
+        gone = db.purge_memories(conn, uids)
+    return {"ok": True, "backup": dest.name, **gone}
 
 
 def bulk(request, payload) -> dict:
@@ -2575,6 +2601,7 @@ routes = [
     Route("/api/memories/{uid}/confidence", api(edit_confidence), methods=["POST"]),
     Route("/api/memories/{uid}/status", api(edit_status), methods=["POST"]),
     Route("/api/memories/{uid}/purge", api(purge), methods=["POST"]),
+    Route("/api/memories/purge", api(purge_many), methods=["POST"]),
     Route("/api/bulk", api(bulk), methods=["POST"]),
     Route("/api/relations", api(create_relation), methods=["POST"]),
     Route("/api/relations/{rel_id:int}", api(delete_relation), methods=["DELETE"]),

@@ -8,6 +8,7 @@ endpoint opens its own db.connect() against default_db_path().
 from __future__ import annotations
 
 import re
+import sqlite3
 import threading
 
 import pytest
@@ -150,6 +151,103 @@ def test_purge_guardrail(client):
     ok = client.post(f"/api/memories/{uid}/purge", json={"confirm": f"DELETE {uid}"})
     assert ok.json()["ok"] is True
     assert client.get(f"/api/memories/{uid}").status_code == 400
+
+
+def _purge_many(client, uids, confirm=None):
+    phrase = f"DELETE {len(uids)}" if confirm is None else confirm
+    return client.post("/api/memories/purge", json={"uids": uids, "confirm": phrase})
+
+
+def _shelf_files(tmp_path):
+    return sorted((tmp_path / "backups").glob("*.db"))
+
+
+def test_bulk_purge_deletes_every_named_memory(client):
+    keep = _create(client, title="the survivor")
+    gone = [_create(client, title=f"doomed {i}") for i in range(3)]
+
+    res = _purge_many(client, gone)
+
+    assert res.status_code == 200, res.text
+    assert res.json()["purged"] == 3 and res.json()["missing"] == []
+    for uid in gone:
+        assert client.get(f"/api/memories/{uid}").status_code == 400
+    assert client.get(f"/api/memories/{keep}").status_code == 200
+
+
+def test_bulk_purge_takes_a_backup_that_still_holds_them(client, tmp_path):
+    gone = [_create(client, title=f"doomed {i}") for i in range(2)]
+
+    body = _purge_many(client, gone).json()
+
+    shelf = _shelf_files(tmp_path)
+    assert [p.name for p in shelf] == [body["backup"]]
+    assert "pre-purge" in body["backup"]
+    conn = sqlite3.connect(shelf[0])
+    try:
+        held = {r[0] for r in conn.execute("SELECT uid FROM memories")}
+    finally:
+        conn.close()
+    assert set(gone) <= held
+
+
+@pytest.mark.parametrize("phrase", ["", "yes", "DELETE", "DELETE 2", "delete 3", "DELETE 3 ", "DELETE 03"])
+def test_bulk_purge_needs_the_phrase_with_the_exact_count(client, tmp_path, phrase):
+    uids = [_create(client, title=f"keep {i}") for i in range(3)]
+
+    res = _purge_many(client, uids, confirm=phrase)
+
+    assert res.status_code == 400
+    assert "DELETE 3" in res.json()["error"]
+    for uid in uids:
+        assert client.get(f"/api/memories/{uid}").status_code == 200
+    assert _shelf_files(tmp_path) == [], "a refused delete takes no backup"
+
+
+def test_bulk_purge_counts_each_memory_once(client):
+    uid = _create(client)
+    res = _purge_many(client, [uid, uid], confirm="DELETE 1")
+    assert res.status_code == 200 and res.json()["purged"] == 1
+
+
+def test_bulk_purge_reports_a_uid_that_is_already_gone(client):
+    uid = _create(client)
+    res = _purge_many(client, [uid, "0123456789abcdef"])
+    assert res.status_code == 200
+    assert res.json()["purged"] == 1 and res.json()["missing"] == ["0123456789abcdef"]
+
+
+@pytest.mark.parametrize("uids", [[], None, "abc", [1, 2], ["ok", ""]])
+def test_bulk_purge_refuses_a_malformed_list(client, uids):
+    res = client.post("/api/memories/purge", json={"uids": uids, "confirm": "DELETE 0"})
+    assert res.status_code == 400
+
+
+def test_bulk_purge_refuses_more_than_bulk_accepts(client):
+    uids = [f"{i:016x}" for i in range(admin.BULK_MAX + 1)]
+    res = _purge_many(client, uids)
+    assert res.status_code == 400 and str(admin.BULK_MAX) in res.json()["error"]
+
+
+def test_bulk_purge_removes_what_hangs_off_a_memory(client):
+    a, b = _create(client, title="a"), _create(client, title="b")
+    client.post("/api/relations", json={
+        "from_uid": a, "to_uid": b, "relation_type": "relates_to"})
+    assert client.get(f"/api/memories/{b}").json()["relations"]
+
+    _purge_many(client, [a])
+
+    assert client.get(f"/api/memories/{b}").json()["relations"] == []
+
+
+def test_the_memory_list_serves_a_page_as_large_as_bulk_takes(client):
+    with db.connect() as conn:
+        for i in range(205):
+            db.insert_memory(conn, type="note", content=f"fact {i}", title=f"t{i}")
+
+    body = client.get("/api/memories?limit=500").json()
+
+    assert body["total"] == 205 and len(body["items"]) == 205
 
 
 def test_bulk_operations(client):
