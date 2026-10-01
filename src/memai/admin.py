@@ -2179,34 +2179,11 @@ def _ensure_run_backup(run_id: int) -> str | None:
     return str(dest)
 
 
-def _ensure_backup_for(run_ids: list[int]) -> str | None:
-    """One backup for a decision that spans several runs.
-
-    A day can hold thirteen runs, and taking a whole-database copy per run
-    would copy the same file thirteen times for one press. The runs in the
-    scope that have no backup yet share ONE fresh copy -- it is the state
-    before this action, which is what an undo of this action needs.
-
-    A run that already carries a backup keeps it: that copy is the state
-    before ITS first apply, which may have been days ago, and reusing it
-    here would hand back a restore point that never existed.
-    """
-    fresh = [rid for rid in run_ids if not _run_backup_path(rid)]
-    if not fresh:
-        return _run_backup_path(run_ids[0])
-    dest = str(_backup(f"optimize-run{fresh[0]}"))
+def _has_pending(run_id: int) -> bool:
     with db.connect() as conn:
-        for rid in fresh:
-            db.set_run_backup(conn, rid, dest)
-    return _run_backup_path(run_ids[0]) or dest
-
-
-def _run_backup_path(run_id: int) -> str | None:
-    with db.connect() as conn:
-        run = db.get_optimization_run(conn, run_id)
-        if run is None:
+        if db.get_optimization_run(conn, run_id) is None:
             raise ValueError(f"unknown run: {run_id}")
-        return run["backup_path"]
+        return bool(db.get_optimization_suggestions(conn, run_id, status="pending"))
 
 
 def optimization_apply(request, payload) -> dict:
@@ -2269,23 +2246,39 @@ def _pending_in_scope(conn, run_ids: list[int], kind: str, ids: list[int] | None
 
 
 def optimization_apply_all(request, payload) -> dict:
-    """Apply the pending suggestions of a run, a kind, a day, or a selection."""
+    """Apply the pending suggestions of a run, a kind, a day, or a selection.
+
+    Every run in the scope that still has something open gets its own
+    backup, taken right before its first suggestion lands, so a run's copy is
+    the store as it stood before that run -- also when the selection touches
+    only some of the runs. A run that already carries a backup keeps it.
+    `backups` lists the copies in run order; `backup` is the first.
+    """
     run_ids, kind, ids = _decision_scope(payload)
     with db.connect() as conn:
         pending = _pending_in_scope(conn, run_ids, kind, ids)
         run = db.get_optimization_run(conn, run_ids[0])
     if not pending:
-        return {"ok": True, "applied": 0, "failed": [], "backup": run["backup_path"]}
-    backup = _ensure_backup_for(run_ids)
-    applied, failed = 0, []
+        return {"ok": True, "applied": 0, "failed": [],
+                "backup": run["backup_path"], "backups": []}
+    by_run: dict[int, list] = {}
     for s in pending:
-        try:
-            with db.connect() as conn:
-                db.apply_suggestion(conn, s["id"])
-            applied += 1
-        except ValueError as e:
-            failed.append({"id": s["id"], "error": str(e)})
-    return {"ok": True, "applied": applied, "failed": failed, "backup": backup}
+        by_run.setdefault(s["run_id"], []).append(s)
+    applied, failed, backups = 0, [], []
+    for rid in dict.fromkeys(run_ids):
+        rows = by_run.get(rid, [])
+        if not rows and not _has_pending(rid):
+            continue
+        backups.append(_ensure_run_backup(rid))
+        for s in rows:
+            try:
+                with db.connect() as conn:
+                    db.apply_suggestion(conn, s["id"])
+                applied += 1
+            except ValueError as e:
+                failed.append({"id": s["id"], "error": str(e)})
+    return {"ok": True, "applied": applied, "failed": failed,
+            "backup": backups[0], "backups": backups}
 
 
 def optimization_reject(request, payload) -> dict:

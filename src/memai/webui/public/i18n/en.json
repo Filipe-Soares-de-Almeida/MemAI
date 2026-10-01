@@ -864,6 +864,7 @@
     "op.toast.applied1": "Suggestion applied",
     "op.toast.appliedBackup": "Applied · backup safeguarded",
     "op.toast.appliedN": "Applied {n}",
+    "op.toast.backupsN": "{n} {n?backup:backups} safeguarded",
     "op.toast.discarded": "Run discarded",
     "op.toast.failedN": " · {m} failed",
     "op.toast.nothingPending": "Nothing pending in this run",

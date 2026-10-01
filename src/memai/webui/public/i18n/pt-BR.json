@@ -864,6 +864,7 @@
     "op.toast.applied1": "Sugestão aplicada",
     "op.toast.appliedBackup": "Aplicada · backup preservado",
     "op.toast.appliedN": "Aplicadas {n}",
+    "op.toast.backupsN": "{n} {n?backup preservado:backups preservados}",
     "op.toast.discarded": "Execução descartada",
     "op.toast.failedN": " · {m} falharam",
     "op.toast.nothingPending": "Nada pendente nesta execução",

@@ -269,8 +269,10 @@ function textPairHTML(s) {
    a warning, and the ids go where they can be read. */
 function reportApplied(res) {
   const bad = res.failed || [];
-  if (!bad.length) { toast(t('op.toast.appliedN', { n: res.applied }), 'ok'); return; }
-  toast(t('op.toast.appliedN', { n: res.applied }) + t('op.toast.failedN', { m: bad.length }),
+  const saved = res.backups && res.backups.length
+    ? ` · ${t('op.toast.backupsN', { n: res.backups.length })}` : '';
+  if (!bad.length) { toast(t('op.toast.appliedN', { n: res.applied }) + saved, 'ok'); return; }
+  toast(t('op.toast.appliedN', { n: res.applied }) + saved + t('op.toast.failedN', { m: bad.length }),
         'warn', { detail: bad.map(f => `#${f.id}: ${f.error}`).join(' · ') });
 }
 
@@ -948,6 +950,7 @@ function dayScope(day, runsOfDay) {
   const now = totals();
   return {
     kind: '',
+    day: true,
     title: label,
     sub: t('op.cal.scopeDay', { n: now.pending, all: now.total }),
     listAria: t('op.cal.dayAria', { day: label }),
@@ -1010,7 +1013,11 @@ function rowName(s) {
   return s.kind;
 }
 
-function detailHTML(s, at, total) {
+/* `decideHere` is whether the pane carries Reject and Apply for this one
+   suggestion. A day review leaves them off: there the decision is the list
+   footer's, which acts on what is ticked, so the pane cannot be mistaken
+   for it. */
+function detailHTML(s, at, total, decideHere = true) {
   if (!s) return `<div class="empty">${t('op.pickOne')}</div>`;
   const relKind = s.kind === 'link' || s.kind === 'merge' || s.kind === 'distill';
   /* One pane per SHAPE of change, not one pane for every kind -- see the
@@ -1053,8 +1060,10 @@ function detailHTML(s, at, total) {
         ? (s.status === 'applied'
             ? `<button type="button" class="btn btn-sm" data-revert="${s.id}">${t('common.undo')}</button>`
             : `<span class="status-tag archived">${t('op.rejected')}</span>`)
-        : `<button type="button" class="btn btn-sm" data-reject="${s.id}">${t('common.reject')}</button>
-           <button type="button" class="btn btn-solid btn-sm" data-apply="${s.id}">${t('common.apply')}</button>`}
+        : decideHere
+          ? `<button type="button" class="btn btn-sm" data-reject="${s.id}">${t('common.reject')}</button>
+             <button type="button" class="btn btn-solid btn-sm" data-apply="${s.id}">${t('common.apply')}</button>`
+          : ''}
     </div>`;
 }
 
@@ -1095,7 +1104,7 @@ function renderOptGroup(view, scope) {
   const paintDetail = () => {
     const host = $('#optDetail');
     if (!host) return;
-    host.innerHTML = detailHTML(items[picked], picked, items.length);
+    host.innerHTML = detailHTML(items[picked], picked, items.length, !scope.day);
     /* Before and After are two walls of nearly the same text; the marks are
        what tells them apart. Taken from the panes rather than from the
        payload, so the words marked are the words drawn. */
