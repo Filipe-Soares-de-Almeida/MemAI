@@ -4810,6 +4810,13 @@ input.pick-q:focus { box-shadow: inset 0 -2px 0 var(--accent); }
 }
 .rl-checked { grid-column: 1 / -1; font-size: var(--fs-sm); color: var(--ink-3); }
 
+/* the two controls under the answer: ask again, and how long before a hook does */
+.rl-check {
+  display: flex; flex-wrap: wrap; align-items: center;
+  gap: var(--sp-3) var(--sp-5);
+  margin-top: var(--sp-4);
+}
+
 /* the update */
 
 .rl-update {
@@ -4872,6 +4879,11 @@ input.pick-q:focus { box-shadow: inset 0 -2px 0 var(--accent); }
 }
 
 /* one release */
+
+/* The rule between where this installation stands (the versions, the controls
+   and the update block) and the history below it. It is the full divider and
+   the rules between releases are the soft one, so it reads as the larger break. */
+.rl-stream { border-top: 1px solid var(--line); padding-top: var(--sp-6); }
 
 .rl-item {
   display: grid;

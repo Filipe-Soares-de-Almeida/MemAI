@@ -5,12 +5,14 @@ from and caches the answer -- one record per release, with its page and its
 notes -- under MEMAI_HOME; `notice` turns the releases above this package's own
 version into the note a session reads, with a `digest` of what each of them
 changed. Setting MEMAI_UPDATE_CHECK to 0/false/no/off stops the request -- an
-answer already cached is still read.
+answer already cached is still read. How long an answer is used is `interval`,
+chosen from the dashboard.
 
-Two constraints decide who calls what. The request belongs to a hook process:
-on Windows, loading a C extension once the stdio reader threads are up
-deadlocks on the loader lock (see memai.autostart) and ssl is one, so an MCP
-server reads the cache and never fills it. And the commands the note carries
+Two constraints decide who calls what. The request belongs to a hook process
+or to the dashboard, never to an MCP server: on Windows, loading a C extension
+once the stdio reader threads are up deadlocks on the loader lock (see
+memai.autostart) and ssl is one, so a server reads the cache and never fills
+it. And the commands the note carries
 are for a person to run with the host closed -- Windows locks an .exe while a
 process is running it, so an install cannot rewrite `.venv\\Scripts` while a
 session holds the console scripts in it.
@@ -43,10 +45,16 @@ RELEASES_API = f"https://api.github.com/repos/{REPO}/releases?per_page={PER_PAGE
 
 CACHE_NAME = "update.json"
 
-# Hours an answer is used before another request is made. The API allows 60
-# unauthenticated requests an hour per address, shared with everything else
-# running on it.
+# Where the chosen window is kept: beside the cache, in the home, so it holds
+# for the machine and not for whichever project is active.
+SETTINGS_NAME = "update-settings.json"
+
+# Hours an answer is used before another request is made, until a window is
+# chosen. The API allows 60 unauthenticated requests an hour per address,
+# shared with everything else running on it, so an hour is the floor; the
+# ceiling is a month.
 TTL_HOURS = 24
+HOURS_RANGE = (1, 720)
 
 # Hours before a request that did not come back is tried again. A hiccup on
 # one call must not decide what a whole day is told.
@@ -55,6 +63,9 @@ RETRY_HOURS = 1
 # Seconds one request may take. It is paid at the end of a turn, and once by a
 # session that has never checked.
 TIMEOUT = 2.0
+
+# The same, for a check somebody asked for and is waiting on.
+MANUAL_TIMEOUT = 5.0
 
 # Characters of notes the cache keeps per release, and characters a note shows
 # across every release it covers. A session behind a release reads the digest
@@ -114,6 +125,37 @@ def _write(record: dict) -> None:
         cache_path().write_text(json.dumps(record, indent=2) + "\n", encoding="utf-8")
     except OSError:
         pass
+
+
+def interval() -> int:
+    """Hours an answer is used before another request is made.
+
+    TTL_HOURS when none was chosen, and for a settings file that cannot be
+    read or holds a value outside HOURS_RANGE.
+    """
+    try:
+        value = int(json.loads((db.home() / SETTINGS_NAME).read_text("utf-8"))["hours"])
+    except (OSError, ValueError, KeyError, TypeError):
+        return TTL_HOURS
+    low, high = HOURS_RANGE
+    return value if low <= value <= high else TTL_HOURS
+
+
+def set_interval(hours: object) -> int:
+    """Keep the window `interval` reads. Raises ValueError outside HOURS_RANGE."""
+    low, high = HOURS_RANGE
+    try:
+        if isinstance(hours, bool):
+            raise ValueError
+        value = int(str(hours).strip())
+    except ValueError:
+        raise ValueError(f"update_check_hours must be a whole number of hours "
+                         f"between {low} and {high}") from None
+    if not low <= value <= high:
+        raise ValueError(f"update_check_hours must be between {low} and {high}")
+    (db.home() / SETTINGS_NAME).write_text(
+        json.dumps({"hours": value}) + "\n", encoding="utf-8")
+    return value
 
 
 def _fetch(timeout: float = TIMEOUT) -> dict:
@@ -176,21 +218,25 @@ def _due(record: dict, *, hours: int, now: datetime) -> bool:
     return now - checked >= timedelta(hours=hours)
 
 
-def refresh(*, unseen_only: bool = False, hours: int = TTL_HOURS,
-            timeout: float = TIMEOUT, now: datetime | None = None) -> dict:
+def refresh(*, unseen_only: bool = False, force: bool = False,
+            hours: int | None = None, timeout: float = TIMEOUT,
+            now: datetime | None = None) -> dict:
     """The cached answer, asking GitHub for a new one when one is due.
 
-    `unseen_only` asks only when nothing has ever been cached. A request that
-    fails stamps the cache anyway and keeps the release it already knew, so an
-    unreachable host costs one attempt per window rather than one per call --
-    RETRY_HOURS after a failure, `hours` after an answer.
+    `unseen_only` asks only when nothing has ever been cached; `force` asks
+    whatever the cache says. `hours` defaults to the chosen window (see
+    `interval`). A request that fails stamps the cache anyway and keeps the
+    release it already knew, so an unreachable host costs one attempt per
+    window rather than one per call -- RETRY_HOURS after a failure, `hours`
+    after an answer.
     """
     record = cached()
     if not enabled():
         return record
     moment = now or datetime.now(timezone.utc)
+    hours = interval() if hours is None else hours
     window = min(hours, RETRY_HOURS) if record.get("failed") else hours
-    due = not record if unseen_only else _due(record, hours=window, now=moment)
+    due = force or (not record if unseen_only else _due(record, hours=window, now=moment))
     if not due:
         return record
     found = _fetch(timeout)
