@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import re
+import sqlite3
 from pathlib import Path
 
 import pytest
@@ -1268,8 +1269,23 @@ def test_api_apply_all_across_a_set_of_runs(client):
     assert status(c["run_id"]) == "pending"     # outside the scope, untouched
 
 
-def test_a_decision_over_several_runs_takes_one_backup(client, tmp_path):
-    """Thirteen runs on one day would otherwise copy the database thirteen times."""
+def test_a_decision_over_several_runs_takes_a_backup_per_run(client, tmp_path):
+    """Each run's copy is the state just before that run's own changes."""
+    uid = _new_memory(client)
+    a = _stage_via_db(uid, "retag", {"tags": "one"})
+    b = _stage_via_db(uid, "retag", {"tags": "two"})
+
+    res = client.post("/api/optimization/apply-all",
+                      json={"runs": [a["run_id"], b["run_id"]]}).json()
+
+    runs = {r["id"]: r for r in client.get("/api/optimization/runs").json()["runs"]}
+    first, second = runs[a["run_id"]]["backup_path"], runs[b["run_id"]]["backup_path"]
+    assert first and second and first != second
+    assert res["backups"] == [first, second]
+    assert len(list((tmp_path / "backups").glob("*.db"))) == 2
+
+
+def test_each_backup_holds_the_store_as_it_stood_before_its_run(client):
     uid = _new_memory(client)
     a = _stage_via_db(uid, "retag", {"tags": "one"})
     b = _stage_via_db(uid, "retag", {"tags": "two"})
@@ -1277,8 +1293,66 @@ def test_a_decision_over_several_runs_takes_one_backup(client, tmp_path):
     client.post("/api/optimization/apply-all", json={"runs": [a["run_id"], b["run_id"]]})
 
     runs = {r["id"]: r for r in client.get("/api/optimization/runs").json()["runs"]}
-    first, second = runs[a["run_id"]], runs[b["run_id"]]
-    assert first["backup_path"] and first["backup_path"] == second["backup_path"]
+
+    def tags_in(path):
+        conn = sqlite3.connect(path)
+        try:
+            return conn.execute("SELECT tags FROM memories WHERE uid = ?", (uid,)).fetchone()[0]
+        finally:
+            conn.close()
+
+    assert "one" not in tags_in(runs[a["run_id"]]["backup_path"])
+    assert "one" in tags_in(runs[b["run_id"]]["backup_path"])
+    assert "two" not in tags_in(runs[b["run_id"]]["backup_path"])
+
+
+def _suggestion_of(client, run_id):
+    return client.get(
+        f"/api/optimization/suggestions?run={run_id}").json()["suggestions"][0]["id"]
+
+
+def _backup_of(client, run_id):
+    runs = {r["id"]: r for r in client.get("/api/optimization/runs").json()["runs"]}
+    return runs[run_id]["backup_path"]
+
+
+def test_a_selection_inside_a_day_still_backs_up_every_run_with_work(client, tmp_path):
+    """The day is reviewed as a whole: applying part of it protects every
+    run of it that is still open, not only the runs the selection touches."""
+    uid = _new_memory(client)
+    a = _stage_via_db(uid, "retag", {"tags": "one"})
+    b = _stage_via_db(uid, "retag", {"tags": "two"})
+    c = _stage_via_db(uid, "retag", {"tags": "three"})
+    chosen = _suggestion_of(client, a["run_id"])
+
+    client.post("/api/optimization/apply-all",
+                json={"runs": [a["run_id"], b["run_id"], c["run_id"]], "ids": [chosen]})
+
+    paths = [_backup_of(client, r["run_id"]) for r in (a, b, c)]
+    assert all(paths) and len(set(paths)) == 3
+    assert len(list((tmp_path / "backups").glob("*.db"))) == 3
+
+
+def test_a_run_with_nothing_left_to_decide_gets_no_backup(client, tmp_path):
+    uid = _new_memory(client)
+    a = _stage_via_db(uid, "retag", {"tags": "one"})
+    b = _stage_via_db(uid, "retag", {"tags": "two"})
+    client.post("/api/optimization/reject", json={"id": _suggestion_of(client, b["run_id"])})
+
+    client.post("/api/optimization/apply-all", json={"runs": [a["run_id"], b["run_id"]]})
+
+    assert _backup_of(client, a["run_id"])
+    assert not _backup_of(client, b["run_id"])
+    assert len(list((tmp_path / "backups").glob("*.db"))) == 1
+
+
+def test_applying_one_suggestion_alone_backs_up_only_its_own_run(client, tmp_path):
+    uid = _new_memory(client)
+    a = _stage_via_db(uid, "retag", {"tags": "one"})
+    _stage_via_db(uid, "retag", {"tags": "two"})
+
+    client.post("/api/optimization/apply", json={"id": _suggestion_of(client, a["run_id"])})
+
     assert len(list((tmp_path / "backups").glob("*.db"))) == 1
 
 

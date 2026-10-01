@@ -530,7 +530,9 @@ def list_memories(request, payload) -> dict:
     if sort not in _MEMORY_SORTS:
         sort = "created_at"
     direction = "ASC" if qp.get("dir", "desc").lower() == "asc" else "DESC"
-    limit = _int_param(request, "limit", 50, 1, 200)
+    # A page can be as long as one bulk call takes, so "every row this filter
+    # matches" is a single request.
+    limit = _int_param(request, "limit", 50, 1, BULK_MAX)
     offset = _int_param(request, "offset", 0, 0, 1_000_000)
     subtree = _subtree_param(request)
 
@@ -801,6 +803,30 @@ def purge(request, payload) -> dict:
     if not ok:
         raise ValueError(f"unknown memory: {uid}")
     return {"ok": True}
+
+
+def purge_many(request, payload) -> dict:
+    """Permanently delete many memories at once.
+
+    The guardrail is the per-memory purge's, scaled: the operator types the
+    literal phrase 'DELETE <n>', n being how many memories are named, and the
+    UI never pre-fills it. A copy of the store is taken first, since a bulk
+    delete is the one act in the app with no per-row way back.
+    """
+    uids = payload.get("uids")
+    if not (isinstance(uids, list) and uids
+            and all(isinstance(u, str) and u for u in uids)):
+        raise ValueError("uids must be a non-empty list of strings")
+    uids = list(dict.fromkeys(uids))
+    if len(uids) > BULK_MAX:
+        raise ValueError(f"at most {BULK_MAX} uids per operation")
+    expected = f"DELETE {len(uids)}"
+    if payload.get("confirm", "") != expected:
+        raise ValueError(f"confirm phrase must exactly equal '{expected}'")
+    dest = _backup("pre-purge")
+    with db.connect() as conn:
+        gone = db.purge_memories(conn, uids)
+    return {"ok": True, "backup": dest.name, **gone}
 
 
 def bulk(request, payload) -> dict:
@@ -1663,21 +1689,58 @@ def backups(request, payload) -> dict:
 
 
 def archive(request, payload) -> dict:
-    """Zip the named backups into this month's archive and take them off the
-    shelf. Merges into the archive when one is already there for the month."""
+    """Zip the named backups and take them off the shelf.
+
+    `group` says where they go: "month" (the default) or "week" split them
+    into one zip per period they were taken in, "name" puts them in a new zip
+    called `label`, "existing" appends them to the zip `into`. `archives`
+    lists every zip touched with what it received; `archive` is the first.
+
+    `dry_run` with a week or month grouping only reports `plan`: the zips the
+    grouping would write, each with what it would receive and whether it
+    exists already.
+    """
     names = payload.get("names") or []
     if not isinstance(names, list) or not names:
         raise ValueError("names must be a non-empty list")
+    names = [str(n) for n in names]
+    group = payload.get("group") or "month"
     project = db.active_project()
+    if payload.get("dry_run"):
+        plan = db.archive_plan(project, names, group)
+        return {"ok": True, "plan": [
+            {"name": dest.name, "added": len(got), "exists": dest.exists()}
+            for dest, got in plan.items()]}
     raw = 0
     shelf = db.backups_dir(project)
     for name in names:
-        path = shelf / str(name)
+        path = shelf / name
         if path.is_file():
             raw += _file_size(path)
-    dest = db.archive_backups(project, [str(n) for n in names])
-    return {"ok": True, "archive": dest.name, "added": len(names),
-            "raw": raw, "size": _file_size(dest)}
+    if group == "name":
+        label = payload.get("label")
+        if not isinstance(label, str):
+            raise ValueError("label (string) required to name a zip")
+        landed = {db.archive_backups(project, names, label=label): names}
+    elif group == "existing":
+        into = payload.get("into")
+        if not isinstance(into, str) or not into:
+            raise ValueError("into (zip name) required to add to a zip")
+        landed = {db.archive_backups(project, names, into=into): names}
+    else:
+        landed = db.archive_grouped(project, names, group)
+    archives = [{"name": dest.name, "added": len(got), "size": _file_size(dest)}
+                for dest, got in landed.items()]
+    return {"ok": True, "archive": archives[0]["name"], "archives": archives,
+            "added": len(names), "raw": raw,
+            "size": sum(a["size"] for a in archives)}
+
+
+def archive_rename(request, payload) -> dict:
+    """Give an archive another name; the file keeps its `<project>-` prefix."""
+    name = str(payload.get("name") or "")
+    dest = db.rename_archive(db.active_project(), name, str(payload.get("label") or ""))
+    return {"ok": True, "name": dest.name}
 
 
 def name_backup(request, payload) -> dict:
@@ -2179,34 +2242,11 @@ def _ensure_run_backup(run_id: int) -> str | None:
     return str(dest)
 
 
-def _ensure_backup_for(run_ids: list[int]) -> str | None:
-    """One backup for a decision that spans several runs.
-
-    A day can hold thirteen runs, and taking a whole-database copy per run
-    would copy the same file thirteen times for one press. The runs in the
-    scope that have no backup yet share ONE fresh copy -- it is the state
-    before this action, which is what an undo of this action needs.
-
-    A run that already carries a backup keeps it: that copy is the state
-    before ITS first apply, which may have been days ago, and reusing it
-    here would hand back a restore point that never existed.
-    """
-    fresh = [rid for rid in run_ids if not _run_backup_path(rid)]
-    if not fresh:
-        return _run_backup_path(run_ids[0])
-    dest = str(_backup(f"optimize-run{fresh[0]}"))
+def _has_pending(run_id: int) -> bool:
     with db.connect() as conn:
-        for rid in fresh:
-            db.set_run_backup(conn, rid, dest)
-    return _run_backup_path(run_ids[0]) or dest
-
-
-def _run_backup_path(run_id: int) -> str | None:
-    with db.connect() as conn:
-        run = db.get_optimization_run(conn, run_id)
-        if run is None:
+        if db.get_optimization_run(conn, run_id) is None:
             raise ValueError(f"unknown run: {run_id}")
-        return run["backup_path"]
+        return bool(db.get_optimization_suggestions(conn, run_id, status="pending"))
 
 
 def optimization_apply(request, payload) -> dict:
@@ -2269,23 +2309,39 @@ def _pending_in_scope(conn, run_ids: list[int], kind: str, ids: list[int] | None
 
 
 def optimization_apply_all(request, payload) -> dict:
-    """Apply the pending suggestions of a run, a kind, a day, or a selection."""
+    """Apply the pending suggestions of a run, a kind, a day, or a selection.
+
+    Every run in the scope that still has something open gets its own
+    backup, taken right before its first suggestion lands, so a run's copy is
+    the store as it stood before that run -- also when the selection touches
+    only some of the runs. A run that already carries a backup keeps it.
+    `backups` lists the copies in run order; `backup` is the first.
+    """
     run_ids, kind, ids = _decision_scope(payload)
     with db.connect() as conn:
         pending = _pending_in_scope(conn, run_ids, kind, ids)
         run = db.get_optimization_run(conn, run_ids[0])
     if not pending:
-        return {"ok": True, "applied": 0, "failed": [], "backup": run["backup_path"]}
-    backup = _ensure_backup_for(run_ids)
-    applied, failed = 0, []
+        return {"ok": True, "applied": 0, "failed": [],
+                "backup": run["backup_path"], "backups": []}
+    by_run: dict[int, list] = {}
     for s in pending:
-        try:
-            with db.connect() as conn:
-                db.apply_suggestion(conn, s["id"])
-            applied += 1
-        except ValueError as e:
-            failed.append({"id": s["id"], "error": str(e)})
-    return {"ok": True, "applied": applied, "failed": failed, "backup": backup}
+        by_run.setdefault(s["run_id"], []).append(s)
+    applied, failed, backups = 0, [], []
+    for rid in dict.fromkeys(run_ids):
+        rows = by_run.get(rid, [])
+        if not rows and not _has_pending(rid):
+            continue
+        backups.append(_ensure_run_backup(rid))
+        for s in rows:
+            try:
+                with db.connect() as conn:
+                    db.apply_suggestion(conn, s["id"])
+                applied += 1
+            except ValueError as e:
+                failed.append({"id": s["id"], "error": str(e)})
+    return {"ok": True, "applied": applied, "failed": failed,
+            "backup": backups[0], "backups": backups}
 
 
 def optimization_reject(request, payload) -> dict:
@@ -2545,6 +2601,7 @@ routes = [
     Route("/api/memories/{uid}/confidence", api(edit_confidence), methods=["POST"]),
     Route("/api/memories/{uid}/status", api(edit_status), methods=["POST"]),
     Route("/api/memories/{uid}/purge", api(purge), methods=["POST"]),
+    Route("/api/memories/purge", api(purge_many), methods=["POST"]),
     Route("/api/bulk", api(bulk), methods=["POST"]),
     Route("/api/relations", api(create_relation), methods=["POST"]),
     Route("/api/relations/{rel_id:int}", api(delete_relation), methods=["DELETE"]),
@@ -2581,6 +2638,7 @@ routes = [
     Route("/api/maintenance/archive", api(archive), methods=["POST"]),
     Route("/api/maintenance/unarchive", api(unarchive), methods=["POST"]),
     Route("/api/maintenance/archive-delete", api(archive_delete), methods=["POST"]),
+    Route("/api/maintenance/archive-rename", api(archive_rename), methods=["POST"]),
     Route("/api/maintenance/backup-name", api(name_backup), methods=["POST"]),
     Route("/api/maintenance/backup-pin", api(pin_backup), methods=["POST"]),
     Route("/api/maintenance/backup-delete", api(delete_backups), methods=["POST"]),

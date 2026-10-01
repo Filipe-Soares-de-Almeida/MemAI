@@ -7,14 +7,14 @@
    it.
 
    Confidence, tags and the filed domain are STAGED: they are chosen here
-   and written by Apply, in one /api/bulk call each. Archive, restore and
-   send-to-project are not -- each is its own act with its own
-   confirmation, and each runs when it is pressed. */
+   and written by Apply, in one /api/bulk call each. Archive, restore,
+   send-to-project and permanent delete are not -- each is its own act with
+   its own confirmation, and each runs when it is pressed. */
 
 import { $, esc, fmtInt, fmtDate, fmtAgo, debounce } from '../core/dom.js';
 import { api, query } from '../core/api.js';
 import { icon } from '../core/icons.js';
-import { toast, failed, promptModal } from '../core/ui.js';
+import { toast, failed, promptModal, typedConfirmModal } from '../core/ui.js';
 import { typeTag, statusTag, confPill, CONF, getDomains, inDomainPath,
          typeItems, confItems, invalidateDomains, uidChip, wireCopyChips } from '../core/shared.js';
 import { pickerFor, wirePicker, fixedItems } from '../core/pick.js';
@@ -26,6 +26,8 @@ import { openRecord, setRecordSequence } from './record.js';
 import { t } from '../i18n.js';
 
 const PAGE = 50;
+/* The most memories one bulk call takes (BULK_MAX in admin.py). */
+const BULK_MAX = 500;
 const selection = new Set();
 
 /* What the inspector is holding but has not written. Reset on every render,
@@ -43,6 +45,15 @@ let domainTree = [];
    so everything the pane says about the picked rows is already here and
    nothing it shows costs a request. */
 let rowData = new Map();
+
+/* The uids on the page, in order; and, for "select all matching", the filter
+   that produced the page, how many rows it matches and the uids that button
+   loaded. rowData also holds the loaded rows, so the inspector reads the
+   whole selection the same way it reads the page. */
+let pageUids = [];
+let matchTotal = 0;
+let matchQs = '';
+let matchingUids = new Set();
 
 /* The uid the caret sits on. The inspector reads the ticked rows first and
    falls back to this one, so a single memory is inspected by selecting its
@@ -100,18 +111,21 @@ export async function renderMemories(view, params, ctx) {
 
   const domains = await getDomains().catch(() => []);
   domainTree = domains;
-  const qs = query({
+  const filter = {
     q: state.q, domain: state.domain, type: state.type, status: state.status,
     confidence: state.confidence, session: state.session, sort: state.sort, dir: state.dir,
     linked: state.linked, due: state.due, stale: state.stale,
     untitled: state.untitled, untagged: state.untagged,
     subtree: state.exact ? '0' : '',
-    limit: PAGE, offset: state.page * PAGE,
-  });
-  const data = await api(`/api/memories?${qs}`);
+  };
+  const data = await api(`/api/memories?${query({ ...filter, limit: PAGE, offset: state.page * PAGE })}`);
   if (ctx.stale()) return;
 
   rowData = new Map(data.items.map(m => [m.uid, m]));
+  pageUids = data.items.map(m => m.uid);
+  matchTotal = data.total;
+  matchQs = query({ ...filter, limit: BULK_MAX, offset: 0 });
+  matchingUids = new Set();
 
   const kids = domains.find(d => d.domain === state.domain)?.children;
   const types = typeItems({ any: t('common.allTypes') });
@@ -184,7 +198,8 @@ export async function renderMemories(view, params, ctx) {
             <div class="mem-check"><input type="checkbox" id="memAll" aria-label="${t('mem.selectAll.aria')}"></div>
             <label class="mem-head-label" for="memAll" data-selcount>${t('mem.selectAll', { n: data.items.length })}</label>
             <div class="mem-head-keys" aria-hidden="true">${t('mem.keys.hint')}</div>
-          </div>` : ''}
+          </div>
+          <div class="mem-banner" id="memBanner" role="status" hidden></div>` : ''}
           <!-- role="grid" and not listbox: a row owns a checkbox and an open
                button, which an option is not allowed to contain. The grid is the
                role that expects widgets in its cells, and it is what licenses the
@@ -314,6 +329,8 @@ export async function renderMemories(view, params, ctx) {
   };
   const setAll = on => {
     rows.forEach(row => selectRow(row, on));
+    /* clearing also drops what "select all matching" loaded from other pages */
+    if (!on) selection.clear();
     anchor = 0;
     paintInspector();
   };
@@ -469,13 +486,56 @@ function paintInspector() {
      innerHTML: both strings mark their number up, and textContent printed
      the <b> tags as text on every toggle. */
   if (label) {
-    label.innerHTML = ticked.length
-      ? t('mem.selectedOf', { n: ticked.length, all: rowData.size })
-      : t('mem.selectAll', { n: rowData.size });
+    label.innerHTML = !ticked.length
+      ? t('mem.selectAll', { n: pageUids.length })
+      : ticked.length > pageUids.length
+        ? t('mem.selectedAcross', { n: ticked.length })
+        : t('mem.selectedOf', { n: ticked.length, all: pageUids.length });
   }
+  paintBanner();
   host.innerHTML = picked.length ? editorHTML(picked) : emptyHTML();
   host.classList.toggle('is-empty', !picked.length);
   if (picked.length) wireEditor(host, picked);
+}
+
+/* Offers to extend a full page to every row the filter matches, and says so
+   once it has. Loading is one request for at most BULK_MAX rows; past that
+   the button names how many it can take. */
+function paintBanner() {
+  const bar = document.getElementById('memBanner');
+  if (!bar) return;
+  const whole = matchingUids.size > 0 && selection.size === matchingUids.size
+    && [...matchingUids].every(uid => selection.has(uid));
+  const pageFull = pageUids.length > 0 && pageUids.every(uid => selection.has(uid));
+  if (whole) {
+    bar.innerHTML = `<span>${t('mem.allMatching', { n: fmtInt(matchingUids.size) })}</span>
+      <button type="button" class="btn btn-sm btn-ghost" data-bn-clear>${t('mem.selectionClear')}</button>`;
+  } else if (pageFull && matchTotal > pageUids.length) {
+    const n = Math.min(matchTotal, BULK_MAX);
+    bar.innerHTML = `<span>${t('mem.pageSelected', { n: pageUids.length })}</span>
+      <button type="button" class="btn btn-sm" data-bn-all>${matchTotal > BULK_MAX
+        ? t('mem.selectMatchingCapped', { n: fmtInt(n), all: fmtInt(matchTotal) })
+        : t('mem.selectMatching', { n: fmtInt(n) })}</button>`;
+  } else {
+    bar.hidden = true;
+    bar.innerHTML = '';
+    return;
+  }
+  bar.hidden = false;
+  bar.querySelector('[data-bn-clear]')?.addEventListener('click', () => {
+    selection.clear();
+    document.querySelectorAll('#memList .mem-row').forEach(row => selectRow(row, false));
+    paintInspector();
+  });
+  bar.querySelector('[data-bn-all]')?.addEventListener('click', async e => {
+    e.currentTarget.disabled = true;
+    try {
+      const r = await api(`/api/memories?${matchQs}`);
+      matchingUids = new Set(r.items.map(m => m.uid));
+      for (const m of r.items) { rowData.set(m.uid, m); selection.add(m.uid); }
+      paintInspector();
+    } catch (err) { failed('err.bulk', err); e.currentTarget.disabled = false; }
+  });
 }
 
 function emptyHTML() {
@@ -570,6 +630,8 @@ function editorHTML(picked) {
             ${t('mem.mi.archiveN', { n })}<span class="hint-sm">${t('mem.mi.reversible')}</span></button>
           <button type="button" class="btn btn-sm" data-act="restore">${t('common.restore')}</button>
           <button type="button" class="btn btn-sm" data-act="project">${t('bulk.move')}</button>
+          <button type="button" class="btn btn-sm btn-danger" data-act="purge">
+            ${t('bulk.purge.button')}<span class="hint-sm">${t('bulk.purge.irreversible')}</span></button>
         </div>
       </div>
 
@@ -686,6 +748,41 @@ async function applyStaged(picked) {
   } catch (err) { failed('err.bulk', err); }
 }
 
+/* The irreversible one. The dialog says how much of the selection is still
+   active (an archived memory is already out of the way; an active one is
+   being thrown out of use), shows a few titles, and asks for the phrase with
+   the count in it. The server takes a copy of the store before it deletes. */
+const PURGE_PREVIEW = 5;
+
+async function purgeSelected(picked) {
+  const uids = picked.map(m => m.uid);
+  const active = picked.filter(m => m.status === 'active').length;
+  const titles = picked.slice(0, PURGE_PREVIEW)
+    .map(m => `<li>${esc(m.title || m.content)}</li>`).join('');
+  const rest = picked.length - PURGE_PREVIEW;
+  const phrase = `DELETE ${uids.length}`;
+  const ok = await typedConfirmModal({
+    title: t('bulk.purge.title', { n: uids.length }),
+    bodyHTML: `<div class="dz-hint">${t('bulk.purge.hint')}</div>
+      <p class="${active ? 'dz-warn' : 'dz-hint'}">${active
+        ? t('bulk.purge.active', { n: active })
+        : t('bulk.purge.allArchived', { n: uids.length })}</p>
+      <ul class="dz-list">${titles}</ul>
+      ${rest > 0 ? `<div class="dz-hint">${t('bulk.purge.more', { n: rest })}</div>` : ''}
+      <div class="dz-hint">${t('bulk.purge.final')}</div>`,
+    phrase,
+    okLabel: t('dz.button'),
+  });
+  if (!ok) return;
+  try {
+    const r = await api('/api/memories/purge', { body: { uids, confirm: phrase } });
+    toast(t('bulk.purge.done', { n: r.purged, name: r.backup }), 'ok');
+    invalidateDomains();
+    selection.clear();
+    refreshBehind();
+  } catch (err) { failed('err.purgeMany', err); }
+}
+
 async function runAction(action, picked) {
   const uids = picked.map(m => m.uid);
   if (action === 'project') {
@@ -695,6 +792,7 @@ async function runAction(action, picked) {
     refreshBehind();
     return;
   }
+  if (action === 'purge') return purgeSelected(picked);
   let reason = '';
   if (action === 'archive') {
     reason = await promptModal({
