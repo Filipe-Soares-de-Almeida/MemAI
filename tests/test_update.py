@@ -14,9 +14,10 @@ import sys
 from datetime import datetime, timedelta, timezone
 
 import pytest
+from starlette.testclient import TestClient
 
 import memai
-from memai import db, hook, server, update
+from memai import admin, db, hook, server, update
 
 NEWER = "v9.9.9"
 PAGE = "https://example.com/memai/releases/v9.9.9"
@@ -201,6 +202,61 @@ def test_a_cache_that_cannot_be_read_is_asked_again(store, monkeypatch):
     (store / update.CACHE_NAME).write_text("{not json", encoding="utf-8")
     monkeypatch.setattr(update, "_fetch", _answers())
     assert update.refresh()["latest"] == NEWER
+
+
+# ------------------------------------------------------- how often it asks
+
+def test_the_window_is_a_day_until_one_is_chosen(store):
+    assert update.interval() == update.TTL_HOURS == 24
+
+
+def test_a_chosen_window_is_kept(store):
+    assert update.set_interval(6) == 6
+    assert update.interval() == 6
+    assert update.set_interval("12") == 12
+
+
+@pytest.mark.parametrize("bad", [0, -1, update.HOURS_RANGE[1] + 1, "soon", None, 1.5, True])
+def test_a_window_outside_the_range_is_refused(store, bad):
+    with pytest.raises(ValueError):
+        update.set_interval(bad)
+    assert update.interval() == update.TTL_HOURS
+
+
+@pytest.mark.parametrize("text", ["{not json", '{"hours": 99999}', '{"hours": "x"}', "[]"])
+def test_an_unreadable_window_reads_as_the_default(store, text):
+    (store / update.SETTINGS_NAME).write_text(text, encoding="utf-8")
+    assert update.interval() == update.TTL_HOURS
+
+
+def test_the_chosen_window_decides_when_an_answer_is_stale(store, monkeypatch):
+    update.set_interval(1)
+    monkeypatch.setattr(update, "_fetch", _answers("v1.0.0"))
+    update.refresh(now=_hours_ago(2))
+    monkeypatch.setattr(update, "_fetch", _answers("v2.0.0"))
+    assert update.refresh()["latest"] == "v2.0.0"
+
+
+def test_a_wider_window_keeps_an_answer_a_day_would_have_dropped(store, monkeypatch):
+    update.set_interval(72)
+    monkeypatch.setattr(update, "_fetch", _answers())
+    update.refresh(now=_hours_ago(48))
+    monkeypatch.setattr(update, "_fetch", _never)
+    assert update.refresh()["latest"] == NEWER
+
+
+def test_forcing_asks_inside_the_window(store, monkeypatch):
+    monkeypatch.setattr(update, "_fetch", _answers("v1.0.0"))
+    update.refresh()
+    monkeypatch.setattr(update, "_fetch", _answers("v2.0.0"))
+    assert update.refresh()["latest"] == "v1.0.0"
+    assert update.refresh(force=True)["latest"] == "v2.0.0"
+
+
+def test_forcing_does_not_get_past_the_off_switch(store, monkeypatch):
+    monkeypatch.setenv("MEMAI_UPDATE_CHECK", "0")
+    monkeypatch.setattr(update, "_fetch", _never)
+    assert update.refresh(force=True) == {}
 
 
 # --------------------------------------------------------------- what it says
@@ -411,6 +467,74 @@ def test_the_stop_hook_fills_the_cache_the_next_session_reads(store, monkeypatch
     finally:
         sys.stdin = sys.__stdin__
     assert update.cached()["latest"] == NEWER
+
+
+def test_the_stop_hook_asks_on_the_chosen_window(store, monkeypatch):
+    update.set_interval(1)
+    monkeypatch.setattr(update, "_fetch", _answers("v1.0.0"))
+    update.refresh(now=_hours_ago(2))
+    monkeypatch.setattr(update, "_fetch", _answers())
+    sys.stdin = io.StringIO(json.dumps({"session_id": "s1"}))
+    try:
+        assert hook.main(["stop"]) == 0
+    finally:
+        sys.stdin = sys.__stdin__
+    assert update.cached()["latest"] == NEWER
+
+
+# --------------------------------------------------------- the dashboard asks
+
+@pytest.fixture
+def client(store):
+    with TestClient(admin.app) as c:
+        yield c
+
+
+def test_the_state_carries_the_window_and_whether_the_last_try_failed(client):
+    body = client.get("/api/update").json()
+    assert body["interval_hours"] == 24
+    assert body["failed"] is False
+
+
+def test_checking_now_asks_even_inside_the_window(client, monkeypatch):
+    monkeypatch.setattr(update, "_fetch", _answers("v1.0.0"))
+    update.refresh()
+    monkeypatch.setattr(update, "_fetch", _answers())
+    body = client.post("/api/update/check", json={}).json()
+    assert body["latest"] == NEWER
+    assert body["behind"] == 1
+    assert body["failed"] is False
+    assert body["checked_at"] == update.cached()["checked_at"]
+
+
+def test_a_check_that_does_not_come_back_says_so_and_keeps_the_known_release(client, monkeypatch):
+    monkeypatch.setattr(update, "_fetch", _answers())
+    update.refresh(now=_hours_ago(1))
+    monkeypatch.setattr(update, "_fetch", _nothing)
+    body = client.post("/api/update/check", json={}).json()
+    assert body["failed"] is True
+    assert body["latest"] == NEWER
+
+
+def test_checking_now_is_refused_while_the_check_is_off(client, monkeypatch):
+    monkeypatch.setenv("MEMAI_UPDATE_CHECK", "0")
+    monkeypatch.setattr(update, "_fetch", _never)
+    response = client.post("/api/update/check", json={})
+    assert response.status_code == 400
+    assert "MEMAI_UPDATE_CHECK" in response.json()["error"]
+
+
+def test_the_window_is_chosen_from_the_dashboard(client):
+    body = client.post("/api/update/interval", json={"hours": 6}).json()
+    assert body["interval_hours"] == 6
+    assert client.get("/api/update").json()["interval_hours"] == 6
+    assert update.interval() == 6
+
+
+def test_a_window_the_dashboard_cannot_keep_is_a_400(client):
+    response = client.post("/api/update/interval", json={"hours": 0})
+    assert response.status_code == 400
+    assert client.get("/api/update").json()["interval_hours"] == 24
 
 
 def test_the_server_instructions_carry_the_note(store, monkeypatch):

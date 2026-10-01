@@ -2404,9 +2404,10 @@ def _state_of(version: str, current: str) -> str:
 def update_state(request=None, payload=None) -> dict:
     """What the release check knows, without asking it anything.
 
-    The cache is filled by a hook process (see memai.update); a dashboard
-    request never reaches the network, so this answers the same whether the
-    machine is online or not.
+    The cache is filled by a hook process or by `check_update`; this only
+    reads it, so it answers the same whether the machine is online or not.
+    `failed` is whether the last request came back empty, and
+    `interval_hours` is how long an answer is used.
     """
     record = update.cached()
     latest = update.newest(record)
@@ -2416,11 +2417,32 @@ def update_state(request=None, payload=None) -> dict:
             "behind": len(behind),
             "url": str(record.get("url") or update.RELEASES_PAGE),
             "checked_at": str(record.get("checked_at", "")),
+            "failed": bool(record.get("failed")),
             "enabled": update.enabled(),
+            "interval_hours": update.interval(),
             # The dashboard runs on the machine these would run on, so it can
             # show them. It never runs them: they rewrite the environment the
             # servers around it are running from.
             "commands": update.commands()}
+
+
+def check_update(request, payload) -> dict:
+    """Ask GitHub for the releases now, whatever the window says.
+
+    The one place the dashboard reaches the network. A request that does not
+    come back leaves the release already known in place and reports
+    `failed`; a check that is switched off is a 400, not a silent no-op.
+    """
+    if not update.enabled():
+        raise ValueError("the release check is off (MEMAI_UPDATE_CHECK)")
+    update.refresh(force=True, timeout=update.MANUAL_TIMEOUT)
+    return update_state()
+
+
+def set_update_interval(request, payload) -> dict:
+    """Choose how many hours an answer is used before another request."""
+    update.set_interval(payload.get("hours"))
+    return update_state()
 
 
 def changelog_page(request, payload) -> dict:
@@ -2620,6 +2642,8 @@ routes = [
     Route("/api/diagrams/{uid}/mermaid", api(diagram_mermaid), methods=["GET"]),
     Route("/api/changelog", api(changelog_page), methods=["GET"]),
     Route("/api/update", api(update_state), methods=["GET"]),
+    Route("/api/update/check", api(check_update), methods=["POST"]),
+    Route("/api/update/interval", api(set_update_interval), methods=["POST"]),
     Route("/api/config", api(get_config), methods=["GET"]),
     Route("/api/config", api(set_config), methods=["POST"]),
     Route("/api/domains", api(domains)),

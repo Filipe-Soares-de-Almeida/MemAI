@@ -155,19 +155,22 @@ An agent installing MemAI on a new machine follows
 running server from breaking the install, both MCP config files, and the checks
 that confirm the result.
 
-**Staying current.** The `stop` hook asks GitHub once a day which releases are
-published and caches them — tag, page and notes, one record per release — in
-`MEMAI_HOME/update.json`. A session that starts behind is told which version it
+**Staying current.** The `stop` hook asks GitHub, at most once per interval
+(a day unless chosen otherwise), which releases are published and caches them —
+tag, page and notes, one record per release — in `MEMAI_HOME/update.json`. A session that starts behind is told which version it
 runs, how many releases came after it, what each of them changed (their notes,
 flattened to a few plain lines) and the two commands that update this checkout
 — for the person to run once every session and the dashboard are closed, for
 the reason above. The dashboard shows the same thing at leisure: the version
 mark in its app bar carries the count and opens **Releases**, which renders the
 packaged `CHANGELOG.md` with the running version marked and anything published
-since it at the top. `memai-hook install --check`
-prints the same comparison. `MEMAI_UPDATE_CHECK=0` stops the request, and
-belongs in the environment the host itself runs in: the hook makes it, not the
-MCP server, which only reads what the hook cached.
+since it at the top. There, **Check now** asks GitHub at once, and **Check every**
+sets the interval, from an hour to a week (the server accepts up to 30 days);
+the choice is kept in `MEMAI_HOME/update-settings.json` and holds for every
+project. `memai-hook install --check` prints the same comparison.
+`MEMAI_UPDATE_CHECK=0` stops the request, and belongs in the environment the
+host itself runs in: the hook and the dashboard make it, not the MCP server,
+which only reads what they cached.
 
 </details>
 
