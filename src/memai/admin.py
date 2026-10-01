@@ -1663,21 +1663,58 @@ def backups(request, payload) -> dict:
 
 
 def archive(request, payload) -> dict:
-    """Zip the named backups into this month's archive and take them off the
-    shelf. Merges into the archive when one is already there for the month."""
+    """Zip the named backups and take them off the shelf.
+
+    `group` says where they go: "month" (the default) or "week" split them
+    into one zip per period they were taken in, "name" puts them in a new zip
+    called `label`, "existing" appends them to the zip `into`. `archives`
+    lists every zip touched with what it received; `archive` is the first.
+
+    `dry_run` with a week or month grouping only reports `plan`: the zips the
+    grouping would write, each with what it would receive and whether it
+    exists already.
+    """
     names = payload.get("names") or []
     if not isinstance(names, list) or not names:
         raise ValueError("names must be a non-empty list")
+    names = [str(n) for n in names]
+    group = payload.get("group") or "month"
     project = db.active_project()
+    if payload.get("dry_run"):
+        plan = db.archive_plan(project, names, group)
+        return {"ok": True, "plan": [
+            {"name": dest.name, "added": len(got), "exists": dest.exists()}
+            for dest, got in plan.items()]}
     raw = 0
     shelf = db.backups_dir(project)
     for name in names:
-        path = shelf / str(name)
+        path = shelf / name
         if path.is_file():
             raw += _file_size(path)
-    dest = db.archive_backups(project, [str(n) for n in names])
-    return {"ok": True, "archive": dest.name, "added": len(names),
-            "raw": raw, "size": _file_size(dest)}
+    if group == "name":
+        label = payload.get("label")
+        if not isinstance(label, str):
+            raise ValueError("label (string) required to name a zip")
+        landed = {db.archive_backups(project, names, label=label): names}
+    elif group == "existing":
+        into = payload.get("into")
+        if not isinstance(into, str) or not into:
+            raise ValueError("into (zip name) required to add to a zip")
+        landed = {db.archive_backups(project, names, into=into): names}
+    else:
+        landed = db.archive_grouped(project, names, group)
+    archives = [{"name": dest.name, "added": len(got), "size": _file_size(dest)}
+                for dest, got in landed.items()]
+    return {"ok": True, "archive": archives[0]["name"], "archives": archives,
+            "added": len(names), "raw": raw,
+            "size": sum(a["size"] for a in archives)}
+
+
+def archive_rename(request, payload) -> dict:
+    """Give an archive another name; the file keeps its `<project>-` prefix."""
+    name = str(payload.get("name") or "")
+    dest = db.rename_archive(db.active_project(), name, str(payload.get("label") or ""))
+    return {"ok": True, "name": dest.name}
 
 
 def name_backup(request, payload) -> dict:
@@ -2574,6 +2611,7 @@ routes = [
     Route("/api/maintenance/archive", api(archive), methods=["POST"]),
     Route("/api/maintenance/unarchive", api(unarchive), methods=["POST"]),
     Route("/api/maintenance/archive-delete", api(archive_delete), methods=["POST"]),
+    Route("/api/maintenance/archive-rename", api(archive_rename), methods=["POST"]),
     Route("/api/maintenance/backup-name", api(name_backup), methods=["POST"]),
     Route("/api/maintenance/backup-pin", api(pin_backup), methods=["POST"]),
     Route("/api/maintenance/backup-delete", api(delete_backups), methods=["POST"]),

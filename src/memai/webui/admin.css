@@ -3698,6 +3698,29 @@ input.pick-q:focus { box-shadow: inset 0 -2px 0 var(--accent); }
 }
 .mnt-sel-zip:hover:not(:disabled) { background: var(--zip-wash); border-color: var(--zip); }
 
+/* The archive dialog: four ways to say where the ticked backups go, the one
+   field the chosen way needs, and the zips that choice would write. */
+.arch-opts { display: flex; flex-direction: column; gap: var(--sp-2); }
+.arch-opt {
+  display: flex; gap: var(--sp-3); align-items: flex-start;
+  padding: var(--sp-2) var(--sp-3); border: 1px solid var(--line-soft);
+  border-radius: var(--r-md); cursor: pointer;
+}
+.arch-opt:has(input:checked) { border-color: var(--zip); background: var(--zip-wash); }
+.arch-opt:has(input:disabled) { opacity: .55; cursor: not-allowed; }
+.arch-opt input { margin-top: 3px; }
+.arch-opt-main { display: flex; flex-direction: column; gap: var(--sp-0); }
+.arch-field { width: 100%; }
+.arch-field[hidden] { display: none; }
+.arch-plan {
+  margin-top: var(--sp-3); padding: var(--sp-2) var(--sp-3); min-height: 2.4em;
+  background: var(--inset); border-radius: var(--r-md);
+  font-size: var(--fs-sm); color: var(--ink-2);
+}
+.arch-plan.is-bad { color: var(--bad-ink); }
+.arch-plan-row { display: flex; justify-content: space-between; gap: var(--sp-3); }
+.arch-plan-name { font-family: var(--font-m); color: var(--ink); overflow-wrap: anywhere; }
+
 /* ── storage ─────────────────────────────────────────────────────────── */
 
 /* Tabs whose content is a stack of sections rather than one list: the
