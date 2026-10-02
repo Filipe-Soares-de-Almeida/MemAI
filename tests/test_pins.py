@@ -11,7 +11,7 @@ import sqlite3
 import pytest
 
 from conftest import shaped
-from memai import db, pending, portable, server
+from memai import brief, db, pending, portable, server
 
 
 @pytest.fixture
@@ -250,3 +250,31 @@ def test_pulse_without_pins_reads_as_before(store):
 
 def test_instructions_name_the_pins():
     assert "pinned=true" in server.INSTRUCTIONS
+
+
+# ---------------------------------------------------------------- the brief
+
+def test_pin_line_counts_global_pins_at_session_start(store):
+    _seed_pins()
+    with db.connect() as conn:
+        assert brief.pin_line(conn, "") == (
+            "Pinned, read every one before acting: 1 note -- "
+            "pending(type=..., pinned=true), then get_memory(uid) each.")
+        assert brief.pin_line(conn, "acme/x100") == (
+            "Pinned, read every one before acting: 2 notes -- "
+            "pending('acme/x100', type=..., pinned=true), then get_memory(uid) each.")
+
+
+def test_pin_line_is_empty_without_pins(store):
+    with db.connect() as conn:
+        _note(conn)
+        assert brief.pin_line(conn, "") == ""
+
+
+def test_the_brief_keeps_the_pin_line_under_a_tight_budget(store):
+    _seed_pins()
+    with db.connect() as conn:
+        for n in range(30):
+            _note(conn, title=f"Filler fact {n}", domain=f"acme/filler{n}")
+        text = brief.session_brief(conn, budget=200)
+    assert "Pinned, read every one before acting: 1 note" in text
