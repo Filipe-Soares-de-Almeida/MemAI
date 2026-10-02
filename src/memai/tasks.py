@@ -381,7 +381,9 @@ def restore_task(conn: sqlite3.Connection, record: dict) -> None:
     """Write a task's rows from an export record, under an already-restored memory.
 
     Skips a link whose target is not in the store and writes no edit. A state
-    outside TASK_STATES or ITEM_STATES is a ValueError before any row is written.
+    outside TASK_STATES or ITEM_STATES, or an item_seq that is not a
+    non-negative integer, is a ValueError before any row is written. The task's
+    retired-key mark is the larger of item_seq and its items' highest seq.
     """
     uid = str(record["uid"])
     state = record.get("state", "open")
@@ -391,9 +393,13 @@ def restore_task(conn: sqlite3.Connection, record: dict) -> None:
         if i.get("state", "todo") not in ITEM_STATES:
             raise ValueError(
                 f"{i.get('state')!r} is not an item state; use {', '.join(ITEM_STATES)}")
+    mark = record.get("item_seq", 0)
+    if isinstance(mark, bool) or not isinstance(mark, int) or mark < 0:
+        raise ValueError(f"{mark!r} is not an item_seq; use a non-negative integer")
+    mark = max(mark, *(int(i.get("seq", 0)) for i in record.get("items") or []), 0)
     conn.execute(
-        "INSERT INTO tasks (memory_uid, goal, state, completed_at) VALUES (?, ?, ?, ?)",
-        (uid, record.get("goal", ""), state, record.get("completed_at", "")),
+        "INSERT INTO tasks (memory_uid, goal, state, completed_at, item_seq) VALUES (?, ?, ?, ?, ?)",
+        (uid, record.get("goal", ""), state, record.get("completed_at", ""), mark),
     )
     conn.executemany(
         """INSERT INTO task_items

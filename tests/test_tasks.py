@@ -421,6 +421,72 @@ def test_a_task_round_trips_through_export_and_import(tmp_path):
         assert _task_rows(b, uid) == [1, 2, 1, 2]
 
 
+def test_a_retired_key_stays_retired_across_export_and_import(tmp_path):
+    from memai import portable
+
+    with db.connect(tmp_path / "a.db") as a:
+        uid = _three(a)
+        tasks.delete_item(a, uid, "i3")
+        records = list(portable.export_records(a, include_archived=True, include_edits=True))
+    assert [r for r in records if r["record"] == "task"][0]["item_seq"] == 3
+    with db.connect(tmp_path / "b.db") as b:
+        assert portable.import_records(b, records)["errors"] == []
+        assert tasks.add_items(b, uid, ["a new step"])["keys"] == ["i4"]
+
+
+def _bare_task_record(**extra):
+    return {
+        "record": "task", "uid": "aaaaaaaaaaaaaaaa", "goal": "g", "state": "open",
+        "completed_at": "",
+        "items": [{"key": f"i{n}", "seq": n, "text": f"step {n}", "state": "todo",
+                   "updated_at": "2026-01-01T00:00:00+00:00", "updated_session": ""}
+                  for n in (1, 2, 5)],
+        "links": [], "comments": [], **extra,
+    }
+
+
+def _restore_bare(conn, **extra):
+    db.restore_memory(conn, {"record": "memory", "uid": "aaaaaaaaaaaaaaaa", "type": "task",
+                             "content": "GOAL: g", "domain": "acme/parser"})
+    tasks.restore_task(conn, _bare_task_record(**extra))
+
+
+def test_a_record_without_item_seq_restores_with_the_highest_item_seq(conn):
+    _restore_bare(conn)
+    assert tasks.add_items(conn, "aaaaaaaaaaaaaaaa", ["next"])["keys"] == ["i6"]
+
+
+def test_a_record_item_seq_past_its_items_is_kept(conn):
+    _restore_bare(conn, item_seq=9)
+    assert tasks.add_items(conn, "aaaaaaaaaaaaaaaa", ["next"])["keys"] == ["i10"]
+
+
+@pytest.mark.parametrize("bad", [-1, "3", 2.5, True, None], ids=repr)
+def test_a_bad_item_seq_is_refused_and_leaves_no_rows(conn, bad):
+    with pytest.raises(ValueError, match="item_seq"):
+        _restore_bare(conn, item_seq=bad)
+    for table in ("tasks", "task_items", "task_item_links", "task_comments"):
+        assert conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] == 0
+
+
+def test_an_import_reports_a_bad_item_seq_and_keeps_the_memory(tmp_path):
+    from memai import portable
+
+    with db.connect(tmp_path / "a.db") as a:
+        uid = _three(a)
+        records = list(portable.export_records(a, include_archived=True))
+    for r in records:
+        if r["record"] == "task":
+            r["item_seq"] = -4
+    with db.connect(tmp_path / "b.db") as b:
+        result = portable.import_records(b, records)
+        assert [e["uid"] for e in result["errors"]] == [uid]
+        assert "item_seq" in result["errors"][0]["error"]
+        assert db.get_memory(b, uid) is not None
+        assert b.execute("SELECT COUNT(*) FROM tasks").fetchone()[0] == 0
+        assert b.execute("SELECT COUNT(*) FROM task_items").fetchone()[0] == 0
+
+
 def test_importing_into_a_store_that_holds_the_task_keeps_its_rows(tmp_path):
     from memai import portable
 

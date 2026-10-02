@@ -164,7 +164,7 @@ def _task_record(conn, uid: str) -> dict | None:
         "WHERE memory_uid = ? ORDER BY created_at, id", (uid,)).fetchall()
     return {
         "record": "task", "uid": uid, "goal": head["goal"], "state": head["state"],
-        "completed_at": head["completed_at"],
+        "completed_at": head["completed_at"], "item_seq": head["item_seq"],
         "items": [{"key": r["item_key"], **{k: r[k] for k in (
             "seq", "text", "state", "updated_at", "updated_session")}} for r in items],
         "links": [dict(r) for r in links],
