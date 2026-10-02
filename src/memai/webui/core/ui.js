@@ -459,31 +459,74 @@ function openMenu(items, at) {
   if (!live.some(i => !i.sep)) return;
   const el = document.createElement('div');
   el.className = 'ctx-menu';
+  /* an entry with a `note` is shown but cannot run: the note is its visible
+     reason, and the button's description */
   el.innerHTML = live.map((it, i) => it.sep
     ? '<div class="ctx-sep"></div>'
-    : `<button class="ctx-item${it.danger ? ' danger' : ''}" data-i="${i}">${esc(it.label)}</button>`
+    : it.note
+      ? `<button class="ctx-item${it.danger ? ' danger' : ''}" data-i="${i}" aria-disabled="true"
+                 aria-labelledby="ctxL${i}" aria-describedby="ctxN${i}" title="${esc(it.note)}">
+           <span id="ctxL${i}">${esc(it.label)}</span><span class="ctx-note" id="ctxN${i}">${esc(it.note)}</span></button>`
+      : `<button class="ctx-item${it.danger ? ' danger' : ''}" data-i="${i}">${esc(it.label)}</button>`
   ).join('');
   document.body.appendChild(el);
   ctxMenu = el;
   place(el, at);
 
+  /* where focus goes when the menu closes with it inside: the button that
+     opened it, else whatever held it before, if either is still on the page */
+  const prior = document.activeElement;
+  const holds = () => el.contains(document.activeElement);
+  const restore = () => [at.btn, prior].find(n => n && n !== document.body && document.contains(n))?.focus();
+
   el.querySelectorAll('[data-i]').forEach(b => b.addEventListener('click', () => {
     const it = live[Number(b.dataset.i)];
+    if (it.note) return;
+    const held = holds();
     closeCtxMenu();
+    if (held) restore();
     it.run?.();
   }));
 
   /* dismissed by whatever you do next -- clicking elsewhere, Escape,
      zooming the canvas. closeCtxMenu takes the listeners off with it. */
   const away = e => { if (!el.contains(e.target)) closeCtxMenu(); };
-  const key = e => { if (e.key === 'Escape') closeCtxMenu(); };
+  /* a menu dropped from a button takes the keyboard: focus goes to its first
+     entry, the arrows walk the entries, and Escape or Tab hands focus back */
+  const entries = [...el.querySelectorAll('.ctx-item')];
+  const key = e => {
+    if (e.key === 'Escape') {
+      const held = holds();
+      closeCtxMenu();
+      if (held || at.btn) restore();
+      return;
+    }
+    if (!at.btn) return;
+    const i = entries.indexOf(document.activeElement);
+    const to = { ArrowDown: i + 1, ArrowUp: i < 0 ? entries.length - 1 : i - 1,
+                 Home: 0, End: entries.length - 1 }[e.key];
+    if (to !== undefined) {
+      e.preventDefault();
+      entries[(to + entries.length) % entries.length].focus();
+    } else if (e.key === 'Tab') {
+      e.preventDefault();
+      closeCtxMenu();
+      restore();
+    }
+  };
+  const wheel = () => {
+    const held = holds();
+    closeCtxMenu();
+    if (held) restore();
+  };
   addEventListener('mousedown', away, true);
   addEventListener('keydown', key, true);
-  addEventListener('wheel', closeCtxMenu, true);
+  addEventListener('wheel', wheel, true);
+  if (at.btn) entries[0]?.focus();
   ctxDrop = () => {
     removeEventListener('mousedown', away, true);
     removeEventListener('keydown', key, true);
-    removeEventListener('wheel', closeCtxMenu, true);
+    removeEventListener('wheel', wheel, true);
   };
 }
 

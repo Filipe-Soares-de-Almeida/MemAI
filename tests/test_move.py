@@ -268,3 +268,33 @@ def test_the_cli_moves_too(home, capsys):
     assert portable.main(["move", "--to", "omni", "--domain", "acme/x100", "--create"]) == 0
     result = json.loads(capsys.readouterr().out)
     assert result["moved"] == 3 and _count("omni") == 3
+
+
+# ── tasks ───────────────────────────────────────────────────────────────
+
+def test_moving_a_task_reports_and_drops_a_link_left_behind(home):
+    from memai import tasks
+
+    with db.connect(project="General") as conn:
+        kept = db.insert_memory(conn, type="note", content="the lexer reads one token",
+                                domain="zeta/x100")
+        uid = tasks.create_task(conn, title="Ship the parser", goal="Parse every config file",
+                                items=["read the spec", "write the lexer"], domain="acme/x100")
+        tasks.link_item(conn, uid, "i2", [kept])
+        tasks.add_comment(conn, uid, "lexer drafted", item="i2")
+        report = portable.boundary(conn, [uid])
+    assert report["task_links"]["count"] == 1
+    assert report["task_links"]["items"][0] == {
+        "task_uid": uid, "item_key": "i2", "target_uid": kept}
+
+    result = portable.move("General", "acme", uids=[uid], dry_run=False)
+    assert result["moved"] == 1 and result["errors"] == []
+    assert result["tasks"] == 1
+    with db.connect(project="acme") as dst:
+        task = tasks.get_task(dst, uid)
+        assert [i["key"] for i in task["items"]] == ["i1", "i2"]
+        assert [c["body"] for c in task["comments"]] == ["lexer drafted"]
+        assert task["items"][1]["links"] == []
+    with db.connect(project="General") as src:
+        assert db.get_memory(src, uid) is None
+        assert db.get_memory(src, kept) is not None

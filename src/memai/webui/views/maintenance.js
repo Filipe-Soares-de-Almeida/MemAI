@@ -1,10 +1,10 @@
-/* Maintenance: the store's own upkeep, as six workspaces behind one tab
+/* Maintenance: the store's own upkeep, as workspaces behind one tab
    strip -- the backups it has taken, the file they are copies of, the
    bodies it could not read into fields, the memories that say the same
-   thing, everything that has happened to it, and the warden that reads it
-   on a session's behalf.
+   thing, everything that has happened to it, and the reminders the Stop
+   hook sends a session (the warden and the open tasks).
 
-   Only ONE of those is ever on screen. The other five stay built and
+   Only ONE of those is ever on screen. The rest stay built and
    hidden rather than being thrown away, because two of them hold work
    that cannot be re-made for free: a dedup scan is a quadratic sweep over
    the whole store, and a log you have scrolled back through is a place
@@ -19,10 +19,11 @@ import { pickerFor, pickerValue, setPickerValue, wirePicker, fixedItems } from '
 import { icon } from '../core/icons.js';
 import { replaceParams } from '../core/router.js';
 import { openRecord } from './record.js';
+import { MOTION_MODES, getMotion, setMotion } from '../core/motion.js';
 import { I18N, t } from '../i18n.js';
 
 /* The address of each workspace, as ?tab= and as the order of the strip. */
-const TABS = ['backups', 'storage', 'sections', 'dupes', 'log', 'warden'];
+const TABS = ['backups', 'storage', 'sections', 'dupes', 'log', 'warden', 'interface'];
 
 /* Free pages worth an amber dot and a mention. Below it the file is simply
    in use and compacting would give back nothing anyone would notice. */
@@ -163,8 +164,8 @@ export async function renderMaintenance(view, params) {
     view.querySelectorAll('.mnt-panel').forEach(
       p => { p.hidden = p.dataset.panel !== id; });
     /* replaceParams, not go(): a tab is an ADDRESS worth deep-linking, not a
-       step worth pressing Back through. Six of them in the history would
-       put five presses between this view and the one you came from. */
+       step worth pressing Back through. Every tab in the history would
+       put a press between this view and the one you came from. */
     replaceParams('maintenance', { tab: id });
     if (!built.has(id)) { built.add(id); BUILD[id](); }
   }
@@ -173,7 +174,7 @@ export async function renderMaintenance(view, params) {
     b.addEventListener('click', () => show(b.dataset.tab)));
 
   /* Left/Right walk the strip, which is what a tablist owes a keyboard --
-     without it the only way between six workspaces is six Tab presses. */
+     without it the only way between the workspaces is a Tab press each. */
   view.querySelector('.mnt-tabs').addEventListener('keydown', e => {
     const step = e.key === 'ArrowRight' ? 1 : e.key === 'ArrowLeft' ? -1 : 0;
     if (!step) return;
@@ -1090,6 +1091,17 @@ export async function renderMaintenance(view, params) {
           ${pickerFor({ id: 'wdEvery', items: everyItems, ariaLabel: t('mn.wd.every') })}</label>
       </div>
       <p class="hint">${t('mn.wd.body')}</p>
+    </section>
+    <section class="panel mnt-short">
+      <h3 class="panel-title">${t('mn.ta.title')}
+        <span class="panel-aside">${t('mn.ta.aside')}</span></h3>
+      <div class="list-toolbar toolbar-sm">
+        <label class="inline-label">${t('mn.ta.state')}
+          ${pickerFor({ id: 'taOn', items: onOffItems, ariaLabel: t('mn.ta.state') })}</label>
+        <label class="inline-label">${t('mn.ta.every')}
+          ${pickerFor({ id: 'taEvery', items: everyItems, ariaLabel: t('mn.ta.every') })}</label>
+      </div>
+      <p class="hint">${t('mn.ta.body')}</p>
     </section>`;
 
     /* Both controls reflect the stored value; only a pick writes one. The
@@ -1102,6 +1114,13 @@ export async function renderMaintenance(view, params) {
       const mins = everyItems.find(it => it.value === String(cfg.warden_minutes));
       if (on && state) setPickerValue(on, state);
       if (every && mins) setPickerValue(every, mins);
+
+      const taOn = $('#taOn');
+      const taEvery = $('#taEvery');
+      const taState = onOffItems.find(it => it.value === (cfg.task_ask_enabled ? 'on' : 'off'));
+      const taMins = everyItems.find(it => it.value === String(cfg.task_ask_minutes));
+      if (taOn && taState) setPickerValue(taOn, taState);
+      if (taEvery && taMins) setPickerValue(taEvery, taMins);
     }).catch(() => {});
 
     wirePicker(view, { id: 'wdOn', items: fixedItems(onOffItems), onPick: async value => {
@@ -1119,6 +1138,40 @@ export async function renderMaintenance(view, params) {
         toast(t('mn.msg.wardenEvery', { n: value }), 'ok');
       } catch (err) { failed('err.maintenance', err); }
     } });
+
+    /* the task reminder is the Stop hook's other ask, with its own pair of
+       settings; the interval stays on file while it is off, as above */
+    wirePicker(view, { id: 'taOn', items: fixedItems(onOffItems), onPick: async value => {
+      const enabled = value === 'on';
+      try {
+        const cfg = await api('/api/config', { body: { task_ask_enabled: enabled } });
+        toast(enabled ? t('mn.msg.taskOn', { n: cfg.task_ask_minutes })
+                      : t('mn.msg.taskOff'), 'ok');
+      } catch (err) { failed('err.maintenance', err); }
+    } });
+
+    wirePicker(view, { id: 'taEvery', items: fixedItems(everyItems), onPick: async value => {
+      try {
+        await api('/api/config', { body: { task_ask_minutes: Number(value) } });
+        toast(t('mn.msg.taskEvery', { n: value }), 'ok');
+      } catch (err) { failed('err.maintenance', err); }
+    } });
+  };
+
+  /* ── the interface ─────────────────────────────────────────────────── */
+
+  BUILD.interface = () => {
+    const modeItems = MOTION_MODES.map(m => ({ value: m, label: t('mn.ui.' + m) }));
+    panel('interface').innerHTML = `<section class="panel mnt-short">
+      <h3 class="panel-title">${t('mn.ui.title')}
+        <span class="panel-aside">${t('mn.ui.aside')}</span></h3>
+      <div class="list-toolbar toolbar-sm">
+        <label class="inline-label">${t('mn.ui.motion')}
+          ${pickerFor({ id: 'uiMotion', value: getMotion(), items: modeItems, ariaLabel: t('mn.ui.motion') })}</label>
+      </div>
+      <p class="hint">${t('mn.ui.body')}</p>
+    </section>`;
+    wirePicker(view, { id: 'uiMotion', items: fixedItems(modeItems), onPick: setMotion });
   };
 
   /* The tab that was asked for is the only one built at mount; the rest

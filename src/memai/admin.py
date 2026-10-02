@@ -51,7 +51,7 @@ from starlette.responses import FileResponse, JSONResponse, Response
 from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 
-from memai import __version__, autostart, changelog, db, portable, sections, update
+from memai import __version__, autostart, changelog, db, portable, sections, tasks, update
 
 # Windows' registry-derived mimetypes map serves .js as text/plain, which
 # browsers refuse to execute as an ES module. Force the correct types.
@@ -68,7 +68,11 @@ WEBUI_DIR = Path(__file__).parent / "webui" / "dist"
 SNIPPET_LIMIT = 280
 DEDUP_SNIPPET = 480
 
-KNOWN_TYPES = ("note", "checkpoint", "anti_pattern", "reasoning", "handoff", "diagram")
+KNOWN_TYPES = db.MEMORY_TYPES
+# What the dashboard's new-memory form writes. A handoff stays a type to read and
+# edit; a diagram is created with its graph and a task with its items.
+CREATABLE_TYPES = tuple(
+    t for t in db.MEMORY_TYPES if t not in ("handoff", db.DIAGRAM_TYPE, db.TASK_TYPE))
 CONFIDENCES = ("unverified", "confirmed", "contradicted")
 STATUSES = ("active", "archived")
 
@@ -185,6 +189,31 @@ def _with_usage(conn: sqlite3.Connection, items: list[dict]) -> list[dict]:
         u = usage.get(i["uid"])
         i["recalls"] = u["recalls"] if u else 0
         i["last_recall"] = u["last_recall"] if u else None
+    return items
+
+
+# The uids of tasks in one state; "open" leaves out a task whose memory is archived.
+_TASK_STATE_UIDS = (
+    "SELECT t.memory_uid FROM tasks t JOIN memories m ON m.uid = t.memory_uid "
+    "WHERE t.state = ? AND (t.state <> 'open' OR m.status = 'active')")
+
+
+def _with_tasks(conn: sqlite3.Connection, items: list[dict]) -> list[dict]:
+    """Give the rows that are tasks their `progress` ({done, total}) and `task_state`."""
+    uids = [i["uid"] for i in items if i.get("type") == db.TASK_TYPE]
+    if not uids:
+        return items
+    marks = ",".join("?" * len(uids))
+    states = dict(conn.execute(
+        f"SELECT memory_uid, state FROM tasks WHERE memory_uid IN ({marks})", uids))
+    counts = {r[0]: (r[1], r[2]) for r in conn.execute(
+        f"""SELECT memory_uid, SUM(state = 'done'), COUNT(*) FROM task_items
+            WHERE memory_uid IN ({marks}) GROUP BY memory_uid""", uids)}
+    for i in items:
+        if i["uid"] in states:
+            done, total = counts.get(i["uid"], (0, 0))
+            i["progress"] = {"done": done, "total": total}
+            i["task_state"] = states[i["uid"]]
     return items
 
 
@@ -399,6 +428,9 @@ def overview(request, payload) -> dict:
                 """SELECT type, confidence, COUNT(*) FROM memories
                    WHERE status = 'active' GROUP BY type, confidence"""):
             by_type_conf.setdefault(tp, {})[conf] = n
+        open_tasks = conn.execute(
+            "SELECT COUNT(*) FROM tasks t JOIN memories m ON m.uid = t.memory_uid "
+            "WHERE t.state = 'open' AND m.status = 'active'").fetchone()[0]
         health = db.health_axes(conn)
         db.health_snapshot(conn, health)
         was = db.health_since(conn, HEALTH_DELTA_DAYS)
@@ -424,6 +456,7 @@ def overview(request, payload) -> dict:
         "by_type": by_type,
         "by_confidence": by_confidence,
         "by_type_confidence": by_type_conf,
+        "open_tasks": open_tasks,
         "health": health,
         "symptoms": symptoms,
         "activity": activity,
@@ -535,6 +568,9 @@ def list_memories(request, payload) -> dict:
     limit = _int_param(request, "limit", 50, 1, BULK_MAX)
     offset = _int_param(request, "offset", 0, 0, 1_000_000)
     subtree = _subtree_param(request)
+    task_state = qp.get("task_state", "")   # "" = any
+    if task_state and task_state not in tasks.TASK_STATES:
+        raise ValueError(f"task_state must be one of {', '.join(tasks.TASK_STATES)}")
 
     with db.connect() as conn:
         scope = _scope_echo(conn, domain)
@@ -550,6 +586,9 @@ def list_memories(request, payload) -> dict:
                     "SELECT uid FROM memories WHERE 1=1 " + " ".join(defects),
                     defect_params)}
                 hits = [h for h in hits if h["uid"] in keep]
+            if task_state:
+                keep = {r[0] for r in conn.execute(_TASK_STATE_UIDS, (task_state,))}
+                hits = [h for h in hits if h["uid"] in keep]
             # A pasted uid names one row, and nothing in the keyword index
             # matches on it: a uid appears in OTHER bodies as [[uid]], so the
             # search answers "what points at this" and never "this". Both are
@@ -563,7 +602,8 @@ def list_memories(request, payload) -> dict:
                 hits = [pinned] + [h for h in hits if h["uid"] != q]
             total = len(hits)
             items = _with_usage(conn, [_summary(h) for h in hits[offset:offset + limit]])
-            return {"total": total, "items": items, "searched": True, **scope}
+            return {"total": total, "items": _with_tasks(conn, items),
+                    "searched": True, **scope}
 
         where, params = ["1=1"], []
         if domain:
@@ -575,6 +615,9 @@ def list_memories(request, payload) -> dict:
             if value:
                 where.append(f"AND {field} = ?")
                 params.append(value)
+        if task_state:
+            where.append(f"AND uid IN ({_TASK_STATE_UIDS})")
+            params.append(task_state)
         where.extend(defects)
         params.extend(defect_params)
         clause = " ".join(where)
@@ -588,7 +631,8 @@ def list_memories(request, payload) -> dict:
                 FROM memories m LEFT JOIN memory_usage u ON u.memory_uid = m.uid
                 WHERE {clause} ORDER BY {_MEMORY_SORTS[sort]} {direction} LIMIT ? OFFSET ?""",
             [*params, limit, offset]).fetchall()
-    return {"total": total, "items": [_summary(r) for r in rows], "searched": False, **scope}
+        items = _with_tasks(conn, [_summary(r) for r in rows])
+    return {"total": total, "items": items, "searched": False, **scope}
 
 
 def memory_detail(request, payload) -> dict:
@@ -620,6 +664,8 @@ def memory_detail(request, payload) -> dict:
         result["relations"] = rels
         if result.get("superseded_by"):
             result["superseded_by_peer"] = _peer_card(conn, result["superseded_by"])
+        if row["type"] == db.TASK_TYPE:
+            result["task"] = tasks.get_task(conn, uid)
         if row["type"] == db.DIAGRAM_TYPE:
             result["diagram"] = _diagram_json(conn, uid)
         else:
@@ -639,11 +685,17 @@ def create_memory(request, payload) -> dict:
     if not title:
         raise ValueError("title is required")
     if type_ not in KNOWN_TYPES:
-        raise ValueError(f"type must be one of {KNOWN_TYPES}")
+        raise ValueError(f"type must be one of {CREATABLE_TYPES}")
     if type_ == db.DIAGRAM_TYPE:
         # a diagram row with no graph behind it is a broken half-state: its
         # content is generated, so there would be nothing to generate from
         raise ValueError("create a diagram through POST /api/diagrams -- it needs a graph")
+    if type_ == db.TASK_TYPE:
+        # a task row with no tasks row behind it has no checklist to generate from
+        raise ValueError("a task is created through POST /api/tasks, not as a plain memory")
+    if type_ not in CREATABLE_TYPES:
+        raise ValueError(f"a {type_} is not created from the dashboard; "
+                         f"type must be one of {CREATABLE_TYPES}")
     if sections.is_sectioned(type_):
         # built from the fields rather than typed, so what lands conforms
         given = payload.get("sections")
@@ -670,6 +722,93 @@ def create_memory(request, payload) -> dict:
         return {"uid": uid, "also": db.get_domain_links(conn, uid)}
 
 
+def _lines(value) -> list[str]:
+    """Items given as text (one per line) or as a list of strings."""
+    if isinstance(value, str):
+        return tasks.split_items(value)
+    if isinstance(value, (list, tuple)):
+        return [str(v) for v in value]
+    return []
+
+
+def _task_answer(conn: sqlite3.Connection, uid: str) -> dict:
+    """The task and its memory status after a write, so a view re-renders from one answer."""
+    return {"task": tasks.get_task(conn, uid), "status": db.get_memory(conn, uid)["status"]}
+
+
+# A ValueError from tasks.* can arrive after rows were written, so each handler
+# lets it leave the connection block and the transaction rolls back.
+def create_task(request, payload) -> dict:
+    with db.connect() as conn:
+        uid = tasks.create_task(
+            conn,
+            title=payload.get("title") or "",
+            goal=payload.get("goal") or "",
+            items=_lines(payload.get("items")),
+            domain=(payload.get("domain") or "").strip(),
+            also=payload.get("also") or "",
+            tags=(payload.get("tags") or "").strip(),
+            session=(payload.get("session") or "").strip(),
+        )
+        return {"uid": uid, **_task_answer(conn, uid)}
+
+
+def task_item_state(request, payload) -> dict:
+    uid = request.path_params["uid"]
+    with db.connect() as conn:
+        tasks.set_item_state(conn, uid, payload.get("item") or "", payload.get("state") or "")
+        return _task_answer(conn, uid)
+
+
+def task_delete_item(request, payload) -> dict:
+    uid = request.path_params["uid"]
+    with db.connect() as conn:
+        tasks.delete_item(conn, uid, payload.get("item") or "")
+        return _task_answer(conn, uid)
+
+
+def task_add_items(request, payload) -> dict:
+    uid = request.path_params["uid"]
+    with db.connect() as conn:
+        tasks.add_items(conn, uid, _lines(payload.get("items")))
+        return _task_answer(conn, uid)
+
+
+def task_goal(request, payload) -> dict:
+    uid = request.path_params["uid"]
+    with db.connect() as conn:
+        tasks.set_goal(conn, uid, payload.get("goal") or "")
+        return _task_answer(conn, uid)
+
+
+def task_comment(request, payload) -> dict:
+    uid = request.path_params["uid"]
+    with db.connect() as conn:
+        tasks.add_comment(conn, uid, payload.get("body") or "",
+                          item=str(payload.get("item") or ""), author="person")
+        return _task_answer(conn, uid)
+
+
+def _targets(value) -> list[str]:
+    """A link target given as one uid or as a list of them."""
+    return [str(v) for v in value] if isinstance(value, (list, tuple)) else [str(value or "")]
+
+
+def task_link(request, payload) -> dict:
+    uid = request.path_params["uid"]
+    with db.connect() as conn:
+        tasks.link_item(conn, uid, payload.get("item") or "", _targets(payload.get("target")))
+        return _task_answer(conn, uid)
+
+
+def task_unlink(request, payload) -> dict:
+    uid = request.path_params["uid"]
+    with db.connect() as conn:
+        for target in _targets(payload.get("target")) or [""]:
+            tasks.unlink_item(conn, uid, payload.get("item") or "", target)
+        return _task_answer(conn, uid)
+
+
 def edit_content(request, payload) -> dict:
     uid = request.path_params["uid"]
     content = payload.get("content", "")
@@ -681,6 +820,12 @@ def edit_content(request, payload) -> dict:
                 "this memory is a diagram: its content is generated from the graph, "
                 "so a hand-written version would be overwritten by the next change. "
                 "Edit the flow instead."
+            )
+        if tasks.is_task(conn, uid):
+            raise ValueError(
+                "this memory is a task: its content is generated from the goal and "
+                "items, so a hand-written version would be overwritten by the next "
+                "change. Edit the goal or the items instead."
             )
         ok = db.update_memory_content(conn, uid, content, note=payload.get("note", ""))
     if not ok:
@@ -720,12 +865,22 @@ def edit_meta(request, payload) -> dict:
         row = db.get_memory(conn, uid)
         if row is None:
             raise ValueError(f"unknown memory: {uid}")
+        if updates.get("type") == "handoff" and row["type"] != "handoff":
+            # a handoff is read and edited where it is; a new one is a task
+            raise ValueError("a memory cannot be retyped to handoff; a task carries "
+                             "work to the next session")
         if "type" in updates and updates["type"] != row["type"] and (
             db.DIAGRAM_TYPE in (updates["type"], row["type"])
         ):
             # retyping away from 'diagram' orphans the graph; retyping into
             # it claims a generated content field with nothing generating it
             raise ValueError("a diagram's type cannot be changed")
+        if "type" in updates and updates["type"] != row["type"] and (
+            db.TASK_TYPE in (updates["type"], row["type"])
+        ):
+            # a task's content is generated from its rows, and a retyped memory
+            # has no rows to generate it from
+            raise ValueError("a task's type cannot be changed")
         if "type" in updates:
             # only on the way IN: leaving a type that has fields just drops
             # a cache, but claiming one means the body has to read that way
@@ -1458,6 +1613,8 @@ def get_config(request, payload) -> dict:
                 "svg_retention": db.get_svg_retention(conn),
                 "warden_enabled": db.get_warden_enabled(conn),
                 "warden_minutes": db.get_warden_minutes(conn),
+                "task_ask_enabled": db.get_task_ask_enabled(conn),
+                "task_ask_minutes": db.get_task_ask_minutes(conn),
                 "sections": {type_: [_section_spec(s) for s in spec]
                              for type_, spec in sections.SECTION_SPEC.items()}}
 
@@ -1472,7 +1629,9 @@ def set_config(request, payload) -> dict:
     writers = {"domain_case": db.set_domain_case,
                "svg_retention": db.set_svg_retention,
                "warden_enabled": db.set_warden_enabled,
-               "warden_minutes": db.set_warden_minutes}
+               "warden_minutes": db.set_warden_minutes,
+               "task_ask_enabled": db.set_task_ask_enabled,
+               "task_ask_minutes": db.set_task_ask_minutes}
     given = {k: payload[k] for k in writers if payload.get(k) is not None}
     if not given:
         raise ValueError(f"expected one of {', '.join(writers)}")
@@ -1482,7 +1641,9 @@ def set_config(request, payload) -> dict:
         return {"domain_case": db.get_domain_case(conn),
                 "svg_retention": db.get_svg_retention(conn),
                 "warden_enabled": db.get_warden_enabled(conn),
-                "warden_minutes": db.get_warden_minutes(conn)}
+                "warden_minutes": db.get_warden_minutes(conn),
+                "task_ask_enabled": db.get_task_ask_enabled(conn),
+                "task_ask_minutes": db.get_task_ask_minutes(conn)}
 
 
 # ------------------------------------------------------------- maintenance
@@ -1598,6 +1759,10 @@ def clean_orphans(request, payload) -> dict:
                         SELECT node_key FROM diagram_nodes
                         WHERE diagram_nodes.memory_uid = diagram_node_links.memory_uid)""")
         links = cur.rowcount
+        cur = conn.execute(
+            """DELETE FROM task_item_links
+               WHERE target_uid NOT IN (SELECT uid FROM memories)""")
+        task_links = cur.rowcount
         # a jump has four things that can rot -- both diagrams and both node
         # keys -- and `to_node` is legitimately empty for a whole-diagram jump
         cur = conn.execute(
@@ -1613,7 +1778,7 @@ def clean_orphans(request, payload) -> dict:
         jumps = cur.rowcount
     return {"ok": True, "relations_removed": rels,
             "suggestions_removed": sugs, "node_links_removed": links,
-            "jumps_removed": jumps}
+            "jumps_removed": jumps, "task_links_removed": task_links}
 
 
 def prune_renders(request, payload) -> dict:
@@ -2624,6 +2789,14 @@ routes = [
     Route("/api/memories/{uid}/status", api(edit_status), methods=["POST"]),
     Route("/api/memories/{uid}/purge", api(purge), methods=["POST"]),
     Route("/api/memories/purge", api(purge_many), methods=["POST"]),
+    Route("/api/tasks", api(create_task), methods=["POST"]),
+    Route("/api/tasks/{uid}/item", api(task_item_state), methods=["POST"]),
+    Route("/api/tasks/{uid}/item", api(task_delete_item), methods=["DELETE"]),
+    Route("/api/tasks/{uid}/items", api(task_add_items), methods=["POST"]),
+    Route("/api/tasks/{uid}/goal", api(task_goal), methods=["POST"]),
+    Route("/api/tasks/{uid}/comment", api(task_comment), methods=["POST"]),
+    Route("/api/tasks/{uid}/link", api(task_link), methods=["POST"]),
+    Route("/api/tasks/{uid}/link", api(task_unlink), methods=["DELETE"]),
     Route("/api/bulk", api(bulk), methods=["POST"]),
     Route("/api/relations", api(create_relation), methods=["POST"]),
     Route("/api/relations/{rel_id:int}", api(delete_relation), methods=["DELETE"]),

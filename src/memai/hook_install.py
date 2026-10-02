@@ -75,9 +75,9 @@ AGENT_RECEIPT = ".memai-agents.json"
 # store.
 TIMEOUT = 15
 
-# The guard opens no store and reads one payload, and it runs in front of a
-# call the session is waiting on -- so it is held to a shorter leash than the
-# events that have the store to load.
+# The guard reads one payload and opens the store only to resolve a uid, and it
+# runs in front of a call the session is waiting on -- so it is held to a
+# shorter leash than the events that have the store to load.
 TIMEOUTS = {"guard": 10}
 
 

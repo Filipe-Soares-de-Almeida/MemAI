@@ -7,13 +7,17 @@ JSON object on stdout:
                   a note when a newer memai has been released
   pre-compact     a reminder to checkpoint before the context is summarised
   stop            a nudge to checkpoint when nothing was written, a request
-                  for the warden subagent when one is owed, and the release
-                  check memai.update caches for the next session
+                  for the warden subagent when one is owed, a block asking
+                  about the open tasks of the domains the session named when
+                  that is owed, and the release check memai.update caches for
+                  the next session
 
-A fourth reads the call the host is about to make instead of the store, and
-is the one exception to everything the last paragraph of this docstring says:
+A fourth reads the call the host is about to make, not the store, and is the
+one exception to everything the last paragraph of this docstring says:
 
-  guard           refuses a memai write whose required text never arrived
+  guard           records the domain a memai call names in the session's
+                  state file, and refuses a memai write whose required text
+                  never arrived
 
 One more subcommand reads the store the same way and writes plain text
 instead:
@@ -31,20 +35,24 @@ running and no tool to have been loaded.
 Every failure path exits 0 with no output -- no store, an unreadable one, a
 payload that is not JSON, an unknown event -- so a hook cannot stop the
 session it is attached to. `guard` is the deliberate exception: stopping the
-call IS what it is for, and it exits 2 to do it. It never reads the store,
-so the only way it can fail is by refusing, and it refuses only on a payload
-it read and understood.
+call IS what it is for, and it exits 2 to do it. It writes the session's state
+file, and reads the store (read-only) only for the domain of a memory a call
+names by uid; both fail open, so the only way it fails is by refusing, and it
+refuses only on a payload it read and understood. It loads neither the store
+module nor the release check for a call that names its domain.
 """
 
 from __future__ import annotations
 
-import argparse
 import json
+import sqlite3
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from memai import brief, db, guard, hook_install, update, warden
+# `guard` runs in front of every memai tool call, so the module loads only what it
+# needs: the store, the brief, the release check and the installer load per event.
+from memai import guard, warden
 
 # How long after the last write a Stop hook assumes the session already
 # recorded what it learned. Long enough to cover a stretch of reading and
@@ -89,12 +97,24 @@ def _emit(event: str, context: str, *, system: str = "") -> None:
     sys.stdout.buffer.flush()
 
 
+def _block(reason: str) -> None:
+    """A Stop result that keeps the session working, with `reason` as the ask.
+
+    Bytes rather than sys.stdout for the reason given in _emit.
+    """
+    out = {"decision": "block", "reason": reason}
+    sys.stdout.buffer.write(json.dumps(out, ensure_ascii=False).encode("utf-8"))
+    sys.stdout.buffer.flush()
+
+
 def _session_start(args, payload) -> None:
     """The store's state, and a note when a newer memai has been released.
 
     `--budget` governs the brief; the update note is outside it, the way the
     warden's ask is outside what `stop` says about the store.
     """
+    from memai import brief, db, update
+
     # Both before the brief and never at its expense. `began` is what later
     # tells an agent the host loaded from one installed behind its back, and
     # a warden state left by a session that ended is nobody else's to clean up.
@@ -138,6 +158,8 @@ def _checkpoint_nudge(args) -> str:
     something was written in the last stretch, the session already did the
     thing being asked for, and it returns "".
     """
+    from memai import db
+
     with db.connect() as conn:
         if _wrote_recently(conn, args.quiet_minutes):
             return ""
@@ -151,6 +173,8 @@ def _checkpoint_nudge(args) -> str:
 
 def _agent_path(args) -> Path:
     """Where the warden definition belonging to this install lives."""
+    from memai import hook_install
+
     settings = Path(args.settings) if args.settings else hook_install.user_settings_path()
     return hook_install.agents_dir(settings) / warden.AGENT_FILE
 
@@ -163,6 +187,8 @@ def _warden_launchable(args, session_id: str) -> bool:
     read its agents, which it does once at startup. A definition somebody
     edited still counts -- the prompt is theirs to change.
     """
+    from memai import hook_install
+
     agent = _agent_path(args)
     state = hook_install.agent_state(agent.parent)
     if state.get(warden.AGENT_FILE) not in ("installed", "edited"):
@@ -177,6 +203,8 @@ def _warden_ask(args, payload) -> str:
     written cancels it: a request the interval cannot see is a request that
     repeats every turn, which is the noise this whole mechanism dies of.
     """
+    from memai import db
+
     session_id = payload.get("session_id", "")
     with db.connect() as conn:
         if not db.get_warden_enabled(conn):
@@ -196,22 +224,79 @@ def _warden_ask(args, payload) -> str:
     return warden.request(session_id, transcript=transcript, since=since)
 
 
+def _task_ask(args, payload) -> str:
+    """Ask the session to settle the open tasks of the domains it named, or ""
+    when it is not owed.
+
+    Only the domains the session's calls named count (see `_record_domains`);
+    a session that named none is not asked. The ask is stamped BEFORE it is
+    returned and a stamp that could not be written cancels it. Any failure
+    reading the store is no ask: the hook never interrupts a session over a
+    store it cannot read.
+    """
+    try:
+        from memai import db, pending
+
+        session_id = payload.get("session_id", "")
+        if not warden.safe_id(session_id):
+            return ""
+        named = warden.read(session_id).get("domains")
+        if not isinstance(named, list) or not named:
+            return ""
+        with db.connect() as conn:
+            if not db.get_task_ask_enabled(conn):
+                return ""
+            minutes = (args.task_minutes if args.task_minutes is not None
+                       else db.get_task_ask_minutes(conn))
+            if not warden.task_due(session_id, minutes):
+                return ""
+            open_tasks = len(pending.open_task_uids(conn, named))
+            holding = [d for d in named
+                       if isinstance(d, str) and pending.open_task_uids(conn, [d])]
+        if not open_tasks or not warden.mark_tasks(session_id):
+            return ""
+    except Exception:
+        return ""
+    count = f"{open_tasks} open task" + ("" if open_tasks == 1 else "s")
+    return (f"MemAI: {count} in the domains this session worked in "
+            f"({', '.join(holding)}). Call pending(type='task', domain=...) for "
+            "each of them. A task on the same subject can be filed under another "
+            "path: call list_domains() and check any similar domain before "
+            "deciding that none applies -- an empty pending() in one domain does "
+            "not mean the subject has no task. For each task this session worked "
+            "on, update its items with task_item(uid, item, state, comment, "
+            "related) -- a task closes itself once every item is done or "
+            "dropped. If none of them is this session's work, say so in one line "
+            "and stop.")
+
+
 def _stop(args, payload) -> None:
     """Whatever the store has to say at the end of a turn, as one result.
 
-    Both notes read state before they speak, and either can be silent, so a
-    turn with nothing to say emits nothing at all. Then the release check
-    refreshes what it caches, which is read by the sessions after this one.
+    Every note reads state before it speaks, and any can be silent, so a turn
+    with nothing to say emits nothing at all. An owed task ask turns the
+    result into a block that carries the other notes after it. Then the
+    release check refreshes what it caches, which is read by the sessions
+    after this one.
     """
+    from memai import update
+
     if payload.get("stop_hook_active"):
         return
     notes, systems = [], []
-    for note, system in ((_checkpoint_nudge(args), "nothing recorded this session"),
-                         (_warden_ask(args, payload), "warden is owed a run")):
+    for ask, system in ((lambda: _checkpoint_nudge(args), "nothing recorded this session"),
+                        (lambda: _warden_ask(args, payload), "warden is owed a run")):
+        try:
+            note = ask()
+        except Exception:
+            continue
         if note:
             notes.append(note)
             systems.append(system)
-    if notes:
+    tasks_ask = _task_ask(args, payload)
+    if tasks_ask:
+        _block("\n\n".join([tasks_ask, *notes]))
+    elif notes:
         _emit("Stop", "\n\n".join(notes), system="MemAI: " + "; ".join(systems) + ".")
     # After the emit, and never part of it: the answer is for the next session
     # to read, and this is the end of a turn, where the request costs nobody
@@ -270,6 +355,8 @@ def _statusline(args, payload) -> None:
 
     An empty store -- or an empty `--domain` scope -- emits no line.
     """
+    from memai import db
+
     with db.connect() as conn:
         census = db.domain_census(conn, args.domain)
         if not census["total"]:
@@ -287,8 +374,58 @@ def _statusline(args, payload) -> None:
     _line(_status_text(census["total"], busiest, age))
 
 
+# Tools that name a memory by `uid`: the domain the session worked in is the one
+# that memory is filed under.
+_UID_TOOLS = ("task_item", "task_add", "task_comment", "get_memory")
+
+
+def _record_domains(payload: dict) -> None:
+    """Add the domain a memai call names to its session's state.
+
+    The domain is the call's `domain` parameter, recorded as given, or for a
+    tool that names a memory by uid the domain that memory is filed under (one
+    read-only read of the store). A domain that names no path ("", "/") is not
+    recorded: the whole project is not a domain. Raises on failure; the caller
+    decides it is not fatal.
+    """
+    tool = guard.memai_tool(str(payload.get("tool_name", "")))
+    params = payload.get("tool_input")
+    session_id = warden.safe_id(payload.get("session_id", ""))
+    if not tool or not session_id or not isinstance(params, dict):
+        return
+    domain = params.get("domain")
+    if isinstance(domain, str):
+        warden.record_domain(session_id, domain)
+    uid = params.get("uid")
+    if tool in _UID_TOOLS and isinstance(uid, str) and uid.strip():
+        found = _domain_of(uid.strip())
+        if found:
+            warden.record_domain(session_id, found)
+
+
+def _domain_of(uid: str) -> str:
+    """The domain memory `uid` is filed under, or "" when it cannot be read.
+
+    A read-only connection with a short timeout and no migration: opening the
+    store the usual way writes, and this runs before every task call.
+    """
+    from memai import db
+
+    conn = sqlite3.connect(db.default_db_path().as_uri() + "?mode=ro", uri=True,
+                           timeout=1)
+    try:
+        row = conn.execute("SELECT domain FROM memories WHERE uid = ?", (uid,)).fetchone()
+    finally:
+        conn.close()
+    return row[0] if row and row[0] else ""
+
+
 def _guard(payload: dict) -> int:
-    """Read the call the host is about to make; 2 to refuse it, 0 to allow.
+    """Record the domain a memai call names, then read the call; 2 to refuse
+    it, 0 to allow.
+
+    Recording comes first and never changes the result: a failure there is
+    swallowed, and a call that is refused has recorded its domain all the same.
 
     Refusing writes the reason on stderr, which is where a host shows the
     model what it did wrong. Two things earn one: required text that never
@@ -304,6 +441,10 @@ def _guard(payload: dict) -> int:
     cannot write to its memory -- so everything this is not sure about goes
     through.
     """
+    try:
+        _record_domains(payload)
+    except Exception:
+        pass
     try:
         call = str(payload.get("tool_name", ""))
         tool = guard.tool_of(call)
@@ -356,6 +497,8 @@ def _check(path, *, skills: bool = False, agents: bool = False) -> int:
     reading, so it asks GitHub when the cached answer is due rather than
     reporting an old one; it never gates the exit code.
     """
+    from memai import hook_install, update
+
     found = hook_install.registered(path)
     events = hook_install.event_state(path)
     print(f"{path}:")
@@ -414,6 +557,8 @@ def _install(args) -> int:
     error surface. --check reports all three, and exits 1 for whichever
     --skills or --agents selects.
     """
+    from memai import hook_install
+
     path = Path(args.settings) if args.settings else hook_install.user_settings_path()
     if args.check:
         return _check(path, skills=args.skills, agents=args.agents)
@@ -430,6 +575,15 @@ def _install(args) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
+    # The registered `guard` skips the parser, whose defaults load the store.
+    # Outside the catch below, like the branch after the parser: a refusal is its point.
+    if (sys.argv[1:] if argv is None else argv) == ["guard"]:
+        return _guard(_payload())
+
+    import argparse
+
+    from memai import brief, db
+
     parser = argparse.ArgumentParser(
         prog="memai-hook",
         description="Emit memai context for a host hook. Reads the hook payload on "
@@ -454,6 +608,11 @@ def main(argv: list[str] | None = None) -> int:
                              "is asked for again (stop only); overrides the "
                              "interval the dashboard writes, which defaults to "
                              f"{db.WARDEN_MINUTES_DEFAULT}")
+    parser.add_argument("--task-minutes", type=int, default=None,
+                        help="how long a session goes before the open tasks are "
+                             "asked about again (stop only); overrides the "
+                             "interval the dashboard writes, which defaults to "
+                             f"{db.TASK_ASK_MINUTES_DEFAULT}")
     parser.add_argument("--settings", default="",
                         help="install into this settings file instead of the user's; "
                              "memai maintains the user's settings and checks nothing "

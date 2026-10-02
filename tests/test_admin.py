@@ -907,3 +907,110 @@ def test_handlers_run_off_the_event_loop():
         released.set()
         worker.join(timeout=10)
     assert answered == {"slow": True}
+
+
+# ── tasks ───────────────────────────────────────────────────────────────
+
+def _task(**kw) -> str:
+    from memai import tasks
+
+    with db.connect() as conn:
+        return tasks.create_task(
+            conn, title="Ship the parser", goal="Parse every config file",
+            items=["read the spec", "write the lexer"], domain="acme/parser", **kw)
+
+
+def test_clean_orphans_removes_dangling_item_links(client):
+    uid = _task()
+    note = _create(client, content="the lexer reads one token")
+    with db.connect() as conn:
+        conn.execute(
+            "INSERT INTO task_item_links (memory_uid, item_key, target_uid, created_at) "
+            "VALUES (?, 'i1', ?, '2026-01-01T00:00:00+00:00')", (uid, note))
+    raw = sqlite3.connect(db.default_db_path())
+    try:
+        raw.execute("PRAGMA foreign_keys=OFF")
+        raw.execute(
+            "INSERT INTO task_item_links (memory_uid, item_key, target_uid, created_at) "
+            "VALUES (?, 'i2', 'ffffffffffffffff', '2026-01-01T00:00:00+00:00')", (uid,))
+        raw.commit()
+    finally:
+        raw.close()
+    res = client.post("/api/maintenance/clean-orphans", json={}).json()
+    assert res["ok"] and res["task_links_removed"] == 1
+    with db.connect() as conn:
+        assert [r["target_uid"] for r in conn.execute("SELECT target_uid FROM task_item_links")] == [note]
+
+
+def test_dashboard_refuses_free_text_edit_and_retype_of_a_task(client):
+    uid = _task()
+    note = _create(client, content="a plain note")
+    before = client.get(f"/api/memories/{uid}").json()["content"]
+    res = client.post(f"/api/memories/{uid}/content", json={"content": "x"})
+    assert res.status_code == 400
+    assert client.get(f"/api/memories/{uid}").json()["content"] == before
+    assert client.post(f"/api/memories/{uid}/meta", json={"type": "note"}).status_code == 400
+    assert client.post(f"/api/memories/{note}/meta", json={"type": "task"}).status_code == 400
+    assert client.get(f"/api/memories/{uid}").json()["type"] == "task"
+    assert client.get(f"/api/memories/{note}").json()["type"] == "note"
+    # the other fields of a task stay editable
+    assert client.post(f"/api/memories/{uid}/meta", json={"tags": "parser"}).status_code == 200
+
+
+def test_dashboard_refuses_to_create_a_task_as_a_plain_memory(client):
+    res = client.post("/api/memories", json={
+        "title": "a would-be task", "type": "task", "content": "- [ ] step"})
+    assert res.status_code == 400
+    assert "/api/tasks" in res.json()["error"]
+    with db.connect() as conn:
+        assert conn.execute("SELECT COUNT(*) FROM memories").fetchone()[0] == 0
+
+
+def test_dashboard_lists_only_the_types_it_can_create_for_an_unknown_type(client):
+    res = client.post("/api/memories", json={
+        "title": "a would-be pitfall", "type": "pitfall", "content": "x"})
+    assert res.status_code == 400
+    assert res.json()["error"] == (
+        "type must be one of ('note', 'reasoning', 'anti_pattern', 'checkpoint')")
+
+
+def test_dashboard_does_not_create_or_retype_to_handoff(client):
+    res = client.post("/api/memories", json={
+        "title": "a would-be handoff", "type": "handoff", "content": "pick up here"})
+    assert res.status_code == 400
+    assert res.json()["error"] == (
+        "a handoff is not created from the dashboard; "
+        "type must be one of ('note', 'reasoning', 'anti_pattern', 'checkpoint')")
+    note = _create(client, content="a plain note")
+    assert client.post(f"/api/memories/{note}/meta", json={"type": "handoff"}).status_code == 400
+    assert client.get(f"/api/memories/{note}").json()["type"] == "note"
+    with db.connect() as conn:
+        old = db.insert_memory(conn, type="handoff", title="an existing handoff",
+                               content="the lexer is next")
+    assert client.post(f"/api/memories/{old}/content", json={"content": "the parser is next"}).status_code == 200
+    assert client.post(f"/api/memories/{old}/meta", json={"tags": "parser"}).status_code == 200
+    assert client.get(f"/api/memories/{old}").json()["type"] == "handoff"
+
+
+def test_config_carries_the_task_ask_settings(client):
+    body = client.get("/api/config").json()
+    assert body["task_ask_enabled"] is True
+    assert body["task_ask_minutes"] == 30
+
+
+def test_config_round_trips_the_task_ask_settings(client):
+    res = client.post("/api/config", json={"task_ask_minutes": 45})
+    assert res.status_code == 200
+    assert res.json()["task_ask_minutes"] == 45
+    assert client.get("/api/config").json()["task_ask_minutes"] == 45
+    res = client.post("/api/config", json={"task_ask_enabled": False})
+    assert res.json()["task_ask_enabled"] is False
+    assert res.json()["task_ask_minutes"] == 45
+    assert res.json()["warden_enabled"] is True
+
+
+@pytest.mark.parametrize("minutes", [0, 481])
+def test_config_refuses_a_task_interval_out_of_range(client, minutes):
+    assert client.post("/api/config",
+                       json={"task_ask_minutes": minutes}).status_code == 400
+    assert client.get("/api/config").json()["task_ask_minutes"] == 30

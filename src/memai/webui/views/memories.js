@@ -89,6 +89,8 @@ export async function renderMemories(view, params, ctx) {
     type: params.get('type') || '',
     status: params.has('status') ? params.get('status') : 'active',
     confidence: params.get('confidence') || '',
+    /* open | completed | cancelled, and only meaningful for the task type */
+    task_state: params.get('task_state') || '',
     session: params.get('session') || '',
     /* a domain filter covers its subdomains; 'exact' is the opt-out, and it
        lives in the URL so the narrowed list is a linkable state */
@@ -114,6 +116,7 @@ export async function renderMemories(view, params, ctx) {
   const filter = {
     q: state.q, domain: state.domain, type: state.type, status: state.status,
     confidence: state.confidence, session: state.session, sort: state.sort, dir: state.dir,
+    task_state: state.type === 'task' ? state.task_state : '',
     linked: state.linked, due: state.due, stale: state.stale,
     untitled: state.untitled, untagged: state.untagged,
     subtree: state.exact ? '0' : '',
@@ -168,6 +171,11 @@ export async function renderMemories(view, params, ctx) {
                confidence its ring in the list where you choose one, and a domain
                keeps the tree it is. -->
           ${pickerFor({ id: 'fType', value: state.type, items: types, ariaLabel: t('common.allTypes') })}
+          ${state.type === 'task' ? `<div class="seg" id="fTask" role="group" aria-label="${t('mem.task.aria')}">
+            ${[['open', 'task.state.open'], ['completed', 'task.state.completed'],
+               ['cancelled', 'task.state.cancelled'], ['', 'common.all']].map(([v, key]) =>
+              `<button type="button" data-v="${v}" aria-pressed="${state.task_state === v}">${t(key)}</button>`).join('')}
+          </div>` : ''}
           ${domainPickerHTML({ id: 'fDomain', value: state.domain, ariaLabel: t('common.allDomains') })}
           <!-- only where the choice exists: a domain with no subdomains reads
                the same either way, and an inert toggle is noise -->
@@ -241,7 +249,7 @@ export async function renderMemories(view, params, ctx) {
     if (e.target.value.trim() === '' && state.q) navigate({ q: '', page: 0 });
   }, 500));
   wirePicker(view, { id: 'fType', items: fixedItems(types),
-                     onPick: type => navigate({ type, page: 0 }) });
+                     onPick: type => navigate({ type, task_state: '', page: 0 }) });
   /* a new scope starts inclusive: 'exact' was about the domain just left */
   wireDomainPicker(view, {
     id: 'fDomain', domains,
@@ -256,6 +264,10 @@ export async function renderMemories(view, params, ctx) {
     const [sort, dir] = v.split(':');
     navigate({ sort, dir, page: 0 });
   } });
+  /* A completed or cancelled task is archived: those states lift the status
+     filter so the list is not empty, and Open puts it back. */
+  $('#fTask')?.querySelectorAll('button').forEach(b => b.addEventListener('click', () =>
+    navigate({ task_state: b.dataset.v, status: b.dataset.v === 'open' ? 'active' : '', page: 0 })));
   $('#fStatus').querySelectorAll('button').forEach(b =>
     b.addEventListener('click', () => navigate({ status: b.dataset.v, page: 0 })));
   view.querySelectorAll('[data-undefect]').forEach(b =>
@@ -405,6 +417,19 @@ export async function renderMemories(view, params, ctx) {
   paintInspector();
 }
 
+/* A task's row says how far it is -- done out of ALL its items, dropped ones
+   included -- and, once it has closed, how it ended. */
+function taskMarkHTML(m) {
+  const p = m.progress;
+  const prog = p ? `<span class="mem-prog" title="${esc(t('task.progress.text', { done: p.done, total: p.total }))}">
+      <span class="bar-track"><span class="bar-fill" style="--v:${p.total ? p.done / p.total : 0}"></span></span>
+      <span class="mem-prog-n">${p.done}/${p.total}</span></span>` : '';
+  const end = m.task_state === 'completed' ? `<span class="status-tag completed">${t('task.state.completed')}</span>`
+    : m.task_state === 'cancelled' ? `<span class="status-tag">${t('task.state.cancelled')}</span>`
+    : statusTag(m.status);
+  return `${end}${prog}`;
+}
+
 /* ─── the rows ────────────────────────────────────────────────────────────
    A row says what tells a reader whether to open it: how far it has been
    vetted, what kind of memory it is, what it is called, and how old.
@@ -453,7 +478,7 @@ function renderRows(items, scope = '') {
       </div>
       <div class="mem-right" role="gridcell">
         ${match}
-        ${statusTag(m.status)}
+        ${m.type === 'task' ? taskMarkHTML(m) : statusTag(m.status)}
         ${away ? `<span class="chip" title="${esc(t('mem.alsoWhy', { domain: m.domain }))}">${t('mem.also')}</span>` : ''}
         <!-- Only on a window wide enough to have room for it (see the media
              query in admin.css). Uncapping the page left a run of empty

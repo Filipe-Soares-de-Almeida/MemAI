@@ -903,13 +903,13 @@ def test_mcp_jump_is_visible_on_both_diagrams(mcp):
     assert mcp.diagram_jump(b, "load", a, "write", delete=True)["ok"] is False
 
 
-def test_mcp_pulse_names_diagrams_without_inlining_them(mcp):
-    uid = mcp.diagram(
+def test_mcp_pulse_counts_diagrams_without_listing_them(mcp):
+    mcp.diagram(
         title="Nightly export routine", nodes=NODES, edges=EDGES, domain="proj-1042",
-    )["uid"]
-    entry = mcp.pulse(domain="proj-1042")["diagrams"][0]
-    assert entry == {"uid": uid, "domain": "proj-1042", "title": "Nightly export routine"}
-    assert "content" not in entry  # a whole graph would swamp a warm-up
+    )
+    p = mcp.pulse(domain="proj-1042")
+    assert p["pending"] == [{"type": "diagram", "count": 1}]
+    assert "diagrams" not in p  # a whole graph would swamp a warm-up
 
 
 def test_mcp_relayout_reports_what_it_moved(mcp):
@@ -1190,9 +1190,6 @@ def test_api_type_allowlist_is_enforced(client):
     assert client.post("/api/memories", json={"title": "fixture title", "type": "wat", "content": "x"}).status_code == 400
     uid = client.post("/api/memories", json={"title": "fixture title", "type": "note", "content": "x"}).json()["uid"]
     assert client.post(f"/api/memories/{uid}/meta", json={"title": "fixture title", "type": "wat"}).status_code == 400
-    # handoff, not reasoning: claiming a type that has fields is a write of
-    # that shape, and this body has none of them
-    assert client.post(f"/api/memories/{uid}/meta", json={"title": "fixture title", "type": "handoff"}).status_code == 200
 
 
 def test_api_refuses_retyping_across_the_diagram_boundary(client):

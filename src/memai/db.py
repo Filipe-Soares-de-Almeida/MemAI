@@ -32,6 +32,9 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 from memai import guard, sections
+from memai.lite import (DOMAIN_SEP, TASK_ASK_MINUTES_DEFAULT,  # noqa: F401
+                        WARDEN_MINUTES_DEFAULT, home, normalize_domain, now_iso,
+                        split_domain)
 
 # Domain-casing policy. Stored in the `meta` table under DOMAIN_CASE_KEY and
 # enforced at every domain write path. 'preserve' keeps free-text casing;
@@ -48,7 +51,6 @@ DOMAIN_CASE_DEFAULT = "preserve"
 # The nesting lives in the string: no domains table, no id to resolve. A
 # store with no separator anywhere is a tree of depth 1, and FTS tokenizes
 # the ancestors into searchable words.
-DOMAIN_SEP = "/"
 
 # A memory is FILED at one path and can additionally BELONG to others. The
 # path says where it lives -- one direct parent, the thing a re-home
@@ -311,6 +313,48 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_diagram_jumps_pair
     ON diagram_jumps(from_uid, from_node, to_uid, to_node);
 CREATE INDEX IF NOT EXISTS idx_diagram_jumps_to ON diagram_jumps(to_uid);
 
+CREATE TABLE IF NOT EXISTS tasks (
+    memory_uid   TEXT PRIMARY KEY REFERENCES memories(uid),
+    goal         TEXT NOT NULL,
+    state        TEXT NOT NULL DEFAULT 'open',    -- open | completed | cancelled
+    completed_at TEXT NOT NULL DEFAULT '',
+    item_seq     INTEGER NOT NULL DEFAULT 0       -- highest item seq ever deleted
+);
+
+CREATE TABLE IF NOT EXISTS task_items (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    memory_uid      TEXT NOT NULL REFERENCES memories(uid),
+    item_key        TEXT NOT NULL,                -- i1, i2, ... never reused
+    seq             INTEGER NOT NULL,
+    text            TEXT NOT NULL,
+    state           TEXT NOT NULL DEFAULT 'todo', -- todo | doing | done | dropped
+    updated_at      TEXT NOT NULL,
+    updated_session TEXT NOT NULL DEFAULT '',
+    UNIQUE (memory_uid, item_key)
+);
+
+CREATE INDEX IF NOT EXISTS idx_task_items_mem ON task_items(memory_uid);
+
+CREATE TABLE IF NOT EXISTS task_item_links (
+    memory_uid TEXT NOT NULL REFERENCES memories(uid),
+    item_key   TEXT NOT NULL,
+    target_uid TEXT NOT NULL REFERENCES memories(uid),
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (memory_uid, item_key, target_uid)
+);
+
+CREATE TABLE IF NOT EXISTS task_comments (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    memory_uid TEXT NOT NULL REFERENCES memories(uid),
+    item_key   TEXT NOT NULL DEFAULT '',          -- '' = on the task as a whole
+    body       TEXT NOT NULL,
+    author     TEXT NOT NULL DEFAULT 'agent',     -- agent | person
+    session    TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_task_comments_mem ON task_comments(memory_uid);
+
 CREATE TABLE IF NOT EXISTS meta (
     key    TEXT PRIMARY KEY,
     value  TEXT NOT NULL
@@ -383,13 +427,6 @@ _PROJECT_BAD_CHARS = frozenset('<>:"/\\|?*') | frozenset(chr(c) for c in range(3
 _PROJECT_DEVICES = frozenset(
     ["con", "prn", "aux", "nul",
      *(f"com{i}" for i in range(1, 10)), *(f"lpt{i}" for i in range(1, 10))])
-
-
-def home() -> Path:
-    """`MEMAI_HOME`, or `~/.memai`, created if needed."""
-    path = Path(os.environ.get("MEMAI_HOME", Path.home() / ".memai"))
-    path.mkdir(parents=True, exist_ok=True)
-    return path
 
 
 def project_name_error(name: object) -> str | None:
@@ -1007,7 +1044,6 @@ def set_svg_retention(conn: sqlite3.Connection, mode: str) -> str:
 WARDEN_ENABLED_KEY = "warden_enabled"
 WARDEN_ENABLED_DEFAULT = True
 WARDEN_MINUTES_KEY = "warden_minutes"
-WARDEN_MINUTES_DEFAULT = 20
 # A session is one conversation, so an interval longer than a working day
 # would only ever fire once; below a minute the ask lands on every turn.
 WARDEN_MINUTES_RANGE = (1, 480)
@@ -1057,6 +1093,55 @@ def set_warden_minutes(conn: sqlite3.Connection, minutes: object) -> int:
     if not low <= value <= high:
         raise ValueError(f"warden_minutes must be between {low} and {high}")
     _set_meta(conn, WARDEN_MINUTES_KEY, str(value))
+    return value
+
+
+TASK_ASK_ENABLED_KEY = "task_ask_enabled"
+TASK_ASK_ENABLED_DEFAULT = True
+TASK_ASK_MINUTES_KEY = "task_ask_minutes"
+# Same bounds as the warden's: a session is one conversation, and below a
+# minute the ask would land on every turn.
+TASK_ASK_MINUTES_RANGE = (1, 480)
+
+
+def get_task_ask_enabled(conn: sqlite3.Connection) -> bool:
+    """Whether the Stop hook may block a session to ask about its open tasks.
+
+    Read from the project `conn` is on, like the warden's switch.
+    """
+    value = _get_meta(conn, TASK_ASK_ENABLED_KEY)
+    return TASK_ASK_ENABLED_DEFAULT if value is None else value == "1"
+
+
+def set_task_ask_enabled(conn: sqlite3.Connection, enabled: object) -> bool:
+    """Persist the task-ask switch. Accepts a bool or the strings a form sends."""
+    if isinstance(enabled, str):
+        enabled = enabled.strip().lower() not in ("", "0", "false", "off", "no")
+    _set_meta(conn, TASK_ASK_ENABLED_KEY, "1" if enabled else "0")
+    return bool(enabled)
+
+
+def get_task_ask_minutes(conn: sqlite3.Connection) -> int:
+    """How long a session goes before the Stop hook asks about tasks again."""
+    try:
+        value = int(_get_meta(conn, TASK_ASK_MINUTES_KEY) or "")
+    except ValueError:
+        return TASK_ASK_MINUTES_DEFAULT
+    low, high = TASK_ASK_MINUTES_RANGE
+    return value if low <= value <= high else TASK_ASK_MINUTES_DEFAULT
+
+
+def set_task_ask_minutes(conn: sqlite3.Connection, minutes: object) -> int:
+    """Persist the task-ask interval, in minutes."""
+    low, high = TASK_ASK_MINUTES_RANGE
+    try:
+        value = int(str(minutes).strip())
+    except (TypeError, ValueError):
+        raise ValueError(f"task_ask_minutes must be a whole number of minutes "
+                         f"between {low} and {high}")
+    if not low <= value <= high:
+        raise ValueError(f"task_ask_minutes must be between {low} and {high}")
+    _set_meta(conn, TASK_ASK_MINUTES_KEY, str(value))
     return value
 
 
@@ -1267,10 +1352,6 @@ def new_uid() -> str:
     return secrets.token_hex(8)
 
 
-def now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
-
-
 # Characters a token is worth in est_tokens. An ESTIMATE, not a tokenizer:
 # no host's tokenizer is reachable from here, so the count is a fixed ratio
 # over the character length.
@@ -1322,21 +1403,6 @@ def case_domain(mode: str, domain: str) -> str:
     if mode == "upper":
         return domain.upper()
     return domain
-
-
-def split_domain(domain: str) -> list[str]:
-    """A domain path's segments, outermost first. Blank segments drop out."""
-    return [s for s in (p.strip() for p in (domain or "").split(DOMAIN_SEP)) if s]
-
-
-def normalize_domain(domain: str) -> str:
-    """Canonical form of a domain path: trimmed segments, single separators.
-
-    Every write path runs this, so 'acme / x100//' and 'acme/x100' are one
-    domain and no caller can coin an empty segment -- a path with one
-    would sit in the tree at a level nothing can name.
-    """
-    return DOMAIN_SEP.join(split_domain(domain))
 
 
 def domain_parent(domain: str) -> str:
@@ -1443,6 +1509,7 @@ def apply_link_policy(
 # fills existing rows with it.
 _ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
     ("diagrams", "font_scale", "REAL NOT NULL DEFAULT 1"),
+    ("tasks", "item_seq", "INTEGER NOT NULL DEFAULT 0"),
     ("diagram_nodes", "w", "REAL"),
     ("diagram_nodes", "h", "REAL"),
     ("memories", "also_domains", "TEXT NOT NULL DEFAULT ''"),
@@ -1461,6 +1528,17 @@ def _ensure_columns(conn: sqlite3.Connection) -> None:
             continue  # table itself is new; the schema above already has it
         if column not in have:
             conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
+
+
+def _repair_task_states(conn: sqlite3.Connection) -> None:
+    """Cancel an open task whose memory is not active.
+
+    A writer that archives a memory without knowing tasks leaves its state
+    open; nothing else would close it.
+    """
+    conn.execute(
+        "UPDATE tasks SET state = 'cancelled' WHERE state = 'open' AND memory_uid IN "
+        "(SELECT uid FROM memories WHERE status <> 'active')")
 
 
 def _ensure_diagram_titles(conn: sqlite3.Connection) -> None:
@@ -1885,6 +1963,7 @@ def connect(db_path: Path | None = None, *, project: str | None = None):
     _drop_vector_store(conn)
     _ensure_fts(conn)
     _ensure_diagram_titles(conn)
+    _repair_task_states(conn)
     try:
         yield conn
         conn.commit()
@@ -2104,6 +2183,9 @@ def set_status(
 ) -> bool:
     """Change a memory's status; optionally record why in the audit log.
 
+    A task keeps its state in step: archiving an open task cancels it, and
+    restoring reopens it only when an item is still todo or doing.
+
     When `note` is given it is stored as a status-change audit entry in
     `edits` (prev_content == new_content, since the content itself is not
     touched). Archiving does not change what the memory says, so nothing
@@ -2116,6 +2198,17 @@ def set_status(
         "UPDATE memories SET status = ?, superseded_by = ?, updated_at = ? WHERE uid = ?",
         (status, superseded_by, now_iso(), uid),
     )
+    if row["type"] == TASK_TYPE:
+        if status == "archived":
+            conn.execute(
+                "UPDATE tasks SET state = 'cancelled' WHERE memory_uid = ? AND state = 'open'", (uid,)
+            )
+        elif status == "active":
+            conn.execute(
+                "UPDATE tasks SET state = 'open', completed_at = '' WHERE memory_uid = ? "
+                "AND EXISTS (SELECT 1 FROM task_items WHERE memory_uid = ? "
+                "AND state IN ('todo', 'doing'))", (uid, uid)
+            )
     if note:
         conn.execute(
             "INSERT INTO edits (memory_uid, edited_at, prev_content, new_content, note) VALUES (?, ?, ?, ?, ?)",
@@ -2257,6 +2350,9 @@ def purge_memory(conn: sqlite3.Connection, uid: str) -> bool:
     memory -- otherwise a purged note leaves a node link dangling at a uid
     that no longer resolves.
 
+    A task's rows (comments, item links, items, the head row) go with it,
+    and so does any task item link that pointed at this memory.
+
     `memory_domains` goes with it for the same reason, and the FK on that
     table means it HAS to: the DELETE below is refused outright while a
     cross-listing still names this uid. No mirror to rewrite -- the row
@@ -2280,6 +2376,12 @@ def purge_memory(conn: sqlite3.Connection, uid: str) -> bool:
     conn.execute("DELETE FROM diagram_nodes WHERE memory_uid = ?", (uid,))
     conn.execute("DELETE FROM diagram_edges WHERE memory_uid = ?", (uid,))
     conn.execute("DELETE FROM diagrams WHERE memory_uid = ?", (uid,))
+    conn.execute("DELETE FROM task_comments WHERE memory_uid = ?", (uid,))
+    conn.execute(
+        "DELETE FROM task_item_links WHERE memory_uid = ? OR target_uid = ?", (uid, uid)
+    )
+    conn.execute("DELETE FROM task_items WHERE memory_uid = ?", (uid,))
+    conn.execute("DELETE FROM tasks WHERE memory_uid = ?", (uid,))
     conn.execute("DELETE FROM memories WHERE uid = ?", (uid,))
     return True
 
@@ -2454,6 +2556,20 @@ LAYOUT_GAP_X = 130.0
 LAYOUT_GAP_Y = 152.0
 LAYOUT_COL_W = NODE_DEFAULT_W + LAYOUT_GAP_X   # 300, the pitch for default boxes
 LAYOUT_ROW_H = NODE_DEFAULT_H + LAYOUT_GAP_Y   # 200
+
+TASK_TYPE = "task"
+# types whose content is generated from rows, so no prose scan or merge applies
+GENERATED_TYPES = (DIAGRAM_TYPE, TASK_TYPE)
+# every type a memory can have; the tools and the dashboard read this one list
+MEMORY_TYPES = ("note", "reasoning", "anti_pattern", "checkpoint", "handoff",
+                DIAGRAM_TYPE, TASK_TYPE)
+
+
+def type_error(type_: str, allowed: tuple[str, ...] = MEMORY_TYPES) -> str | None:
+    """The refusal for a type outside `allowed`, or None. An empty type means all."""
+    if not type_ or type_ in allowed:
+        return None
+    return f"unknown type '{type_}'; valid types: {', '.join(allowed)}"
 
 
 def node_box(node: dict, font_scale: float = 1.0) -> tuple[float, float]:
@@ -4075,9 +4191,9 @@ def _sound_clause(exclude_contradicted: bool) -> str:
 
     Off by default: list_by_domain/list_recent are the fallback for a search
     that came back thin, and a caller asking for everything in a scope means
-    everything. pulse() opts in, because a warm-up presents what it returns
-    as the current state -- a contradicted anti-pattern read there is a
-    pitfall to avoid, not one that turned out not to be.
+    everything. pulse() opts in for the checkpoint it returns, because a
+    warm-up presents that as the current state -- a contradicted checkpoint
+    would hand the next session a bearing already ruled out.
     """
     return f" AND confidence <> '{CONFIDENCE_CONTRADICTED}'" if exclude_contradicted else ""
 
@@ -4257,10 +4373,9 @@ def domain_census(
 ) -> dict:
     """What a domain scope holds, and how it splits one level down.
 
-    pulse() returns the newest few of each type; this is how it can say what
-    it did NOT return. `by_type` counts the whole scope, so a caller can see
-    that 5 of 13 notes came back and reach for search()/list_by_domain()
-    with the domain it already has.
+    pulse() carries this census as its `scope`: `by_type` counts the whole
+    scope, so a caller can see that it holds 13 notes and reach for
+    search()/list_by_domain() with the domain it already has.
 
     `children` stops at the NEXT level rather than walking the subtree: "what
     else is in here" is answered a level at a time, and the child's own
@@ -4737,14 +4852,14 @@ def similar_memories(
     whole store, for a human to answer.
 
     Never blocks a write and never merges anything -- the memory is
-    already stored when this runs. Diagrams are out on both sides: their
-    content is a projection of a graph, so a resemblance between two of
+    already stored when this runs. Diagrams and tasks are out on both sides:
+    their content is a projection of rows, so a resemblance between two of
     them is not a merge anyone could apply. Consecutive checkpoints of one
     effort are out too (see _timeline_pair) -- they share a skeleton by
     design and would fire on every write.
     """
     row = get_memory(conn, uid)
-    if row is None or row["type"] == DIAGRAM_TYPE:
+    if row is None or row["type"] in GENERATED_TYPES:
         return []
 
     # A scan, so it stays inside the scope the memory was filed under -- a
@@ -4762,7 +4877,7 @@ def similar_memories(
 
     out = []
     for other, score, method in sorted(scored, key=lambda s: -s[1]):
-        if other["status"] != "active" or other["type"] == DIAGRAM_TYPE:
+        if other["status"] != "active" or other["type"] in GENERATED_TYPES:
             continue
         if _timeline_pair(row, other):
             continue
@@ -4803,13 +4918,13 @@ def dedup_candidates(
     score -- real merges live in durable types. The returned score is
     never altered, only the ordering.
 
-    Diagrams never enter the candidate pool: their content is a generated
-    projection of a graph, so two similar flows are not a prose merge
+    Diagrams and tasks never enter the candidate pool: their content is a
+    generated projection of rows, so two similar flows are not a prose merge
     anybody could apply -- proposing one would only produce a suggestion
     that cannot be carried out.
     """
-    sql = ["SELECT * FROM memories WHERE status = 'active' AND type != ?"]
-    params: list = [DIAGRAM_TYPE]
+    sql = ["SELECT * FROM memories WHERE status = 'active' AND type NOT IN (?, ?)"]
+    params: list = [*GENERATED_TYPES]
     if domain:
         clause, values, _ = domain_scope_clause(conn, domain, alias="", subtree=subtree)
         sql.append(clause)
@@ -5277,17 +5392,23 @@ def _memory_exists(conn: sqlite3.Connection, uid: str | None) -> bool:
     return bool(uid) and get_memory(conn, uid) is not None
 
 
-def _diagram_content_error(conn: sqlite3.Connection, uid: str | None) -> str | None:
+def _generated_content_error(conn: sqlite3.Connection, uid: str | None) -> str | None:
     """The free-text editors' refusal, for the suggestion kinds that rewrite content.
 
-    A diagram's content is the projection of its graph, so a hand-authored
-    body applied over it survives only until the next diagram_node/
-    diagram_edge edit regenerates it (see is_diagram).
+    A diagram's or a task's content is the projection of its rows, so a
+    hand-authored body applied over it matches no row and survives only
+    until the next structural edit regenerates it (see is_diagram).
     """
-    if not (uid and is_diagram(conn, uid)):
+    row = get_memory(conn, uid) if uid else None
+    if row is None:
         return None
-    return (f"{uid} is a diagram: its content is generated from the graph. "
-            "Use diagram_node/diagram_edge to change the flow.")
+    if row["type"] == DIAGRAM_TYPE:
+        return (f"{uid} is a diagram: its content is generated from the graph. "
+                "Use diagram_node/diagram_edge to change the flow.")
+    if row["type"] == TASK_TYPE:
+        return (f"{uid} is a task: its content is generated from the goal and items. "
+                "Change them through the task tools.")
+    return None
 
 
 def _validate_suggestion(conn: sqlite3.Connection, s: object) -> tuple[dict | None, str | None]:
@@ -5308,7 +5429,7 @@ def _validate_suggestion(conn: sqlite3.Connection, s: object) -> tuple[dict | No
         return None if _memory_exists(conn, target_uid) else f"target_uid not found: {target_uid!r}"
 
     if kind in ("compact", "reword"):
-        err = target_err() or _diagram_content_error(conn, target_uid)
+        err = target_err() or _generated_content_error(conn, target_uid)
         if err:
             return None, err
         if not str(payload.get("new_content", "")).strip():
@@ -5329,7 +5450,7 @@ def _validate_suggestion(conn: sqlite3.Connection, s: object) -> tuple[dict | No
             return None, (f"payload.field must be one of: {', '.join(LEAK_FIELDS)}; "
                           f"got {field!r}")
         if field == "content":
-            err = _diagram_content_error(conn, target_uid)
+            err = _generated_content_error(conn, target_uid)
             if err:
                 return None, err
         row = get_memory(conn, target_uid)
@@ -5475,6 +5596,9 @@ def _validate_suggestion(conn: sqlite3.Connection, s: object) -> tuple[dict | No
             if is_diagram(conn, u):
                 return None, (f"{u} is a diagram: distill archives its sources. "
                               "Use archive to retire a flow on its own.")
+            if get_memory(conn, u)["type"] == TASK_TYPE:
+                return None, (f"{u} is a task: distill archives its sources, and a task "
+                              "closes through its own items.")
         if payload.get("new_type") not in DISTILL_TYPES:
             return None, f"payload.new_type must be one of {DISTILL_TYPES}"
         if not str(payload.get("new_content", "")).strip():
@@ -5639,10 +5763,9 @@ def _update_meta_field(conn: sqlite3.Connection, uid: str, field: str, value: st
 def _apply_kind(conn: sqlite3.Connection, kind: str, target_uid: str | None, payload: dict) -> dict:
     """Execute one suggestion and return the prev_state dict for undo."""
     if kind in ("compact", "reword"):
-        # staging refuses these on a diagram, but a run staged before that
-        # guard existed still holds one, and applying it would write over
-        # the projection
-        err = _diagram_content_error(conn, target_uid)
+        # staging refuses these on a diagram or task, but a staged run may still
+        # hold one; applying it would write over the projection
+        err = _generated_content_error(conn, target_uid)
         if err:
             raise ValueError(err)
         row = get_memory(conn, target_uid)
@@ -5651,6 +5774,10 @@ def _apply_kind(conn: sqlite3.Connection, kind: str, target_uid: str | None, pay
         return prev
     if kind == "unleak":
         field = str(payload.get("field", "")).strip() or LEAK_FIELDS[0]
+        if field == "content":
+            err = _generated_content_error(conn, target_uid)
+            if err:
+                raise ValueError(err)
         row = get_memory(conn, target_uid)
         prev = {field: row[field]}
         text = str(payload["new_text"])

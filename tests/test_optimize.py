@@ -17,7 +17,7 @@ import pytest
 from starlette.testclient import TestClient
 
 from conftest import shaped
-from memai import admin, db, sections
+from memai import admin, db, sections, tasks
 
 
 @pytest.fixture
@@ -299,6 +299,55 @@ def test_apply_refuses_a_diagram_rewrite_staged_before_the_guard(conn):
     with pytest.raises(ValueError, match="generated from the graph"):
         db.apply_suggestion(conn, sug["id"])
     assert db.get_memory(conn, diag)["content"] == before
+    assert db.get_suggestion(conn, sug["id"])["status"] == "pending"
+
+
+def _mk_task(conn):
+    return tasks.create_task(conn, title="Ship the parser", goal="Parse every config file",
+                             items=["read the spec", "write the lexer"], domain="acme/parser")
+
+
+@pytest.mark.parametrize("kind", ["compact", "reword"])
+def test_stage_refuses_rewriting_a_task(conn, kind):
+    uid = _mk_task(conn)
+    before = db.get_memory(conn, uid)["content"]
+    res = db.stage_optimization(conn, "r", [
+        {"kind": kind, "target_uid": uid, "payload": {"new_content": "hand written"}},
+    ])
+    assert res["staged"] == 0 and res["run_id"] is None
+    assert "is a task" in res["errors"][0]["error"]
+    assert db.get_memory(conn, uid)["content"] == before
+
+
+def test_an_unleak_of_a_task_body_is_refused(conn):
+    uid = _mk_task(conn)
+    res = db.stage_optimization(conn, "clean the leaks", [
+        {"kind": "unleak", "target_uid": uid, "payload": {"field": "content"}}])
+    assert res["staged"] == 0
+    assert "is a task" in res["errors"][0]["error"]
+
+
+@pytest.mark.parametrize("kind,payload", [
+    ("reword", {"new_content": "hand written"}),
+    ("compact", {"new_content": "hand written"}),
+    ("unleak", {"field": "content", "new_text": "hand written"}),
+])
+def test_apply_refuses_a_task_rewrite_staged_before_the_guard(conn, kind, payload):
+    task, note = _mk_task(conn), _mk(conn, content="untouched")
+    before = db.get_memory(conn, task)["content"]
+    run = db.stage_optimization(conn, "r", [
+        {"kind": "reword", "target_uid": note, "payload": {"new_content": "better"}},
+    ])
+    conn.execute(
+        """INSERT INTO optimization_suggestions
+           (run_id, kind, target_uid, payload, rationale, verified, status, created_at)
+           VALUES (?, ?, ?, ?, '', '', 'pending', ?)""",
+        (run["run_id"], kind, task, json.dumps(payload), db.now_iso()),
+    )
+    sug = db.get_optimization_suggestions(conn, run["run_id"])[-1]
+    with pytest.raises(ValueError, match="is a task"):
+        db.apply_suggestion(conn, sug["id"])
+    assert db.get_memory(conn, task)["content"] == before
     assert db.get_suggestion(conn, sug["id"])["status"] == "pending"
 
 

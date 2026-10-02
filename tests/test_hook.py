@@ -16,7 +16,10 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from conftest import shaped
-from memai import brief, db, hook, hook_install, server, warden
+from memai import brief, db, hook, hook_install, server, tasks, warden
+
+
+DOMAIN_CAP = brief.DOMAINS
 
 
 @pytest.fixture
@@ -73,13 +76,23 @@ def _status(capsysbinary, argv=(), stdin: str = "{}") -> str:
 
 # ------------------------------------------------------------ the brief text
 
+def _seed_task(conn, domain: str = "acme/x100") -> str:
+    return tasks.create_task(conn, title="Ship the retry path", goal="Retries back off",
+                             items=["add the backoff", "cover it with a test"],
+                             domain=domain)
+
+
 def test_the_brief_names_what_the_store_holds(conn):
     ids = _seed(conn)
+    _seed_task(conn)
     text = brief.session_brief(conn)
-    assert "4 memories" in text
+    assert "5 memories" in text
     assert "acme/x100" in text
-    assert ids["hand"] in text and ids["pitfall"] in text and ids["cp"] in text
-    assert "pulse(domain)" in text  # what to do next
+    assert "Pending in this project: 1 open task, 1 pitfall, 1 handoff, 1 note." in text
+    assert ids["cp"] in text
+    # the pending line counts; it never lists a memory
+    assert ids["hand"] not in text and ids["pitfall"] not in text and ids["note"] not in text
+    assert "pulse(domain)" in text and "pending()" in text  # what to do next
 
 
 def test_an_empty_store_has_nothing_to_say(conn):
@@ -88,8 +101,43 @@ def test_an_empty_store_has_nothing_to_say(conn):
 
 def test_the_brief_can_be_scoped(conn):
     ids = _seed(conn)
-    text = brief.session_brief(conn, domain="omni/x900")
-    assert ids["hand"] in text and ids["note"] not in text
+    text = brief.session_brief(conn, domain="acme/x100")
+    assert "Pending in acme/x100:" in text
+    assert "1 pitfall, 1 note." in text
+    assert "handoff" not in text.split("Pending in")[1].split("\n")[0]
+    assert ids["hand"] not in text
+
+
+def test_the_brief_pluralizes_the_counts(conn):
+    for i in range(3):
+        db.insert_memory(conn, type="note", domain="acme/x100", content=f"fact {i}")
+    _seed_task(conn)
+    _seed_task(conn)
+    text = brief.session_brief(conn)
+    assert "Pending in this project: 2 open tasks, 3 notes." in text
+
+
+def test_the_brief_calls_a_diagram_a_flow(conn):
+    uid = db.insert_memory(conn, type="diagram", domain="acme/x100",
+                           content="export routine")
+    text = brief.session_brief(conn)
+    assert "1 flow." in text
+    assert uid not in text
+
+
+def test_the_brief_has_no_pending_line_when_nothing_is_pending(conn):
+    db.insert_memory(conn, type="checkpoint", domain="acme/x100",
+                     content=shaped("checkpoint", "ship the retry path"))
+    text = brief.session_brief(conn)
+    assert "Pending in" not in text
+    assert "Latest checkpoint" in text
+
+
+def test_the_brief_puts_tasks_first(conn):
+    _seed(conn)
+    assert "pending(type='task') first" not in brief.session_brief(conn)
+    _seed_task(conn)
+    assert "pending(type='task') first" in brief.session_brief(conn)
 
 
 def test_a_tight_budget_drops_whole_sections_and_says_so(conn):
@@ -97,35 +145,49 @@ def test_a_tight_budget_drops_whole_sections_and_says_so(conn):
     text = brief.session_brief(conn, budget=200)
     assert "more section(s) omitted" in text
     # the instruction on what to do next survives a squeeze; it is the point
-    assert "pulse(domain)" in text
+    assert "pulse(domain)" in text and "pending()" in text
 
 
 def test_a_long_section_cannot_starve_the_ones_after_it(conn):
-    """Found against a real store: four pitfalls at full length took half
-    the warm-up and the recent notes fell off the end entirely."""
-    for i in range(4):
-        db.insert_memory(conn, type="anti_pattern", domain="acme/x100",
-                         content=shaped("anti_pattern",
-                                        f"pitfall {i} " + "spelled out at length " * 12))
-    note = db.insert_memory(conn, type="note", domain="acme/x100",
-                            content="the export window is inclusive on both ends")
+    """The room is divided between the sections. Spent in order, the opening
+    line and a long domains line would leave the pending line less than it
+    needs; its even share keeps it."""
+    for i in range(DOMAIN_CAP):
+        db.insert_memory(conn, type="note",
+                         domain=f"acme/a-very-long-product-name-{i}/with/a/deep/path/to/walk",
+                         content=f"fact {i}")
+    db.insert_memory(conn, type="checkpoint", domain="acme/x100",
+                     content=shaped("checkpoint", "ship the retry path " + "spelled out at length " * 12))
+    db.insert_memory(conn, type="anti_pattern", domain="acme/x100",
+                     content=shaped("anti_pattern", "retry without backoff"))
+    whole = brief.session_brief(conn, budget=10_000).split("\n")
+    opening = whole[0]
+    domains = next(x for x in whole if x.startswith("Active domains"))
+    pending = next(x for x in whole if x.startswith("Pending in"))
+    assert len(domains) > 3 * len(pending)
+
+    # Room for the opening and the domains line plus half the pending line:
+    # in order, the pending line does not fit; split four ways, it does.
+    room = len(opening) + len(domains) + len(pending) // 2 + 2
+    assert room // 4 > len(pending)
+    text = brief.session_brief(conn, budget=len(brief.call_to_action(conn)) + 1 + room)
+    assert pending in text
+    assert "more section(s) omitted" in text
+
+
+def test_a_trimmed_domain_line_still_reports_its_total(conn):
+    """The domains named are capped, and the line says how many it left out."""
+    for i in range(DOMAIN_CAP + 1):  # plus the shared parent, two over the cap
+        db.insert_memory(conn, type="note", domain=f"acme/p{i}", content=f"fact {i}")
     text = brief.session_brief(conn)
-    assert "Pitfalls on record" in text
-    assert "Recent notes" in text and note in text
+    assert "+2 more" in text
 
 
-def test_a_trimmed_section_still_reports_its_total(conn):
-    """Items are dropped, never cut mid-sentence, and the heading says how
-    many there really were."""
-    for i in range(4):
-        db.insert_memory(conn, type="anti_pattern", domain="acme/x100",
-                         content=shaped("anti_pattern",
-                                        f"pitfall {i} " + "spelled out at length " * 12))
-    text = brief.session_brief(conn, budget=1400)
-    section = next(b for b in text.split("\n\n") if "Pitfalls on record" in b)
-    shown = sum(1 for line in section.splitlines() if line.startswith("  - "))
-    assert shown < 4
-    assert f"... +{4 - shown} not shown" in text
+def test_a_section_that_does_not_fit_is_dropped_whole():
+    """A section is kept or dropped as one line, never cut mid-sentence."""
+    part = "Latest checkpoint: " + "ship the retry path " * 5
+    assert brief._cap(part, len(part)) == part
+    assert brief._cap(part, len(part) - 1) == ""
 
 
 @pytest.mark.parametrize("mode, said, not_said", [
@@ -143,10 +205,14 @@ def test_the_instruction_states_the_active_casing_policy(conn, mode, said, not_s
     assert not_said not in text
 
 
-def test_a_contradicted_pitfall_is_not_in_the_warm_up(conn):
+def test_a_contradicted_pitfall_is_not_counted(conn):
     ids = _seed(conn)
+    db.insert_memory(conn, type="anti_pattern", domain="acme/x100",
+                     content=shaped("anti_pattern", "sleep instead of waiting on a signal"))
+    assert "2 pitfalls" in brief.session_brief(conn)
     db.set_confidence(conn, ids["pitfall"], "contradicted")
-    assert ids["pitfall"] not in brief.session_brief(conn)
+    text = brief.session_brief(conn)
+    assert "1 pitfall," in text and "2 pitfalls" not in text
 
 
 # ------------------------------------------------------------------ the hooks
@@ -480,8 +546,10 @@ def test_a_store_that_cannot_be_opened_is_not_an_error(monkeypatch, capsysbinary
 
 def test_the_warm_up_prompt_returns_the_same_brief(store):
     with db.connect() as conn:
-        ids = _seed(conn)
-    assert ids["hand"] in server.warm_up()
+        _seed(conn)
+    text = server.warm_up()
+    assert "Pending in this project: 1 pitfall, 1 handoff, 1 note." in text
+    assert "pending()" in text
 
 
 def test_the_warm_up_prompt_says_so_when_there_is_nothing(store):
@@ -554,3 +622,287 @@ def test_the_flag_overrides_the_stored_interval(store, capsysbinary, tmp_path):
         json.dumps({**warden.read("session-1"), "asked_at": hours}), encoding="utf-8")
     assert _run("stop", {"session_id": "session-1"}, capsysbinary,
                 argv=(*argv, "--warden-minutes", "1"))
+
+
+# ------------------------------------------------------- asking about tasks
+
+SESSION = "session-1"
+
+
+def _open_tasks(count: int = 2, *, backdate: bool = False, worked: bool = True) -> None:
+    """`count` open tasks in `acme/x100`, and a session that worked there;
+    `backdate` ages every memory so the checkpoint nudge is owed too."""
+    with db.connect() as conn:
+        for _ in range(count):
+            _seed_task(conn)
+        if backdate:
+            old = (datetime.now(timezone.utc) - timedelta(days=3)).isoformat()
+            conn.execute("UPDATE memories SET created_at = ?", (old,))
+    if worked:
+        warden.record_domain(SESSION, "acme/x100")
+
+
+def _age_task_ask(session_id: str, minutes: int) -> None:
+    """Move the task ask's stamp back, as if that long had passed."""
+    earlier = (datetime.now(timezone.utc) - timedelta(minutes=minutes)).isoformat()
+    warden.state_path(session_id).write_text(
+        json.dumps({**warden.read(session_id), "tasks_asked_at": earlier}),
+        encoding="utf-8")
+
+
+ASK = ("MemAI: {count} in the domains this session worked in ({domains}). Call "
+       "pending(type='task', domain=...) for each of them. A task on the same "
+       "subject can be filed under another path: call list_domains() and check "
+       "any similar domain before deciding that none applies -- an empty "
+       "pending() in one domain does not mean the subject has no task. For each "
+       "task this session worked on, update its items with task_item(uid, item, "
+       "state, comment, related) -- a task closes itself once every item is done "
+       "or dropped. If none of them is this session's work, say so in one line "
+       "and stop.")
+
+
+def test_stop_blocks_when_tasks_are_open(store, capsysbinary):
+    _open_tasks(2)
+    out = _run("stop", {"session_id": "session-1"}, capsysbinary)
+    assert out["decision"] == "block"
+    assert out["reason"] == ASK.format(count="2 open tasks", domains="acme/x100")
+    assert set(out) == {"decision", "reason"}
+    assert warden.read(SESSION)["tasks_asked_at"]
+
+
+def test_the_stop_that_follows_the_block_is_silent(store, capsysbinary):
+    _open_tasks(2)
+    assert _run("stop", {"session_id": SESSION}, capsysbinary)["decision"] == "block"
+    assert _run("stop", {"session_id": SESSION, "stop_hook_active": True},
+                capsysbinary) is None
+
+
+def test_the_block_says_one_task_in_the_singular(store, capsysbinary):
+    _open_tasks(1)
+    out = _run("stop", {"session_id": "session-1"}, capsysbinary)
+    assert out["reason"] == ASK.format(count="1 open task", domains="acme/x100")
+
+
+def _two_domains() -> None:
+    with db.connect() as conn:
+        _seed_task(conn, "acme/harbor")
+        _seed_task(conn, "acme/docks")
+
+
+def _reason(capsysbinary, session: str = SESSION) -> str | None:
+    out = _run("stop", {"session_id": session}, capsysbinary)
+    return out["reason"] if out else None
+
+
+def test_the_ask_covers_only_the_domains_the_session_named(store, capsysbinary):
+    _two_domains()
+    warden.record_domain(SESSION, "acme/harbor")
+    reason = _reason(capsysbinary)
+    assert reason == ASK.format(count="1 open task", domains="acme/harbor")
+
+
+def test_a_parent_domain_covers_the_tasks_below_it(store, capsysbinary):
+    _two_domains()
+    warden.record_domain(SESSION, "acme")
+    assert _reason(capsysbinary) == ASK.format(count="2 open tasks", domains="acme")
+
+
+def test_the_ask_names_the_domains_that_hold_a_task_in_recorded_order(store, capsysbinary):
+    _two_domains()
+    for domain in ("acme/docks", "zeta/other", "acme/harbor"):
+        warden.record_domain(SESSION, domain)
+    reason = _reason(capsysbinary)
+    assert reason == ASK.format(count="2 open tasks", domains="acme/docks, acme/harbor")
+
+
+def test_a_session_that_worked_elsewhere_is_not_asked(store, capsysbinary):
+    _two_domains()
+    warden.record_domain(SESSION, "zeta/other")
+    assert _reason(capsysbinary) is None
+    assert "tasks_asked_at" not in warden.read(SESSION)
+
+
+def test_a_session_that_named_no_domain_is_not_asked(store, capsysbinary):
+    _two_domains()
+    assert _reason(capsysbinary) is None
+    assert "tasks_asked_at" not in warden.read(SESSION)
+
+
+def test_a_task_listed_into_a_recorded_domain_is_counted(store, capsysbinary):
+    with db.connect() as conn:
+        tasks.create_task(conn, title="Repair the pier", goal="The pier holds",
+                          items=["replace the planks"], domain="acme/harbor",
+                          also="acme/docks")
+    warden.record_domain(SESSION, "acme/docks")
+    assert _reason(capsysbinary) == ASK.format(count="1 open task", domains="acme/docks")
+
+
+def test_a_task_in_two_recorded_domains_counts_once(store, capsysbinary):
+    with db.connect() as conn:
+        tasks.create_task(conn, title="Repair the pier", goal="The pier holds",
+                          items=["replace the planks"], domain="acme/harbor",
+                          also="acme/docks")
+    warden.record_domain(SESSION, "acme/harbor")
+    warden.record_domain(SESSION, "acme/docks")
+    reason = _reason(capsysbinary)
+    assert reason == ASK.format(count="1 open task", domains="acme/harbor, acme/docks")
+
+
+def test_stop_does_not_block_twice_in_one_interval(store, capsysbinary):
+    _open_tasks(2)
+    assert _run("stop", {"session_id": "session-1"}, capsysbinary)["decision"] == "block"
+    assert _run("stop", {"session_id": "session-1"}, capsysbinary) is None
+
+
+def test_stop_blocks_again_after_the_interval(store, capsysbinary):
+    _open_tasks(2)
+    assert _run("stop", {"session_id": "session-1"}, capsysbinary)
+    _age_task_ask("session-1", 2)
+    out = _run("stop", {"session_id": "session-1"}, capsysbinary,
+               argv=("--task-minutes", "1"))
+    assert out["decision"] == "block"
+
+
+def test_the_task_flag_overrides_the_stored_interval(store, capsysbinary):
+    _open_tasks(2)
+    with db.connect() as conn:
+        db.set_task_ask_minutes(conn, 480)
+    assert _run("stop", {"session_id": "session-1"}, capsysbinary)
+    _age_task_ask("session-1", 2)
+    assert _run("stop", {"session_id": "session-1"}, capsysbinary) is None
+    assert _run("stop", {"session_id": "session-1"}, capsysbinary,
+                argv=("--task-minutes", "1"))["decision"] == "block"
+
+
+def test_the_block_carries_the_other_notes(store, capsysbinary, tmp_path):
+    """The reason leads with the task ask, then the checkpoint nudge and the
+    warden ask, joined by a blank line."""
+    _open_tasks(2, backdate=True)
+    out = _run("stop", {"session_id": "session-1"}, capsysbinary,
+               argv=_with_agent(tmp_path))
+    reason = out["reason"]
+    assert reason.startswith("MemAI: 2 open tasks in the domains this session worked in")
+    assert reason.index("2 open tasks") < reason.index("note()") < reason.index("memai-warden")
+    assert "\n\n" in reason
+    assert "hookSpecificOutput" not in out
+    state = warden.read("session-1")
+    assert state["tasks_asked_at"] and state["asked_at"]
+    assert _run("stop", {"session_id": "session-1", "stop_hook_active": True},
+                capsysbinary, argv=_with_agent(tmp_path)) is None
+
+
+def test_no_block_without_open_tasks(store, capsysbinary):
+    """A completed task is not open, so the output is what it was before."""
+    with db.connect() as conn:
+        uid = tasks.create_task(conn, title="Ship the retry path", goal="Retries back off",
+                                items=["add the backoff"], domain="acme/x100")
+        tasks.set_item_state(conn, uid, "i1", "done")
+    warden.record_domain("session-1", "acme/x100")
+    assert _run("stop", {"session_id": "session-1"}, capsysbinary) is None
+
+
+def test_no_block_when_switched_off(store, capsysbinary):
+    _open_tasks(2)
+    with db.connect() as conn:
+        db.set_task_ask_enabled(conn, False)
+    assert _run("stop", {"session_id": "session-1"}, capsysbinary) is None
+
+
+def test_the_task_switch_does_not_touch_the_warden_switch(store):
+    with db.connect() as conn:
+        db.set_task_ask_enabled(conn, False)
+        assert db.get_warden_enabled(conn) is True
+
+
+def test_no_block_without_a_session_id(store, capsysbinary):
+    """Nothing can record the ask, so making it would repeat it every turn."""
+    _open_tasks(2)
+    assert _run("stop", {}, capsysbinary) is None
+
+
+def test_no_block_for_an_unsafe_session_id(store, capsysbinary):
+    _open_tasks(2)
+    assert _run("stop", {"session_id": "../escape"}, capsysbinary) is None
+
+
+def test_stop_hook_active_still_returns_first(store, capsysbinary):
+    _open_tasks(2)
+    assert _run("stop", {"session_id": "session-1", "stop_hook_active": True},
+                capsysbinary) is None
+    assert "tasks_asked_at" not in warden.read("session-1")
+
+
+def test_a_failed_stamp_cancels_the_block(store, capsysbinary, monkeypatch):
+    """An ask the interval cannot see would repeat on every turn."""
+    _open_tasks(2)
+    monkeypatch.setattr(warden, "mark_tasks", lambda session_id: {})
+    assert _run("stop", {"session_id": "session-1"}, capsysbinary) is None
+
+
+def test_a_store_that_cannot_be_opened_does_not_block(store, capsysbinary, monkeypatch):
+    """The hook is attached to somebody's session: no store, no ask, exit 0."""
+    def refuse(*args, **kwargs):
+        raise OSError("store is not readable")
+    monkeypatch.setattr(db, "connect", refuse)
+    assert _run("stop", {"session_id": "session-1"}, capsysbinary) is None
+
+
+def test_a_failing_task_read_asks_nothing_and_leaves_the_other_notes(
+        store, capsysbinary, monkeypatch):
+    """Only the task ask is lost when counting the open tasks raises."""
+    import argparse
+
+    from memai import pending
+    _open_tasks(2, backdate=True)
+
+    def refuse(*args, **kwargs):
+        raise RuntimeError("cannot count")
+    monkeypatch.setattr(pending, "open_task_uids", refuse)
+    args = argparse.Namespace(task_minutes=None)
+    assert hook._task_ask(args, {"session_id": "session-1"}) == ""
+    out = _run("stop", {"session_id": "session-1"}, capsysbinary)
+    assert "decision" not in out
+    assert "note()" in _context(out)
+
+
+def test_stop_does_not_block_over_a_task_archived_without_syncing_its_state(
+        store, capsysbinary, monkeypatch):
+    monkeypatch.setattr(db, "_repair_task_states", lambda conn: None)
+    with db.connect() as conn:
+        uid = _seed_task(conn)
+        conn.execute("UPDATE memories SET status = 'archived' WHERE uid = ?", (uid,))
+    warden.record_domain("session-1", "acme/x100")
+    assert _run("stop", {"session_id": "session-1"}, capsysbinary) is None
+
+
+@pytest.mark.parametrize("failing", ["_checkpoint_nudge", "_warden_ask"])
+def test_a_note_that_raises_does_not_suppress_the_task_ask(
+        store, capsysbinary, monkeypatch, failing):
+    _open_tasks(2, backdate=True)
+
+    def refuse(*args, **kwargs):
+        raise RuntimeError("cannot compute")
+    monkeypatch.setattr(hook, failing, refuse)
+    out = _run("stop", {"session_id": SESSION}, capsysbinary)
+    assert out["decision"] == "block"
+    assert out["reason"].startswith("MemAI: 2 open tasks in the domains")
+
+
+def test_a_stop_inside_the_interval_does_not_query_the_task_domains(
+        store, capsysbinary, monkeypatch):
+    from memai import pending
+    _open_tasks(2)
+    assert _run("stop", {"session_id": SESSION}, capsysbinary)["decision"] == "block"
+    calls = []
+    monkeypatch.setattr(pending, "open_task_uids",
+                        lambda conn, domains: calls.append(domains) or [])
+    assert _run("stop", {"session_id": SESSION}, capsysbinary) is None
+    assert calls == []
+
+
+def test_a_recorded_domain_that_names_no_path_does_not_disable_the_ask(store, capsysbinary):
+    _open_tasks(2)
+    state = warden.read(SESSION)
+    warden.state_path(SESSION).write_text(
+        json.dumps({**state, "domains": ["/", " / ", *state["domains"]]}), encoding="utf-8")
+    assert _reason(capsysbinary) == ASK.format(count="2 open tasks", domains="acme/x100")

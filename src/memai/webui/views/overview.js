@@ -70,6 +70,8 @@ export async function renderOverview(view, params, ctx) {
       </div>
     </div>
 
+    ${tasksPanel(o.open_tasks)}
+
     <div class="grid grid-3232">
       <div class="panel">
         <h3 class="panel-title">${t('ov.activity.title')}
@@ -256,6 +258,22 @@ function symptomsPanel(symptoms, active) {
   </div>`;
 }
 
+/* ─── open tasks ──────────────────────────────────────────────────────────
+   Work left for the next session; not a defect, and absent at zero. */
+
+function tasksPanel(n) {
+  if (!n) return '';
+  const open = fmtInt(n);
+  return `<div class="panel hx-tasks">
+    ${typeTag('task')}
+    <div class="hx-tasks-text">
+      <span class="hx-tasks-title">${t('ov.tasks.open', { n: open })}</span>
+      <span class="hx-tasks-aside">${t('ov.tasks.aside')}</span>
+    </div>
+    <button type="button" class="btn btn-sm" data-open-tasks>${t('ov.tasks.act')}</button>
+  </div>`;
+}
+
 /* ─── the calendar ────────────────────────────────────────────────────────
    The API sends one row per day that has anything on it. A calendar has to
    show the days that have nothing, so the sparse rows are filled into a
@@ -392,6 +410,9 @@ function wire(view, o) {
     go('memories', { confidence: el.dataset.conf, status: 'active' })));
   view.querySelectorAll('[data-type]').forEach(el => el.addEventListener('click', () =>
     go('memories', { type: el.dataset.type, status: 'active' })));
+
+  view.querySelector('[data-open-tasks]')?.addEventListener('click', () =>
+    go('memories', { type: 'task', task_state: 'open', status: 'active' }));
 
   view.querySelectorAll('.hx-sym-go').forEach(btn => btn.addEventListener('click', () => {
     const s = bySymptom[btn.closest('.hx-sym').dataset.sym];

@@ -44,7 +44,10 @@ from memai import sections
 GUARDED: dict[str, tuple[str, ...]] = {
     "note": ("title", "content"),
     "reasoning": ("title", "content"),
-    "handoff": ("title", "content"),
+    "task": ("title", "goal", "items"),
+    "task_item": ("uid", "item"),
+    "task_add": ("uid", "items"),
+    "task_comment": ("uid", "body"),
     **{tool: ("title", *(s.key for s in spec))
        for tool, spec in sections.SECTION_SPEC.items()},
 }
@@ -55,9 +58,9 @@ GUARDED: dict[str, tuple[str, ...]] = {
 WATCHED: dict[str, tuple[str, ...]] = {
     "note": ("domain", "tags", "source_ref"),
     "reasoning": ("domain", "tags", "source_ref"),
-    "handoff": ("domain", "tags"),
     "checkpoint": ("domain", "tags"),
     "anti_pattern": ("domain", "tags", "source_ref"),
+    "task": ("domain", "tags"),
 }
 
 # tool -> the parameters it takes that have a default, in signature order.
@@ -68,9 +71,12 @@ WATCHED: dict[str, tuple[str, ...]] = {
 OPTIONAL: dict[str, tuple[str, ...]] = {
     "note": ("domain", "also", "tags", "session", "review_after", "source_ref"),
     "reasoning": ("domain", "also", "tags", "session", "review_after", "source_ref"),
-    "handoff": ("domain", "also", "tags", "session"),
     "checkpoint": ("session", "domain", "also", "tags"),
     "anti_pattern": ("domain", "also", "tags", "session", "review_after", "source_ref"),
+    "task": ("domain", "also", "tags", "session"),
+    "task_item": ("state", "comment", "related"),
+    "task_add": (),
+    "task_comment": ("item",),
 }
 
 # The frame of a tool call. A closing tag naming one of these, inside the text
@@ -87,23 +93,34 @@ DEBRIS = ("parameter name=", "</", "<parameter")
 def matcher() -> str:
     """The tool names the guard's registration fires for, as a regex.
 
-    The server's name in a host config is the user's to choose, so the middle
-    segment is matched rather than spelled.
+    Every memai tool: the hook records the domains a session names for any of
+    them, and checks the writers in `GUARDED` only. The server's name in a
+    host config is the user's to choose, so the middle segment is matched
+    rather than spelled.
     """
-    return f"mcp__[Mm]em[Aa][Ii]__({'|'.join(GUARDED)})"
+    return "mcp__[Mm]em[Aa][Ii]__.*"
 
 
-def tool_of(name: str) -> str:
+def memai_tool(name: str) -> str:
     """The memai tool a host's `tool_name` refers to, or "" for anything else.
 
-    `mcp__MemAI__note` -> `note`. A tool of another server, or one this does
-    not guard, is not ours to judge: the matcher is a regex in a file people
-    edit, so the name is checked here as well.
+    `mcp__MemAI__pulse` -> `pulse`. A tool of another server is not ours.
     """
     parts = str(name).split("__")
     if len(parts) != 3 or parts[0] != "mcp" or parts[1].lower() != "memai":
         return ""
-    return parts[2] if parts[2] in GUARDED else ""
+    return parts[2]
+
+
+def tool_of(name: str) -> str:
+    """The guarded memai tool a host's `tool_name` refers to, or "".
+
+    `mcp__MemAI__note` -> `note`. A memai tool outside `GUARDED` is not ours
+    to judge: the matcher is a regex in a file people edit, so the name is
+    checked here as well.
+    """
+    tool = memai_tool(name)
+    return tool if tool in GUARDED else ""
 
 
 def _blank(value: object) -> bool:
