@@ -5339,17 +5339,23 @@ def _memory_exists(conn: sqlite3.Connection, uid: str | None) -> bool:
     return bool(uid) and get_memory(conn, uid) is not None
 
 
-def _diagram_content_error(conn: sqlite3.Connection, uid: str | None) -> str | None:
+def _generated_content_error(conn: sqlite3.Connection, uid: str | None) -> str | None:
     """The free-text editors' refusal, for the suggestion kinds that rewrite content.
 
-    A diagram's content is the projection of its graph, so a hand-authored
-    body applied over it survives only until the next diagram_node/
-    diagram_edge edit regenerates it (see is_diagram).
+    A diagram's or a task's content is the projection of its rows, so a
+    hand-authored body applied over it matches no row and survives only
+    until the next structural edit regenerates it (see is_diagram).
     """
-    if not (uid and is_diagram(conn, uid)):
+    row = get_memory(conn, uid) if uid else None
+    if row is None:
         return None
-    return (f"{uid} is a diagram: its content is generated from the graph. "
-            "Use diagram_node/diagram_edge to change the flow.")
+    if row["type"] == DIAGRAM_TYPE:
+        return (f"{uid} is a diagram: its content is generated from the graph. "
+                "Use diagram_node/diagram_edge to change the flow.")
+    if row["type"] == TASK_TYPE:
+        return (f"{uid} is a task: its content is generated from the goal and items. "
+                "Change them through the task tools.")
+    return None
 
 
 def _validate_suggestion(conn: sqlite3.Connection, s: object) -> tuple[dict | None, str | None]:
@@ -5370,7 +5376,7 @@ def _validate_suggestion(conn: sqlite3.Connection, s: object) -> tuple[dict | No
         return None if _memory_exists(conn, target_uid) else f"target_uid not found: {target_uid!r}"
 
     if kind in ("compact", "reword"):
-        err = target_err() or _diagram_content_error(conn, target_uid)
+        err = target_err() or _generated_content_error(conn, target_uid)
         if err:
             return None, err
         if not str(payload.get("new_content", "")).strip():
@@ -5391,7 +5397,7 @@ def _validate_suggestion(conn: sqlite3.Connection, s: object) -> tuple[dict | No
             return None, (f"payload.field must be one of: {', '.join(LEAK_FIELDS)}; "
                           f"got {field!r}")
         if field == "content":
-            err = _diagram_content_error(conn, target_uid)
+            err = _generated_content_error(conn, target_uid)
             if err:
                 return None, err
         row = get_memory(conn, target_uid)
@@ -5704,10 +5710,10 @@ def _update_meta_field(conn: sqlite3.Connection, uid: str, field: str, value: st
 def _apply_kind(conn: sqlite3.Connection, kind: str, target_uid: str | None, payload: dict) -> dict:
     """Execute one suggestion and return the prev_state dict for undo."""
     if kind in ("compact", "reword"):
-        # staging refuses these on a diagram, but a run staged before that
-        # guard existed still holds one, and applying it would write over
+        # staging refuses these on a diagram or task, but a run staged before
+        # that guard existed still holds one, and applying it would write over
         # the projection
-        err = _diagram_content_error(conn, target_uid)
+        err = _generated_content_error(conn, target_uid)
         if err:
             raise ValueError(err)
         row = get_memory(conn, target_uid)
@@ -5716,6 +5722,10 @@ def _apply_kind(conn: sqlite3.Connection, kind: str, target_uid: str | None, pay
         return prev
     if kind == "unleak":
         field = str(payload.get("field", "")).strip() or LEAK_FIELDS[0]
+        if field == "content":
+            err = _generated_content_error(conn, target_uid)
+            if err:
+                raise ValueError(err)
         row = get_memory(conn, target_uid)
         prev = {field: row[field]}
         text = str(payload["new_text"])
