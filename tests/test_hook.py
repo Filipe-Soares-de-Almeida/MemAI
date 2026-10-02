@@ -183,15 +183,11 @@ def test_a_trimmed_domain_line_still_reports_its_total(conn):
     assert "+2 more" in text
 
 
-def test_a_trimmed_section_drops_items_and_says_how_many():
-    """Items come off the end of a multi-line section, never mid-line, and the
-    marker counts them."""
-    part = "Heading:\n" + "\n".join(f"  - item {i} " + "x" * 40 for i in range(5))
-    kept = brief._cap(part, 140)
-    shown = sum(1 for line in kept.splitlines() if line.startswith("  - "))
-    assert 0 < shown < 5
-    assert f"... +{5 - shown} not shown" in kept
-    assert brief._cap(part, 5) == ""
+def test_a_section_that_does_not_fit_is_dropped_whole():
+    """A section is kept or dropped as one line, never cut mid-sentence."""
+    part = "Latest checkpoint: " + "ship the retry path " * 5
+    assert brief._cap(part, len(part)) == part
+    assert brief._cap(part, len(part) - 1) == ""
 
 
 @pytest.mark.parametrize("mode, said, not_said", [
@@ -671,6 +667,14 @@ def test_stop_blocks_when_tasks_are_open(store, capsysbinary):
     assert out["decision"] == "block"
     assert out["reason"] == ASK.format(count="2 open tasks", domains="acme/x100")
     assert set(out) == {"decision", "reason"}
+    assert warden.read(SESSION)["tasks_asked_at"]
+
+
+def test_the_stop_that_follows_the_block_is_silent(store, capsysbinary):
+    _open_tasks(2)
+    assert _run("stop", {"session_id": SESSION}, capsysbinary)["decision"] == "block"
+    assert _run("stop", {"session_id": SESSION, "stop_hook_active": True},
+                capsysbinary) is None
 
 
 def test_the_block_says_one_task_in_the_singular(store, capsysbinary):
@@ -781,6 +785,10 @@ def test_the_block_carries_the_other_notes(store, capsysbinary, tmp_path):
     assert reason.index("2 open tasks") < reason.index("note()") < reason.index("memai-warden")
     assert "\n\n" in reason
     assert "hookSpecificOutput" not in out
+    state = warden.read("session-1")
+    assert state["tasks_asked_at"] and state["asked_at"]
+    assert _run("stop", {"session_id": "session-1", "stop_hook_active": True},
+                capsysbinary, argv=_with_agent(tmp_path)) is None
 
 
 def test_no_block_without_open_tasks(store, capsysbinary):
@@ -863,3 +871,36 @@ def test_stop_does_not_block_over_a_task_archived_without_syncing_its_state(
         conn.execute("UPDATE memories SET status = 'archived' WHERE uid = ?", (uid,))
     warden.record_domain("session-1", "acme/x100")
     assert _run("stop", {"session_id": "session-1"}, capsysbinary) is None
+
+
+@pytest.mark.parametrize("failing", ["_checkpoint_nudge", "_warden_ask"])
+def test_a_note_that_raises_does_not_suppress_the_task_ask(
+        store, capsysbinary, monkeypatch, failing):
+    _open_tasks(2, backdate=True)
+
+    def refuse(*args, **kwargs):
+        raise RuntimeError("cannot compute")
+    monkeypatch.setattr(hook, failing, refuse)
+    out = _run("stop", {"session_id": SESSION}, capsysbinary)
+    assert out["decision"] == "block"
+    assert out["reason"].startswith("MemAI: 2 open tasks in the domains")
+
+
+def test_a_stop_inside_the_interval_does_not_query_the_task_domains(
+        store, capsysbinary, monkeypatch):
+    from memai import pending
+    _open_tasks(2)
+    assert _run("stop", {"session_id": SESSION}, capsysbinary)["decision"] == "block"
+    calls = []
+    monkeypatch.setattr(pending, "open_task_uids",
+                        lambda conn, domains: calls.append(domains) or [])
+    assert _run("stop", {"session_id": SESSION}, capsysbinary) is None
+    assert calls == []
+
+
+def test_a_recorded_domain_that_names_no_path_does_not_disable_the_ask(store, capsysbinary):
+    _open_tasks(2)
+    state = warden.read(SESSION)
+    warden.state_path(SESSION).write_text(
+        json.dumps({**state, "domains": ["/", " / ", *state["domains"]]}), encoding="utf-8")
+    assert _reason(capsysbinary) == ASK.format(count="2 open tasks", domains="acme/x100")

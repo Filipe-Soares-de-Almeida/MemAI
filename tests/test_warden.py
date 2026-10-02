@@ -363,6 +363,8 @@ def test_recording_a_domain_keeps_the_rest_of_the_state(store):
 
 def test_a_blank_domain_or_an_unsafe_id_records_nothing(store):
     assert warden.record_domain("session-1", "  ") == {}
+    assert warden.record_domain("session-1", "/") == {}
+    assert warden.record_domain("session-1", " / ") == {}
     assert warden.record_domain("../escape", "acme/harbor") == {}
     assert warden.read("session-1") == {}
 

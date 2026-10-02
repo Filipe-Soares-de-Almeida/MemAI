@@ -233,12 +233,12 @@ def _task_ask(args, payload) -> str:
                 return ""
             minutes = (args.task_minutes if args.task_minutes is not None
                        else db.get_task_ask_minutes(conn))
+            if not warden.task_due(session_id, minutes):
+                return ""
             open_tasks = len(pending.open_task_uids(conn, named))
             holding = [d for d in named
                        if isinstance(d, str) and pending.open_task_uids(conn, [d])]
-        if not open_tasks or not warden.task_due(session_id, minutes):
-            return ""
-        if not warden.mark_tasks(session_id):
+        if not open_tasks or not warden.mark_tasks(session_id):
             return ""
     except Exception:
         return ""
@@ -267,8 +267,12 @@ def _stop(args, payload) -> None:
     if payload.get("stop_hook_active"):
         return
     notes, systems = [], []
-    for note, system in ((_checkpoint_nudge(args), "nothing recorded this session"),
-                         (_warden_ask(args, payload), "warden is owed a run")):
+    for ask, system in ((lambda: _checkpoint_nudge(args), "nothing recorded this session"),
+                        (lambda: _warden_ask(args, payload), "warden is owed a run")):
+        try:
+            note = ask()
+        except Exception:
+            continue
         if note:
             notes.append(note)
             systems.append(system)
@@ -361,8 +365,9 @@ def _record_domains(payload: dict) -> None:
 
     The domain is the call's `domain` parameter, recorded as given, or for a
     tool that names a memory by uid the domain that memory is filed under (one
-    read-only read of the store). A blank domain is not recorded: the whole
-    project is not a domain. Raises on failure; the caller decides it is not fatal.
+    read-only read of the store). A domain that names no path ("", "/") is not
+    recorded: the whole project is not a domain. Raises on failure; the caller
+    decides it is not fatal.
     """
     tool = guard.memai_tool(str(payload.get("tool_name", "")))
     params = payload.get("tool_input")
@@ -370,7 +375,7 @@ def _record_domains(payload: dict) -> None:
     if not tool or not session_id or not isinstance(params, dict):
         return
     domain = params.get("domain")
-    if isinstance(domain, str) and domain.strip():
+    if isinstance(domain, str):
         warden.record_domain(session_id, domain)
     uid = params.get("uid")
     if tool in _UID_TOOLS and isinstance(uid, str) and uid.strip():

@@ -485,7 +485,8 @@ def test_an_unknown_uid_records_nothing_and_returns_as_before(store, monkeypatch
     assert code == 2 and "BLOCKED" in err
 
 
-@pytest.mark.parametrize("params", [{"domain": ""}, {"domain": "   "}, {}, {"domain": 3}])
+@pytest.mark.parametrize("params", [{"domain": ""}, {"domain": "   "}, {}, {"domain": 3},
+                                    {"domain": "/"}, {"domain": " / "}])
 def test_no_domain_records_nothing(store, monkeypatch, capsys, params):
     assert _guarded(_call("pulse", **params), monkeypatch, capsys)[0] == 0
     assert _named() == []

@@ -138,11 +138,12 @@ def mark_tasks(session_id: str) -> dict:
 def record_domain(session_id: str, domain: str) -> dict:
     """Add `domain` to the domains `session_id` has named, and return the state.
 
-    Distinct, the most recently named last, at most DOMAINS_MAX. {} for a blank
-    domain, an id we will not write a file for, or a failed write.
+    Distinct, the most recently named last, at most DOMAINS_MAX. {} for a domain
+    that names no path ("", "/"), an id we will not write a file for, or a failed
+    write.
     """
     domain = str(domain or "").strip()
-    if not domain:
+    if not db.normalize_domain(domain):
         return {}
     named = read(session_id).get("domains")
     named = [d for d in named if isinstance(d, str)] if isinstance(named, list) else []
