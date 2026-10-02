@@ -188,10 +188,12 @@ const ICONS = {
     body: `<path d="M3 8.4l3.2 3.2L13 4.8" fill="none" stroke="currentColor"
                  stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>`,
   },
-  play: {     /* a filled triangle pointing right: a task item being worked on */
+  ongoing: {  /* one open arc ending in an arrowhead: a task item in progress */
     viewBox: '0 0 16 16',
-    body: `<path d="M6.2 4.2v7.6L12.1 8z" fill="currentColor" stroke="currentColor"
-                 stroke-width="1.2" stroke-linejoin="round"/>`,
+    body: `<path d="M10.29 14.3A6.7 6.7 0 1 1 13.8 4.65" fill="none" stroke="currentColor"
+                 stroke-width="1.6" stroke-linecap="round"/>
+           <path d="M11.71 5.63L15 6.73l.69-3.4z" fill="currentColor" stroke="currentColor"
+                 stroke-width=".6" stroke-linejoin="round"/>`,
   },
   minus: {    /* set aside: a task item that was dropped */
     viewBox: '0 0 16 16',

@@ -2719,11 +2719,9 @@ button.rs-mono:hover { color: var(--accent); }
   transition: background-color .15s, border-color .15s, box-shadow .15s;
 }
 .tk-state:hover .tk-ring { box-shadow: 0 0 0 4px var(--hover-3); }
-/* in progress: a ring with a play triangle, which no other state draws */
+/* in progress: the ring opens into an arc with an arrowhead, so it is not todo's ring */
 .tk-state[data-s="doing"]   { --sc: var(--f-live); }
-.tk-state[data-s="doing"] .tk-ring {
-  background: color-mix(in srgb, var(--f-live) 16%, transparent); color: var(--f-live);
-}
+.tk-state[data-s="doing"] .tk-ring { border: 0; background: none; color: var(--f-live); --ico: 20px; }
 .tk-state[data-s="done"]    { --sc: var(--f-go); }
 .tk-state[data-s="done"] .tk-ring { background: var(--f-go); color: var(--accent-ink); }
 .tk-state[data-s="dropped"] .tk-ring { border-style: dashed; color: var(--ink-3); }

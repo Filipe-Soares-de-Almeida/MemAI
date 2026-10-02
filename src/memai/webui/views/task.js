@@ -165,7 +165,7 @@ export function mountTask(host, { uid, task, status }, { onStatus } = {}) {
         <button type="button" class="tk-state" data-s="${esc(item.state)}" data-step="${esc(item.key)}"
                 title="${esc(action)}"
                 aria-label="${esc(t('task.state.aria', { text: item.text, state: stateName, action }))}">
-          <span class="tk-ring">${{ doing: icon('play'), done: icon('check'), dropped: icon('minus') }[item.state] || ''}</span>
+          <span class="tk-ring">${{ doing: icon('ongoing'), done: icon('check'), dropped: icon('minus') }[item.state] || ''}</span>
         </button>
         <button type="button" class="tk-main" data-toggle="${esc(item.key)}"
                 aria-expanded="${open}"${open ? ` aria-controls="tkp-${esc(item.key)}"` : ''}>
