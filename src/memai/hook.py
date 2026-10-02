@@ -44,6 +44,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import sqlite3
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -360,8 +361,8 @@ def _record_domains(payload: dict) -> None:
 
     The domain is the call's `domain` parameter, recorded as given, or for a
     tool that names a memory by uid the domain that memory is filed under (one
-    read of the store). A blank domain is not recorded: the whole project is
-    not a domain. Raises on failure; the caller decides it is not fatal.
+    read-only read of the store). A blank domain is not recorded: the whole
+    project is not a domain. Raises on failure; the caller decides it is not fatal.
     """
     tool = guard.memai_tool(str(payload.get("tool_name", "")))
     params = payload.get("tool_input")
@@ -373,10 +374,24 @@ def _record_domains(payload: dict) -> None:
         warden.record_domain(session_id, domain)
     uid = params.get("uid")
     if tool in _UID_TOOLS and isinstance(uid, str) and uid.strip():
-        with db.connect() as conn:
-            row = db.get_memory(conn, uid.strip())
-        if row is not None:
-            warden.record_domain(session_id, row["domain"])
+        found = _domain_of(uid.strip())
+        if found:
+            warden.record_domain(session_id, found)
+
+
+def _domain_of(uid: str) -> str:
+    """The domain memory `uid` is filed under, or "" when it cannot be read.
+
+    A read-only connection with a short timeout and no migration: opening the
+    store the usual way writes, and this runs before every task call.
+    """
+    conn = sqlite3.connect(db.default_db_path().as_uri() + "?mode=ro", uri=True,
+                           timeout=1)
+    try:
+        row = conn.execute("SELECT domain FROM memories WHERE uid = ?", (uid,)).fetchone()
+    finally:
+        conn.close()
+    return row[0] if row and row[0] else ""
 
 
 def _guard(payload: dict) -> int:

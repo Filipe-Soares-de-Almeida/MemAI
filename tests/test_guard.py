@@ -518,3 +518,53 @@ def test_a_recording_that_raises_leaves_the_result_alone(store, monkeypatch, cap
     assert _guarded(_call("pulse", domain="acme/harbor"), monkeypatch, capsys) == (0, "", "")
     code, _, err = _guarded(_call("note", domain="acme/harbor"), monkeypatch, capsys)
     assert code == 2 and "BLOCKED" in err
+
+
+# ------------------------------------- the uid lookup is a bare read of the store
+
+def test_the_uid_lookup_runs_no_migration(store, monkeypatch, capsys):
+    """`db.connect` migrates and writes on open; the lookup must not go through it."""
+    uid = _seed_task("acme/docks")
+
+    def refuse(*args, **kwargs):
+        raise AssertionError("db.connect was used")
+    monkeypatch.setattr(db, "connect", refuse)
+    assert _guarded(_call("get_memory", uid=uid), monkeypatch, capsys) == (0, "", "")
+    assert _named() == ["acme/docks"]
+
+
+def test_the_uid_lookup_does_not_wait_for_a_writer(store, monkeypatch, capsys):
+    import sqlite3
+    import time
+    uid = _seed_task("acme/docks")
+    writer = sqlite3.connect(str(db.default_db_path()), timeout=1)
+    writer.execute("BEGIN IMMEDIATE")
+    try:
+        started = time.monotonic()
+        code, _, _ = _guarded(_call("get_memory", uid=uid), monkeypatch, capsys)
+        assert code == 0 and time.monotonic() - started < 5
+    finally:
+        writer.rollback()
+        writer.close()
+    assert _named() == ["acme/docks"]
+
+
+def test_a_store_that_does_not_exist_records_nothing_and_is_not_created(
+        store, monkeypatch, capsys):
+    code, out, err = _guarded(_call("get_memory", uid="deadbeefdeadbeef"),
+                              monkeypatch, capsys)
+    assert (code, out, err) == (0, "", "")
+    assert _named() == []
+    assert not db.default_db_path().exists()
+    code, _, err = _guarded(_call("task_item", uid="deadbeefdeadbeef"), monkeypatch, capsys)
+    assert code == 2 and "BLOCKED" in err
+
+
+def test_a_store_path_with_a_space_still_opens_for_the_lookup(
+        tmp_path, monkeypatch, capsys):
+    home = tmp_path / "a home with spaces"
+    home.mkdir()
+    monkeypatch.setenv("MEMAI_HOME", str(home))
+    uid = _seed_task("acme/docks")
+    assert _guarded(_call("task_comment", uid=uid, body="x"), monkeypatch, capsys)[0] == 0
+    assert _named() == ["acme/docks"]

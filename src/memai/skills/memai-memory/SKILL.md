@@ -547,7 +547,8 @@ all exit 0 with no output). **Four events:**
 Register all four with `memai-hook install`, which writes them into the user's
 `~/.claude/settings.json` — the only scope memai maintains and reads back. The
 first three are registered on the host events of the same name, `guard` on
-`PreToolUse` with a matcher over memai's writers.
+`PreToolUse` with a matcher over every memai tool: the hook records the domains a
+call names, and the guard checks only the writers.
 `--settings <file>` writes the same block into a named file instead, and what it
 registers there is nobody's to keep current but yours. `--check`
 reports what is registered and exits non-zero if anything is missing;
