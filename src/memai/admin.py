@@ -68,7 +68,7 @@ WEBUI_DIR = Path(__file__).parent / "webui" / "dist"
 SNIPPET_LIMIT = 280
 DEDUP_SNIPPET = 480
 
-KNOWN_TYPES = ("note", "checkpoint", "anti_pattern", "reasoning", "handoff", "diagram")
+KNOWN_TYPES = db.MEMORY_TYPES
 CONFIDENCES = ("unverified", "confirmed", "contradicted")
 STATUSES = ("active", "archived")
 
@@ -644,6 +644,9 @@ def create_memory(request, payload) -> dict:
         # a diagram row with no graph behind it is a broken half-state: its
         # content is generated, so there would be nothing to generate from
         raise ValueError("create a diagram through POST /api/diagrams -- it needs a graph")
+    if type_ == db.TASK_TYPE:
+        # a task row with no tasks row behind it has no checklist to generate from
+        raise ValueError("a task is created through the task tools, not as a plain memory")
     if sections.is_sectioned(type_):
         # built from the fields rather than typed, so what lands conforms
         given = payload.get("sections")
@@ -720,7 +723,7 @@ def edit_meta(request, payload) -> dict:
         error = db.title_error(updates["title"])
         if error:
             raise ValueError(error)
-    if "type" in updates and updates["type"] not in KNOWN_TYPES + (db.TASK_TYPE,):
+    if "type" in updates and updates["type"] not in KNOWN_TYPES:
         raise ValueError(f"type must be one of {KNOWN_TYPES}")
     with db.connect() as conn:
         row = db.get_memory(conn, uid)

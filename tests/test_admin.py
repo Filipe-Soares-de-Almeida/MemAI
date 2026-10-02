@@ -955,3 +955,12 @@ def test_dashboard_refuses_free_text_edit_and_retype_of_a_task(client):
     assert client.get(f"/api/memories/{note}").json()["type"] == "note"
     # the other fields of a task stay editable
     assert client.post(f"/api/memories/{uid}/meta", json={"tags": "parser"}).status_code == 200
+
+
+def test_dashboard_refuses_to_create_a_task_as_a_plain_memory(client):
+    res = client.post("/api/memories", json={
+        "title": "a would-be task", "type": "task", "content": "- [ ] step"})
+    assert res.status_code == 400
+    assert "task tools" in res.json()["error"]
+    with db.connect() as conn:
+        assert conn.execute("SELECT COUNT(*) FROM memories").fetchone()[0] == 0

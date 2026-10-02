@@ -1114,8 +1114,8 @@ def search(query: str, domain: str = "", type: str = "", limit: int = 10) -> dic
     whole routine the surrounding notes only annotate.
 
     type filters (one writer each): 'note', 'reasoning', 'checkpoint',
-    'anti_pattern', 'handoff', 'diagram'. Ask for type='diagram' to sweep
-    the documented flows on purpose. To recall note()'d knowledge
+    'anti_pattern', 'handoff', 'diagram', 'task'; any other type is an error.
+    Ask for type='diagram' to sweep the documented flows on purpose. To recall note()'d knowledge
     specifically, recall() is the sugar for search(type='note') -- which
     also means recall() never surfaces a diagram; use search() for that.
 
@@ -1125,6 +1125,8 @@ def search(query: str, domain: str = "", type: str = "", limit: int = 10) -> dic
     resolved to the branches it sits in -- every result carries its real
     `domain`, which is where to read what the filter actually covered.
     """
+    if error := db.type_error(type):
+        return _errors([error])
     with db.connect() as conn:
         results = _read(conn, db.search_ranked(conn, query, domain=domain, type=type,
                                               limit=limit, collapse=True))
@@ -1179,6 +1181,8 @@ def list_by_domain(
     record; a result's `est_tokens` estimates what that full record costs,
     and the top-level `est_tokens` is the sum over the results.
     """
+    if error := db.type_error(type):
+        return _errors([error])
     with db.connect() as conn:
         rows = _read(conn, db.list_by_domain(conn, domain, type=type, limit=limit,
                                             subtree=subtree))
@@ -1200,6 +1204,8 @@ def list_recent(
     record; a result's `est_tokens` estimates what that full record costs,
     and the top-level `est_tokens` is the sum over the results.
     """
+    if error := db.type_error(type):
+        return _errors([error])
     with db.connect() as conn:
         rows = _read(conn, db.list_recent(conn, type=type, domain=domain, limit=limit,
                                          subtree=subtree))
@@ -1244,6 +1250,8 @@ def timeline(
     if not uid and not query:
         return _errors(["timeline needs uid or query: one names the anchor, "
                         "the other searches for it"])
+    if error := db.type_error(type):
+        return _errors([error])
     with db.connect() as conn:
         if uid:
             anchored_by = "uid"

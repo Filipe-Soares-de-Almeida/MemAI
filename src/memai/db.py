@@ -2480,6 +2480,16 @@ DIAGRAM_TYPE = "diagram"
 TASK_TYPE = "task"
 # types whose content is generated from rows, so no prose scan or merge applies
 GENERATED_TYPES = (DIAGRAM_TYPE, TASK_TYPE)
+# every type a memory can have; the tools and the dashboard read this one list
+MEMORY_TYPES = ("note", "reasoning", "anti_pattern", "checkpoint", "handoff",
+                DIAGRAM_TYPE, TASK_TYPE)
+
+
+def type_error(type_: str, allowed: tuple[str, ...] = MEMORY_TYPES) -> str | None:
+    """The refusal for a type outside `allowed`, or None. An empty type means all."""
+    if not type_ or type_ in allowed:
+        return None
+    return f"unknown type '{type_}'; valid types: {', '.join(allowed)}"
 DIAGRAM_KINDS = ("flowchart",)
 NODE_SHAPES = ("start", "step", "decision", "io", "end")
 
