@@ -6,7 +6,7 @@ import { api, seg } from '../core/api.js';
 import { icon } from '../core/icons.js';
 import { toast, failed, openDropMenu } from '../core/ui.js';
 import { pickMemories } from '../core/link-picker.js';
-import { go } from '../core/router.js';
+import { go, parseHash, refreshBehind } from '../core/router.js';
 import { t } from '../i18n.js';
 
 const STATES = ['todo', 'doing', 'done', 'dropped'];
@@ -28,16 +28,26 @@ const fresh = uid => ({
 /* A selector that finds the same control again after a repaint. */
 const selectorOf = el => {
   if (el.id) return `#${CSS.escape(el.id)}`;
+  if (el.hasAttribute('data-unlink'))
+    return `[data-unlink="${CSS.escape(el.dataset.unlink)}"][data-item="${CSS.escape(el.dataset.item)}"]`;
   for (const a of ['data-step', 'data-toggle', 'data-menu', 'data-draft', 'data-link'])
     if (el.hasAttribute(a)) return `[${a}="${CSS.escape(el.getAttribute(a))}"]`;
   return '';
 };
+const attr = (name, value) => `[${name}="${CSS.escape(value)}"]`;
 
 export function mountTask(host, { uid, task, status }, { onStatus } = {}) {
   if (!ui || ui.uid !== uid) ui = fresh(uid);
+  /* this mount's own state: a write that lands after another task has taken
+     the module's `ui` still clears its drafts on the object it was started on */
+  const state = ui;
   let current = task;
   let currentStatus = status;
   let busy = false;
+  /* where focus goes on the next repaint, first match wins; a control that is
+     about to leave the page names its successor here */
+  let want = [];
+  const focusAfter = (...selectors) => { want = selectors; };
   const alive = () => host.isConnected;
 
   /* ── the write path ── */
@@ -51,16 +61,19 @@ export function mountTask(host, { uid, task, status }, { onStatus } = {}) {
   };
 
   /* One write at a time, so a second click cannot read a stale state. `onOk`
-     runs on acceptance, before the repaint, so what it clears is not redrawn. */
+     runs on acceptance, before the repaint, so what it clears is not redrawn.
+     A write that lands after the host is gone repaints the task's route. */
   const write = async (path, body, { method = 'POST', errKey = 'task.err.save', onOk } = {}) => {
-    if (busy) return null;
+    if (busy) { want = []; return null; }
     busy = true;
     try {
       const res = await api(`/api/tasks/${seg(uid)}/${path}`, { method, body });
-      onOk?.();
+      onOk?.(state);
       apply(res);
+      if (!alive()) refreshIfShown();
       return res;
     } catch (err) {
+      want = [];
       failed(errKey, err);
       return null;
     } finally {
@@ -68,16 +81,24 @@ export function mountTask(host, { uid, task, status }, { onStatus } = {}) {
     }
   };
 
+  const refreshIfShown = () => {
+    const { name, params } = parseHash();
+    if (name === 'memory' && params.get('uid') === uid) refreshBehind();
+  };
+
   /* A write that closes the task says so, and Undo puts the item back in
      the state it was in. Undo is itself a write, and says nothing more. */
-  const setItem = async (key, state, { quiet = false } = {}) => {
+  const setItem = async (key, next, { quiet = false } = {}) => {
     const before = current.items.find(i => i.key === key)?.state;
     const wasOpen = current.state === 'open';
-    const res = await write('item', { item: key, state });
+    const res = await write('item', { item: key, state: next });
     if (!res || quiet) return;
     if (wasOpen && res.task.state !== 'open') {
       toast(t(`task.toast.${res.task.state}`), 'ok', {
-        action: { label: t('common.undo'), run: () => setItem(key, before, { quiet: true }) },
+        action: { label: t('common.undo'), run: () => {
+          focusAfter(attr('data-step', key));
+          setItem(key, before, { quiet: true });
+        } },
       });
     } else if (!wasOpen && res.task.state === 'open') {
       toast(t('task.toast.reopened'), 'ok');
@@ -105,8 +126,8 @@ export function mountTask(host, { uid, task, status }, { onStatus } = {}) {
   const composerHTML = (scope, { rows = 2 } = {}) => `<div class="tk-compose">
     <textarea class="tk-box" rows="${rows}" data-draft="${esc(scope)}"
               placeholder="${esc(t('task.comment.placeholder'))}"
-              aria-label="${esc(t('task.comment.placeholder'))}">${esc(ui.drafts.get(scope) || '')}</textarea>
-    <button type="button" class="btn btn-sm" data-send="${esc(scope)}" ${(ui.drafts.get(scope) || '').trim() ? '' : 'disabled'}>${t('task.comment.send')}</button>
+              aria-label="${esc(t('task.comment.placeholder'))}">${esc(state.drafts.get(scope) || '')}</textarea>
+    <button type="button" class="btn btn-sm" data-send="${esc(scope)}" ${(state.drafts.get(scope) || '').trim() ? '' : 'disabled'}>${t('task.comment.send')}</button>
   </div>`;
 
   const itemPanelHTML = item => {
@@ -132,7 +153,7 @@ export function mountTask(host, { uid, task, status }, { onStatus } = {}) {
   };
 
   const itemHTML = item => {
-    const open = ui.open === item.key;
+    const open = state.open === item.key;
     const links = item.links.length;
     const talk = current.comments.filter(c => c.item === item.key).length;
     const next = NEXT[item.state];
@@ -147,11 +168,11 @@ export function mountTask(host, { uid, task, status }, { onStatus } = {}) {
             : item.state === 'dropped' ? icon('minus') : ''}</span>
         </button>
         <button type="button" class="tk-main" data-toggle="${esc(item.key)}"
-                aria-expanded="${open}" aria-controls="tkp-${esc(item.key)}">
+                aria-expanded="${open}"${open ? ` aria-controls="tkp-${esc(item.key)}"` : ''}>
           <span class="tk-text">${esc(item.text)}</span>
           <span class="tk-counts">${links
-            ? `<span class="tk-count" title="${esc(t('task.links.n', { n: links }))}">${icon('relation')}${links}</span>` : ''}${talk
-            ? `<span class="tk-count" title="${esc(t('task.comments.n', { n: talk }))}">${icon('comment')}${talk}</span>` : ''}</span>
+            ? `<span class="tk-count" title="${esc(t('task.links.n', { n: links }))}"><span aria-hidden="true">${icon('relation')}${links}</span><span class="sr-only">${esc(t('task.links.n', { n: links }))}</span></span>` : ''}${talk
+            ? `<span class="tk-count" title="${esc(t('task.comments.n', { n: talk }))}"><span aria-hidden="true">${icon('comment')}${talk}</span><span class="sr-only">${esc(t('task.comments.n', { n: talk }))}</span></span>` : ''}</span>
           <span class="tk-chev">${icon('chevron-right')}</span>
         </button>
         <button type="button" class="icon-btn tk-menu" data-menu="${esc(item.key)}"
@@ -164,7 +185,7 @@ export function mountTask(host, { uid, task, status }, { onStatus } = {}) {
 
   const progressHTML = () => {
     const p = progressOf();
-    const before = ui.progress || p;
+    const before = state.progress || p;
     const frac = n => (p.total ? n / p.total : 0);
     const shown = p.total ? before.done / p.total : 0;
     return `<div class="tk-prog">
@@ -197,7 +218,7 @@ export function mountTask(host, { uid, task, status }, { onStatus } = {}) {
   };
 
   const goalHTML = () => {
-    if (ui.goalEditing) {
+    if (state.goalEditing) {
       return `<div class="tk-goal is-editing">
         <textarea class="tk-box tk-goal-box" id="tkGoalBox" rows="3"
                   aria-label="${esc(t('task.goal.aria'))}">${esc(current.goal)}</textarea>
@@ -216,11 +237,11 @@ export function mountTask(host, { uid, task, status }, { onStatus } = {}) {
     </div>`;
   };
 
-  const addHTML = () => ui.adding
+  const addHTML = () => state.adding
     ? `<div class="tk-add is-open">
         <textarea class="tk-box" id="tkAddBox" rows="4"
                   placeholder="${esc(t('task.add.placeholder'))}"
-                  aria-label="${esc(t('task.add.placeholder'))}">${esc(ui.drafts.get('+items') || '')}</textarea>
+                  aria-label="${esc(t('task.add.placeholder'))}">${esc(state.drafts.get('+items') || '')}</textarea>
         <div class="tk-actions">
           <button type="button" class="btn btn-sm btn-solid" id="tkAddSend">${t('task.add.send')}</button>
           <button type="button" class="btn btn-sm btn-ghost" id="tkAddCancel">${t('common.cancel')}</button>
@@ -230,7 +251,7 @@ export function mountTask(host, { uid, task, status }, { onStatus } = {}) {
 
   const threadHTML = () => {
     const all = current.comments.filter(c => !c.item);
-    const hidden = ui.allComments ? 0 : Math.max(0, all.length - OLDER_SHOWN);
+    const hidden = state.allComments ? 0 : Math.max(0, all.length - OLDER_SHOWN);
     return `<section class="tk-thread tk-card" aria-label="${esc(t('task.comments.aria'))}">
       <h3 class="tk-h">${t('task.comments')}<span class="rs-n">${all.length}</span></h3>
       ${hidden ? `<button type="button" class="rs-more tk-older" id="tkOlder">${t('task.comments.older', { n: hidden })}</button>` : ''}
@@ -244,8 +265,10 @@ export function mountTask(host, { uid, task, status }, { onStatus } = {}) {
     /* the control the caret was on, so a repaint does not drop a keyboard
        user or a half-typed comment back to the top of the page */
     const was = document.activeElement;
-    const focus = host.contains(was) ? selectorOf(was) : '';
+    const kept = host.contains(was) ? selectorOf(was) : '';
     const caret = was?.selectionStart ?? null;
+    const tries = want.length ? want : [kept];
+    want = [];
     host.innerHTML = `<div class="tk">
       <div class="tk-head tk-card${current.state === 'open' ? '' : ' is-closed'}">
         ${closedHTML()}
@@ -259,7 +282,7 @@ export function mountTask(host, { uid, task, status }, { onStatus } = {}) {
       ${threadHTML()}
     </div>`;
     wire();
-    const back = focus && host.querySelector(focus);
+    const back = tries.filter(Boolean).map(sel => host.querySelector(sel)).find(Boolean);
     if (back) {
       back.focus({ preventScroll: true });
       if (caret !== null && back.setSelectionRange) back.setSelectionRange(caret, caret);
@@ -270,7 +293,7 @@ export function mountTask(host, { uid, task, status }, { onStatus } = {}) {
     if (fill) requestAnimationFrame(() => requestAnimationFrame(() => {
       fill.style.setProperty('--v', fill.dataset.fill);
     }));
-    ui.progress = progressOf();
+    state.progress = progressOf();
   }
 
   /* ── wiring ── */
@@ -285,7 +308,7 @@ export function mountTask(host, { uid, task, status }, { onStatus } = {}) {
     }));
 
     all('[data-toggle]').forEach(b => b.addEventListener('click', () => {
-      ui.open = ui.open === b.dataset.toggle ? '' : b.dataset.toggle;
+      state.open = state.open === b.dataset.toggle ? '' : b.dataset.toggle;
       paint();
     }));
 
@@ -294,7 +317,7 @@ export function mountTask(host, { uid, task, status }, { onStatus } = {}) {
       if (!item) return;
       openDropMenu(b, STATES.filter(s => s !== item.state).map(s => ({
         label: t(`task.mark.${s}`), danger: s === 'dropped',
-        run: () => setItem(item.key, s),
+        run: () => { focusAfter(attr('data-menu', item.key)); setItem(item.key, s); },
       })), { align: 'right' });
     }));
 
@@ -305,11 +328,21 @@ export function mountTask(host, { uid, task, status }, { onStatus } = {}) {
         okLabel: t('task.link.add'),
       });
       if (!chosen?.uids.length) return;
+      focusAfter(attr('data-link', item.key));
       await write('link', { item: item.key, target: chosen.uids }, { errKey: 'task.err.link' });
     }));
-    all('[data-unlink]').forEach(b => b.addEventListener('click', () =>
-      write('link', { item: b.dataset.item, target: b.dataset.unlink },
-            { method: 'DELETE', errKey: 'task.err.link' })));
+    /* the control that goes is replaced by the next link's, else the
+       previous one's, else the item's "add link" */
+    all('[data-unlink]').forEach(b => b.addEventListener('click', () => {
+      const item = b.dataset.item;
+      const row = b.closest('.tk-link');
+      const near = [row?.nextElementSibling, row?.previousElementSibling]
+        .map(r => r?.querySelector('[data-unlink]')).filter(Boolean)
+        .map(selectorOf);
+      focusAfter(...near, attr('data-link', item));
+      write('link', { item, target: b.dataset.unlink },
+            { method: 'DELETE', errKey: 'task.err.link' });
+    }));
 
     /* a link opens the record it names */
     all('[data-open]').forEach(b => b.addEventListener('click',
@@ -321,11 +354,12 @@ export function mountTask(host, { uid, task, status }, { onStatus } = {}) {
       const post = async () => {
         const body = box.value.trim();
         if (!body) return;
+        focusAfter(attr('data-draft', scope));
         await write('comment', { body, item: scope },
-                    { errKey: 'task.err.comment', onOk: () => ui.drafts.delete(scope) });
+                    { errKey: 'task.err.comment', onOk: s => s.drafts.delete(scope) });
       };
       box.addEventListener('input', () => {
-        ui.drafts.set(scope, box.value);
+        state.drafts.set(scope, box.value);
         send.disabled = !box.value.trim();
       });
       box.addEventListener('keydown', e => {
@@ -334,11 +368,11 @@ export function mountTask(host, { uid, task, status }, { onStatus } = {}) {
       send.addEventListener('click', post);
     });
 
-    q('#tkOlder')?.addEventListener('click', () => { ui.allComments = true; paint(); });
+    q('#tkOlder')?.addEventListener('click', () => { state.allComments = true; paint(); });
 
     /* ── the goal ── */
     q('#tkGoalEdit')?.addEventListener('click', () => {
-      ui.goalEditing = true;
+      state.goalEditing = true;
       paint();
       const box = q('#tkGoalBox');
       box.focus();
@@ -346,22 +380,23 @@ export function mountTask(host, { uid, task, status }, { onStatus } = {}) {
     });
     const goalBox = q('#tkGoalBox');
     if (goalBox) {
+      const leave = () => { state.goalEditing = false; focusAfter('#tkGoalEdit'); paint(); };
       const save = async () => {
         const goal = goalBox.value.trim();
-        if (goal === current.goal) { ui.goalEditing = false; paint(); return; }
-        await write('goal', { goal }, { onOk: () => { ui.goalEditing = false; } });
+        if (goal === current.goal) { leave(); return; }
+        await write('goal', { goal }, { onOk: s => { s.goalEditing = false; focusAfter('#tkGoalEdit'); } });
       };
       q('#tkGoalSave').addEventListener('click', save);
-      q('#tkGoalCancel').addEventListener('click', () => { ui.goalEditing = false; paint(); });
+      q('#tkGoalCancel').addEventListener('click', leave);
       goalBox.addEventListener('keydown', e => {
-        if (e.key === 'Escape') { ui.goalEditing = false; paint(); }
+        if (e.key === 'Escape') leave();
         if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') { e.preventDefault(); save(); }
       });
     }
 
     /* ── more items ── */
     q('#tkAddOpen')?.addEventListener('click', () => {
-      ui.adding = true;
+      state.adding = true;
       paint();
       q('#tkAddBox').focus();
     });
@@ -371,14 +406,15 @@ export function mountTask(host, { uid, task, status }, { onStatus } = {}) {
         if (!addBox.value.trim()) return;
         await write('items', { items: addBox.value }, {
           errKey: 'task.err.items',
-          onOk: () => { ui.adding = false; ui.drafts.delete('+items'); },
+          onOk: s => { s.adding = false; s.drafts.delete('+items'); focusAfter('#tkAddOpen'); },
         });
       };
-      addBox.addEventListener('input', () => ui.drafts.set('+items', addBox.value));
+      addBox.addEventListener('input', () => state.drafts.set('+items', addBox.value));
       q('#tkAddSend').addEventListener('click', send);
-      q('#tkAddCancel').addEventListener('click', () => { ui.adding = false; paint(); });
+      const close = () => { state.adding = false; focusAfter('#tkAddOpen'); paint(); };
+      q('#tkAddCancel').addEventListener('click', close);
       addBox.addEventListener('keydown', e => {
-        if (e.key === 'Escape') { ui.adding = false; paint(); }
+        if (e.key === 'Escape') close();
         if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') { e.preventDefault(); send(); }
       });
     }

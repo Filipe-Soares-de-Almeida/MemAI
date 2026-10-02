@@ -1,8 +1,8 @@
 /* Maintenance: the store's own upkeep, as six workspaces behind one tab
    strip -- the backups it has taken, the file they are copies of, the
    bodies it could not read into fields, the memories that say the same
-   thing, everything that has happened to it, and the warden that reads it
-   on a session's behalf.
+   thing, everything that has happened to it, and the reminders the Stop
+   hook sends a session (the warden and the open tasks).
 
    Only ONE of those is ever on screen. The other five stay built and
    hidden rather than being thrown away, because two of them hold work
@@ -1090,6 +1090,17 @@ export async function renderMaintenance(view, params) {
           ${pickerFor({ id: 'wdEvery', items: everyItems, ariaLabel: t('mn.wd.every') })}</label>
       </div>
       <p class="hint">${t('mn.wd.body')}</p>
+    </section>
+    <section class="panel mnt-short">
+      <h3 class="panel-title">${t('mn.ta.title')}
+        <span class="panel-aside">${t('mn.ta.aside')}</span></h3>
+      <div class="list-toolbar toolbar-sm">
+        <label class="inline-label">${t('mn.ta.state')}
+          ${pickerFor({ id: 'taOn', items: onOffItems, ariaLabel: t('mn.ta.state') })}</label>
+        <label class="inline-label">${t('mn.ta.every')}
+          ${pickerFor({ id: 'taEvery', items: everyItems, ariaLabel: t('mn.ta.every') })}</label>
+      </div>
+      <p class="hint">${t('mn.ta.body')}</p>
     </section>`;
 
     /* Both controls reflect the stored value; only a pick writes one. The
@@ -1102,6 +1113,13 @@ export async function renderMaintenance(view, params) {
       const mins = everyItems.find(it => it.value === String(cfg.warden_minutes));
       if (on && state) setPickerValue(on, state);
       if (every && mins) setPickerValue(every, mins);
+
+      const taOn = $('#taOn');
+      const taEvery = $('#taEvery');
+      const taState = onOffItems.find(it => it.value === (cfg.task_ask_enabled ? 'on' : 'off'));
+      const taMins = everyItems.find(it => it.value === String(cfg.task_ask_minutes));
+      if (taOn && taState) setPickerValue(taOn, taState);
+      if (taEvery && taMins) setPickerValue(taEvery, taMins);
     }).catch(() => {});
 
     wirePicker(view, { id: 'wdOn', items: fixedItems(onOffItems), onPick: async value => {
@@ -1117,6 +1135,24 @@ export async function renderMaintenance(view, params) {
       try {
         await api('/api/config', { body: { warden_minutes: Number(value) } });
         toast(t('mn.msg.wardenEvery', { n: value }), 'ok');
+      } catch (err) { failed('err.maintenance', err); }
+    } });
+
+    /* the task reminder is the Stop hook's other ask, with its own pair of
+       settings; the interval stays on file while it is off, as above */
+    wirePicker(view, { id: 'taOn', items: fixedItems(onOffItems), onPick: async value => {
+      const enabled = value === 'on';
+      try {
+        const cfg = await api('/api/config', { body: { task_ask_enabled: enabled } });
+        toast(enabled ? t('mn.msg.taskOn', { n: cfg.task_ask_minutes })
+                      : t('mn.msg.taskOff'), 'ok');
+      } catch (err) { failed('err.maintenance', err); }
+    } });
+
+    wirePicker(view, { id: 'taEvery', items: fixedItems(everyItems), onPick: async value => {
+      try {
+        await api('/api/config', { body: { task_ask_minutes: Number(value) } });
+        toast(t('mn.msg.taskEvery', { n: value }), 'ok');
       } catch (err) { failed('err.maintenance', err); }
     } });
   };

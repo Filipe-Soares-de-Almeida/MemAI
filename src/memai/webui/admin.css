@@ -979,6 +979,16 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
 }
 .hx-right { display: grid; gap: var(--sp-4); min-width: 0; }
 
+/* open tasks: the type's tag, one sentence, and the way to the list */
+.hx-tasks {
+  display: flex; align-items: center; gap: var(--sp-4);
+  margin-bottom: var(--sp-4); padding-block: var(--sp-3);
+}
+.hx-tasks-text { flex: 1; min-width: 0; display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--sp-1) var(--sp-3); }
+.hx-tasks-title { font: 500 var(--fs-md) var(--font-ui); color: var(--ink); font-variant-numeric: tabular-nums; }
+.hx-tasks-aside { font-size: var(--fs-sm); color: var(--ink-3); }
+.hx-tasks .btn { flex: none; }
+
 /* ── the ring ──
    One of them, on the confidence split: three segments, drawn in proportion
    to it. */
@@ -1198,6 +1208,11 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
    whole width is the `1fr` between its label and its number, to nothing. */
 @media (max-width: 1180px) {
   .hx-top { grid-template-columns: 1fr; }
+}
+@media (max-width: 560px) {
+  .hx-tasks { flex-wrap: wrap; gap: var(--sp-3); }
+  .hx-tasks-text { flex: 1 1 0; }
+  .hx-tasks .btn { flex: 1 0 100%; justify-content: center; }
 }
 @media (max-width: 860px) {
   .hx-sym { grid-template-columns: 6px minmax(0, 1fr) 56px 92px; }
@@ -2691,7 +2706,7 @@ button.rs-mono:hover { color: var(--accent); }
 
 .tk-state {
   --sc: var(--ink-3);
-  width: 28px; height: 28px; padding: 0;
+  width: max(28px, var(--tap)); height: max(28px, var(--tap)); padding: 0;
   display: grid; place-items: center;
   background: none; border: 0; border-radius: 50%; cursor: pointer;
 }

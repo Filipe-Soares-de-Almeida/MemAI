@@ -66,5 +66,32 @@ def test_the_portuguese_task_strings_are_not_the_english_ones():
     def words(s: str) -> str:
         return re.sub(r"\{\w+\}|[:.\s]", "", s)
 
-    same = [k for k in en if k.startswith("task.") and en[k] == pt[k] and words(en[k])]
+    own = ("task.", "nm.task.", "ov.tasks.", "mn.ta.", "mn.msg.task")
+    same = [k for k in en if k.startswith(own) and en[k] == pt[k] and words(en[k])]
     assert not same, f"untranslated: {same}"
+
+
+def test_the_create_health_and_reminder_views_only_ask_for_strings_that_exist():
+    """The new-task fields, the open-tasks figure and the reminder panel."""
+    src = "\n".join((WEBUI / "views" / name).read_text(encoding="utf-8")
+                    for name in ("new-memory.js", "overview.js", "maintenance.js"))
+    wanted = set(re.findall(
+        r"""\bt\(\s*'((?:nm\.task|ov\.tasks|mn\.ta)\.[\w.]+|mn\.msg\.task\w+)'""", src))
+    assert {"nm.task.goal", "nm.task.items", "ov.tasks.open", "mn.ta.title",
+            "mn.msg.taskOn"} <= wanted
+    for code in ("en", "pt-BR"):
+        strings = _catalog(code)
+        missing = sorted(k for k in wanted if k not in strings)
+        assert not missing, f"{code} lacks {missing}"
+
+
+def test_the_new_memory_form_offers_task_and_posts_it_to_its_own_endpoint():
+    src = (WEBUI / "views" / "new-memory.js").read_text(encoding="utf-8")
+    assert "NOT_WRITTEN_HERE = ['handoff']" in src
+    assert "'/api/tasks'" in src
+
+
+def test_an_item_names_its_panel_only_while_the_panel_is_drawn():
+    src = (WEBUI / "views" / "task.js").read_text(encoding="utf-8")
+    uses = re.findall(r"[^\n]*aria-controls[^\n]*", src)
+    assert uses and all("open ?" in line for line in uses)
