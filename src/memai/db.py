@@ -2157,6 +2157,15 @@ def set_status(
         "UPDATE memories SET status = ?, superseded_by = ?, updated_at = ? WHERE uid = ?",
         (status, superseded_by, now_iso(), uid),
     )
+    if row["type"] == TASK_TYPE:
+        if status == "archived":
+            conn.execute(
+                "UPDATE tasks SET state = 'cancelled' WHERE memory_uid = ? AND state = 'open'", (uid,)
+            )
+        elif status == "active":
+            conn.execute(
+                "UPDATE tasks SET state = 'open', completed_at = '' WHERE memory_uid = ?", (uid,)
+            )
     if note:
         conn.execute(
             "INSERT INTO edits (memory_uid, edited_at, prev_content, new_content, note) VALUES (?, ?, ?, ?, ?)",
