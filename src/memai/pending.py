@@ -9,9 +9,14 @@ import sqlite3
 from . import db, tasks
 
 CATEGORIES = ("task", "anti_pattern", "handoff", "note", "diagram")
+# what a pin can be counted under: the categories, then the types outside them
+PINNED_TYPES = CATEGORIES + ("checkpoint", "reasoning")
 
 LIMIT_MAX = 50
-_SOUND = {"anti_pattern", "handoff", "note"}
+_SOUND = {"anti_pattern", "handoff", "note", "checkpoint", "reasoning"}
+
+# A path `col` that is the asked scope or one of its ancestors.
+_ANCHOR = "({col} <> '' AND (? = {col} OR substr(?, 1, length({col}) + 1) = {col} || '/'))"
 
 
 def _scope(conn: sqlite3.Connection, domain: str) -> tuple[str, list]:
@@ -26,8 +31,24 @@ def _scope(conn: sqlite3.Connection, domain: str) -> tuple[str, list]:
     return clause, params
 
 
-def _from_where(conn: sqlite3.Connection, domain: str, type_: str) -> tuple[str, list]:
-    scope, params = _scope(conn, domain)
+def _pin_scope(conn: sqlite3.Connection, domain: str) -> tuple[str, list]:
+    """The pins in scope for `domain`: every global one, and each domain pin
+    whose domain or also path is the asked domain or above it."""
+    scopes = db.resolve_domain_scopes(conn, domain) if db.normalize_domain(domain) else []
+    if not scopes:
+        return "AND m.pin = 'global'", []
+    arms, params = [], []
+    for scope in scopes:
+        arms.append(_ANCHOR.format(col="m.domain"))
+        arms.append("EXISTS (SELECT 1 FROM memory_domains pd WHERE pd.memory_uid = m.uid "
+                    f"AND {_ANCHOR.format(col='pd.domain')})")
+        params.extend([scope, scope, scope, scope])
+    return f"AND (m.pin = 'global' OR (m.pin = 'domain' AND ({' OR '.join(arms)})))", params
+
+
+def _from_where(conn: sqlite3.Connection, domain: str, type_: str,
+                pinned: bool = False) -> tuple[str, list]:
+    scope, params = _pin_scope(conn, domain) if pinned else _scope(conn, domain)
     if type_ == db.TASK_TYPE:
         return (f"FROM memories m JOIN tasks t ON t.memory_uid = m.uid "
                 f"WHERE m.type = ? AND m.status = 'active' AND t.state = 'open' {scope}", [type_, *params])
@@ -36,14 +57,20 @@ def _from_where(conn: sqlite3.Connection, domain: str, type_: str) -> tuple[str,
             [type_, *params])
 
 
-def _count(conn: sqlite3.Connection, domain: str, type_: str) -> int:
-    where, params = _from_where(conn, domain, type_)
+def _count(conn: sqlite3.Connection, domain: str, type_: str, pinned: bool = False) -> int:
+    where, params = _from_where(conn, domain, type_, pinned)
     return conn.execute(f"SELECT COUNT(*) {where}", params).fetchone()[0]
 
 
 def counts(conn: sqlite3.Connection, domain: str = "") -> list[dict]:
     """[{"type", "count"}] in CATEGORIES order, leaving out empty categories."""
     found = [{"type": t, "count": _count(conn, domain, t)} for t in CATEGORIES]
+    return [c for c in found if c["count"] > 0]
+
+
+def pinned_counts(conn: sqlite3.Connection, domain: str = "") -> list[dict]:
+    """[{"type", "count"}] of the pins in scope, PINNED_TYPES order, empty ones left out."""
+    found = [{"type": t, "count": _count(conn, domain, t, True)} for t in PINNED_TYPES]
     return [c for c in found if c["count"] > 0]
 
 
@@ -97,16 +124,17 @@ def _header(conn: sqlite3.Connection, row: sqlite3.Row) -> dict:
 
 
 def headers(conn: sqlite3.Connection, domain: str, type_: str,
-            limit: int = 10, offset: int = 0) -> dict:
+            limit: int = 10, offset: int = 0, *, pinned: bool = False) -> dict:
     """One page of pending headers of a category, newest first.
 
     `next_offset` is present only when another page follows. A task sorts by
-    its newest item update.
+    its newest item update. `pinned` narrows the page to the pins in scope
+    (see _pin_scope).
     """
     limit = max(1, min(int(limit), LIMIT_MAX))
     offset = max(0, int(offset))
-    where, params = _from_where(conn, domain, type_)
-    total = _count(conn, domain, type_)
+    where, params = _from_where(conn, domain, type_, pinned)
+    total = _count(conn, domain, type_, pinned)
     if type_ == db.TASK_TYPE:
         order = ("ORDER BY COALESCE((SELECT MAX(i.updated_at) FROM task_items i "
                  "WHERE i.memory_uid = m.uid), m.created_at) DESC, m.rowid_pk DESC")

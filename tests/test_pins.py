@@ -10,7 +10,8 @@ import sqlite3
 
 import pytest
 
-from memai import db, portable
+from conftest import shaped
+from memai import db, pending, portable, server
 
 
 @pytest.fixture
@@ -99,3 +100,99 @@ def test_markdown_export_names_a_pin(store):
         db.set_pin(conn, uid, "global")
         text = portable.to_markdown(portable.export_records(conn))
     assert "pin: global" in text
+
+
+# ------------------------------------------------------------ scope and counts
+
+def _pinned(conn, pin, domain="acme/x100", also="", type_="note", title="Pinned fact"):
+    if type_ == "note":
+        uid = _note(conn, title=title, domain=domain, also=also)
+    else:
+        uid = db.insert_memory(conn, type=type_, title=title,
+                               content=shaped(type_, "a pinned body"), domain=domain)
+    db.set_pin(conn, uid, pin)
+    return uid
+
+
+def _types(found):
+    return {c["type"]: c["count"] for c in found}
+
+
+def test_whole_project_counts_only_global_pins(store):
+    with db.connect() as conn:
+        _pinned(conn, "global")
+        _pinned(conn, "domain")
+        assert pending.pinned_counts(conn) == [{"type": "note", "count": 1}]
+
+
+@pytest.mark.parametrize("asked, seen", [
+    ("acme/x100", True), ("acme/x100/p200", True), ("acme/x100/new/deep", True),
+    ("acme", False), ("acme/x1000", False), ("other", False),
+])
+def test_a_domain_pin_covers_its_subtree_only(store, asked, seen):
+    with db.connect() as conn:
+        _note(conn, title="Something under p200", domain="acme/x100/p200")
+        _pinned(conn, "domain")
+        assert pending.pinned_counts(conn, asked) == (
+            [{"type": "note", "count": 1}] if seen else [])
+
+
+def test_a_global_pin_is_in_every_scope(store):
+    with db.connect() as conn:
+        _pinned(conn, "global", domain="other")
+        for asked in ("", "acme", "acme/x100/p200", "other"):
+            assert _types(pending.pinned_counts(conn, asked)) == {"note": 1}
+
+
+def test_a_domain_pin_covers_its_also_paths(store):
+    with db.connect() as conn:
+        _pinned(conn, "domain", also="other/y200")
+        assert _types(pending.pinned_counts(conn, "other/y200/z")) == {"note": 1}
+        assert pending.pinned_counts(conn, "other") == []
+
+
+def test_a_pin_that_is_not_pending_is_not_counted_and_survives(store):
+    with db.connect() as conn:
+        archived = _pinned(conn, "global", title="Archived pin")
+        db.set_status(conn, archived, "archived")
+        wrong = _pinned(conn, "global", title="Wrong pin")
+        db.set_confidence(conn, wrong, "contradicted")
+        assert pending.pinned_counts(conn) == []
+        db.set_status(conn, archived, "active")
+        assert _types(pending.pinned_counts(conn)) == {"note": 1}
+        assert db.get_memory(conn, wrong)["pin"] == "global"
+
+
+def test_a_closed_task_pin_is_not_counted(store):
+    uid = server.task(title="Ship the parser", goal="Parse every config file",
+                      items="read the spec", domain="acme/x100")["uid"]
+    with db.connect() as conn:
+        db.set_pin(conn, uid, "global")
+        assert _types(pending.pinned_counts(conn)) == {"task": 1}
+    server.task_item(uid, "i1", state="done")
+    with db.connect() as conn:
+        assert pending.pinned_counts(conn) == []
+
+
+def test_pinned_memories_still_count_in_their_category(store):
+    with db.connect() as conn:
+        _pinned(conn, "global")
+        _note(conn, title="Plain fact")
+        assert pending.counts(conn, "acme/x100") == [{"type": "note", "count": 2}]
+
+
+def test_checkpoint_and_reasoning_pins_are_counted(store):
+    with db.connect() as conn:
+        _pinned(conn, "global", type_="checkpoint", title="Pinned bearing")
+        _pinned(conn, "global", type_="reasoning", title="Pinned decision")
+        assert pending.pinned_counts(conn) == [
+            {"type": "checkpoint", "count": 1}, {"type": "reasoning", "count": 1}]
+
+
+def test_pinned_headers_list_only_pins_of_the_type(store):
+    with db.connect() as conn:
+        uid = _pinned(conn, "domain")
+        _note(conn, title="Plain fact")
+        page = pending.headers(conn, "acme/x100", "note", pinned=True)
+        assert page["total"] == 1 and [i["uid"] for i in page["items"]] == [uid]
+        assert pending.headers(conn, "", "note", pinned=True)["total"] == 0
