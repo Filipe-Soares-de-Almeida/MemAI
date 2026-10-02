@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import pytest
 
-from memai import db, server
+from memai import db, pending, server
 
 UNKNOWN = ("unknown type 'pitfall'; valid types: note, reasoning, anti_pattern, "
            "checkpoint, handoff, diagram, task")
@@ -47,3 +47,152 @@ def test_reads_accept_the_new_type(store):
     uid = server.task(title="Ship the parser", goal="Parse every config file",
                       items="read the spec", domain="acme/parser")["uid"]
     assert [r["uid"] for r in server.list_recent(type="task")["results"]] == [uid]
+
+
+# ------------------------------------------------------------------ pending
+
+DOMAIN = "acme/x100"
+CATEGORY_LIST = "task, anti_pattern, handoff, note, diagram"
+
+
+def _diagram(domain: str = DOMAIN) -> str:
+    return server.diagram(
+        title="Nightly export routine", domain=domain,
+        nodes=[{"key": "a", "label": "Start", "shape": "start"},
+               {"key": "b", "label": "Done", "shape": "end"}],
+        edges=[{"from": "a", "to": "b"}])["uid"]
+
+
+def _task(title: str, domain: str = DOMAIN) -> str:
+    return server.task(title=title, goal="Parse every config file",
+                       items="read the spec\nwrite the lexer", domain=domain)["uid"]
+
+
+@pytest.fixture
+def seeded(store):
+    """One open and one completed task, two anti-patterns (one contradicted),
+    one handoff, three notes and one diagram, all under acme/x100."""
+    uids = {"open": _task("Ship the parser")}
+    done = _task("Retire the legacy lexer")
+    server.task_item(done, "i1", state="done")
+    server.task_item(done, "i2", state="done")
+    uids["done"] = done
+    uids["ap_good"] = server.anti_pattern(
+        title="Lexing twice", pattern="Lexing the input twice.",
+        why_wrong="It doubles the work.", instead="Lex once.", domain=DOMAIN)["uid"]
+    bad = server.anti_pattern(
+        title="Eager flush", pattern="Flushing on every token.",
+        why_wrong="It stalls the pipeline.", instead="Flush per line.", domain=DOMAIN)["uid"]
+    server.set_confidence(bad, "contradicted")
+    uids["ap_bad"] = bad
+    uids["handoff"] = server.handoff(
+        title="Parser handover", content="The lexer is next.", domain=DOMAIN)["uid"]
+    for n in range(3):
+        server.note(title=f"Parser fact {n}", content=f"Fact number {n}.", domain=DOMAIN)
+    uids["diagram"] = _diagram()
+    return uids
+
+
+FULL = [{"type": "task", "count": 1}, {"type": "anti_pattern", "count": 1},
+        {"type": "handoff", "count": 1}, {"type": "note", "count": 3},
+        {"type": "diagram", "count": 1}]
+
+
+def test_counts_follow_the_category_order_and_skip_empty_ones(seeded):
+    with db.connect() as conn:
+        assert pending.counts(conn) == FULL
+        conn.execute("UPDATE memories SET status = 'archived' WHERE uid = ?",
+                     (seeded["handoff"],))
+        assert [c["type"] for c in pending.counts(conn)] == [
+            "task", "anti_pattern", "note", "diagram"]
+
+
+def test_counts_are_scoped(seeded):
+    with db.connect() as conn:
+        assert pending.counts(conn, "other") == []
+        assert pending.counts(conn, "acme") == FULL
+
+
+def test_task_headers_carry_progress_and_doing(seeded):
+    server.task_item(seeded["open"], "i1", state="doing")
+    with db.connect() as conn:
+        result = pending.headers(conn, "", "task")
+    assert result["type"] == "task" and result["total"] == 1
+    item = result["items"][0]
+    assert item["uid"] == seeded["open"]
+    assert item["progress"] == {"done": 0, "total": 2}
+    assert item["doing"] == ["i1"]
+
+
+def test_tasks_are_ordered_by_their_latest_item_update(store):
+    older = _task("Older task")
+    newer = _task("Newer task")
+    with db.connect() as conn:
+        assert [i["uid"] for i in pending.headers(conn, "", "task")["items"]] == [newer, older]
+    server.task_item(older, "i1", state="doing")
+    with db.connect() as conn:
+        assert [i["uid"] for i in pending.headers(conn, "", "task")["items"]] == [older, newer]
+
+
+def test_headers_exclude_what_is_not_pending(seeded):
+    with db.connect() as conn:
+        assert [i["uid"] for i in pending.headers(conn, "", "anti_pattern")["items"]] == [
+            seeded["ap_good"]]
+        assert [i["uid"] for i in pending.headers(conn, "", "task")["items"]] == [
+            seeded["open"]]
+
+
+def test_headers_page(store):
+    for n in range(12):
+        server.note(title=f"Parser fact {n}", content=f"Fact number {n}.", domain=DOMAIN)
+    with db.connect() as conn:
+        first = pending.headers(conn, "", "note")
+        assert first["total"] == 12 and len(first["items"]) == 10
+        assert first["next_offset"] == 10
+        last = pending.headers(conn, "", "note", offset=10)
+        assert len(last["items"]) == 2 and "next_offset" not in last
+        assert len(pending.headers(conn, "", "note", limit=500)["items"]) == 12
+        assert len(pending.headers(conn, "", "note", limit=0)["items"]) == 1
+
+
+def test_headers_are_newest_first(store):
+    uids = [server.note(title=f"Parser fact {n}", content=f"Fact {n}.",
+                        domain=DOMAIN)["uid"] for n in range(3)]
+    with db.connect() as conn:
+        assert [i["uid"] for i in pending.headers(conn, "", "note")["items"]] == uids[::-1]
+
+
+def test_headers_have_no_bodies(seeded):
+    with db.connect() as conn:
+        for type_ in pending.CATEGORIES:
+            for item in pending.headers(conn, "", type_)["items"]:
+                assert "content" not in item
+                assert {"uid", "title", "domain", "est_tokens"} <= set(item)
+
+
+def test_pending_tool_without_a_type_lists_the_counts(seeded):
+    assert server.pending() == {"categories": FULL}
+    assert server.pending(domain="acme/x100") == {"categories": FULL}
+
+
+def test_pending_tool_with_a_type_lists_headers(seeded):
+    result = server.pending(domain="acme", type="note")
+    assert result["type"] == "note" and result["total"] == 3 and len(result["items"]) == 3
+
+
+def test_pending_tool_counts_what_it_returns_as_read(seeded):
+    server.pending(type="handoff")
+    with db.connect() as conn:
+        usage = db.usage_for(conn, [seeded["handoff"], seeded["ap_good"]])
+    assert usage[seeded["handoff"]]["recalls"] == 1
+    assert seeded["ap_good"] not in usage
+
+
+def test_pending_tool_refuses_a_type_it_does_not_serve(store):
+    result = server.pending(type="checkpoint")
+    assert result["errors"] == [
+        f"unknown type 'checkpoint'; valid types: {CATEGORY_LIST}"]
+
+
+def test_pending_on_an_unknown_domain_is_empty_not_an_error(seeded):
+    assert server.pending(domain="nowhere/at/all") == {"categories": []}

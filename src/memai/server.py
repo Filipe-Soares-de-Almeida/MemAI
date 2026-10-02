@@ -39,8 +39,8 @@ import os
 
 from mcp.server.fastmcp import FastMCP
 
-from memai import (autostart, brief, db, diagram_svg, hook_install, portable,
-                   sections, tasks, update)
+from memai import (autostart, brief, db, diagram_svg, hook_install, pending as pending_lists,
+                   portable, sections, tasks, update)
 
 # Sent to the host in the initialize handshake, and injected into the
 # model's context by the hosts that support it. Kept to a paragraph on
@@ -1390,6 +1390,34 @@ def set_domain_case(mode: str) -> dict:
 
 
 @tool("core")
+def pending(domain: str = "", type: str = "", limit: int = 10, offset: int = 0) -> dict:
+    """What is still open in a scope: counts per category, or one category's headers.
+
+    Without type: {"categories": [{"type", "count"}, ...]} for task,
+    anti_pattern, handoff, note and diagram, in that order, leaving out the
+    empty ones. With type: {"type", "total", "items", "next_offset"} -- one
+    page of headers (uid, title, domain, est_tokens; a task adds
+    `progress` {done, total} and `doing`, the keys of its items in progress),
+    newest first, a task by its latest item update. Open a header with
+    get_memory(uid). `next_offset` is absent on the last page.
+
+    Pending means: a task that is open; an active anti_pattern, handoff or
+    note that is not contradicted; an active diagram.
+
+    domain covers its subdomains and what is cross-listed there; empty is the
+    whole project. limit is 1 to 50. Any other type is an error.
+    """
+    if error := db.type_error(type, allowed=pending_lists.CATEGORIES):
+        return _errors([error])
+    with db.connect() as conn:
+        if not type:
+            return {"categories": pending_lists.counts(conn, domain)}
+        result = pending_lists.headers(conn, domain, type, limit=limit, offset=offset)
+        _read(conn, result["items"])
+    return result
+
+
+@tool("core")
 def pulse(domain: str = "") -> dict:
     """Session warm-up: latest checkpoint + open handoffs/anti-patterns + recent notes.
 
@@ -2187,6 +2215,7 @@ _TOOLS = {
     "get_domain_case": get_domain_case,
     "set_domain_case": set_domain_case,
     "pulse": pulse,
+    "pending": pending,
     "get_memory": get_memory,
     "edit_memory": edit_memory,
     "link_memories": link_memories,
