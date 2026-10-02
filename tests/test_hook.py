@@ -16,7 +16,10 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from conftest import shaped
-from memai import brief, db, hook, hook_install, server, warden
+from memai import brief, db, hook, hook_install, server, tasks, warden
+
+
+DOMAIN_CAP = brief.DOMAINS
 
 
 @pytest.fixture
@@ -73,13 +76,23 @@ def _status(capsysbinary, argv=(), stdin: str = "{}") -> str:
 
 # ------------------------------------------------------------ the brief text
 
+def _seed_task(conn, domain: str = "acme/x100") -> str:
+    return tasks.create_task(conn, title="Ship the retry path", goal="Retries back off",
+                             items=["add the backoff", "cover it with a test"],
+                             domain=domain)
+
+
 def test_the_brief_names_what_the_store_holds(conn):
     ids = _seed(conn)
+    _seed_task(conn)
     text = brief.session_brief(conn)
-    assert "4 memories" in text
+    assert "5 memories" in text
     assert "acme/x100" in text
-    assert ids["hand"] in text and ids["pitfall"] in text and ids["cp"] in text
-    assert "pulse(domain)" in text  # what to do next
+    assert "Pending in this project: 1 open task, 1 pitfall, 1 handoff, 1 note." in text
+    assert ids["cp"] in text
+    # the pending line counts; it never lists a memory
+    assert ids["hand"] not in text and ids["pitfall"] not in text and ids["note"] not in text
+    assert "pulse(domain)" in text and "pending()" in text  # what to do next
 
 
 def test_an_empty_store_has_nothing_to_say(conn):
@@ -88,8 +101,43 @@ def test_an_empty_store_has_nothing_to_say(conn):
 
 def test_the_brief_can_be_scoped(conn):
     ids = _seed(conn)
-    text = brief.session_brief(conn, domain="omni/x900")
-    assert ids["hand"] in text and ids["note"] not in text
+    text = brief.session_brief(conn, domain="acme/x100")
+    assert "Pending in acme/x100:" in text
+    assert "1 pitfall, 1 note." in text
+    assert "handoff" not in text.split("Pending in")[1].split("\n")[0]
+    assert ids["hand"] not in text
+
+
+def test_the_brief_pluralizes_the_counts(conn):
+    for i in range(3):
+        db.insert_memory(conn, type="note", domain="acme/x100", content=f"fact {i}")
+    _seed_task(conn)
+    _seed_task(conn)
+    text = brief.session_brief(conn)
+    assert "Pending in this project: 2 open tasks, 3 notes." in text
+
+
+def test_the_brief_calls_a_diagram_a_flow(conn):
+    uid = db.insert_memory(conn, type="diagram", domain="acme/x100",
+                                  content="export routine")
+    text = brief.session_brief(conn)
+    assert "1 flow." in text
+    assert uid not in text
+
+
+def test_the_brief_has_no_pending_line_when_nothing_is_pending(conn):
+    db.insert_memory(conn, type="checkpoint", domain="acme/x100",
+                     content=shaped("checkpoint", "ship the retry path"))
+    text = brief.session_brief(conn)
+    assert "Pending in" not in text
+    assert "Latest checkpoint" in text
+
+
+def test_the_brief_puts_tasks_first(conn):
+    _seed(conn)
+    assert "pending(type='task') first" not in brief.session_brief(conn)
+    _seed_task(conn)
+    assert "pending(type='task') first" in brief.session_brief(conn)
 
 
 def test_a_tight_budget_drops_whole_sections_and_says_so(conn):
@@ -97,35 +145,43 @@ def test_a_tight_budget_drops_whole_sections_and_says_so(conn):
     text = brief.session_brief(conn, budget=200)
     assert "more section(s) omitted" in text
     # the instruction on what to do next survives a squeeze; it is the point
-    assert "pulse(domain)" in text
+    assert "pulse(domain)" in text and "pending()" in text
 
 
 def test_a_long_section_cannot_starve_the_ones_after_it(conn):
-    """Found against a real store: four pitfalls at full length took half
-    the warm-up and the recent notes fell off the end entirely."""
-    for i in range(4):
-        db.insert_memory(conn, type="anti_pattern", domain="acme/x100",
-                         content=shaped("anti_pattern",
-                                        f"pitfall {i} " + "spelled out at length " * 12))
-    note = db.insert_memory(conn, type="note", domain="acme/x100",
-                            content="the export window is inclusive on both ends")
+    """A long domains line and a long checkpoint, tried in order, would leave
+    no room for the pending line behind them."""
+    for i in range(DOMAIN_CAP):
+        db.insert_memory(conn, type="note",
+                         domain=f"acme/a-very-long-product-name-{i}/with/a/deep/path/to/walk",
+                         content=f"fact {i}")
+    db.insert_memory(conn, type="checkpoint", domain="acme/x100",
+                     content=shaped("checkpoint", "ship the retry path " + "spelled out at length " * 12))
+    db.insert_memory(conn, type="anti_pattern", domain="acme/x100",
+                     content=shaped("anti_pattern", "retry without backoff"))
+    tail = len(brief.call_to_action(conn))
+    text = brief.session_brief(conn, budget=tail + 800)
+    assert "Pending in this project:" in text
+    assert "more section(s) omitted" in text
+
+
+def test_a_trimmed_domain_line_still_reports_its_total(conn):
+    """The domains named are capped, and the line says how many it left out."""
+    for i in range(DOMAIN_CAP + 1):  # plus the shared parent, two over the cap
+        db.insert_memory(conn, type="note", domain=f"acme/p{i}", content=f"fact {i}")
     text = brief.session_brief(conn)
-    assert "Pitfalls on record" in text
-    assert "Recent notes" in text and note in text
+    assert "+2 more" in text
 
 
-def test_a_trimmed_section_still_reports_its_total(conn):
-    """Items are dropped, never cut mid-sentence, and the heading says how
-    many there really were."""
-    for i in range(4):
-        db.insert_memory(conn, type="anti_pattern", domain="acme/x100",
-                         content=shaped("anti_pattern",
-                                        f"pitfall {i} " + "spelled out at length " * 12))
-    text = brief.session_brief(conn, budget=1400)
-    section = next(b for b in text.split("\n\n") if "Pitfalls on record" in b)
-    shown = sum(1 for line in section.splitlines() if line.startswith("  - "))
-    assert shown < 4
-    assert f"... +{4 - shown} not shown" in text
+def test_a_trimmed_section_drops_items_and_says_how_many():
+    """Items come off the end of a multi-line section, never mid-line, and the
+    marker counts them."""
+    part = "Heading:\n" + "\n".join(f"  - item {i} " + "x" * 40 for i in range(5))
+    kept = brief._cap(part, 140)
+    shown = sum(1 for line in kept.splitlines() if line.startswith("  - "))
+    assert 0 < shown < 5
+    assert f"... +{5 - shown} not shown" in kept
+    assert brief._cap(part, 5) == ""
 
 
 @pytest.mark.parametrize("mode, said, not_said", [
@@ -143,10 +199,14 @@ def test_the_instruction_states_the_active_casing_policy(conn, mode, said, not_s
     assert not_said not in text
 
 
-def test_a_contradicted_pitfall_is_not_in_the_warm_up(conn):
+def test_a_contradicted_pitfall_is_not_counted(conn):
     ids = _seed(conn)
+    db.insert_memory(conn, type="anti_pattern", domain="acme/x100",
+                     content=shaped("anti_pattern", "sleep instead of waiting on a signal"))
+    assert "2 pitfalls" in brief.session_brief(conn)
     db.set_confidence(conn, ids["pitfall"], "contradicted")
-    assert ids["pitfall"] not in brief.session_brief(conn)
+    text = brief.session_brief(conn)
+    assert "1 pitfall," in text and "2 pitfalls" not in text
 
 
 # ------------------------------------------------------------------ the hooks
@@ -480,8 +540,10 @@ def test_a_store_that_cannot_be_opened_is_not_an_error(monkeypatch, capsysbinary
 
 def test_the_warm_up_prompt_returns_the_same_brief(store):
     with db.connect() as conn:
-        ids = _seed(conn)
-    assert ids["hand"] in server.warm_up()
+        _seed(conn)
+    text = server.warm_up()
+    assert "Pending in this project: 1 pitfall, 1 handoff, 1 note." in text
+    assert "pending()" in text
 
 
 def test_the_warm_up_prompt_says_so_when_there_is_nothing(store):

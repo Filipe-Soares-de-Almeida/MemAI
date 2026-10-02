@@ -1,11 +1,11 @@
 """The store as a few hundred words, for a reader that has not asked yet.
 
 session_brief renders what the store holds -- its size, active domains, the
-latest checkpoint, open handoffs, pitfalls, recent notes, documented flows --
-and ends with the instruction to open the subject with pulse(domain) before
-working, spelling out what the store's own casing policy means for the path
-that instruction asks for. The SessionStart hook emits it (memai.hook); the
-warm_up prompt returns it.
+latest checkpoint, one line counting what is pending per category -- and ends
+with the instruction to call pending() and open the subject with pulse(domain)
+before working, spelling out what the store's own casing policy means for the
+path that instruction asks for. The SessionStart hook emits it (memai.hook);
+the warm_up prompt returns it.
 
 Plain text, not JSON, read by a language model. Every section is capped and
 every cap is reported, so a brief that stopped short does not read as a store
@@ -14,7 +14,7 @@ that was empty.
 
 from __future__ import annotations
 
-from memai import db
+from memai import db, pending
 
 # What a warm-up may cost. Generous next to a tool result and small next to
 # a context window -- this is paid once per session, and the alternative is
@@ -22,10 +22,15 @@ from memai import db
 DEFAULT_BUDGET = 2400
 SNIPPET = 220
 DOMAINS = 8
-HANDOFFS = 3
-PITFALLS = 4
-NOTES = 4
-FLOWS = 5
+
+# The pending line's words per category: (singular, plural).
+LABELS = {
+    "task": ("open task", "open tasks"),
+    "anti_pattern": ("pitfall", "pitfalls"),
+    "handoff": ("handoff", "handoffs"),
+    "note": ("note", "notes"),
+    "diagram": ("flow", "flows"),
+}
 
 # What the casing policy means for a caller writing a path. Under `lower`
 # and `upper` a domain is folded on the way in AND on the way through a
@@ -41,13 +46,18 @@ CASING = {
                 "an existing one exactly as list_domains() spells it.",
 }
 
+# What the pending line asks for, depending on whether a task is open.
+WORK_TASKS_FIRST = ("Call pending(type='task') first and work through the open tasks, "
+                    "then the other categories, before acting.")
+WORK_EACH = "Call pending(type=...) for each category before acting."
+
 # The tail of every brief. _fit reserves its room before dividing what is
 # left between the sections, so it is never the part that gets trimmed.
 # {casing} is filled from the store's active policy, never assumed.
 CALL_TO_ACTION = (
-    "Before the first tool call of this session, call pulse(domain) for the "
-    "subject the prompt names -- what was decided, what was already tried, "
-    "where the last session stopped. A domain is a path, outermost scope first "
+    "Before the first tool call of this session, call pending() for what is "
+    "still open and pulse(domain) for the subject the prompt names -- what "
+    "was decided, what was already tried, where the last session stopped. A domain is a path, outermost scope first "
     "('acme/x100/p200'). {casing} If the path is not obvious: list_domains() "
     "for the tree, recall(query) or search(query) to find a subject by name, "
     "get_memory(uid) for one record in full. If the memai tools are not loaded "
@@ -69,16 +79,15 @@ def _snip(text: str, limit: int = SNIPPET) -> str:
     return text if len(text) <= limit else text[: limit - 1] + "..."
 
 
-def _lines(rows, label: str, cap: int, total: int) -> list[str]:
-    """One block: a heading that admits what it left out, then the rows."""
-    if not rows:
-        return []
-    head = f"{label} ({total})" if total > len(rows) else f"{label}"
-    out = [f"{head}:"]
-    for r in rows[:cap]:
-        where = f" [{r['domain']}]" if r["domain"] else ""
-        out.append(f"  - {r['uid']}{where} {_snip(r['content'])}")
-    return out
+def pending_line(conn, domain: str) -> str:
+    """The count line for a scope plus what to call next, or "" when nothing is pending."""
+    found = pending.counts(conn, domain)
+    if not found:
+        return ""
+    said = ", ".join(
+        f"{c['count']} {LABELS[c['type']][0 if c['count'] == 1 else 1]}" for c in found)
+    ask = WORK_TASKS_FIRST if found[0]["type"] == db.TASK_TYPE else WORK_EACH
+    return f"Pending in {domain or 'this project'}: {said}. {ask}"
 
 
 def session_brief(conn, *, domain: str = "", budget: int = DEFAULT_BUDGET,
@@ -110,24 +119,9 @@ def session_brief(conn, *, domain: str = "", budget: int = DEFAULT_BUDGET,
         parts.append(f"Latest checkpoint{where} {checkpoint['created_at'][:16]} "
                      f"({checkpoint['uid']}): {_snip(checkpoint['content'], SNIPPET * 2)}")
 
-    by_type = census["by_type"]
-    for label, type_, cap in (("Open handoffs", "handoff", HANDOFFS),
-                              ("Pitfalls on record", "anti_pattern", PITFALLS),
-                              ("Recent notes", "note", NOTES)):
-        rows = db.list_by_domain(conn, domain, type=type_, limit=cap,
-                                 exclude_contradicted=True) if domain else \
-            db.list_recent(conn, type=type_, limit=cap, exclude_contradicted=True)
-        block = _lines(rows, label, cap, by_type.get(type_, 0))
-        if block:
-            parts.append("\n".join(block))
-
-    flows = db.list_recent(conn, type="diagram", domain=domain, limit=FLOWS)
-    if flows:
-        titles = []
-        for r in flows:
-            meta = db.get_diagram_row(conn, r["uid"])
-            titles.append(f"{r['uid']} {meta['title'] if meta else ''}".strip())
-        parts.append("Documented flows (get_diagram(uid) to read one): " + "; ".join(titles))
+    line = pending_line(conn, domain)
+    if line:
+        parts.append(line)
 
     return _fit(parts, budget, tail=call_to_action(conn))
 
@@ -154,9 +148,8 @@ def _cap(part: str, room: int) -> str:
     Never mid-sentence: a memory cut in half reads as if it said something
     it did not, which is worse than not showing it at all.
 
-    What it drops, it says. _lines writes the heading before this runs and
-    can only count what the QUERY left out, so a section trimmed here would
-    otherwise show two of four items and read as if there were two.
+    What it drops, it says: a trailing marker counts the items left out, so a
+    trimmed section does not read as a shorter one.
     """
     if len(part) <= room:
         return part
