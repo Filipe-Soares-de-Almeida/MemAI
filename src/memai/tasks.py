@@ -110,12 +110,14 @@ def get_task(conn: sqlite3.Connection, uid: str) -> dict | None:
         return None
     links: dict[str, list[dict]] = {}
     for r in conn.execute(
-        """SELECT l.item_key, l.target_uid, m.title
+        """SELECT l.item_key, l.target_uid, m.title, m.type
            FROM task_item_links l JOIN memories m ON m.uid = l.target_uid
            WHERE l.memory_uid = ? ORDER BY l.created_at, l.target_uid""",
         (uid,),
     ):
-        links.setdefault(r["item_key"], []).append({"uid": r["target_uid"], "title": r["title"]})
+        links.setdefault(r["item_key"], []).append(
+            {"uid": r["target_uid"], "title": r["title"], "type": r["type"]}
+        )
     items = [
         {
             "key": r["item_key"], "seq": r["seq"], "text": r["text"], "state": r["state"],

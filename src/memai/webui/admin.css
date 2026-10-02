@@ -126,6 +126,7 @@
   --f-stop: #e53935;  --f-stop-ink: #ef9a9a;   /* the temptation, the mistake */
   --f-go:   #43a047;  --f-go-ink:   #a5d6a7;   /* the way out, what is settled */
   --f-hold: #fb8c00;  --f-hold-ink: #ffcc80;   /* in flight, not proven */
+  --f-live: #26c6da;  --f-live-ink: #80deea;   /* being worked on now: a task item in progress */
   --f-aim:  #1e88e5;  --f-aim-ink:  #90caf9;   /* the bearing, the reasoning */
   --f-ask:  #8e24aa;  --f-ask-ink:  #ce93d8;   /* waiting on a decision */
   --f-next: #00897b;  --f-next-ink: #80cbc4;   /* left for next time */
@@ -2642,7 +2643,7 @@ button.rs-mono:hover { color: var(--accent); }
   .rf-pane + .rf-pane { border-left: 0; border-top: 1px solid var(--line-soft); }
 }
 
-/* A task's checklist: an item's state is its mark's shape first, colour second (--f-hold, --f-go);
+/* A task's checklist: an item's state is its mark's shape first, colour second (--f-live, --f-go);
    dropped is struck through, so it never passes for done. */
 
 .tk { display: flex; flex-direction: column; gap: var(--sp-3); min-width: 0; }
@@ -2693,16 +2694,17 @@ button.rs-mono:hover { color: var(--accent); }
 
 /* the items */
 .tk-items { list-style: none; margin: 0; padding: 0; }
-.tk-item { border-bottom: 1px solid var(--line-soft); }
+/* the row and the panel it opens are one surface, so the wash is the item's */
+.tk-item { border-bottom: 1px solid var(--line-soft); transition: background .15s; }
+.tk-item[data-s="doing"] { background: color-mix(in srgb, var(--f-live) 7%, transparent); }
+.tk-item.is-open { background: var(--hover-2); }
+.tk-item[data-s="doing"].is-open { background: color-mix(in srgb, var(--f-live) 7%, var(--hover-2)); }
 .tk-item:last-child { border-bottom: 0; }
 .tk-row {
   display: grid; grid-template-columns: 28px minmax(0, 1fr) var(--ctl-h-sm);
   align-items: start; gap: var(--sp-2);
   padding: var(--sp-2) var(--sp-3);
-  transition: background .15s;
 }
-.tk-item[data-s="doing"] .tk-row { background: color-mix(in srgb, var(--f-hold) 8%, transparent); }
-.tk-item.is-open .tk-row { background: var(--hover-2); }
 
 .tk-state {
   --sc: var(--ink-3);
@@ -2717,8 +2719,11 @@ button.rs-mono:hover { color: var(--accent); }
   transition: background-color .15s, border-color .15s, box-shadow .15s;
 }
 .tk-state:hover .tk-ring { box-shadow: 0 0 0 4px var(--hover-3); }
-.tk-state[data-s="doing"]   { --sc: var(--f-hold); }
-.tk-state[data-s="doing"] .tk-ring { background: linear-gradient(90deg, var(--f-hold) 50%, transparent 50%); }
+/* in progress: a ring with a play triangle, which no other state draws */
+.tk-state[data-s="doing"]   { --sc: var(--f-live); }
+.tk-state[data-s="doing"] .tk-ring {
+  background: color-mix(in srgb, var(--f-live) 16%, transparent); color: var(--f-live);
+}
 .tk-state[data-s="done"]    { --sc: var(--f-go); }
 .tk-state[data-s="done"] .tk-ring { background: var(--f-go); color: var(--accent-ink); }
 .tk-state[data-s="dropped"] .tk-ring { border-style: dashed; color: var(--ink-3); }
@@ -2745,29 +2750,31 @@ button.rs-mono:hover { color: var(--accent); }
 .tk-main:hover .tk-counts, .tk-main:hover .tk-chev { color: var(--ink); }
 .tk-main[aria-expanded="true"] .tk-chev { transform: rotate(90deg); }
 
-/* one item's links and comments, open under its row */
+/* One item's links and comments, open under its row: no box of its own. A
+   rule drops from the centre of the state mark, and the content lines up with
+   the item's text. */
 .tk-panel {
+  --mark: calc(var(--sp-3) + 14px);
   display: flex; flex-direction: column; gap: var(--sp-3);
-  margin: 0 var(--sp-3) var(--sp-3) calc(var(--sp-3) + 28px + var(--sp-2));
-  padding: var(--sp-3) var(--sp-4);
-  background: var(--inset); border-radius: var(--r-md);
+  margin: 0 var(--sp-3) 0 var(--mark);
+  padding: var(--sp-1) 0 var(--sp-4) calc(28px + var(--sp-2) + var(--sp-3) - var(--mark) - 1px);
+  border-left: 1px solid var(--line);
 }
 .tk-sub { display: flex; align-items: baseline; gap: var(--sp-2); }
 .tk-sub-h {
   font: 500 var(--fs-sm) var(--font-ui); color: var(--ink-2);
   display: flex; align-items: baseline; gap: var(--sp-2);
 }
-.tk-links { display: flex; flex-direction: column; }
-.tk-link { display: flex; align-items: center; gap: var(--sp-2); min-width: 0; }
-.tk-link-open {
-  flex: 1; min-width: 0; text-align: left;
-  display: inline-flex; align-items: center; min-height: var(--tap);
-  background: none; border: 0; padding: 0; cursor: pointer;
-  font: 400 var(--fs-sm) var(--font-ui); color: var(--ink);
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+/* a linked memory is drawn as a relation of the record's side panel: its
+   type, its name, and the control that removes it */
+.tk-links { display: flex; flex-direction: column; gap: var(--sp-1); }
+.rs-rel.tk-link, .rs-rel.tk-link:last-child {
+  flex-wrap: nowrap; padding: 0 var(--sp-1) 0 var(--sp-3);
+  background: var(--chip-fill); border: 1px solid var(--line-soft); border-radius: var(--r-md);
 }
-.tk-link-open:hover { color: var(--accent); }
-.tk-link .icon-btn { --ico: 11px; }
+.tk-link .type-tag { flex: none; }
+.tk-link-open { font: 400 var(--fs-sm) var(--font-ui); color: var(--ink); }
+.tk-link .icon-btn { flex: none; }
 
 /* add items, below the list */
 .tk-add { padding: var(--sp-2) var(--sp-3); border-top: 1px solid var(--line-soft); }
@@ -2777,7 +2784,6 @@ textarea.tk-box {
   font: 400 var(--fs-body)/1.5 var(--font-ui);
   min-height: 0; resize: vertical;
 }
-.tk-panel textarea.tk-box { background: var(--surface); }
 .tk-actions { display: flex; gap: var(--sp-2); }
 
 /* A comment from a person is indented and washed in the accent; an agent's
@@ -2789,7 +2795,6 @@ textarea.tk-box {
   padding: var(--sp-2) var(--sp-3); border-radius: var(--r-md);
   background: var(--chip-fill);
 }
-.tk-panel .tk-c { background: var(--surface); }
 .tk-c.is-person { margin-left: var(--sp-5); background: var(--accent-dim); }
 .tk-c-head { display: flex; align-items: baseline; gap: var(--sp-2); }
 .tk-c-who { font: 500 var(--fs-sm) var(--font-ui); color: var(--ink-2); }
@@ -2809,8 +2814,14 @@ textarea.tk-box {
   .tk-main { grid-template-columns: minmax(0, 1fr) auto; gap: var(--sp-1) var(--sp-3); }
   .tk-counts { grid-column: 1; grid-row: 2; }
   .tk-chev { grid-column: 2; grid-row: 1; }
-  .tk-panel { margin-left: var(--sp-3); }
   .tk-c.is-person { margin-left: var(--sp-3); }
+  /* the name gets the full width, under its type */
+  .rs-rel.tk-link, .rs-rel.tk-link:last-child {
+    display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; row-gap: 0;
+    padding-top: var(--sp-1); padding-bottom: var(--sp-1);
+  }
+  .tk-link .icon-btn { grid-column: 2; grid-row: 1; }
+  .tk-link-open { grid-column: 1 / -1; grid-row: 2; white-space: normal; text-align: left; min-height: 0; padding-bottom: var(--sp-1); }
 }
 
 @media (prefers-reduced-motion: reduce) {

@@ -304,7 +304,7 @@ def test_link_and_unlink(conn):
     note = db.insert_memory(conn, type="note", content="a plain note", title="Lexer notes", domain="acme/parser")
     assert tasks.link_item(conn, uid, "i1", [note]) == [note]
     links = tasks.get_task(conn, uid)["items"][0]["links"]
-    assert links == [{"uid": note, "title": "Lexer notes"}]
+    assert links == [{"uid": note, "title": "Lexer notes", "type": "note"}]
     assert tasks.link_item(conn, uid, "i1", [note]) == []
     assert tasks.unlink_item(conn, uid, "i1", note) is True
     assert tasks.get_task(conn, uid)["items"][0]["links"] == []

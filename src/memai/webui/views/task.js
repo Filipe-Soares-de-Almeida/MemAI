@@ -6,6 +6,7 @@ import { api, seg } from '../core/api.js';
 import { icon } from '../core/icons.js';
 import { toast, failed, openDropMenu } from '../core/ui.js';
 import { pickMemories } from '../core/link-picker.js';
+import { typeTag } from '../core/shared.js';
 import { go, parseHash, refreshBehind } from '../core/router.js';
 import { t } from '../i18n.js';
 
@@ -137,7 +138,8 @@ export function mountTask(host, { uid, task, status }, { onStatus } = {}) {
         <h3 class="tk-sub-h">${t('task.links')}<span class="rs-n">${item.links.length}</span></h3>
         <button type="button" class="rs-more" data-link="${esc(item.key)}">${t('task.link.add')}</button>
       </div>
-      ${item.links.length ? `<div class="tk-links">${item.links.map(l => `<div class="tk-link">
+      ${item.links.length ? `<div class="tk-links">${item.links.map(l => `<div class="rs-rel tk-link">
+          ${typeTag(l.type)}
           <button type="button" class="snippet tk-link-open" data-open="${esc(l.uid)}"
                   title="${esc(l.uid)}">${esc(l.title || l.uid)}</button>
           <button type="button" class="icon-btn danger" data-unlink="${esc(l.uid)}"
@@ -163,8 +165,7 @@ export function mountTask(host, { uid, task, status }, { onStatus } = {}) {
         <button type="button" class="tk-state" data-s="${esc(item.state)}" data-step="${esc(item.key)}"
                 title="${esc(action)}"
                 aria-label="${esc(t('task.state.aria', { text: item.text, state: stateName, action }))}">
-          <span class="tk-ring">${item.state === 'done' ? icon('check')
-            : item.state === 'dropped' ? icon('minus') : ''}</span>
+          <span class="tk-ring">${{ doing: icon('play'), done: icon('check'), dropped: icon('minus') }[item.state] || ''}</span>
         </button>
         <button type="button" class="tk-main" data-toggle="${esc(item.key)}"
                 aria-expanded="${open}"${open ? ` aria-controls="tkp-${esc(item.key)}"` : ''}>
