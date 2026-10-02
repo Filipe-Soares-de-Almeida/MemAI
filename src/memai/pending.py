@@ -43,6 +43,23 @@ def counts(conn: sqlite3.Connection, domain: str = "") -> list[dict]:
     return [c for c in found if c["count"] > 0]
 
 
+def open_task_uids(conn: sqlite3.Connection, domains: list[str]) -> list[str]:
+    """The distinct uids of the open tasks inside any of `domains`.
+
+    Each domain is resolved the way `headers` resolves it, subdomains and
+    cross-listings included, and a blank one is skipped: the whole project is
+    not a domain.
+    """
+    found: dict[str, None] = {}
+    for domain in domains:
+        if not str(domain).strip():
+            continue
+        where, params = _from_where(conn, str(domain).strip(), db.TASK_TYPE)
+        for row in conn.execute(f"SELECT m.uid {where}", params):
+            found[row["uid"]] = None
+    return list(found)
+
+
 def _doing(conn: sqlite3.Connection, uid: str) -> list[str]:
     return [r["item_key"] for r in conn.execute(
         "SELECT item_key FROM task_items WHERE memory_uid = ? AND state = 'doing' "

@@ -91,8 +91,11 @@ task(
 task_item(uid, "i1", state="done", comment="Handler keys off the event id.")
 ```
 
-Open tasks come first in the session-start brief, and at the end of a turn the
-`stop` hook blocks once per interval to ask the agent to update them. The
+Open tasks come first in the session-start brief. The PreToolUse hook notes the
+domains a session names in its memai calls, and at the end of a turn the `stop`
+hook blocks once per interval to ask the agent to update the open tasks of those
+domains, and to check similar domains for a task filed under another path. A
+session that named no domain is not asked. The
 dashboard's Maintenance view switches that reminder off and sets its interval;
 a task's checklist, comments and linked memories are worked there as well. A
 closed task is an archived memory, so `list_by_domain(domain, type="task",

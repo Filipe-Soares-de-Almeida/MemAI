@@ -7,9 +7,9 @@ spawn a subagent, only the agent can -- so what this module does is decide
 WHEN to ask and remember that it did.
 
 The state is one file per session under `<MEMAI_HOME>/warden/`, holding the
-timestamp of the last request and the transcript position the warden was
-last pointed at. A hook process lives for one event, so a file is the only
-place two runs can meet.
+timestamp of the last request, the transcript position the warden was last
+pointed at and the domains the session has named. A hook process lives for
+one event, so a file is the only place two runs can meet.
 
 A session id comes from the host and reaches a path, so `safe_id` refuses
 anything that could name a file outside the directory.
@@ -18,7 +18,9 @@ anything that could name a file outside the directory.
 from __future__ import annotations
 
 import json
+import os
 import re
+import tempfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -35,6 +37,9 @@ GRACE = timedelta(seconds=2)
 # so they are written once.
 AGENT = "memai-warden"
 AGENT_FILE = f"{AGENT}.md"
+
+# How many domains a session's state remembers; the oldest drops off.
+DOMAINS_MAX = 20
 
 # Session ids the state directory will hold a file for. The host's own ids
 # are hex and dashes; this also allows the underscores and dots a different
@@ -97,9 +102,21 @@ def _write(session_id: str, fields: dict) -> dict:
         return {}
     state = read(session_id)
     state.update(fields)
+    temp = ""
     try:
-        path.write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
+        # Parallel tool calls run parallel hooks: the file is replaced whole, so a
+        # reader sees the old state or the new one, never half of either.
+        handle, temp = tempfile.mkstemp(dir=path.parent, prefix=path.stem + ".",
+                                        suffix=".tmp")
+        with os.fdopen(handle, "w", encoding="utf-8") as out:
+            out.write(json.dumps(state, ensure_ascii=False))
+        os.replace(temp, path)
     except OSError:
+        if temp:
+            try:
+                os.unlink(temp)
+            except OSError:
+                pass
         return {}
     return state
 
@@ -116,6 +133,21 @@ def mark_tasks(session_id: str) -> dict:
     intervals in the same file.
     """
     return _write(session_id, {"tasks_asked_at": db.now_iso()})
+
+
+def record_domain(session_id: str, domain: str) -> dict:
+    """Add `domain` to the domains `session_id` has named, and return the state.
+
+    Distinct, the most recently named last, at most DOMAINS_MAX. {} for a blank
+    domain, an id we will not write a file for, or a failed write.
+    """
+    domain = str(domain or "").strip()
+    if not domain:
+        return {}
+    named = read(session_id).get("domains")
+    named = [d for d in named if isinstance(d, str)] if isinstance(named, list) else []
+    named = [d for d in named if d != domain] + [domain]
+    return _write(session_id, {"domains": named[-DOMAINS_MAX:]})
 
 
 def began(session_id: str) -> dict:
@@ -199,7 +231,7 @@ def prune(days: int = 14) -> int:
     cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).timestamp()
     gone = 0
     try:
-        entries = list(state_dir().glob("*.json"))
+        entries = [*state_dir().glob("*.json"), *state_dir().glob("*.tmp")]
     except OSError:
         return 0
     for path in entries:

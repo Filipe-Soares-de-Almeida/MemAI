@@ -8,13 +8,16 @@ JSON object on stdout:
   pre-compact     a reminder to checkpoint before the context is summarised
   stop            a nudge to checkpoint when nothing was written, a request
                   for the warden subagent when one is owed, a block asking
-                  about the project's open tasks when that is owed, and the
-                  release check memai.update caches for the next session
+                  about the open tasks of the domains the session named when
+                  that is owed, and the release check memai.update caches for
+                  the next session
 
 A fourth reads the call the host is about to make instead of the store, and
 is the one exception to everything the last paragraph of this docstring says:
 
-  guard           refuses a memai write whose required text never arrived
+  guard           records the domain a memai call names in the session's
+                  state, and refuses a memai write whose required text never
+                  arrived
 
 One more subcommand reads the store the same way and writes plain text
 instead:
@@ -32,9 +35,9 @@ running and no tool to have been loaded.
 Every failure path exits 0 with no output -- no store, an unreadable one, a
 payload that is not JSON, an unknown event -- so a hook cannot stop the
 session it is attached to. `guard` is the deliberate exception: stopping the
-call IS what it is for, and it exits 2 to do it. It never reads the store,
-so the only way it can fail is by refusing, and it refuses only on a payload
-it read and understood.
+call IS what it is for, and it exits 2 to do it. It reads the store only to
+find the domain of a memory a call names by uid, so the only way it can fail
+is by refusing, and it refuses only on a payload it read and understood.
 """
 
 from __future__ import annotations
@@ -208,23 +211,30 @@ def _warden_ask(args, payload) -> str:
 
 
 def _task_ask(args, payload) -> str:
-    """Ask the session to settle the project's open tasks, or "" when it is not owed.
+    """Ask the session to settle the open tasks of the domains it named, or ""
+    when it is not owed.
 
-    The ask is stamped BEFORE it is returned and a stamp that could not be
-    written cancels it. Any failure reading the store is no ask: the hook
-    never interrupts a session over a store it cannot read.
+    Only the domains the session's calls named count (see `_record_domains`);
+    a session that named none is not asked. The ask is stamped BEFORE it is
+    returned and a stamp that could not be written cancels it. Any failure
+    reading the store is no ask: the hook never interrupts a session over a
+    store it cannot read.
     """
     try:
         session_id = payload.get("session_id", "")
         if not warden.safe_id(session_id):
+            return ""
+        named = warden.read(session_id).get("domains")
+        if not isinstance(named, list) or not named:
             return ""
         with db.connect() as conn:
             if not db.get_task_ask_enabled(conn):
                 return ""
             minutes = (args.task_minutes if args.task_minutes is not None
                        else db.get_task_ask_minutes(conn))
-            open_tasks = sum(c["count"] for c in pending.counts(conn)
-                             if c["type"] == db.TASK_TYPE)
+            open_tasks = len(pending.open_task_uids(conn, named))
+            holding = [d for d in named
+                       if isinstance(d, str) and pending.open_task_uids(conn, [d])]
         if not open_tasks or not warden.task_due(session_id, minutes):
             return ""
         if not warden.mark_tasks(session_id):
@@ -232,11 +242,16 @@ def _task_ask(args, payload) -> str:
     except Exception:
         return ""
     count = f"{open_tasks} open task" + ("" if open_tasks == 1 else "s")
-    return (f"MemAI: this project has {count}. Call pending(type='task'). For each "
-            "task this session worked on, update its items with task_item(uid, "
-            "item, state, comment, related) -- a task closes itself once every "
-            "item is done or dropped. If this session did not touch any of them, "
-            "say so in one line and stop.")
+    return (f"MemAI: {count} in the domains this session worked in "
+            f"({', '.join(holding)}). Call pending(type='task', domain=...) for "
+            "each of them. A task on the same subject can be filed under another "
+            "path: call list_domains() and check any similar domain before "
+            "deciding that none applies -- an empty pending() in one domain does "
+            "not mean the subject has no task. For each task this session worked "
+            "on, update its items with task_item(uid, item, state, comment, "
+            "related) -- a task closes itself once every item is done or "
+            "dropped. If none of them is this session's work, say so in one line "
+            "and stop.")
 
 
 def _stop(args, payload) -> None:
@@ -335,8 +350,41 @@ def _statusline(args, payload) -> None:
     _line(_status_text(census["total"], busiest, age))
 
 
+# Tools that name a memory by `uid`: the domain the session worked in is the one
+# that memory is filed under.
+_UID_TOOLS = ("task_item", "task_add", "task_comment", "get_memory")
+
+
+def _record_domains(payload: dict) -> None:
+    """Add the domain a memai call names to its session's state.
+
+    The domain is the call's `domain` parameter, recorded as given, or for a
+    tool that names a memory by uid the domain that memory is filed under (one
+    read of the store). A blank domain is not recorded: the whole project is
+    not a domain. Raises on failure; the caller decides it is not fatal.
+    """
+    tool = guard.memai_tool(str(payload.get("tool_name", "")))
+    params = payload.get("tool_input")
+    session_id = warden.safe_id(payload.get("session_id", ""))
+    if not tool or not session_id or not isinstance(params, dict):
+        return
+    domain = params.get("domain")
+    if isinstance(domain, str) and domain.strip():
+        warden.record_domain(session_id, domain)
+    uid = params.get("uid")
+    if tool in _UID_TOOLS and isinstance(uid, str) and uid.strip():
+        with db.connect() as conn:
+            row = db.get_memory(conn, uid.strip())
+        if row is not None:
+            warden.record_domain(session_id, row["domain"])
+
+
 def _guard(payload: dict) -> int:
-    """Read the call the host is about to make; 2 to refuse it, 0 to allow.
+    """Record the domain a memai call names, then read the call; 2 to refuse
+    it, 0 to allow.
+
+    Recording comes first and never changes the result: a failure there is
+    swallowed, and a call that is refused has recorded its domain all the same.
 
     Refusing writes the reason on stderr, which is where a host shows the
     model what it did wrong. Two things earn one: required text that never
@@ -352,6 +400,10 @@ def _guard(payload: dict) -> int:
     cannot write to its memory -- so everything this is not sure about goes
     through.
     """
+    try:
+        _record_domains(payload)
+    except Exception:
+        pass
     try:
         call = str(payload.get("tool_name", ""))
         tool = guard.tool_of(call)

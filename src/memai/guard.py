@@ -93,23 +93,34 @@ DEBRIS = ("parameter name=", "</", "<parameter")
 def matcher() -> str:
     """The tool names the guard's registration fires for, as a regex.
 
-    The server's name in a host config is the user's to choose, so the middle
-    segment is matched rather than spelled.
+    Every memai tool: the hook records the domains a session names for any of
+    them, and checks the writers in `GUARDED` only. The server's name in a
+    host config is the user's to choose, so the middle segment is matched
+    rather than spelled.
     """
-    return f"mcp__[Mm]em[Aa][Ii]__({'|'.join(GUARDED)})"
+    return "mcp__[Mm]em[Aa][Ii]__.*"
 
 
-def tool_of(name: str) -> str:
+def memai_tool(name: str) -> str:
     """The memai tool a host's `tool_name` refers to, or "" for anything else.
 
-    `mcp__MemAI__note` -> `note`. A tool of another server, or one this does
-    not guard, is not ours to judge: the matcher is a regex in a file people
-    edit, so the name is checked here as well.
+    `mcp__MemAI__pulse` -> `pulse`. A tool of another server is not ours.
     """
     parts = str(name).split("__")
     if len(parts) != 3 or parts[0] != "mcp" or parts[1].lower() != "memai":
         return ""
-    return parts[2] if parts[2] in GUARDED else ""
+    return parts[2]
+
+
+def tool_of(name: str) -> str:
+    """The guarded memai tool a host's `tool_name` refers to, or "".
+
+    `mcp__MemAI__note` -> `note`. A memai tool outside `GUARDED` is not ours
+    to judge: the matcher is a regex in a file people edit, so the name is
+    checked here as well.
+    """
+    tool = memai_tool(name)
+    return tool if tool in GUARDED else ""
 
 
 def _blank(value: object) -> bool:

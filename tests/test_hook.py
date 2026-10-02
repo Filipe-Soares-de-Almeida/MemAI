@@ -630,15 +630,20 @@ def test_the_flag_overrides_the_stored_interval(store, capsysbinary, tmp_path):
 
 # ------------------------------------------------------- asking about tasks
 
-def _open_tasks(count: int = 2, *, backdate: bool = False) -> None:
-    """`count` open tasks in the store; `backdate` ages every memory so the
-    checkpoint nudge is owed too."""
+SESSION = "session-1"
+
+
+def _open_tasks(count: int = 2, *, backdate: bool = False, worked: bool = True) -> None:
+    """`count` open tasks in `acme/x100`, and a session that worked there;
+    `backdate` ages every memory so the checkpoint nudge is owed too."""
     with db.connect() as conn:
         for _ in range(count):
             _seed_task(conn)
         if backdate:
             old = (datetime.now(timezone.utc) - timedelta(days=3)).isoformat()
             conn.execute("UPDATE memories SET created_at = ?", (old,))
+    if worked:
+        warden.record_domain(SESSION, "acme/x100")
 
 
 def _age_task_ask(session_id: str, minutes: int) -> None:
@@ -649,19 +654,94 @@ def _age_task_ask(session_id: str, minutes: int) -> None:
         encoding="utf-8")
 
 
+ASK = ("MemAI: {count} in the domains this session worked in ({domains}). Call "
+       "pending(type='task', domain=...) for each of them. A task on the same "
+       "subject can be filed under another path: call list_domains() and check "
+       "any similar domain before deciding that none applies -- an empty "
+       "pending() in one domain does not mean the subject has no task. For each "
+       "task this session worked on, update its items with task_item(uid, item, "
+       "state, comment, related) -- a task closes itself once every item is done "
+       "or dropped. If none of them is this session's work, say so in one line "
+       "and stop.")
+
+
 def test_stop_blocks_when_tasks_are_open(store, capsysbinary):
     _open_tasks(2)
     out = _run("stop", {"session_id": "session-1"}, capsysbinary)
     assert out["decision"] == "block"
-    assert "2 open tasks" in out["reason"]
-    assert "pending(type='task')" in out["reason"]
+    assert out["reason"] == ASK.format(count="2 open tasks", domains="acme/x100")
     assert set(out) == {"decision", "reason"}
 
 
 def test_the_block_says_one_task_in_the_singular(store, capsysbinary):
     _open_tasks(1)
     out = _run("stop", {"session_id": "session-1"}, capsysbinary)
-    assert "1 open task." in out["reason"]
+    assert out["reason"] == ASK.format(count="1 open task", domains="acme/x100")
+
+
+def _two_domains() -> None:
+    with db.connect() as conn:
+        _seed_task(conn, "acme/harbor")
+        _seed_task(conn, "acme/docks")
+
+
+def _reason(capsysbinary, session: str = SESSION) -> str | None:
+    out = _run("stop", {"session_id": session}, capsysbinary)
+    return out["reason"] if out else None
+
+
+def test_the_ask_covers_only_the_domains_the_session_named(store, capsysbinary):
+    _two_domains()
+    warden.record_domain(SESSION, "acme/harbor")
+    reason = _reason(capsysbinary)
+    assert reason == ASK.format(count="1 open task", domains="acme/harbor")
+
+
+def test_a_parent_domain_covers_the_tasks_below_it(store, capsysbinary):
+    _two_domains()
+    warden.record_domain(SESSION, "acme")
+    assert _reason(capsysbinary) == ASK.format(count="2 open tasks", domains="acme")
+
+
+def test_the_ask_names_the_domains_that_hold_a_task_in_recorded_order(store, capsysbinary):
+    _two_domains()
+    for domain in ("acme/docks", "zeta/other", "acme/harbor"):
+        warden.record_domain(SESSION, domain)
+    reason = _reason(capsysbinary)
+    assert reason == ASK.format(count="2 open tasks", domains="acme/docks, acme/harbor")
+
+
+def test_a_session_that_worked_elsewhere_is_not_asked(store, capsysbinary):
+    _two_domains()
+    warden.record_domain(SESSION, "zeta/other")
+    assert _reason(capsysbinary) is None
+    assert "tasks_asked_at" not in warden.read(SESSION)
+
+
+def test_a_session_that_named_no_domain_is_not_asked(store, capsysbinary):
+    _two_domains()
+    assert _reason(capsysbinary) is None
+    assert "tasks_asked_at" not in warden.read(SESSION)
+
+
+def test_a_task_listed_into_a_recorded_domain_is_counted(store, capsysbinary):
+    with db.connect() as conn:
+        tasks.create_task(conn, title="Repair the pier", goal="The pier holds",
+                          items=["replace the planks"], domain="acme/harbor",
+                          also="acme/docks")
+    warden.record_domain(SESSION, "acme/docks")
+    assert _reason(capsysbinary) == ASK.format(count="1 open task", domains="acme/docks")
+
+
+def test_a_task_in_two_recorded_domains_counts_once(store, capsysbinary):
+    with db.connect() as conn:
+        tasks.create_task(conn, title="Repair the pier", goal="The pier holds",
+                          items=["replace the planks"], domain="acme/harbor",
+                          also="acme/docks")
+    warden.record_domain(SESSION, "acme/harbor")
+    warden.record_domain(SESSION, "acme/docks")
+    reason = _reason(capsysbinary)
+    assert reason == ASK.format(count="1 open task", domains="acme/harbor, acme/docks")
 
 
 def test_stop_does_not_block_twice_in_one_interval(store, capsysbinary):
@@ -697,7 +777,7 @@ def test_the_block_carries_the_other_notes(store, capsysbinary, tmp_path):
     out = _run("stop", {"session_id": "session-1"}, capsysbinary,
                argv=_with_agent(tmp_path))
     reason = out["reason"]
-    assert reason.startswith("MemAI: this project has 2 open tasks.")
+    assert reason.startswith("MemAI: 2 open tasks in the domains this session worked in")
     assert reason.index("2 open tasks") < reason.index("note()") < reason.index("memai-warden")
     assert "\n\n" in reason
     assert "hookSpecificOutput" not in out
@@ -709,6 +789,7 @@ def test_no_block_without_open_tasks(store, capsysbinary):
         uid = tasks.create_task(conn, title="Ship the retry path", goal="Retries back off",
                                 items=["add the backoff"], domain="acme/x100")
         tasks.set_item_state(conn, uid, "i1", "done")
+    warden.record_domain("session-1", "acme/x100")
     assert _run("stop", {"session_id": "session-1"}, capsysbinary) is None
 
 
@@ -740,7 +821,7 @@ def test_stop_hook_active_still_returns_first(store, capsysbinary):
     _open_tasks(2)
     assert _run("stop", {"session_id": "session-1", "stop_hook_active": True},
                 capsysbinary) is None
-    assert warden.read("session-1") == {}
+    assert "tasks_asked_at" not in warden.read("session-1")
 
 
 def test_a_failed_stamp_cancels_the_block(store, capsysbinary, monkeypatch):
@@ -766,7 +847,7 @@ def test_a_failing_task_read_asks_nothing_and_leaves_the_other_notes(
 
     def refuse(*args, **kwargs):
         raise RuntimeError("cannot count")
-    monkeypatch.setattr(pending, "counts", refuse)
+    monkeypatch.setattr(pending, "open_task_uids", refuse)
     args = hook.argparse.Namespace(task_minutes=None)
     assert hook._task_ask(args, {"session_id": "session-1"}) == ""
     out = _run("stop", {"session_id": "session-1"}, capsysbinary)
@@ -780,4 +861,5 @@ def test_stop_does_not_block_over_a_task_archived_without_syncing_its_state(
     with db.connect() as conn:
         uid = _seed_task(conn)
         conn.execute("UPDATE memories SET status = 'archived' WHERE uid = ?", (uid,))
+    warden.record_domain("session-1", "acme/x100")
     assert _run("stop", {"session_id": "session-1"}, capsysbinary) is None

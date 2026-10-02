@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import pytest
 
-from memai import db, pending, server
+from memai import db, pending, server, tasks
 
 UNKNOWN = ("unknown type 'pitfall'; valid types: note, reasoning, anti_pattern, "
            "checkpoint, handoff, diagram, task")
@@ -285,3 +285,38 @@ def test_a_task_archived_without_syncing_its_state_is_not_counted(store):
                             (uid,)).fetchone()[0] == "open"
         assert pending.counts(conn, DOMAIN) == []
         assert pending.headers(conn, DOMAIN, "task")["items"] == []
+
+
+# ------------------------------------------- open tasks in a set of domains
+
+def _pier(conn, domain: str, also: str = "") -> str:
+    return tasks.create_task(conn, title="Repair the pier", goal="The pier holds",
+                             items=["replace the planks"], domain=domain, also=also)
+
+
+def test_open_task_uids_resolve_each_domain_like_pending(store):
+    with db.connect() as conn:
+        harbor = _pier(conn, "acme/harbor/pier")
+        docks = _pier(conn, "acme/docks")
+        _pier(conn, "zeta/other")
+        assert set(pending.open_task_uids(conn, ["acme/harbor"])) == {harbor}
+        assert set(pending.open_task_uids(conn, ["acme"])) == {harbor, docks}
+        assert pending.open_task_uids(conn, ["pier"]) == [harbor]  # the deep end
+        assert pending.open_task_uids(conn, ["nowhere"]) == []
+
+
+def test_a_task_in_two_listed_domains_counts_once(store):
+    with db.connect() as conn:
+        uid = _pier(conn, "acme/harbor", also="acme/docks")
+        assert pending.open_task_uids(conn, ["acme/docks"]) == [uid]
+        assert pending.open_task_uids(conn, ["acme/harbor", "acme/docks", "acme"]) == [uid]
+
+
+def test_a_closed_task_and_a_blank_domain_are_not_counted(store):
+    with db.connect() as conn:
+        done = _pier(conn, "acme/harbor")
+        tasks.set_item_state(conn, done, "i1", "done")
+        _pier(conn, "acme/docks")
+        assert pending.open_task_uids(conn, ["acme/harbor"]) == []
+        assert pending.open_task_uids(conn, ["", "  "]) == []
+        assert pending.open_task_uids(conn, []) == []

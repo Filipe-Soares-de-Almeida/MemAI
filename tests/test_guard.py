@@ -23,7 +23,7 @@ import re
 import pytest
 from starlette.testclient import TestClient
 
-from memai import admin, db, guard, hook, hook_install, server
+from memai import admin, db, guard, hook, hook_install, server, tasks, warden
 
 
 # What a leaked call looks like once it is one parameter's text: the closing
@@ -120,13 +120,21 @@ def test_a_tool_with_no_table_is_read_against_the_frame_alone():
     assert guard.leak_marks("forget", "a body with </invoke> in it") == ["</invoke>"]
 
 
-def test_the_matcher_selects_every_guarded_tool_and_nothing_else():
+def test_the_matcher_selects_every_memai_tool_and_no_other():
     pattern = re.compile(guard.matcher())
-    for tool in guard.GUARDED:
-        assert pattern.fullmatch(f"mcp__MemAI__{tool}")
-        assert pattern.fullmatch(f"mcp__memai__{tool}")  # the name is the user's
-    assert not pattern.fullmatch("mcp__MemAI__forget")
-    assert not pattern.fullmatch("mcp__OtherServer__note")
+    for name in ("pulse", "note", "search", "forget", "task_item"):
+        assert pattern.fullmatch(f"mcp__memai__{name}")  # the name is the user's
+        assert pattern.fullmatch(f"mcp__MemAI__{name}")
+    assert not pattern.fullmatch("mcp__other__note")
+    assert not pattern.fullmatch("mcp__OtherServer__pulse")
+
+
+def test_a_tool_of_ours_outside_guarded_is_not_judged():
+    assert guard.tool_of("mcp__memai__pulse") == ""
+    assert guard.tool_of("mcp__memai__note") == "note"
+    assert guard.memai_tool("mcp__MemAI__pulse") == "pulse"
+    assert guard.memai_tool("mcp__other__pulse") == ""
+    assert guard.memai_tool("mcp__memai__a__b") == ""
 
 
 def test_guard_matcher_has_no_handoff():
@@ -421,3 +429,92 @@ def test_the_missing_fields_are_named_in_signature_order():
     for tool, fields in guard.GUARDED.items():
         missing, _, _ = guard.check(tool, {})
         assert missing == list(fields), tool
+
+
+# ------------------------------------------- the domains a session names
+
+def _seed_task(domain: str) -> str:
+    with db.connect() as conn:
+        return tasks.create_task(conn, title="Repair the pier", goal="The pier holds",
+                                 items=["replace the planks"], domain=domain)
+
+
+def _named(session: str = "session-1") -> list[str]:
+    return warden.read(session).get("domains", [])
+
+
+def _guarded(payload, monkeypatch, capsys, session: str | None = "session-1"):
+    if session is not None and isinstance(payload, dict):
+        payload = {**payload, "session_id": session}
+    return _run(payload, monkeypatch, capsys)
+
+
+def test_a_call_naming_a_domain_records_it_and_goes_through(store, monkeypatch, capsys):
+    code, out, err = _guarded(_call("pulse", domain="acme/harbor"), monkeypatch, capsys)
+    assert (code, out, err) == (0, "", "")
+    assert _named() == ["acme/harbor"]
+
+
+def test_a_refused_write_records_its_domain_first(store, monkeypatch, capsys):
+    code, _, err = _guarded(_call("note", domain="acme/harbor"), monkeypatch, capsys)
+    assert code == 2 and "BLOCKED" in err
+    assert _named() == ["acme/harbor"]
+
+
+def test_the_domain_is_recorded_stripped_and_as_given(store, monkeypatch, capsys):
+    _guarded(_call("search", query="x", domain="  p200 "), monkeypatch, capsys)
+    assert _named() == ["p200"]
+
+
+def test_a_task_call_records_the_domain_of_its_task(store, monkeypatch, capsys):
+    uid = _seed_task("acme/docks")
+    for tool, extra in (("task_item", {"item": "i1"}), ("task_add", {"items": "x"}),
+                        ("task_comment", {"body": "x"}), ("get_memory", {})):
+        warden.state_path("session-1").unlink(missing_ok=True)
+        code, _, _ = _guarded(_call(tool, uid=uid, **extra), monkeypatch, capsys)
+        assert code == 0
+        assert _named() == ["acme/docks"], tool
+
+
+def test_an_unknown_uid_records_nothing_and_returns_as_before(store, monkeypatch, capsys):
+    code, out, err = _guarded(_call("task_item", uid="deadbeefdeadbeef", item="i1"),
+                              monkeypatch, capsys)
+    assert (code, out, err) == (0, "", "")
+    assert _named() == []
+    code, _, err = _guarded(_call("task_item", uid="deadbeefdeadbeef"), monkeypatch, capsys)
+    assert code == 2 and "BLOCKED" in err
+
+
+@pytest.mark.parametrize("params", [{"domain": ""}, {"domain": "   "}, {}, {"domain": 3}])
+def test_no_domain_records_nothing(store, monkeypatch, capsys, params):
+    assert _guarded(_call("pulse", **params), monkeypatch, capsys)[0] == 0
+    assert _named() == []
+
+
+def test_a_call_without_a_session_id_records_nothing(store, monkeypatch, capsys):
+    assert _guarded(_call("pulse", domain="acme/harbor"), monkeypatch, capsys,
+                    session=None)[0] == 0
+    assert list((store / "warden").glob("*")) == []
+
+
+def test_an_unsafe_session_id_records_nothing(store, monkeypatch, capsys):
+    assert _guarded(_call("pulse", domain="acme/harbor"), monkeypatch, capsys,
+                    session="../escape")[0] == 0
+    assert list(store.rglob("escape*")) == []
+
+
+def test_a_call_naming_a_domain_does_not_open_the_store(store, monkeypatch, capsys):
+    def refuse(*args, **kwargs):
+        raise AssertionError("the store was opened")
+    monkeypatch.setattr(db, "connect", refuse)
+    assert _guarded(_call("pulse", domain="acme/harbor"), monkeypatch, capsys)[0] == 0
+    assert _named() == ["acme/harbor"]
+
+
+def test_a_recording_that_raises_leaves_the_result_alone(store, monkeypatch, capsys):
+    def refuse(*args, **kwargs):
+        raise RuntimeError("cannot write")
+    monkeypatch.setattr(warden, "record_domain", refuse)
+    assert _guarded(_call("pulse", domain="acme/harbor"), monkeypatch, capsys) == (0, "", "")
+    code, _, err = _guarded(_call("note", domain="acme/harbor"), monkeypatch, capsys)
+    assert code == 2 and "BLOCKED" in err
