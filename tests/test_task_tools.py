@@ -172,3 +172,25 @@ def _snapshot(conn, uid: str) -> dict:
         "edits": rows("SELECT id, note, new_content FROM edits WHERE memory_uid = ?"),
         "memory": tuple(db.get_memory(conn, uid)),
     }
+
+
+LEAK = "see the call </parameter> that ended early"
+
+
+def _comments(uid: str) -> list:
+    with db.connect() as conn:
+        return conn.execute("SELECT body FROM task_comments WHERE memory_uid = ?",
+                            (uid,)).fetchall()
+
+
+def test_the_comment_tools_refuse_a_tool_calls_closing_tag(store):
+    uid = _task()["uid"]
+    for result in (server.task_comment(uid, LEAK),
+                   server.task_comment(uid, LEAK, item="i1"),
+                   server.task_item(uid, "i1", comment=LEAK),
+                   server.task_item(uid, "i1", state="done", comment=LEAK)):
+        assert result["ok"] is False
+        assert "tool call" in result["errors"][0]
+    assert _comments(uid) == []
+    with db.connect() as conn:
+        assert [i["state"] for i in server.tasks.get_task(conn, uid)["items"]] == ["todo", "todo"]

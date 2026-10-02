@@ -191,6 +191,12 @@ def _with_usage(conn: sqlite3.Connection, items: list[dict]) -> list[dict]:
     return items
 
 
+# The uids of tasks in one state; "open" leaves out a task whose memory is archived.
+_TASK_STATE_UIDS = (
+    "SELECT t.memory_uid FROM tasks t JOIN memories m ON m.uid = t.memory_uid "
+    "WHERE t.state = ? AND (t.state <> 'open' OR m.status = 'active')")
+
+
 def _with_tasks(conn: sqlite3.Connection, items: list[dict]) -> list[dict]:
     """Give the rows that are tasks their `progress` ({done, total}) and `task_state`."""
     uids = [i["uid"] for i in items if i.get("type") == db.TASK_TYPE]
@@ -422,7 +428,8 @@ def overview(request, payload) -> dict:
                    WHERE status = 'active' GROUP BY type, confidence"""):
             by_type_conf.setdefault(tp, {})[conf] = n
         open_tasks = conn.execute(
-            "SELECT COUNT(*) FROM tasks WHERE state = 'open'").fetchone()[0]
+            "SELECT COUNT(*) FROM tasks t JOIN memories m ON m.uid = t.memory_uid "
+            "WHERE t.state = 'open' AND m.status = 'active'").fetchone()[0]
         health = db.health_axes(conn)
         db.health_snapshot(conn, health)
         was = db.health_since(conn, HEALTH_DELTA_DAYS)
@@ -579,8 +586,7 @@ def list_memories(request, payload) -> dict:
                     defect_params)}
                 hits = [h for h in hits if h["uid"] in keep]
             if task_state:
-                keep = {r[0] for r in conn.execute(
-                    "SELECT memory_uid FROM tasks WHERE state = ?", (task_state,))}
+                keep = {r[0] for r in conn.execute(_TASK_STATE_UIDS, (task_state,))}
                 hits = [h for h in hits if h["uid"] in keep]
             # A pasted uid names one row, and nothing in the keyword index
             # matches on it: a uid appears in OTHER bodies as [[uid]], so the
@@ -609,7 +615,7 @@ def list_memories(request, payload) -> dict:
                 where.append(f"AND {field} = ?")
                 params.append(value)
         if task_state:
-            where.append("AND uid IN (SELECT memory_uid FROM tasks WHERE state = ?)")
+            where.append(f"AND uid IN ({_TASK_STATE_UIDS})")
             params.append(task_state)
         where.extend(defects)
         params.extend(defect_params)

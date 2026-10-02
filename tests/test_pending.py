@@ -267,3 +267,21 @@ def test_instructions_name_pending_and_tasks():
     assert "pending(" in server.INSTRUCTIONS
     assert "task(" in server.INSTRUCTIONS
     assert "pulse(domain)" in server.INSTRUCTIONS
+
+
+# ------------------------------------------- an archived task is never open
+
+def _raw_archive(conn, uid: str) -> None:
+    """Archive without touching tasks.state, as a writer that does not know tasks does."""
+    conn.execute("UPDATE memories SET status = 'archived' WHERE uid = ?", (uid,))
+
+
+def test_a_task_archived_without_syncing_its_state_is_not_counted(store):
+    uid = _task("Ship the parser")
+    with db.connect() as conn:
+        assert pending.counts(conn, DOMAIN) == [{"type": "task", "count": 1}]
+        _raw_archive(conn, uid)
+        assert conn.execute("SELECT state FROM tasks WHERE memory_uid = ?",
+                            (uid,)).fetchone()[0] == "open"
+        assert pending.counts(conn, DOMAIN) == []
+        assert pending.headers(conn, DOMAIN, "task")["items"] == []

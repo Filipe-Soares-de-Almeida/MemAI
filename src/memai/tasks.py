@@ -299,6 +299,7 @@ def add_comment(
         raise ValueError("a comment needs a body")
     if len(body) > COMMENT_MAX:
         raise ValueError(f"comment is {len(body)} characters; the limit is {COMMENT_MAX}")
+    db._refuse_leak(db.TASK_TYPE, body)
     if author not in ("agent", "person"):
         raise ValueError(f"{author!r} is not a comment author; use agent or person")
     _lock(conn, uid)
@@ -348,12 +349,20 @@ def unlink_item(conn: sqlite3.Connection, uid: str, item: str, target: str) -> b
 def restore_task(conn: sqlite3.Connection, record: dict) -> None:
     """Write a task's rows from an export record, under an already-restored memory.
 
-    Skips a link whose target is not in the store and writes no edit.
+    Skips a link whose target is not in the store and writes no edit. A state
+    outside TASK_STATES or ITEM_STATES is a ValueError before any row is written.
     """
     uid = str(record["uid"])
+    state = record.get("state", "open")
+    if state not in TASK_STATES:
+        raise ValueError(f"{state!r} is not a task state; use {', '.join(TASK_STATES)}")
+    for i in record.get("items") or []:
+        if i.get("state", "todo") not in ITEM_STATES:
+            raise ValueError(
+                f"{i.get('state')!r} is not an item state; use {', '.join(ITEM_STATES)}")
     conn.execute(
         "INSERT INTO tasks (memory_uid, goal, state, completed_at) VALUES (?, ?, ?, ?)",
-        (uid, record.get("goal", ""), record.get("state", "open"), record.get("completed_at", "")),
+        (uid, record.get("goal", ""), state, record.get("completed_at", "")),
     )
     conn.executemany(
         """INSERT INTO task_items

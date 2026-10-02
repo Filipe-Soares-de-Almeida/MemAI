@@ -94,9 +94,8 @@ export async function openNewMemory() {
       box.addEventListener('input', tick);
       tick();
     });
-    /* a diagram's content is its graph and a task is its checklist, so each
-       is created unverified and the control says so by being unreachable
-       rather than by being ignored */
+    /* a diagram's content is its graph and a task's its checklist: created
+       unverified, with the control unreachable */
     mq('#nmConf').disabled = isDiagram() || isTask();
   };
 

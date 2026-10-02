@@ -844,9 +844,7 @@ function wireStatusAction(view, uid) {
     if (reason === null) return;
     try {
       await setStatus(uid, 'archived', reason);
-      /* Archiving is reversible in the data model and was not reversible in
-         the UI: the toast said "archived" and left. Restoring is the exact
-         inverse and needs nothing this screen has thrown away. */
+      /* Undo is the inverse write and needs nothing this screen dropped. */
       toast(t('dr.archived'), 'ok', {
         action: {
           label: t('common.undo'),
@@ -861,10 +859,7 @@ function wireStatusAction(view, uid) {
   q('#dRestore')?.addEventListener('click', async () => {
     try {
       await setStatus(uid, 'active');
-      /* No Undo on this one, deliberately: putting a record back to archived
-         needs the reason it was archived with, and that is not something this
-         screen still knows. An "undo" that silently rewrites the reason would
-         be worse than no undo at all. */
+      /* No Undo: re-archiving needs a reason, which this screen does not keep. */
       toast(t('dr.restored'), 'ok');
       save();
     } catch (err) { failed('err.status', err); }

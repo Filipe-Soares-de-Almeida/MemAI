@@ -60,9 +60,8 @@ export function mountTask(host, { uid, task, status }, { onStatus } = {}) {
     if (alive() && was !== currentStatus) onStatus?.(currentStatus);
   };
 
-  /* One write at a time, so a second click cannot read a stale state. `onOk`
-     runs on acceptance, before the repaint, so what it clears is not redrawn.
-     A write that lands after the host is gone repaints the task's route. */
+  /* One write at a time, so a second click cannot read a stale state; `onOk`
+     runs on acceptance, before the repaint. */
   const write = async (path, body, { method = 'POST', errKey = 'task.err.save', onOk } = {}) => {
     if (busy) { want = []; return null; }
     busy = true;
@@ -159,9 +158,9 @@ export function mountTask(host, { uid, task, status }, { onStatus } = {}) {
     const next = NEXT[item.state];
     const action = t(`task.mark.${next}`);
     const stateName = t(`task.state.${item.state}`);
-    return `<li class="tk-item${open ? ' is-open' : ''}" data-s="${item.state}" data-key="${esc(item.key)}">
+    return `<li class="tk-item${open ? ' is-open' : ''}" data-s="${esc(item.state)}" data-key="${esc(item.key)}">
       <div class="tk-row">
-        <button type="button" class="tk-state" data-s="${item.state}" data-step="${esc(item.key)}"
+        <button type="button" class="tk-state" data-s="${esc(item.state)}" data-step="${esc(item.key)}"
                 title="${esc(action)}"
                 aria-label="${esc(t('task.state.aria', { text: item.text, state: stateName, action }))}">
           <span class="tk-ring">${item.state === 'done' ? icon('check')

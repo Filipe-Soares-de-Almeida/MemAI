@@ -490,3 +490,89 @@ def test_edit_memory_refuses_a_task(tmp_path, monkeypatch):
     assert res["ok"] is False and "task" in res["errors"][0]
     with db.connect() as conn:
         assert db.get_memory(conn, uid)["content"] == before
+
+
+def test_opening_a_store_cancels_an_open_task_whose_memory_is_archived(tmp_path):
+    path = tmp_path / "test.db"
+    with db.connect(path) as c:
+        archived, kept = _make(c), _make(c)
+        done = _make(c)
+        _close_both(c, done)
+        for uid in (archived, done):
+            c.execute("UPDATE memories SET status = 'archived' WHERE uid = ?", (uid,))
+    with db.connect(path) as c:
+        assert tasks.get_task(c, archived)["state"] == "cancelled"
+        assert tasks.get_task(c, kept)["state"] == "open"
+        assert tasks.get_task(c, done)["state"] == "completed"
+
+
+# ------------------------------------------------------- comments are refused a leak
+
+LEAK = "see the call </parameter> that ended early"
+
+
+def test_add_comment_refuses_a_tool_calls_closing_tag(conn):
+    uid = _make(conn)
+    with pytest.raises(ValueError, match="tool call"):
+        tasks.add_comment(conn, uid, LEAK)
+    with pytest.raises(ValueError, match="tool call"):
+        tasks.add_comment(conn, uid, LEAK, item="i1")
+    assert tasks.get_task(conn, uid)["comments"] == []
+
+
+# ------------------------------------------------------- import validates states
+
+def _record(**over) -> dict:
+    record = {
+        "record": "task", "uid": "aaaaaaaaaaaaaaaa", "goal": "g", "state": "open",
+        "completed_at": "",
+        "items": [{"key": "i1", "seq": 1, "text": "step", "state": "todo",
+                   "updated_at": "2026-01-01T00:00:00+00:00", "updated_session": ""}],
+        "links": [], "comments": [],
+    }
+    return {**record, **over}
+
+
+def _memory_record() -> dict:
+    return {"record": "memory", "uid": "aaaaaaaaaaaaaaaa", "type": "task",
+            "content": "GOAL: g\n[ ] i1 step", "domain": "acme/parser", "title": "A task"}
+
+
+def _bad_item(state: str) -> dict:
+    item = _record()["items"][0]
+    return _record(items=[{**item, "key": "i2", "seq": 2, "state": state}, item])
+
+
+@pytest.mark.parametrize("record", [
+    _record(state="bogus"),
+    _bad_item('"><img src=x onerror=alert(1)>'),
+])
+def test_restore_task_refuses_a_state_outside_its_vocabulary(conn, record):
+    db.restore_memory(conn, _memory_record())
+    with pytest.raises(ValueError, match="state"):
+        tasks.restore_task(conn, record)
+
+
+@pytest.mark.parametrize("record", [
+    _record(state="bogus"),
+    _bad_item('"><img src=x onerror=alert(1)>'),
+])
+def test_importing_a_bad_state_is_an_error_and_leaves_no_task_rows(conn, record):
+    from memai import portable
+
+    result = portable.import_records(conn, [_memory_record(), record])
+    assert [e["uid"] for e in result["errors"]] == ["aaaaaaaaaaaaaaaa"]
+    assert "state" in result["errors"][0]["error"]
+    for table in ("tasks", "task_items", "task_item_links", "task_comments"):
+        assert conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] == 0
+
+
+def test_a_task_record_that_fails_midway_leaves_no_rows(conn):
+    from memai import portable
+
+    item = _record()["items"][0]
+    result = portable.import_records(
+        conn, [_memory_record(), _record(items=[item, {**item, "seq": 2}])])
+    assert [e["uid"] for e in result["errors"]] == ["aaaaaaaaaaaaaaaa"]
+    assert conn.execute("SELECT COUNT(*) FROM tasks").fetchone()[0] == 0
+    assert conn.execute("SELECT COUNT(*) FROM task_items").fetchone()[0] == 0

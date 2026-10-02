@@ -1554,6 +1554,17 @@ def _ensure_columns(conn: sqlite3.Connection) -> None:
             conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
 
 
+def _repair_task_states(conn: sqlite3.Connection) -> None:
+    """Cancel an open task whose memory is not active.
+
+    A writer that archives a memory without knowing tasks leaves its state
+    open; nothing else would close it.
+    """
+    conn.execute(
+        "UPDATE tasks SET state = 'cancelled' WHERE state = 'open' AND memory_uid IN "
+        "(SELECT uid FROM memories WHERE status <> 'active')")
+
+
 def _ensure_diagram_titles(conn: sqlite3.Connection) -> None:
     """Give a diagram memory the name its graph already carries.
 
@@ -1976,6 +1987,7 @@ def connect(db_path: Path | None = None, *, project: str | None = None):
     _drop_vector_store(conn)
     _ensure_fts(conn)
     _ensure_diagram_titles(conn)
+    _repair_task_states(conn)
     try:
         yield conn
         conn.commit()
@@ -2194,6 +2206,8 @@ def set_status(
     note: str = "",
 ) -> bool:
     """Change a memory's status; optionally record why in the audit log.
+
+    A task keeps its state in step: archiving an open task cancels it, restoring reopens it.
 
     When `note` is given it is stored as a status-change audit entry in
     `edits` (prev_content == new_content, since the content itself is not
@@ -5769,9 +5783,8 @@ def _update_meta_field(conn: sqlite3.Connection, uid: str, field: str, value: st
 def _apply_kind(conn: sqlite3.Connection, kind: str, target_uid: str | None, payload: dict) -> dict:
     """Execute one suggestion and return the prev_state dict for undo."""
     if kind in ("compact", "reword"):
-        # staging refuses these on a diagram or task, but a run staged before
-        # that guard existed still holds one, and applying it would write over
-        # the projection
+        # staging refuses these on a diagram or task, but a staged run may still
+        # hold one; applying it would write over the projection
         err = _generated_content_error(conn, target_uid)
         if err:
             raise ValueError(err)

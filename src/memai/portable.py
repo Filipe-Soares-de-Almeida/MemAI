@@ -292,7 +292,14 @@ def import_records(conn, records) -> dict:
             if uid in fresh and conn.execute(
                 "SELECT 1 FROM tasks WHERE memory_uid = ?", (uid,)
             ).fetchone() is None:
-                tasks.restore_task(conn, rec)
+                conn.execute("SAVEPOINT restore_task")
+                try:
+                    tasks.restore_task(conn, rec)
+                except Exception:
+                    conn.execute("ROLLBACK TO restore_task")
+                    raise
+                finally:
+                    conn.execute("RELEASE restore_task")
         except Exception as exc:
             errors.append({"uid": rec.get("uid"), "error": str(exc)})
     linked = 0

@@ -26,7 +26,7 @@ def _from_where(conn: sqlite3.Connection, domain: str, type_: str) -> tuple[str,
     scope, params = _scope(conn, domain)
     if type_ == db.TASK_TYPE:
         return (f"FROM memories m JOIN tasks t ON t.memory_uid = m.uid "
-                f"WHERE m.type = ? AND t.state = 'open' {scope}", [type_, *params])
+                f"WHERE m.type = ? AND m.status = 'active' AND t.state = 'open' {scope}", [type_, *params])
     sound = db._sound_clause(type_ in _SOUND)
     return (f"FROM memories m WHERE m.type = ? AND m.status = 'active'{sound} {scope}",
             [type_, *params])

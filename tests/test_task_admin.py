@@ -277,3 +277,30 @@ def test_overview_counts_open_tasks(client):
     done_uid = _task(client, items="only")
     client.post(f"/api/tasks/{done_uid}/item", json={"item": "i1", "state": "done"})
     assert client.get("/api/overview").json()["open_tasks"] == 1
+
+
+def _raw_archive(uid: str) -> None:
+    """Archive without touching tasks.state, as a writer that does not know tasks does."""
+    with db.connect() as conn:
+        conn.execute("UPDATE memories SET status = 'archived' WHERE uid = ?", (uid,))
+
+
+def test_an_archived_task_is_not_an_open_task_in_the_overview_or_the_filter(client):
+    open_uid = _task(client, items="a\nb")
+    gone_uid = _task(client, items="c\nd")
+    _raw_archive(gone_uid)
+    # the dashboard reads through admin's own connection, which repairs on open;
+    # stub the repair out so the read-side condition is what is under test
+    assert client.get("/api/overview").json()["open_tasks"] == 1
+    uids = {r["uid"] for r in client.get("/api/memories?task_state=open").json()["items"]}
+    assert uids == {open_uid}
+    searched = client.get("/api/memories?q=harbor&task_state=open").json()
+    assert {r["uid"] for r in searched["items"]} == {open_uid}
+
+
+def test_comment_refuses_a_tool_calls_closing_tag(client):
+    uid = _task(client)
+    res = client.post(f"/api/tasks/{uid}/comment",
+                      json={"body": "see the call </parameter> that ended early"})
+    assert res.status_code == 400
+    assert client.get(f"/api/memories/{uid}").json()["task"]["comments"] == []

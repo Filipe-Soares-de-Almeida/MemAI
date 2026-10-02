@@ -259,9 +259,7 @@ function symptomsPanel(symptoms, active) {
 }
 
 /* ─── open tasks ──────────────────────────────────────────────────────────
-   Work a session left for the next one. It is not a defect, so it sits
-   outside the symptom list, and it is left out at zero rather than shown
-   as an empty row. */
+   Work left for the next session; not a defect, and absent at zero. */
 
 function tasksPanel(n) {
   if (!n) return '';

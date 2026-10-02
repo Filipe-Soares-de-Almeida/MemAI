@@ -772,3 +772,12 @@ def test_a_failing_task_read_asks_nothing_and_leaves_the_other_notes(
     out = _run("stop", {"session_id": "session-1"}, capsysbinary)
     assert "decision" not in out
     assert "note()" in _context(out)
+
+
+def test_stop_does_not_block_over_a_task_archived_without_syncing_its_state(
+        store, capsysbinary, monkeypatch):
+    monkeypatch.setattr(db, "_repair_task_states", lambda conn: None)
+    with db.connect() as conn:
+        uid = _seed_task(conn)
+        conn.execute("UPDATE memories SET status = 'archived' WHERE uid = ?", (uid,))
+    assert _run("stop", {"session_id": "session-1"}, capsysbinary) is None
