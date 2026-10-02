@@ -258,10 +258,13 @@ def add_items(conn: sqlite3.Connection, uid: str, items: list[str], *, session: 
             raise ValueError(f"an item is {len(text)} characters; the limit is {ITEM_MAX}")
     _lock(conn, uid)
     last = conn.execute(
-        "SELECT COALESCE(MAX(seq), 0) FROM task_items WHERE memory_uid = ?", (uid,)
+        """SELECT MAX(COALESCE((SELECT MAX(seq) FROM task_items WHERE memory_uid = :uid), 0),
+                      (SELECT item_seq FROM tasks WHERE memory_uid = :uid))""",
+        {"uid": uid},
     ).fetchone()[0]
-    if last + len(items) > ITEMS_MAX:
-        raise ValueError(f"a task holds at most {ITEMS_MAX} items; it has {last}")
+    count = len(_items(conn, uid))
+    if count + len(items) > ITEMS_MAX:
+        raise ValueError(f"a task holds at most {ITEMS_MAX} items; it has {count}")
     stamp = db.now_iso()
     keys = [f"i{n}" for n in range(last + 1, last + len(items) + 1)]
     conn.executemany(
@@ -274,6 +277,32 @@ def add_items(conn: sqlite3.Connection, uid: str, items: list[str], *, session: 
     _regenerate(conn, uid, note)
     _settle(conn, uid)
     return {"uid": uid, "keys": keys, **_outcome(conn, uid)}
+
+
+def delete_item(conn: sqlite3.Connection, uid: str, item: str, *, session: str = "") -> dict:
+    """Remove one item with its comments and links, then settle an open task.
+
+    The deleted key stays retired: add_items numbers past it. A closed task
+    keeps its state. Raises ValueError for a non-task, an unknown item, or
+    the task's only item, before anything is written.
+    """
+    _lock(conn, uid)
+    key = _require_item(conn, uid, item)
+    rows = _items(conn, uid)
+    if len(rows) == 1:
+        raise ValueError("a task keeps at least one item")
+    gone = next(r for r in rows if r["key"] == key)
+    conn.execute(
+        "UPDATE tasks SET item_seq = MAX(item_seq, ?) WHERE memory_uid = ?", (gone["seq"], uid)
+    )
+    for table in ("task_comments", "task_item_links"):
+        conn.execute(f"DELETE FROM {table} WHERE memory_uid = ? AND item_key = ?", (uid, key))
+    conn.execute("DELETE FROM task_items WHERE memory_uid = ? AND item_key = ?", (uid, key))
+    _regenerate(conn, uid, f"item {key} deleted: {gone['text']}")
+    state = conn.execute("SELECT state FROM tasks WHERE memory_uid = ?", (uid,)).fetchone()["state"]
+    if state == "open":
+        _settle(conn, uid)
+    return {"uid": uid, "item": key, **_outcome(conn, uid)}
 
 
 def set_goal(conn: sqlite3.Connection, uid: str, goal: str) -> None:

@@ -576,3 +576,156 @@ def test_a_task_record_that_fails_midway_leaves_no_rows(conn):
     assert [e["uid"] for e in result["errors"]] == ["aaaaaaaaaaaaaaaa"]
     assert conn.execute("SELECT COUNT(*) FROM tasks").fetchone()[0] == 0
     assert conn.execute("SELECT COUNT(*) FROM task_items").fetchone()[0] == 0
+
+
+def _three(conn):
+    return tasks.create_task(
+        conn, title="Ship the parser", goal="Parse every config file",
+        items=["read the spec", "write the lexer", "write the parser"], domain="acme/parser",
+    )
+
+
+def test_delete_item_removes_the_item_its_comments_and_its_links(conn):
+    uid = _three(conn)
+    note = db.insert_memory(conn, type="note", content="a plain note", domain="acme/parser")
+    tasks.link_item(conn, uid, "i2", [note])
+    tasks.link_item(conn, uid, "i3", [note])
+    tasks.add_comment(conn, uid, "about the lexer", item="i2")
+    tasks.add_comment(conn, uid, "about the parser", item="i3")
+    tasks.add_comment(conn, uid, "about the whole task")
+    result = tasks.delete_item(conn, uid, "2")
+    assert result["uid"] == uid and result["item"] == "i2"
+    assert result["progress"] == {"done": 0, "dropped": 0, "total": 2}
+    assert result["task_state"] == "open" and result["archived"] is False
+    task = tasks.get_task(conn, uid)
+    assert [i["key"] for i in task["items"]] == ["i1", "i3"]
+    assert [l["uid"] for i in task["items"] for l in i["links"]] == [note]
+    assert [c["body"] for c in task["comments"]] == ["about the parser", "about the whole task"]
+    assert db.get_memory(conn, uid)["content"] == (
+        "GOAL: Parse every config file\n[ ] i1 read the spec\n[ ] i3 write the parser")
+    assert _notes(conn, uid)[-1] == "item i2 deleted: write the lexer"
+
+
+def test_the_only_item_cannot_be_deleted(conn):
+    uid = tasks.create_task(conn, title="One step", goal="Do it", items=["the only step"])
+    before = _edit_count(conn, uid)
+    with pytest.raises(ValueError, match="a task keeps at least one item"):
+        tasks.delete_item(conn, uid, "i1")
+    assert _edit_count(conn, uid) == before
+    assert len(tasks.get_task(conn, uid)["items"]) == 1
+
+
+def test_delete_item_refuses_an_unknown_item_and_a_non_task(conn):
+    uid = _three(conn)
+    before = _edit_count(conn, uid)
+    with pytest.raises(ValueError, match="i9"):
+        tasks.delete_item(conn, uid, "i9")
+    with pytest.raises(ValueError, match="not an item key"):
+        tasks.delete_item(conn, uid, "x")
+    note = db.insert_memory(conn, type="note", content="a plain note", domain="acme/parser")
+    with pytest.raises(ValueError, match="no task"):
+        tasks.delete_item(conn, note, "i1")
+    assert _edit_count(conn, uid) == before
+    assert len(tasks.get_task(conn, uid)["items"]) == 3
+
+
+def test_a_key_is_not_reused_after_the_highest_item_is_deleted(conn):
+    uid = _three(conn)
+    tasks.delete_item(conn, uid, "i3")
+    assert tasks.add_items(conn, uid, ["a new step"])["keys"] == ["i4"]
+    tasks.delete_item(conn, uid, "i4")
+    tasks.delete_item(conn, uid, "i2")
+    assert tasks.add_items(conn, uid, ["one", "two"])["keys"] == ["i5", "i6"]
+    assert [i["key"] for i in tasks.get_task(conn, uid)["items"]] == ["i1", "i5", "i6"]
+
+
+def test_the_item_limit_counts_items_not_retired_keys(conn):
+    uid = _three(conn)
+    for _ in range(3):
+        key = tasks.add_items(conn, uid, ["extra"])["keys"][0]
+        tasks.delete_item(conn, uid, key)
+    assert tasks.add_items(conn, uid, [f"step {n}" for n in range(47)])["progress"]["total"] == 50
+    with pytest.raises(ValueError):
+        tasks.add_items(conn, uid, ["one too many"])
+
+
+def test_a_store_without_the_mark_column_gets_it_and_keeps_its_keys(tmp_path):
+    import sqlite3
+
+    path = tmp_path / "old.db"
+    with db.connect(path) as c:
+        uid = _three(c)
+        c.commit()
+    raw = sqlite3.connect(path)
+    raw.execute("ALTER TABLE tasks DROP COLUMN item_seq")
+    raw.commit()
+    raw.close()
+    with db.connect(path) as c:
+        assert "item_seq" in {r["name"] for r in c.execute("PRAGMA table_info(tasks)")}
+        assert tasks.add_items(c, uid, ["next"])["keys"] == ["i4"]
+    with db.connect(path) as c:
+        assert "item_seq" in {r["name"] for r in c.execute("PRAGMA table_info(tasks)")}
+
+
+def test_deleting_the_last_open_item_completes_the_task(conn):
+    uid = _three(conn)
+    tasks.set_item_state(conn, uid, "i1", "done")
+    tasks.set_item_state(conn, uid, "i2", "dropped")
+    result = tasks.delete_item(conn, uid, "i3")
+    assert result["task_state"] == "completed" and result["archived"] is True
+    assert db.get_memory(conn, uid)["status"] == "archived"
+    assert tasks.get_task(conn, uid)["completed_at"] != ""
+    assert _notes(conn, uid)[-2:] == ["item i3 deleted: write the parser", "completed"]
+
+
+def test_deleting_the_last_open_item_of_an_all_dropped_task_cancels_it(conn):
+    uid = _three(conn)
+    tasks.set_item_state(conn, uid, "i1", "dropped")
+    tasks.set_item_state(conn, uid, "i2", "dropped")
+    assert tasks.delete_item(conn, uid, "i3")["task_state"] == "cancelled"
+
+
+def test_deleting_from_a_completed_task_keeps_it_completed(conn):
+    uid = _make(conn)
+    _close_both(conn, uid)
+    stamp = tasks.get_task(conn, uid)["completed_at"]
+    result = tasks.delete_item(conn, uid, "i1")
+    assert result["task_state"] == "completed" and result["archived"] is True
+    assert result["progress"] == {"done": 1, "dropped": 0, "total": 1}
+    assert tasks.get_task(conn, uid)["completed_at"] == stamp
+    assert _notes(conn, uid).count("completed") == 1
+
+
+def test_deleting_from_a_completed_task_never_changes_its_state(conn):
+    uid = _make(conn)
+    tasks.set_item_state(conn, uid, "i1", "done")
+    tasks.set_item_state(conn, uid, "i2", "dropped")
+    assert tasks.delete_item(conn, uid, "i1")["task_state"] == "completed"
+    assert tasks.get_task(conn, uid)["state"] == "completed"
+
+
+def test_deleting_from_a_cancelled_task_leaves_it_cancelled(conn):
+    uid = _three(conn)
+    db.set_status(conn, uid, "archived")
+    result = tasks.delete_item(conn, uid, "i3")
+    assert result["task_state"] == "cancelled" and result["archived"] is True
+
+
+def test_a_refusal_after_the_rows_changed_rolls_them_back(tmp_path, monkeypatch):
+    path = tmp_path / "rollback.db"
+    with db.connect(path) as c:
+        uid = _three(c)
+        note = db.insert_memory(c, type="note", content="a plain note", domain="acme/parser")
+        tasks.link_item(c, uid, "i3", [note])
+        tasks.add_comment(c, uid, "about the parser", item="i3")
+    def refuse(conn, uid, note):
+        raise ValueError("refused after the rows changed")
+    monkeypatch.setattr(tasks, "_regenerate", refuse)
+    with pytest.raises(ValueError):
+        with db.connect(path) as c:
+            tasks.delete_item(c, uid, "i3")
+    with db.connect(path) as c:
+        task = tasks.get_task(c, uid)
+        assert [i["key"] for i in task["items"]] == ["i1", "i2", "i3"]
+        assert len(task["items"][2]["links"]) == 1 and len(task["comments"]) == 1
+        assert c.execute("SELECT item_seq FROM tasks WHERE memory_uid = ?", (uid,)).fetchone()[0] == 0

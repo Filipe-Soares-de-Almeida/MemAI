@@ -315,7 +315,8 @@ CREATE TABLE IF NOT EXISTS tasks (
     memory_uid   TEXT PRIMARY KEY REFERENCES memories(uid),
     goal         TEXT NOT NULL,
     state        TEXT NOT NULL DEFAULT 'open',    -- open | completed | cancelled
-    completed_at TEXT NOT NULL DEFAULT ''
+    completed_at TEXT NOT NULL DEFAULT '',
+    item_seq     INTEGER NOT NULL DEFAULT 0       -- highest item seq ever deleted
 );
 
 CREATE TABLE IF NOT EXISTS task_items (
@@ -1534,6 +1535,7 @@ def apply_link_policy(
 # fills existing rows with it.
 _ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
     ("diagrams", "font_scale", "REAL NOT NULL DEFAULT 1"),
+    ("tasks", "item_seq", "INTEGER NOT NULL DEFAULT 0"),
     ("diagram_nodes", "w", "REAL"),
     ("diagram_nodes", "h", "REAL"),
     ("memories", "also_domains", "TEXT NOT NULL DEFAULT ''"),

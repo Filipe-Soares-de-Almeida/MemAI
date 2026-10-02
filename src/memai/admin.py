@@ -759,6 +759,13 @@ def task_item_state(request, payload) -> dict:
         return _task_answer(conn, uid)
 
 
+def task_delete_item(request, payload) -> dict:
+    uid = request.path_params["uid"]
+    with db.connect() as conn:
+        tasks.delete_item(conn, uid, payload.get("item") or "")
+        return _task_answer(conn, uid)
+
+
 def task_add_items(request, payload) -> dict:
     uid = request.path_params["uid"]
     with db.connect() as conn:
@@ -2782,6 +2789,7 @@ routes = [
     Route("/api/memories/purge", api(purge_many), methods=["POST"]),
     Route("/api/tasks", api(create_task), methods=["POST"]),
     Route("/api/tasks/{uid}/item", api(task_item_state), methods=["POST"]),
+    Route("/api/tasks/{uid}/item", api(task_delete_item), methods=["DELETE"]),
     Route("/api/tasks/{uid}/items", api(task_add_items), methods=["POST"]),
     Route("/api/tasks/{uid}/goal", api(task_goal), methods=["POST"]),
     Route("/api/tasks/{uid}/comment", api(task_comment), methods=["POST"]),

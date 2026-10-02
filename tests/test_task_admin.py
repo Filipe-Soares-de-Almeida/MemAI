@@ -304,3 +304,69 @@ def test_comment_refuses_a_tool_calls_closing_tag(client):
                       json={"body": "see the call </parameter> that ended early"})
     assert res.status_code == 400
     assert client.get(f"/api/memories/{uid}").json()["task"]["comments"] == []
+
+
+def test_delete_item_happy_path(client):
+    uid = _task(client, items="draft the plan\nreview the plan\nship the plan")
+    note = _note(client)
+    client.post(f"/api/tasks/{uid}/link", json={"item": "i3", "target": note})
+    client.post(f"/api/tasks/{uid}/comment", json={"body": "on the last step", "item": "i3"})
+    res = client.request("DELETE", f"/api/tasks/{uid}/item", json={"item": "i3"})
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert [i["key"] for i in body["task"]["items"]] == ["i1", "i2"]
+    assert body["task"]["comments"] == []
+    assert body["status"] == "active"
+    added = client.post(f"/api/tasks/{uid}/items", json={"items": "a later step"}).json()
+    assert [i["key"] for i in added["task"]["items"]] == ["i1", "i2", "i4"]
+
+
+def test_delete_item_completes_the_task_like_closing_the_last_item(client):
+    uid = _task(client)
+    client.post(f"/api/tasks/{uid}/item", json={"item": "i1", "state": "done"})
+    body = client.request("DELETE", f"/api/tasks/{uid}/item", json={"item": "i2"}).json()
+    assert body["status"] == "archived" and body["task"]["state"] == "completed"
+
+
+def test_delete_item_refuses_the_only_item_and_writes_nothing(client):
+    uid = _task(client, items="only step")
+    before = _snapshot(uid)
+    res = client.request("DELETE", f"/api/tasks/{uid}/item", json={"item": "i1"})
+    assert res.status_code == 400
+    assert res.json()["error"] == "a task keeps at least one item"
+    assert _snapshot(uid) == before
+
+
+def test_delete_item_refuses_an_unknown_item_and_a_non_task(client):
+    uid = _task(client)
+    before = _snapshot(uid)
+    res = client.request("DELETE", f"/api/tasks/{uid}/item", json={"item": "i9"})
+    assert res.status_code == 400 and "i9" in res.json()["error"]
+    assert client.request("DELETE", f"/api/tasks/{uid}/item", json={}).status_code == 400
+    assert _snapshot(uid) == before
+    res = client.request("DELETE", f"/api/tasks/{_note(client)}/item", json={"item": "i1"})
+    assert res.status_code == 400 and "no task" in res.json()["error"]
+    assert client.request("DELETE", "/api/tasks/ghost0000/item", json={"item": "i1"}).status_code == 400
+
+
+def test_a_delete_item_refusal_after_rows_changed_rolls_them_back(client, monkeypatch):
+    uid = _task(client)
+    before = _snapshot(uid)
+
+    def refuse(conn, uid, note):
+        raise ValueError("refused after the item row was deleted")
+
+    monkeypatch.setattr(tasks, "_regenerate", refuse)
+    res = client.request("DELETE", f"/api/tasks/{uid}/item", json={"item": "i1"})
+    assert res.status_code == 400
+    assert _snapshot(uid) == before
+
+
+def test_delete_item_refuses_a_foreign_origin(client):
+    uid = _task(client)
+    before = _snapshot(uid)
+    for headers in ({"Origin": "https://evil.example.com"}, {"Sec-Fetch-Site": "cross-site"}):
+        res = client.request("DELETE", f"/api/tasks/{uid}/item", json={"item": "i1"},
+                             headers=headers)
+        assert res.status_code == 403
+    assert _snapshot(uid) == before
