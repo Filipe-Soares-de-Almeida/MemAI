@@ -70,8 +70,9 @@ DEDUP_SNIPPET = 480
 
 KNOWN_TYPES = db.MEMORY_TYPES
 # What the dashboard's new-memory form writes. A handoff stays a type to read and
-# edit; a diagram is created with its graph.
-CREATABLE_TYPES = tuple(t for t in db.MEMORY_TYPES if t not in ("handoff", "diagram"))
+# edit; a diagram is created with its graph and a task with its items.
+CREATABLE_TYPES = tuple(
+    t for t in db.MEMORY_TYPES if t not in ("handoff", db.DIAGRAM_TYPE, db.TASK_TYPE))
 CONFIDENCES = ("unverified", "confirmed", "contradicted")
 STATUSES = ("active", "archived")
 
@@ -803,7 +804,8 @@ def task_link(request, payload) -> dict:
 def task_unlink(request, payload) -> dict:
     uid = request.path_params["uid"]
     with db.connect() as conn:
-        tasks.unlink_item(conn, uid, payload.get("item") or "", payload.get("target") or "")
+        for target in _targets(payload.get("target")) or [""]:
+            tasks.unlink_item(conn, uid, payload.get("item") or "", target)
         return _task_answer(conn, uid)
 
 

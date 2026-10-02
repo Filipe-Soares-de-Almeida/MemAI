@@ -285,6 +285,9 @@ def delete_item(conn: sqlite3.Connection, uid: str, item: str, *, session: str =
     The deleted key stays retired: add_items numbers past it. A closed task
     keeps its state. Raises ValueError for a non-task, an unknown item, or
     the task's only item, before anything is written.
+
+    `session` is accepted for signature parity with the other writers; the
+    item it would stamp is the one removed, so nothing records it.
     """
     _lock(conn, uid)
     key = _require_item(conn, uid, item)

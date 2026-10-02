@@ -966,10 +966,21 @@ def test_dashboard_refuses_to_create_a_task_as_a_plain_memory(client):
         assert conn.execute("SELECT COUNT(*) FROM memories").fetchone()[0] == 0
 
 
+def test_dashboard_lists_only_the_types_it_can_create_for_an_unknown_type(client):
+    res = client.post("/api/memories", json={
+        "title": "a would-be pitfall", "type": "pitfall", "content": "x"})
+    assert res.status_code == 400
+    assert res.json()["error"] == (
+        "type must be one of ('note', 'reasoning', 'anti_pattern', 'checkpoint')")
+
+
 def test_dashboard_does_not_create_or_retype_to_handoff(client):
     res = client.post("/api/memories", json={
         "title": "a would-be handoff", "type": "handoff", "content": "pick up here"})
     assert res.status_code == 400
+    assert res.json()["error"] == (
+        "a handoff is not created from the dashboard; "
+        "type must be one of ('note', 'reasoning', 'anti_pattern', 'checkpoint')")
     note = _create(client, content="a plain note")
     assert client.post(f"/api/memories/{note}/meta", json={"type": "handoff"}).status_code == 400
     assert client.get(f"/api/memories/{note}").json()["type"] == "note"

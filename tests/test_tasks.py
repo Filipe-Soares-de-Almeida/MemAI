@@ -92,6 +92,48 @@ def test_creation_refuses_out_of_limit_input_and_writes_nothing(conn, kwargs):
     assert conn.execute("SELECT COUNT(*) FROM task_items").fetchone()[0] == 0
 
 
+def test_creation_accepts_input_exactly_at_each_limit(conn):
+    uid = tasks.create_task(
+        conn, title="At the limits", goal="g" * 2000,
+        items=["x" * 300] + [f"step {n}" for n in range(49)],
+    )
+    task = tasks.get_task(conn, uid)
+    assert len(task["goal"]) == 2000
+    assert len(task["items"]) == 50 and len(task["items"][0]["text"]) == 300
+
+
+def test_a_created_task_records_its_session_tags_and_cross_listing(conn):
+    uid = tasks.create_task(
+        conn, title="Ship the parser", goal="Parse it", items=["read the spec", "write the lexer"],
+        domain="acme/parser", also="acme/lexer", tags="parser,release", session="session-7",
+    )
+    memory = db.get_memory(conn, uid)
+    assert memory["session"] == "session-7"
+    assert memory["tags"] == "parser,release"
+    assert memory["also_domains"] == "acme/lexer"
+    items = tasks.get_task(conn, uid)["items"]
+    assert [i["updated_session"] for i in items] == ["session-7", "session-7"]
+
+
+def test_add_items_accepts_up_to_fifty_items_and_an_item_of_exactly_three_hundred(conn):
+    uid = _make(conn)
+    keys = tasks.add_items(conn, uid, ["x" * 300] + [f"step {n}" for n in range(47)])["keys"]
+    assert len(keys) == 48 and len(tasks.get_task(conn, uid)["items"]) == 50
+    with pytest.raises(ValueError):
+        tasks.add_items(conn, uid, ["one too many"])
+    with pytest.raises(ValueError):
+        tasks.add_items(conn, uid, ["x" * 301])
+    assert len(tasks.get_task(conn, uid)["items"]) == 50
+
+
+def test_a_comment_of_exactly_two_thousand_characters_is_stored_and_one_more_is_refused(conn):
+    uid = _make(conn)
+    assert isinstance(tasks.add_comment(conn, uid, "c" * 2000), int)
+    with pytest.raises(ValueError, match="2001"):
+        tasks.add_comment(conn, uid, "c" * 2001)
+    assert len(tasks.get_task(conn, uid)["comments"]) == 1
+
+
 def test_get_task_of_another_type_is_none(conn):
     uid = db.insert_memory(conn, type="note", content="a plain note", domain="acme/parser")
     assert tasks.get_task(conn, uid) is None
@@ -762,12 +804,16 @@ def test_deleting_from_a_completed_task_keeps_it_completed(conn):
     assert _notes(conn, uid).count("completed") == 1
 
 
-def test_deleting_from_a_completed_task_never_changes_its_state(conn):
+def test_deleting_the_only_done_item_of_a_completed_task_does_not_cancel_it(conn):
     uid = _make(conn)
     tasks.set_item_state(conn, uid, "i1", "done")
     tasks.set_item_state(conn, uid, "i2", "dropped")
-    assert tasks.delete_item(conn, uid, "i1")["task_state"] == "completed"
-    assert tasks.get_task(conn, uid)["state"] == "completed"
+    stamp = tasks.get_task(conn, uid)["completed_at"]
+    result = tasks.delete_item(conn, uid, "i1")
+    assert result["task_state"] == "completed" and result["archived"] is True
+    assert result["progress"] == {"done": 0, "dropped": 1, "total": 1}
+    assert tasks.get_task(conn, uid)["completed_at"] == stamp
+    assert "cancelled" not in _notes(conn, uid)
 
 
 def test_deleting_from_a_cancelled_task_leaves_it_cancelled(conn):
@@ -784,6 +830,7 @@ def test_a_refusal_after_the_rows_changed_rolls_them_back(tmp_path, monkeypatch)
         note = db.insert_memory(c, type="note", content="a plain note", domain="acme/parser")
         tasks.link_item(c, uid, "i3", [note])
         tasks.add_comment(c, uid, "about the parser", item="i3")
+
     def refuse(conn, uid, note):
         raise ValueError("refused after the rows changed")
     monkeypatch.setattr(tasks, "_regenerate", refuse)

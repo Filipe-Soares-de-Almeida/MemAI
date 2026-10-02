@@ -3,6 +3,8 @@ and the overview."""
 
 from __future__ import annotations
 
+import json
+
 import pytest
 from starlette.testclient import TestClient
 
@@ -192,10 +194,21 @@ def test_link_and_unlink_happy_path(client):
     res = client.post(f"/api/tasks/{uid}/link", json={"item": "i1", "target": note})
     assert res.status_code == 200, res.text
     links = res.json()["task"]["items"][0]["links"]
-    assert [l["uid"] for l in links] == [note]
+    assert [link["uid"] for link in links] == [note]
     gone = client.request("DELETE", f"/api/tasks/{uid}/link", json={"item": "i1", "target": note})
     assert gone.status_code == 200, gone.text
     assert gone.json()["task"]["items"][0]["links"] == []
+
+
+def test_unlink_accepts_a_list_of_uids(client):
+    uid = _task(client)
+    first, second, kept = _note(client), _note(client), _note(client)
+    res = client.post(f"/api/tasks/{uid}/link", json={"item": "i1", "target": [first, second, kept]})
+    assert res.status_code == 200, res.text
+    gone = client.request("DELETE", f"/api/tasks/{uid}/link",
+                          json={"item": "i1", "target": [first, second]})
+    assert gone.status_code == 200, gone.text
+    assert [link["uid"] for link in gone.json()["task"]["items"][0]["links"]] == [kept]
 
 
 def test_unlink_refuses_an_unknown_item(client):
@@ -285,12 +298,16 @@ def _raw_archive(uid: str) -> None:
         conn.execute("UPDATE memories SET status = 'archived' WHERE uid = ?", (uid,))
 
 
-def test_an_archived_task_is_not_an_open_task_in_the_overview_or_the_filter(client):
+def test_an_archived_task_is_not_an_open_task_in_the_overview_or_the_filter(
+        client, monkeypatch):
     open_uid = _task(client, items="a\nb")
     gone_uid = _task(client, items="c\nd")
+    # the repair that cancels an archived task's state runs on every connection;
+    # without it the status='active' condition on the dashboard's reads decides
+    monkeypatch.setattr(db, "_repair_task_states", lambda conn: None)
     _raw_archive(gone_uid)
-    # the dashboard reads through admin's own connection, which repairs on open;
-    # stub the repair out so the read-side condition is what is under test
+    with db.connect() as conn:
+        assert tasks.get_task(conn, gone_uid)["state"] == "open"
     assert client.get("/api/overview").json()["open_tasks"] == 1
     uids = {r["uid"] for r in client.get("/api/memories?task_state=open").json()["items"]}
     assert uids == {open_uid}
@@ -370,3 +387,46 @@ def test_delete_item_refuses_a_foreign_origin(client):
                              headers=headers)
         assert res.status_code == 403
     assert _snapshot(uid) == before
+
+
+# ------------------------------------------------- the same-origin middleware
+
+POST_ROUTES = [
+    ("/api/tasks", {"title": "t", "goal": "g", "items": "a"}),
+    ("/api/tasks/{uid}/item", {"item": "i1", "state": "done"}),
+    ("/api/tasks/{uid}/items", {"items": "more"}),
+    ("/api/tasks/{uid}/goal", {"goal": "new goal"}),
+    ("/api/tasks/{uid}/comment", {"body": "hello"}),
+    ("/api/tasks/{uid}/link", {"item": "i1", "target": "abc"}),
+]
+DELETE_ROUTES = [
+    ("/api/tasks/{uid}/item", {"item": "i1"}),
+    ("/api/tasks/{uid}/link", {"item": "i1", "target": "abc"}),
+]
+FOREIGN = [{"Origin": "https://evil.example.com"}, {"Sec-Fetch-Site": "cross-site"}]
+
+
+@pytest.mark.parametrize("path,body", POST_ROUTES)
+@pytest.mark.parametrize("ctype", ["text/plain", "application/x-www-form-urlencoded",
+                                   "multipart/form-data"])
+def test_a_task_post_that_is_not_json_is_refused(client, path, body, ctype):
+    uid = _task(client)
+    before = _snapshot(uid)
+    res = client.post(path.format(uid=uid), content=json.dumps(body).encode(),
+                      headers={"Content-Type": ctype})
+    assert res.status_code == 415
+    assert _snapshot(uid) == before
+    assert client.get("/api/memories?type=task").json()["total"] == 1
+
+
+@pytest.mark.parametrize("headers", FOREIGN, ids=["origin", "fetch-site"])
+@pytest.mark.parametrize("method,path,body",
+                         [("POST", p, b) for p, b in POST_ROUTES]
+                         + [("DELETE", p, b) for p, b in DELETE_ROUTES])
+def test_a_task_write_from_a_foreign_origin_is_refused(client, method, path, body, headers):
+    uid = _task(client)
+    before = _snapshot(uid)
+    res = client.request(method, path.format(uid=uid), json=body, headers=headers)
+    assert res.status_code == 403
+    assert _snapshot(uid) == before
+    assert client.get("/api/memories?type=task").json()["total"] == 1

@@ -143,38 +143,20 @@ def _shares(sizes: list[int], room: int) -> list[int]:
 
 
 def _cap(part: str, room: int) -> str:
-    """Trim a section by dropping whole ITEMS off the end of it.
+    """The section when it fits `room`, else "" so it is dropped whole.
 
-    Never mid-sentence: a memory cut in half reads as if it said something
-    it did not, which is worse than not showing it at all.
-
-    What it drops, it says: a trailing marker counts the items left out, so a
-    trimmed section does not read as a shorter one.
+    Every section is one line, so a cut would end mid-sentence, and a memory
+    cut in half reads as if it said something it did not. _fit counts what
+    this drops.
     """
-    if len(part) <= room:
-        return part
-    lines = part.split("\n")
-    if len(lines[0]) > room:
-        return ""  # not even the heading fits: the section goes, and is counted
-    marker = "  ... +{} not shown"
-    kept, used = [lines[0]], len(lines[0]) + len(marker.format(len(lines) - 1))
-    for line in lines[1:]:
-        if used + len(line) + 1 > room:
-            break
-        kept.append(line)
-        used += len(line) + 1
-    left = len(lines) - len(kept)
-    return "\n".join(kept + ([marker.format(left)] if left else []))
+    return part if len(part) <= room else ""
 
 
 def _fit(parts: list[str], budget: int, *, tail: str) -> str:
-    """Fit the sections into the budget, trimming rather than truncating.
+    """Fit the sections into the budget, dropping whole sections that do not fit.
 
-    Every section gets a share (see _shares) instead of the budget being
-    spent first-come-first-served. That ordering looked harmless and was
-    not: against a real store, four pitfalls at full length took half the
-    warm-up and the recent notes -- the part a session is most likely to
-    act on -- fell off the end and were reported as "omitted for length".
+    Every section gets a share (see _shares) rather than the budget going to
+    the sections in order, so a long section cannot starve the ones after it.
 
     `tail` is what the reader is meant to DO next, so its room comes off
     the top rather than being the first thing a tight budget throws away.
@@ -183,18 +165,16 @@ def _fit(parts: list[str], budget: int, *, tail: str) -> str:
     fitted = [_cap(p, s) for p, s in zip(parts, _shares([len(p) for p in parts], room))]
 
     # The share is a floor, not a ceiling. Whatever the short sections left
-    # unspent goes back to the trimmed ones, earliest first -- otherwise a
-    # section a few characters over its cut is dropped whole while a third
-    # of the budget sits unused, which is what happened to the latest
-    # checkpoint: one long line, nothing in it to trim, so all or nothing.
+    # unspent goes back to the dropped ones, earliest first, so a section a
+    # few characters over its share is not lost while the budget sits unused.
     spare = room - sum(len(f) + 1 for f in fitted if f)
     for i, part in enumerate(parts):
         if spare <= 0:
             break
-        if len(fitted[i]) == len(part):
+        if fitted[i]:
             continue
-        grown = _cap(part, len(fitted[i]) + spare)
-        spare -= len(grown) - len(fitted[i])
+        grown = _cap(part, spare)
+        spare -= len(grown)
         fitted[i] = grown
 
     kept = [f for f in fitted if f]
