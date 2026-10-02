@@ -184,7 +184,9 @@ def test_config_writes_one_setting_without_restating_the_other(client):
     body = client.post("/api/config", json={"svg_retention": "30d"}).json()
     assert body == {"domain_case": "upper", "svg_retention": "30d",
                     "warden_enabled": db.WARDEN_ENABLED_DEFAULT,
-                    "warden_minutes": db.WARDEN_MINUTES_DEFAULT}
+                    "warden_minutes": db.WARDEN_MINUTES_DEFAULT,
+                    "task_ask_enabled": db.TASK_ASK_ENABLED_DEFAULT,
+                    "task_ask_minutes": db.TASK_ASK_MINUTES_DEFAULT}
 
 
 def test_config_rejects_an_empty_payload(client):

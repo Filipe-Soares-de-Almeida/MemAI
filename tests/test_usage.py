@@ -76,13 +76,16 @@ def test_listing_counts(store):
     assert _usage(uid)["recalls"] == 2
 
 
-def test_a_warm_up_counts_everything_it_hands_over(store):
+def test_a_warm_up_counts_the_checkpoint_and_not_what_it_only_counts(store):
     note = server.note("fixture title", content="the export window is inclusive", domain="acme/x100")["uid"]
-    hand = server.handoff("fixture title", content="pick up at the retry path", domain="acme/x100")["uid"]
+    with db.connect() as conn:
+        hand = db.insert_memory(conn, type="handoff", content="pick up at the retry path",
+                                title="fixture title", domain="acme/x100")
     cp = server.checkpoint("fixture title", intent="i", established="e", pursuing="p",
                            open_questions="q", domain="acme/x100")["uid"]
     server.pulse("acme/x100")
-    assert all(_usage(u)["recalls"] == 1 for u in (note, hand, cp))
+    assert _usage(cp)["recalls"] == 1
+    assert _usage(note) == {} and _usage(hand) == {}
 
 
 def test_a_search_that_missed_counts_nothing(store):
@@ -210,7 +213,7 @@ def test_a_search_credits_the_index_that_surfaced_the_row(store):
 def test_a_read_with_no_search_behind_it_credits_nobody(store):
     uid = server.note("fixture title", content="row merge keeps the older id", domain="acme/x100")["uid"]
     server.get_memory(uid)
-    server.pulse("acme/x100")
+    server.pending(domain="acme/x100", type="note")
     with db.connect() as conn:
         share = db.search_share(conn)
     assert share["reads"] == 2 and share["from_search"] == 0

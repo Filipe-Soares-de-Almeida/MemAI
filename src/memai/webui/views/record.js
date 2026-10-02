@@ -29,6 +29,7 @@ import { onTeardown } from '../core/lifecycle.js';
 import { renderRich, wireRich, headings } from '../core/richtext.js';
 import { highlightIn } from '../core/highlight.js';
 import { DiagramEditor } from '../diagram-engine.js';
+import { mountTask } from './task.js';
 import { t } from '../i18n.js';
 
 /* Where every other view sends a reader who clicked a memory. It is a
@@ -190,6 +191,8 @@ export async function renderRecord(view, params, ctx) {
      read-only and sends editing to the canvas; every other type gets the
      reverse view -- which flows have a step pointing at it */
   const isDiagram = m.type === 'diagram';
+  /* a task's body is generated from its checklist, so the record shows that */
+  const isTask = m.type === 'task' && Boolean(m.task);
   const spec = isDiagram ? [] : (m.spec || []);
   const sectionText = Object.fromEntries((m.sections || []).map(s => [s.key, s.text]));
   /* One entry per editable field. A type with no spec has exactly one, whose
@@ -219,7 +222,7 @@ export async function renderRecord(view, params, ctx) {
         ${m.section_problem
           ? `<div class="sec-problem">${t('dr.sections.problem',
                { detail: esc(m.section_problem) })}</div>` : ''}
-        ${isDiagram ? diagramHTML(m, uid) : editing.all
+        ${isDiagram ? diagramHTML(m, uid) : isTask ? '<div id="taskHost"></div>' : editing.all
           ? `<div class="rec-stack">${fields.map(f => fieldHTML(f, m)).join('')}</div>
              ${saveBarHTML(t('dr.saveAll'), 'dSaveAll')}`
           : `<div class="rec-stage">
@@ -233,6 +236,12 @@ export async function renderRecord(view, params, ctx) {
   </div>`;
 
   wire(view, m, uid, fields, isDiagram);
+  if (isTask) {
+    mountTask(view.querySelector('#taskHost'),
+              { uid, task: m.task, status: m.status },
+              { onStatus: status => paintStatus(view, m, uid, status),
+                onWrite: () => refreshTrail(view, m, uid) });
+  }
 }
 
 /* ─── the bar ─────────────────────────────────────────────────────────── */
@@ -259,7 +268,7 @@ function barHTML(m, uid) {
         aria-label="${esc(t('a11y.filterDomain', { domain: m.domain }))}">${esc(m.domain)}</button>` : ''}
     <span class="rec-bar-end">
       ${stepper}
-      ${m.type === 'diagram' ? '' : `<button type="button" class="btn btn-sm" id="dEditAll"
+      ${m.type === 'diagram' || m.type === 'task' ? '' : `<button type="button" class="btn btn-sm" id="dEditAll"
         aria-pressed="${editing.all}">${icon('pencil')}${t('dr.editAll')}</button>`}
       <button type="button" class="icon-btn" id="dMore" title="${t('dr.more')}"
               aria-label="${t('dr.more')}">${icon('maintenance')}</button>
@@ -451,18 +460,7 @@ function sideHTML(m, uid) {
       ${r.note ? `<span class="rs-rel-note">${esc(r.note)}</span>` : ''}
     </div>`).join('') || `<div class="hint-sm">${t('dr.rel.empty')}</div>`;
 
-  const hist = m.edit_history.slice().reverse().map((e, i) => `
-    <div class="rs-hist">
-      <span class="rs-hist-when" title="${esc(e.edited_at)}">${fmtDate(e.edited_at)}</span>
-      <span class="rs-hist-note">${esc(e.note || '')
-        || (e.prev_content !== e.new_content ? t('dr.hist.contentEdited') : t('dr.hist.entry'))}</span>
-      ${e.prev_content !== e.new_content
-        ? `<button type="button" class="rs-hist-diff" data-diff="${i}" aria-expanded="false"
-                   aria-controls="histDiff${i}">${t('dr.hist.show')}</button>
-           <div class="hist-diff" id="histDiff${i}" data-diffbody="${i}" hidden></div>` : ''}
-    </div>`).join('') || `<div class="hint-sm">${t('dr.hist.empty')}</div>`;
-
-  return `<aside class="rec-side">
+  return `<aside class="rec-side" data-uid="${esc(m.uid)}">
     <div class="rs-head">
       <div class="rs-head-row">
         ${typeTag(m.type)}${uidChip(m.uid)}
@@ -509,9 +507,9 @@ function sideHTML(m, uid) {
           : `<b class="rs-mono">—</b>`}</div>
         <div><span>${t('dr.meta.created')}</span><b class="rs-mono"
           title="${esc(m.created_at)}">${fmtDate(m.created_at)}</b></div>
-        <div><span>${t('dr.meta.updated')}</span><b class="rs-mono"
+        <div><span>${t('dr.meta.updated')}</span><b class="rs-mono" data-rs="updated"
           title="${esc(m.updated_at)}">${fmtDate(m.updated_at)}</b></div>
-        <div><span>${t('dr.meta.size')}</span><b class="rs-mono">${
+        <div><span>${t('dr.meta.size')}</span><b class="rs-mono" data-rs="size">${
           t('dr.chars', { n: fmtInt(m.content.length) })}</b></div>
         ${m.superseded_by ? `<div><span>${t('dr.meta.supersededBy')}</span>
           <button type="button" class="rs-mono" data-open="${esc(m.superseded_by)}"
@@ -525,20 +523,64 @@ function sideHTML(m, uid) {
         ${rels}
       </div>
 
-      <div class="rs-field">
-        <div class="rs-field-head"><span class="mg-label">${t('dr.history')}</span>
-          <span class="rs-n">${m.edit_history.length}</span></div>
-        ${hist}
-      </div>
+      <div class="rs-field" data-rs="history">${historyHTML(m)}</div>
     </div>
 
     <div class="rs-foot">
-      ${m.status === 'active'
-        ? `<button class="btn btn-sm" id="dArchive">${t('dr.archiveSoft')}</button>`
-        : `<button class="btn btn-sm" id="dRestore">${t('common.restore')}</button>`}
+      ${statusActionHTML(m.status)}
       <button class="btn btn-sm btn-danger" id="dDelete">${icon('trash')}${t('dz.button')}</button>
     </div>
   </aside>`;
+}
+
+/* The edit history's head and rows, newest first. */
+function historyHTML(m) {
+  const rows = m.edit_history.slice().reverse().map((e, i) => `
+    <div class="rs-hist">
+      <span class="rs-hist-when" title="${esc(e.edited_at)}">${fmtDate(e.edited_at)}</span>
+      <span class="rs-hist-note">${esc(e.note || '')
+        || (e.prev_content !== e.new_content ? t('dr.hist.contentEdited') : t('dr.hist.entry'))}</span>
+      ${e.prev_content !== e.new_content
+        ? `<button type="button" class="rs-hist-diff" data-diff="${i}" aria-expanded="false"
+                   aria-controls="histDiff${i}">${t('dr.hist.show')}</button>
+           <div class="hist-diff" id="histDiff${i}" data-diffbody="${i}" hidden></div>` : ''}
+    </div>`).join('') || `<div class="hint-sm">${t('dr.hist.empty')}</div>`;
+  return `<div class="rs-field-head"><span class="mg-label">${t('dr.history')}</span>
+      <span class="rs-n">${m.edit_history.length}</span></div>
+    ${rows}`;
+}
+
+/* A write the task view made in place changed the record's Updated time, its
+   size and its edit history; the side panel reads them again. */
+async function refreshTrail(view, m, uid) {
+  let now;
+  try { now = await api(`/api/memories/${seg(uid)}`); } catch { return; }
+  const side = view.querySelector('.rec-side');
+  if (!side || side.dataset.uid !== uid) return;
+  Object.assign(m, { updated_at: now.updated_at, content: now.content, edit_history: now.edit_history });
+  const updated = side.querySelector('[data-rs="updated"]');
+  updated.textContent = fmtDate(m.updated_at);
+  updated.title = m.updated_at;
+  side.querySelector('[data-rs="size"]').textContent = t('dr.chars', { n: fmtInt(m.content.length) });
+  side.querySelector('[data-rs="history"]').innerHTML = historyHTML(m);
+  wireHistory(view, m);
+}
+
+/* The one control that moves a record between active and archived. */
+const statusActionHTML = status => status === 'active'
+  ? `<button class="btn btn-sm" id="dArchive">${t('dr.archiveSoft')}</button>`
+  : `<button class="btn btn-sm" id="dRestore">${t('common.restore')}</button>`;
+
+/* The archived mark in the side's head and the control in its foot, repainted
+   when a task closes or reopens without leaving the page. */
+function paintStatus(view, m, uid, status) {
+  m.status = status;
+  const mark = view.querySelector('.rs-status');
+  if (mark) mark.innerHTML = status === 'archived' ? statusTag('archived') : t('common.active');
+  const act = view.querySelector('#dArchive, #dRestore');
+  if (!act) return;
+  act.outerHTML = statusActionHTML(status);
+  wireStatusAction(view, uid);
 }
 
 /* ─── wiring ──────────────────────────────────────────────────────────── */
@@ -729,39 +771,7 @@ function wire(view, m, uid, fields, isDiagram) {
   }));
 
   /* ── archive / restore / delete ── */
-  q('#dArchive')?.addEventListener('click', async () => {
-    const reason = await promptModal({
-      title: t('dr.archiveModal.title'),
-      body: t('dr.archiveModal.body'),
-      label: t('dr.archiveModal.label'), okLabel: t('common.archive'), danger: true });
-    if (reason === null) return;
-    try {
-      await setStatus(uid, 'archived', reason);
-      /* Archiving is reversible in the data model and was not reversible in
-         the UI: the toast said "archived" and left. Restoring is the exact
-         inverse and needs nothing this screen has thrown away. */
-      toast(t('dr.archived'), 'ok', {
-        action: {
-          label: t('common.undo'),
-          run: () => setStatus(uid, 'active')
-            .then(() => { toast(t('dr.restored'), 'ok'); save(); })
-            .catch(err => failed('err.status', err)),
-        },
-      });
-      save();
-    } catch (err) { failed('err.status', err); }
-  });
-  q('#dRestore')?.addEventListener('click', async () => {
-    try {
-      await setStatus(uid, 'active');
-      /* No Undo on this one, deliberately: putting a record back to archived
-         needs the reason it was archived with, and that is not something this
-         screen still knows. An "undo" that silently rewrites the reason would
-         be worse than no undo at all. */
-      toast(t('dr.restored'), 'ok');
-      save();
-    } catch (err) { failed('err.status', err); }
-  });
+  wireStatusAction(view, uid);
   q('#dDelete').addEventListener('click', () => openPurgeModal(uid));
 
   q('#dMore').addEventListener('click', e => {
@@ -828,7 +838,11 @@ function wire(view, m, uid, fields, isDiagram) {
     save();
   });
 
-  /* ── history diffs (lazy) ── */
+  wireHistory(view, m);
+}
+
+/* ── history diffs (lazy) ── */
+function wireHistory(view, m) {
   const histRev = m.edit_history.slice().reverse();
   view.querySelectorAll('[data-diff]').forEach(b => b.addEventListener('click', () => {
     const i = b.dataset.diff;
@@ -839,6 +853,40 @@ function wire(view, m, uid, fields, isDiagram) {
     b.setAttribute('aria-expanded', body.hidden ? 'false' : 'true');
     b.textContent = body.hidden ? t('dr.hist.show') : t('dr.hist.hide');
   }));
+}
+
+/* Archive and restore, wired on whichever of the two the record shows. */
+function wireStatusAction(view, uid) {
+  const q = sel => view.querySelector(sel);
+  const save = () => refreshBehind();
+  q('#dArchive')?.addEventListener('click', async () => {
+    const reason = await promptModal({
+      title: t('dr.archiveModal.title'),
+      body: t('dr.archiveModal.body'),
+      label: t('dr.archiveModal.label'), okLabel: t('common.archive'), danger: true });
+    if (reason === null) return;
+    try {
+      await setStatus(uid, 'archived', reason);
+      /* Undo is the inverse write and needs nothing this screen dropped. */
+      toast(t('dr.archived'), 'ok', {
+        action: {
+          label: t('common.undo'),
+          run: () => setStatus(uid, 'active')
+            .then(() => { toast(t('dr.restored'), 'ok'); save(); })
+            .catch(err => failed('err.status', err)),
+        },
+      });
+      save();
+    } catch (err) { failed('err.status', err); }
+  });
+  q('#dRestore')?.addEventListener('click', async () => {
+    try {
+      await setStatus(uid, 'active');
+      /* No Undo: re-archiving needs a reason, which this screen does not keep. */
+      toast(t('dr.restored'), 'ok');
+      save();
+    } catch (err) { failed('err.status', err); }
+  });
 }
 
 function step(uid, delta) {

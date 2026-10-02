@@ -12,6 +12,7 @@ import json
 import os
 import time
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 import pytest
 
@@ -254,3 +255,156 @@ def test_a_stored_interval_out_of_range_reads_as_the_default(store):
         conn.execute("INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)",
                      (db.WARDEN_MINUTES_KEY, "not a number"))
         assert db.get_warden_minutes(conn) == db.WARDEN_MINUTES_DEFAULT
+
+
+# ------------------------------------------------------- the task ask's stamp
+
+def test_a_session_never_asked_about_tasks_is_owed_the_ask(store):
+    assert warden.task_due("session-1", 30) is True
+
+
+def test_marking_the_task_ask_satisfies_its_interval(store):
+    warden.mark_tasks("session-1")
+    assert warden.task_due("session-1", 30) is False
+    later = datetime.now(timezone.utc) + timedelta(minutes=31)
+    assert warden.task_due("session-1", 30, now=later) is True
+
+
+def test_the_task_ask_and_the_warden_ask_are_independent(store):
+    """Stamping one leaves the other owed."""
+    warden.mark_tasks("session-1")
+    assert warden.due("session-1") is True
+    warden.mark("session-1")
+    assert warden.task_due("session-1", 30) is False
+    other = "session-2"
+    warden.mark(other)
+    assert warden.task_due(other, 30) is True
+
+
+def test_a_task_stamp_merges_with_what_is_on_file(store):
+    warden.mark("session-1", transcript="/tmp/a.jsonl")
+    state = warden.mark_tasks("session-1")
+    assert state["tasks_asked_at"]
+    assert warden.read("session-1")["transcript"] == "/tmp/a.jsonl"
+    assert warden.read("session-1")["asked_at"]
+
+
+def test_a_session_without_a_safe_id_is_never_owed_the_task_ask(store):
+    assert warden.task_due("", 30) is False
+    assert warden.task_due("../escape", 30) is False
+    assert warden.mark_tasks("") == {}
+
+
+def test_an_unreadable_task_stamp_counts_as_never_asked(store):
+    warden.state_path("session-1").write_text(
+        json.dumps({"tasks_asked_at": "not a timestamp"}), encoding="utf-8")
+    assert warden.task_due("session-1", 30) is True
+
+
+# --------------------------------------------------- the task ask's own settings
+
+def test_the_task_ask_is_on_every_thirty_minutes_by_default(store):
+    with db.connect() as conn:
+        assert db.get_task_ask_enabled(conn) is True
+        assert db.get_task_ask_minutes(conn) == db.TASK_ASK_MINUTES_DEFAULT == 30
+
+
+@pytest.mark.parametrize("given, expected", [
+    (False, False), (True, True), ("off", False), ("0", False), ("on", True),
+])
+def test_the_task_switch_takes_a_bool_or_what_a_form_sends(store, given, expected):
+    with db.connect() as conn:
+        assert db.set_task_ask_enabled(conn, given) is expected
+        assert db.get_task_ask_enabled(conn) is expected
+
+
+@pytest.mark.parametrize("bad", [0, -5, 481, "", "soon", None, 3.7])
+def test_a_task_interval_outside_the_range_is_refused(store, bad):
+    with db.connect() as conn:
+        with pytest.raises(ValueError):
+            db.set_task_ask_minutes(conn, bad)
+
+
+def test_the_task_interval_round_trips_apart_from_the_warden_s(store):
+    with db.connect() as conn:
+        assert db.set_task_ask_minutes(conn, 45) == 45
+        assert db.get_task_ask_minutes(conn) == 45
+        assert db.get_warden_minutes(conn) == db.WARDEN_MINUTES_DEFAULT
+
+
+def test_a_stored_task_interval_out_of_range_reads_as_the_default(store):
+    with db.connect() as conn:
+        conn.execute("INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)",
+                     (db.TASK_ASK_MINUTES_KEY, "99999"))
+        assert db.get_task_ask_minutes(conn) == db.TASK_ASK_MINUTES_DEFAULT
+
+
+# ------------------------------------------------ the domains a session names
+
+def test_the_domains_keep_the_most_recent_last_without_repeats(store):
+    for domain in ("acme/harbor", "acme/docks", "acme/harbor"):
+        warden.record_domain("session-1", domain)
+    assert warden.read("session-1")["domains"] == ["acme/docks", "acme/harbor"]
+
+
+def test_the_domains_keep_the_twenty_most_recent(store):
+    for n in range(25):
+        warden.record_domain("session-1", f"acme/p{n}")
+    domains = warden.read("session-1")["domains"]
+    assert domains == [f"acme/p{n}" for n in range(5, 25)]
+
+
+def test_recording_a_domain_keeps_the_rest_of_the_state(store):
+    warden.mark_tasks("session-1")
+    warden.record_domain("session-1", "acme/harbor")
+    state = warden.read("session-1")
+    assert state["tasks_asked_at"] and state["domains"] == ["acme/harbor"]
+
+
+def test_a_blank_domain_or_an_unsafe_id_records_nothing(store):
+    assert warden.record_domain("session-1", "  ") == {}
+    assert warden.record_domain("session-1", "/") == {}
+    assert warden.record_domain("session-1", " / ") == {}
+    assert warden.record_domain("../escape", "acme/harbor") == {}
+    assert warden.read("session-1") == {}
+
+
+def test_a_state_that_holds_junk_for_domains_is_started_over(store):
+    warden.state_path("session-1").write_text(
+        json.dumps({"domains": "acme"}), encoding="utf-8")
+    warden.record_domain("session-1", "acme/harbor")
+    assert warden.read("session-1")["domains"] == ["acme/harbor"]
+
+
+def test_the_state_is_written_through_a_temp_file_and_replaced(store, monkeypatch):
+    replaced = []
+    real = os.replace
+    monkeypatch.setattr(os, "replace", lambda a, b: (replaced.append((a, b)), real(a, b))[1])
+    warden.mark_tasks("session-1")
+    (source, target), = replaced
+    assert Path(target) == warden.state_path("session-1")
+    assert Path(source).parent == Path(target).parent and not Path(source).exists()
+    assert list(warden.state_dir().glob("*.tmp")) == []
+
+
+def test_a_failed_replace_leaves_the_old_state_and_no_temp_file(store, monkeypatch):
+    warden.mark_tasks("session-1")
+    before = warden.read("session-1")
+
+    def refuse(a, b):
+        raise OSError("locked")
+    monkeypatch.setattr(os, "replace", refuse)
+    assert warden.record_domain("session-1", "acme/harbor") == {}
+    assert warden.read("session-1") == before
+    assert list(warden.state_dir().glob("*.tmp")) == []
+
+
+def test_prune_removes_an_old_temp_file_left_by_an_interrupted_write(store):
+    warden.mark("fresh")
+    leftover = warden.state_dir() / "stale.abc123.tmp"
+    leftover.write_text("{", encoding="utf-8")
+    old = time.time() - 20 * 86400
+    os.utime(leftover, (old, old))
+
+    assert warden.prune(days=14) == 1
+    assert not leftover.exists()

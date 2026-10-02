@@ -13,6 +13,7 @@
    read arrives long before the polishing does. */
 
 import { cssVar } from './core/dom.js';
+import { motionOn } from './core/motion.js';
 import { clamp } from './graph-geom.js';
 import { deriveStore, arrangement, DEFAULT_MODE } from './graph-arrange.js';
 
@@ -153,6 +154,9 @@ export class GraphCanvas {
      `mode` is the arrangement to open on; `show` is what the drawing carries
      -- `links` the relations, `domains` the place names, `names` the titles
      of the memories themselves. */
+  /* read from the root's data-motion, so a change of setting applies at once */
+  get motion() { return motionOn(); }
+
   constructor(canvas, {
     nodes, edges, colorOf,
     onSelect = () => {}, onSelectDomain = () => {}, onOpen = () => {},
@@ -199,7 +203,6 @@ export class GraphCanvas {
     this.cam = new Cam();
     this.drag = null; this.moved = false;
     this.pointers = new Map(); this.pinch = null;
-    this.motion = !matchMedia('(prefers-reduced-motion: reduce)').matches;
     this.running = true;
     this.raf = 0;
     this.dirty = true;

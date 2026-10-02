@@ -102,8 +102,6 @@ _TAGGED_WRITERS = (
                    "hypothesis": "the loader stalls on blanks", "reasoning": "read the trace",
                    "result": "it skips them", "revised_belief": "blanks are handled",
                    "next_time": "read the trace first"}),
-    ("handoff", {"title": "where the drain step stands",
-                 "content": "pick up at the drain step"}),
 )
 
 

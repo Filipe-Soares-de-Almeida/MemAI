@@ -43,20 +43,25 @@ a **single** `optimize_stage` run.
 The orchestrator warms up **once** and keeps the result in context for every
 sub-skill. Read each source once; nothing below is read twice.
 
-1. **`pulse(domain)`** — the state a scope inherits, plus:
-   - **`scope`** — what the scope HOLDS next to what came back: `subdomains`
-     (`own` = filed exactly there, `subtree` = with descendants) and
-     **`not_shown`** per list (a warm-up stops at a handful; this counts what
-     it left behind). Read it as the **drill-down plan**:
-     `list_by_domain(domain, type=…)` / `search(query, domain=…)` on the child
-     that was only counted.
+1. **`pulse(domain)`** — the state a scope inherits: the latest checkpoint in
+   full, plus:
+   - **`pending`** — a count per category (`task`, `anti_pattern`, `handoff`,
+     `note`, `diagram`) and **`read_next`**, which says what to open. Nothing
+     is listed: `pending(domain, type=…)` returns one category's headers and
+     `get_memory(uid)` opens one. Open tasks are work in progress: read them to
+     know what is live.
+   - **`scope`** — what the scope HOLDS: `subdomains` (`own` = filed exactly
+     there, `subtree` = with descendants) and `by_type`. Read it as the
+     **drill-down plan**: `list_by_domain(domain, type=…)` /
+     `search(query, domain=…)` on the child that was only counted.
    - **`scope.paths`** — which path(s) the name given actually resolved to
      (§2).
    - **`scope.stale`** — how many memories in the scope carry a `review_after`
      date that has passed. Present only when non-zero, and the pass's own
      work list (§4, step 3).
-   - **`diagrams`** — the documented flows **by title only**, never inlined.
-     Open one with `get_diagram(uid, format='json')`.
+   - The documented flows are counted under `pending.diagram`:
+     `pending(domain, type='diagram')` lists them **by title only**, never
+     inlined. Open one with `get_diagram(uid, format='json')`.
 2. **`list_domains()`** — the **tree**, not a list: per entry `parent`,
    `depth`, `count` (filed at exactly that path), `subtree` (that plus its
    descendants), `children`, `implicit` (a level that exists only because
@@ -340,7 +345,8 @@ delta.`
   on request.
 - MemAI is not the host's own memory files. A pass reaches memories through the
   MemAI tools and touches nothing else on disk ([[memai-memory]]).
-- **Never** `reword`/`compact` a `type=diagram` (§3), and **never**
+- **Never** `reword`/`compact` a `type=diagram` (§3) or a `type=task` — both
+  contents are generated from rows and staging refuses them — and **never**
   `purge_memory` (§1).
 - **Reuse the path `list_domains()` spells.** Reads fold case, so a filter in
   the wrong case still finds the rows; what a coined variant costs is a second

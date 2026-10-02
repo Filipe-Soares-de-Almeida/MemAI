@@ -117,21 +117,24 @@ def test_the_aggregate_prices_the_results_and_not_the_store(store):
 
 # ------------------------------------------------------------------- warm-up
 
-def test_a_pulse_prices_every_record_it_hands_over(store):
+def test_a_pulse_prices_the_checkpoint_it_hands_over(store):
     server.checkpoint("fixture title", intent=EXPORT, established="the index is rebuilt",
                       pursuing="the batch retry", open_questions="none",
                       domain="acme/x100")
-    server.handoff("fixture title", content=RETRY, domain="acme/x100")
+    with db.connect() as conn:
+        db.insert_memory(conn, type="handoff", content=RETRY,
+                         title="fixture title", domain="acme/x100")
     server.anti_pattern("fixture title", pattern=RETRY, why_wrong="it drops rows",
                         instead="drain the queue first", domain="acme/x100")
     server.note("fixture title", content=MERGE, domain="acme/x100")
 
     p = server.pulse(domain="acme/x100")
-    for key in ("handoffs", "anti_patterns", "recent_notes"):
-        assert p[key], key
-        assert all(r["est_tokens"] > 0 for r in p[key]), key
-    assert p["handoffs"][0]["est_tokens"] == _full_estimate(RETRY)
-    assert p["recent_notes"][0]["est_tokens"] == _full_estimate(MERGE)
+    assert p["latest_checkpoint"]["est_tokens"] > 0
+    assert p["pending"] == [{"type": "anti_pattern", "count": 1},
+                            {"type": "handoff", "count": 1},
+                            {"type": "note", "count": 1}]
+    headers = server.pending(domain="acme/x100", type="handoff")["items"]
+    assert headers[0]["est_tokens"] == _full_estimate(RETRY)
 
 
 def test_the_checkpoint_is_priced_by_the_body_pulse_returned_whole(store):

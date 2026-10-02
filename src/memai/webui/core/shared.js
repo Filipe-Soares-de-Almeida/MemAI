@@ -13,7 +13,7 @@ import { fixedItems, pickerFor, wirePicker } from './pick.js';
 import { t } from '../i18n.js';
 import { copyUid } from './ui.js';
 
-export const TYPE_ORDER = ['note', 'checkpoint', 'anti_pattern', 'reasoning', 'handoff', 'diagram'];
+export const TYPE_ORDER = ['note', 'checkpoint', 'anti_pattern', 'reasoning', 'handoff', 'diagram', 'task'];
 
 export const TYPES = Object.fromEntries(
   TYPE_ORDER.map(tp => [tp, { color: cssVar(`--t-${tp}`) || '#9e9e9e' }]));

@@ -45,7 +45,9 @@ Payload details:
 - **`new_type`** accepts only `note` / `reasoning` / `anti_pattern`.
   `checkpoint`/`handoff` are not targets, and neither is **`diagram`**: a
   flow is written by `diagram()` + `diagram_node`/`diagram_edge`, never
-  from prose.
+  from prose; nor is **`task`**: it is written by `task()` and closes through
+  its own items. A task is no source either — distilling archives its
+  sources, and a task is closed with `task_item`.
 - **`reasoning` and `anti_pattern` are made of FIELDS**, so a `new_content`
   for either has to read back as those fields — each label opening its own
   line, in order, none empty:
