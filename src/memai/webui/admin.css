@@ -99,6 +99,8 @@
   --t-reasoning:    #ab47bc;
   --t-handoff:      #2e7d32;
   --t-diagram:      #009688;   /* Teal 500 — the sixth hue of the same check */
+  --t-task:         #c0ca33;   /* Lime 600 — the gap between the orange and the green,
+                                  13+ OKLab dE from the nearest of the six, any vision */
 
   /* ...and the 200 step of each of the same six ramps, for the type worn as
      a WORD. The fills above are 3.0-4.4:1 as text on --surface; these are
@@ -110,6 +112,7 @@
   --t-reasoning-ink:    #ce93d8;
   --t-handoff-ink:      #a5d6a7;
   --t-diagram-ink:      #80cbc4;
+  --t-task-ink:         #e6ee9c;
 
   /* field palette, by ROLE. The six above say what a memory IS; these say
      what one of its blocks is FOR, and the meaning holds across types: the
@@ -789,6 +792,7 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
 .t-reasoning    { --c: var(--t-reasoning);    --tc: var(--t-reasoning-ink); }
 .t-handoff      { --c: var(--t-handoff);      --tc: var(--t-handoff-ink); }
 .t-diagram      { --c: var(--t-diagram);      --tc: var(--t-diagram-ink); }
+.t-task         { --c: var(--t-task);         --tc: var(--t-task-ink); }
 
 .uid-chip {
   display: inline-flex; align-items: center;
@@ -2622,6 +2626,189 @@ button.rs-mono:hover { color: var(--accent); }
   .rf-split { grid-template-columns: 1fr; }
   .rf-pane + .rf-pane { border-left: 0; border-top: 1px solid var(--line-soft); }
 }
+
+/* A task's checklist: an item's state is its mark's shape first, colour second (--f-hold, --f-go);
+   dropped is struck through, so it never passes for done. */
+
+.tk { display: flex; flex-direction: column; gap: var(--sp-3); min-width: 0; }
+.tk-card { background: var(--surface); border-radius: var(--r-lg); min-width: 0; }
+.tk-h { font: 500 var(--fs-md)/1.3 var(--font-ui); color: var(--ink); display: flex; align-items: baseline; gap: var(--sp-2); }
+
+/* the head: what the task is for, and how far it has got */
+.tk-head { padding: var(--sp-4) var(--sp-5); display: flex; flex-direction: column; gap: var(--sp-4); }
+.tk-head.is-closed { background: color-mix(in srgb, var(--f-go) 6%, var(--surface)); }
+.tk-head.is-closed:has(.is-cancelled) { background: var(--surface); }
+
+.tk-closed {
+  display: flex; align-items: center; gap: var(--sp-3);
+  font-size: var(--fs-sm); color: var(--ink-2);
+}
+.tk-closed b { color: var(--ink); font-weight: 500; font-size: var(--fs-body); margin-right: var(--sp-2); }
+.tk-closed-when { margin-right: var(--sp-2); color: var(--ink-3); }
+.tk-closed-mark {
+  flex: none; width: 24px; height: 24px; border-radius: 50%;
+  display: grid; place-items: center; --ico: 14px;
+}
+.tk-closed.is-completed .tk-closed-mark { background: var(--f-go); color: var(--accent-ink); }
+.tk-closed.is-cancelled .tk-closed-mark { background: var(--chip-fill); color: var(--ink-2); }
+
+.tk-goal { display: flex; align-items: flex-start; gap: var(--sp-3); }
+.tk-goal.is-editing { flex-direction: column; align-items: stretch; }
+.tk-goal-text {
+  flex: 1; min-width: 0; max-width: 75ch;
+  font: 400 var(--fs-read)/1.55 var(--font-ui); color: var(--ink);
+  white-space: pre-wrap; overflow-wrap: anywhere;
+}
+.tk-goal-text.is-empty { color: var(--ink-3); }
+.tk-goal > .icon-btn { margin-left: auto; flex: none; }
+
+.tk-prog { display: flex; flex-direction: column; gap: var(--sp-2); }
+.tk-prog-line { display: flex; align-items: center; gap: var(--sp-3); flex-wrap: wrap; }
+.tk-prog-n { font: 400 var(--fs-md) var(--font-ui); color: var(--ink-2); font-variant-numeric: tabular-nums; }
+.tk-prog-n b { font: 500 var(--fs-lg) var(--font-ui); color: var(--ink); }
+.tk-bar { height: 8px; border-radius: var(--r-pill); }
+.tk-bar .bar-fill { --c: var(--f-go); }
+/* what was dropped sits right after what was done, hatched: it is part of
+   the whole the bar counts out of, and it is not progress */
+.tk-bar-drop {
+  position: absolute; top: 0; bottom: 0;
+  left: calc(var(--v0) * 100%); width: calc(var(--v) * 100%);
+  background: repeating-linear-gradient(135deg, rgba(255, 255, 255, .3) 0 2px, transparent 2px 5px);
+}
+
+/* the items */
+.tk-items { list-style: none; margin: 0; padding: 0; }
+.tk-item { border-bottom: 1px solid var(--line-soft); }
+.tk-item:last-child { border-bottom: 0; }
+.tk-row {
+  display: grid; grid-template-columns: 28px minmax(0, 1fr) var(--ctl-h-sm);
+  align-items: start; gap: var(--sp-2);
+  padding: var(--sp-2) var(--sp-3);
+  transition: background .15s;
+}
+.tk-item[data-s="doing"] .tk-row { background: color-mix(in srgb, var(--f-hold) 8%, transparent); }
+.tk-item.is-open .tk-row { background: var(--hover-2); }
+
+.tk-state {
+  --sc: var(--ink-3);
+  width: 28px; height: 28px; padding: 0;
+  display: grid; place-items: center;
+  background: none; border: 0; border-radius: 50%; cursor: pointer;
+}
+.tk-ring {
+  width: 20px; height: 20px; border-radius: 50%;
+  border: 2px solid var(--sc); box-sizing: border-box;
+  display: grid; place-items: center; --ico: 12px;
+  transition: background-color .15s, border-color .15s, box-shadow .15s;
+}
+.tk-state:hover .tk-ring { box-shadow: 0 0 0 4px var(--hover-3); }
+.tk-state[data-s="doing"]   { --sc: var(--f-hold); }
+.tk-state[data-s="doing"] .tk-ring { background: linear-gradient(90deg, var(--f-hold) 50%, transparent 50%); }
+.tk-state[data-s="done"]    { --sc: var(--f-go); }
+.tk-state[data-s="done"] .tk-ring { background: var(--f-go); color: var(--accent-ink); }
+.tk-state[data-s="dropped"] .tk-ring { border-style: dashed; color: var(--ink-3); }
+
+.tk-main {
+  display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: start; gap: var(--sp-3);
+  width: 100%; min-height: 28px; padding: var(--sp-1) 0; text-align: left;
+  background: none; border: 0; border-radius: var(--r-sm); cursor: pointer;
+  font: 400 var(--fs-body)/1.5 var(--font-ui); color: var(--ink);
+}
+.tk-text { overflow-wrap: anywhere; }
+.tk-item[data-s="done"] .tk-text { color: var(--ink-2); }
+.tk-item[data-s="dropped"] .tk-text {
+  color: var(--ink-3); text-decoration: line-through;
+  text-decoration-color: var(--ink-3);
+}
+.tk-counts { display: inline-flex; align-items: center; gap: var(--sp-3); color: var(--ink-3); min-height: 22px; }
+.tk-counts:empty { display: none; }
+.tk-count {
+  display: inline-flex; align-items: center; gap: var(--sp-1);
+  font: 400 var(--fs-label) var(--font-ui); font-variant-numeric: tabular-nums; --ico: 12px;
+}
+.tk-chev { display: inline-flex; align-items: center; min-height: 22px; color: var(--ink-3); --ico: 12px; transition: transform .15s; }
+.tk-main:hover .tk-counts, .tk-main:hover .tk-chev { color: var(--ink); }
+.tk-main[aria-expanded="true"] .tk-chev { transform: rotate(90deg); }
+
+/* one item's links and comments, open under its row */
+.tk-panel {
+  display: flex; flex-direction: column; gap: var(--sp-3);
+  margin: 0 var(--sp-3) var(--sp-3) calc(var(--sp-3) + 28px + var(--sp-2));
+  padding: var(--sp-3) var(--sp-4);
+  background: var(--inset); border-radius: var(--r-md);
+}
+.tk-sub { display: flex; align-items: baseline; gap: var(--sp-2); }
+.tk-sub-h {
+  font: 500 var(--fs-sm) var(--font-ui); color: var(--ink-2);
+  display: flex; align-items: baseline; gap: var(--sp-2);
+}
+.tk-links { display: flex; flex-direction: column; }
+.tk-link { display: flex; align-items: center; gap: var(--sp-2); min-width: 0; }
+.tk-link-open {
+  flex: 1; min-width: 0; text-align: left;
+  display: inline-flex; align-items: center; min-height: var(--tap);
+  background: none; border: 0; padding: 0; cursor: pointer;
+  font: 400 var(--fs-sm) var(--font-ui); color: var(--ink);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.tk-link-open:hover { color: var(--accent); }
+.tk-link .icon-btn { --ico: 11px; }
+
+/* add items, below the list */
+.tk-add { padding: var(--sp-2) var(--sp-3); border-top: 1px solid var(--line-soft); }
+.tk-add.is-open { display: flex; flex-direction: column; gap: var(--sp-2); padding: var(--sp-3); }
+
+textarea.tk-box {
+  font: 400 var(--fs-body)/1.5 var(--font-ui);
+  min-height: 0; resize: vertical;
+}
+.tk-panel textarea.tk-box { background: var(--surface); }
+.tk-actions { display: flex; gap: var(--sp-2); }
+
+/* A comment from a person is indented and washed in the accent; an agent's
+   runs flush on the neutral well. Each says who wrote it. */
+.tk-thread { padding: var(--sp-4) var(--sp-5); display: flex; flex-direction: column; gap: var(--sp-3); }
+.tk-older { margin-left: 0; align-self: flex-start; }
+.tk-c {
+  display: flex; flex-direction: column; gap: var(--sp-1);
+  padding: var(--sp-2) var(--sp-3); border-radius: var(--r-md);
+  background: var(--chip-fill);
+}
+.tk-panel .tk-c { background: var(--surface); }
+.tk-c.is-person { margin-left: var(--sp-5); background: var(--accent-dim); }
+.tk-c-head { display: flex; align-items: baseline; gap: var(--sp-2); }
+.tk-c-who { font: 500 var(--fs-sm) var(--font-ui); color: var(--ink-2); }
+.tk-c.is-person .tk-c-who { color: var(--accent); }
+.tk-c-session { font: 400 var(--fs-label) var(--font-m); color: var(--ink-3); }
+.tk-c-when { margin-left: auto; font-size: var(--fs-label); color: var(--ink-3); }
+.tk-c-body {
+  font: 400 var(--fs-body)/1.5 var(--font-ui); color: var(--ink);
+  white-space: pre-wrap; overflow-wrap: anywhere;
+}
+.tk-compose { display: flex; flex-direction: column; align-items: flex-start; gap: var(--sp-2); }
+.tk-compose .tk-box { width: 100%; }
+
+@media (max-width: 640px) {
+  .tk-head, .tk-thread { padding: var(--sp-3) var(--sp-4); }
+  /* the counts go under the words rather than squeezing them */
+  .tk-main { grid-template-columns: minmax(0, 1fr) auto; gap: var(--sp-1) var(--sp-3); }
+  .tk-counts { grid-column: 1; grid-row: 2; }
+  .tk-chev { grid-column: 2; grid-row: 1; }
+  .tk-panel { margin-left: var(--sp-3); }
+  .tk-c.is-person { margin-left: var(--sp-3); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tk-ring, .tk-chev, .tk-row { transition: none; }
+}
+
+/* a task in the memories list: how far it has got, as a short bar and the
+   count it is drawn from */
+.mem-prog { display: inline-flex; align-items: center; gap: var(--sp-2); }
+.mem-prog .bar-track { display: block; width: 44px; height: 6px; border-radius: var(--r-pill); }
+.mem-prog .bar-fill { --c: var(--f-go); }
+.mem-prog-n { font: 500 var(--fs-label) var(--font-ui); color: var(--ink-2); font-variant-numeric: tabular-nums; }
+.status-tag.completed { color: var(--ok); border-color: rgba(129, 199, 132, .35); }
 
 .content-pre {
   font: 400 var(--fs-sm)/1.65 var(--font-m);

@@ -16,10 +16,14 @@ import { openRecord } from './record.js';
 import { newDiagramSkeleton } from './diagrams.js';
 import { t } from '../i18n.js';
 
+/* The types this form does not write: the server refuses a handoff here, and
+   a task is created with its goal and items, not with a body. */
+const NOT_WRITTEN_HERE = ['handoff', 'task'];
+
 export async function openNewMemory() {
   const domains = await getDomains().catch(() => []);
   const spec = await api('/api/config').then(c => c.sections || {}).catch(() => ({}));
-  const types = typeItems();
+  const types = typeItems().filter(it => !NOT_WRITTEN_HERE.includes(it.value));
   const confs = confItems();
   const modal = openModal({
     title: t('nm.title'),

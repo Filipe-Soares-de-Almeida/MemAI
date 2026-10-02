@@ -29,6 +29,7 @@ import { onTeardown } from '../core/lifecycle.js';
 import { renderRich, wireRich, headings } from '../core/richtext.js';
 import { highlightIn } from '../core/highlight.js';
 import { DiagramEditor } from '../diagram-engine.js';
+import { mountTask } from './task.js';
 import { t } from '../i18n.js';
 
 /* Where every other view sends a reader who clicked a memory. It is a
@@ -190,6 +191,8 @@ export async function renderRecord(view, params, ctx) {
      read-only and sends editing to the canvas; every other type gets the
      reverse view -- which flows have a step pointing at it */
   const isDiagram = m.type === 'diagram';
+  /* a task's body is generated from its checklist, so the record shows that */
+  const isTask = m.type === 'task' && Boolean(m.task);
   const spec = isDiagram ? [] : (m.spec || []);
   const sectionText = Object.fromEntries((m.sections || []).map(s => [s.key, s.text]));
   /* One entry per editable field. A type with no spec has exactly one, whose
@@ -219,7 +222,7 @@ export async function renderRecord(view, params, ctx) {
         ${m.section_problem
           ? `<div class="sec-problem">${t('dr.sections.problem',
                { detail: esc(m.section_problem) })}</div>` : ''}
-        ${isDiagram ? diagramHTML(m, uid) : editing.all
+        ${isDiagram ? diagramHTML(m, uid) : isTask ? '<div id="taskHost"></div>' : editing.all
           ? `<div class="rec-stack">${fields.map(f => fieldHTML(f, m)).join('')}</div>
              ${saveBarHTML(t('dr.saveAll'), 'dSaveAll')}`
           : `<div class="rec-stage">
@@ -233,6 +236,11 @@ export async function renderRecord(view, params, ctx) {
   </div>`;
 
   wire(view, m, uid, fields, isDiagram);
+  if (isTask) {
+    mountTask(view.querySelector('#taskHost'),
+              { uid, task: m.task, status: m.status },
+              { onStatus: status => paintStatus(view, m, uid, status) });
+  }
 }
 
 /* ─── the bar ─────────────────────────────────────────────────────────── */
@@ -259,7 +267,7 @@ function barHTML(m, uid) {
         aria-label="${esc(t('a11y.filterDomain', { domain: m.domain }))}">${esc(m.domain)}</button>` : ''}
     <span class="rec-bar-end">
       ${stepper}
-      ${m.type === 'diagram' ? '' : `<button type="button" class="btn btn-sm" id="dEditAll"
+      ${m.type === 'diagram' || m.type === 'task' ? '' : `<button type="button" class="btn btn-sm" id="dEditAll"
         aria-pressed="${editing.all}">${icon('pencil')}${t('dr.editAll')}</button>`}
       <button type="button" class="icon-btn" id="dMore" title="${t('dr.more')}"
               aria-label="${t('dr.more')}">${icon('maintenance')}</button>
@@ -533,12 +541,27 @@ function sideHTML(m, uid) {
     </div>
 
     <div class="rs-foot">
-      ${m.status === 'active'
-        ? `<button class="btn btn-sm" id="dArchive">${t('dr.archiveSoft')}</button>`
-        : `<button class="btn btn-sm" id="dRestore">${t('common.restore')}</button>`}
+      ${statusActionHTML(m.status)}
       <button class="btn btn-sm btn-danger" id="dDelete">${icon('trash')}${t('dz.button')}</button>
     </div>
   </aside>`;
+}
+
+/* The one control that moves a record between active and archived. */
+const statusActionHTML = status => status === 'active'
+  ? `<button class="btn btn-sm" id="dArchive">${t('dr.archiveSoft')}</button>`
+  : `<button class="btn btn-sm" id="dRestore">${t('common.restore')}</button>`;
+
+/* The archived mark in the side's head and the control in its foot, repainted
+   when a task closes or reopens without leaving the page. */
+function paintStatus(view, m, uid, status) {
+  m.status = status;
+  const mark = view.querySelector('.rs-status');
+  if (mark) mark.innerHTML = status === 'archived' ? statusTag('archived') : t('common.active');
+  const act = view.querySelector('#dArchive, #dRestore');
+  if (!act) return;
+  act.outerHTML = statusActionHTML(status);
+  wireStatusAction(view, uid);
 }
 
 /* ─── wiring ──────────────────────────────────────────────────────────── */
@@ -729,39 +752,7 @@ function wire(view, m, uid, fields, isDiagram) {
   }));
 
   /* ── archive / restore / delete ── */
-  q('#dArchive')?.addEventListener('click', async () => {
-    const reason = await promptModal({
-      title: t('dr.archiveModal.title'),
-      body: t('dr.archiveModal.body'),
-      label: t('dr.archiveModal.label'), okLabel: t('common.archive'), danger: true });
-    if (reason === null) return;
-    try {
-      await setStatus(uid, 'archived', reason);
-      /* Archiving is reversible in the data model and was not reversible in
-         the UI: the toast said "archived" and left. Restoring is the exact
-         inverse and needs nothing this screen has thrown away. */
-      toast(t('dr.archived'), 'ok', {
-        action: {
-          label: t('common.undo'),
-          run: () => setStatus(uid, 'active')
-            .then(() => { toast(t('dr.restored'), 'ok'); save(); })
-            .catch(err => failed('err.status', err)),
-        },
-      });
-      save();
-    } catch (err) { failed('err.status', err); }
-  });
-  q('#dRestore')?.addEventListener('click', async () => {
-    try {
-      await setStatus(uid, 'active');
-      /* No Undo on this one, deliberately: putting a record back to archived
-         needs the reason it was archived with, and that is not something this
-         screen still knows. An "undo" that silently rewrites the reason would
-         be worse than no undo at all. */
-      toast(t('dr.restored'), 'ok');
-      save();
-    } catch (err) { failed('err.status', err); }
-  });
+  wireStatusAction(view, uid);
   q('#dDelete').addEventListener('click', () => openPurgeModal(uid));
 
   q('#dMore').addEventListener('click', e => {
@@ -839,6 +830,45 @@ function wire(view, m, uid, fields, isDiagram) {
     b.setAttribute('aria-expanded', body.hidden ? 'false' : 'true');
     b.textContent = body.hidden ? t('dr.hist.show') : t('dr.hist.hide');
   }));
+}
+
+/* Archive and restore, wired on whichever of the two the record shows. */
+function wireStatusAction(view, uid) {
+  const q = sel => view.querySelector(sel);
+  const save = () => refreshBehind();
+  q('#dArchive')?.addEventListener('click', async () => {
+    const reason = await promptModal({
+      title: t('dr.archiveModal.title'),
+      body: t('dr.archiveModal.body'),
+      label: t('dr.archiveModal.label'), okLabel: t('common.archive'), danger: true });
+    if (reason === null) return;
+    try {
+      await setStatus(uid, 'archived', reason);
+      /* Archiving is reversible in the data model and was not reversible in
+         the UI: the toast said "archived" and left. Restoring is the exact
+         inverse and needs nothing this screen has thrown away. */
+      toast(t('dr.archived'), 'ok', {
+        action: {
+          label: t('common.undo'),
+          run: () => setStatus(uid, 'active')
+            .then(() => { toast(t('dr.restored'), 'ok'); save(); })
+            .catch(err => failed('err.status', err)),
+        },
+      });
+      save();
+    } catch (err) { failed('err.status', err); }
+  });
+  q('#dRestore')?.addEventListener('click', async () => {
+    try {
+      await setStatus(uid, 'active');
+      /* No Undo on this one, deliberately: putting a record back to archived
+         needs the reason it was archived with, and that is not something this
+         screen still knows. An "undo" that silently rewrites the reason would
+         be worse than no undo at all. */
+      toast(t('dr.restored'), 'ok');
+      save();
+    } catch (err) { failed('err.status', err); }
+  });
 }
 
 function step(uid, delta) {

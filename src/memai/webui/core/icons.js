@@ -188,6 +188,18 @@ const ICONS = {
     body: `<path d="M3 8.4l3.2 3.2L13 4.8" fill="none" stroke="currentColor"
                  stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>`,
   },
+  minus: {    /* set aside: a task item that was dropped */
+    viewBox: '0 0 16 16',
+    body: `<path d="M4 8h8"/>`,
+  },
+  comment: {  /* a speech bubble with its tail at the lower left */
+    viewBox: '0 0 16 16',
+    body: `<path d="M3.2 2.8h9.6a1 1 0 011 1v6.4a1 1 0 01-1 1H7.4L4.4 13.6v-2.4H3.2a1 1 0 01-1-1V3.8a1 1 0 011-1z"/>`,
+  },
+  more: {     /* three dots in a row: the menu behind a control */
+    viewBox: '0 0 16 16',
+    body: `<path d="M3.5 8h.01M8 8h.01M12.5 8h.01" stroke-width="2.4"/>`,
+  },
   update: {   /* something to bring down onto this machine */
     viewBox: '0 0 16 16',
     body: `<path d="M8 2.4v6.6"/>
