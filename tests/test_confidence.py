@@ -47,13 +47,13 @@ def test_contradicted_still_comes_back(conn):
 
 # ---------------------------------------------------------------- the warm-up
 
-def test_pulse_leaves_a_contradicted_anti_pattern_out(store):
-    live = server.anti_pattern("fixture title", pattern="retry without backoff", why_wrong="stampede",
-                               instead="exponential backoff", domain="acme/x100")["uid"]
+def test_pulse_does_not_count_a_contradicted_anti_pattern(store):
+    server.anti_pattern("fixture title", pattern="retry without backoff", why_wrong="stampede",
+                               instead="exponential backoff", domain="acme/x100")
     stale = server.anti_pattern("fixture title", pattern="batch over 100 rows", why_wrong="times out",
                                 instead="page it", domain="acme/x100")["uid"]
     server.set_confidence(stale, "contradicted")
-    assert [r["uid"] for r in server.pulse("acme/x100")["anti_patterns"]] == [live]
+    assert server.pulse("acme/x100")["pending"] == [{"type": "anti_pattern", "count": 1}]
 
 
 def test_pulse_falls_through_to_a_sound_checkpoint(store):

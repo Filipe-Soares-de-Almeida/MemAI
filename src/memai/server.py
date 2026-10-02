@@ -57,7 +57,10 @@ diagram() a routine start to end. One memory holds ONE fact: when a body
 grows into several subjects, write them as separate memories and
 link_memories() them to each other. A claim you could not check says so in
 its own body; set_confidence(uid, 'confirmed'|'contradicted') closes it
-once the evidence turns up.
+once the evidence turns up. pending() says which memories wait to be read
+in a scope -- open tasks first (task() files one), then pitfalls, handoffs,
+notes and flows; work an open task with task_item() and it closes itself
+once every item is done or dropped.
 
 A domain is a path ('acme/x100/p200') and every read covers its
 subdomains, so the same call asks about a product or one routine depending
@@ -245,21 +248,6 @@ def _row_to_dict(row) -> dict:
 
 
 SNIPPET_LIMIT = 400
-# What one warm-up is allowed to cost, per list. Named rather than inline
-# because pulse() reports which of these it hit: a brief that silently
-# stopped at five reads as "there were five".
-PULSE_NOTES = 5  # recent note()'d facts surfaced as warm-up breadcrumbs
-PULSE_DIAGRAMS = 5  # documented flows named, never inlined -- see pulse()
-PULSE_HANDOFFS = 5
-PULSE_ANTI_PATTERNS = 10
-# the type each pulse list is drawn from, for "how many did it leave out"
-PULSE_LIST_TYPES = {
-    "recent_notes": "note",
-    "handoffs": "handoff",
-    "anti_patterns": "anti_pattern",
-    "diagrams": "diagram",
-    "latest_checkpoint": "checkpoint",
-}
 
 # Memory type tag per writer -- the retrieval tools filter on these exact
 # strings (search/recall/list_*(type=...)). Each writer tool is named
@@ -331,22 +319,6 @@ def _read(conn, rows):
                if isinstance(r, dict) and r.get("match_source")}
     db.record_recall(conn, [r["uid"] for r in rows], sources=sources or None)
     return rows
-
-
-def _list_scoped(conn, domain: str, type: str, limit: int) -> list:
-    """Recency-ordered rows of one type, for a warm-up: scoped to a domain
-    subtree if given, else global.
-
-    Contradicted rows are left out here and nowhere else. This feeds
-    pulse(), which presents what it returns as the current state of a
-    scope, and a pitfall that turned out not to be one reads there as a
-    pitfall. list_by_domain()/list_recent() still return them: a caller
-    asking a scope for everything means everything.
-    """
-    if domain:
-        return db.list_by_domain(conn, domain, type=type, limit=limit,
-                                 exclude_contradicted=True)
-    return db.list_recent(conn, type=type, limit=limit, exclude_contradicted=True)
 
 
 def _coerce_domain(conn, domain: str) -> tuple[str, dict | None]:
@@ -670,7 +642,7 @@ def task(title: str, goal: str, items: str, domain: str = "", also: str = "",
 
     Stored as type='task'. Work it with task_item(), grow it with task_add()
     and discuss it with task_comment(); it archives itself once every item is
-    done or dropped, and pulse() lists the open ones.
+    done or dropped, and pending() lists the open ones.
 
     title: one line naming what this task delivers, in the words someone
     would look for it by. At most 120 characters.
@@ -1417,29 +1389,42 @@ def pending(domain: str = "", type: str = "", limit: int = 10, offset: int = 0) 
     return result
 
 
+READ_NEXT_TASKS = ("Open tasks first: pending({domain}type='task'), then get_memory(uid) "
+                   "for each task you will touch. ")
+READ_NEXT_OTHERS = ("Then pending({domain}type=<t>) for each other category listed in "
+                    "`pending`, before acting.")
+
+
+def _read_next(domain: str, categories: list[dict]) -> str:
+    """The reading order for what is pending, or "" when nothing is."""
+    if not categories:
+        return ""
+    arg = f"'{domain}', " if domain else ""
+    first = READ_NEXT_TASKS if categories[0]["type"] == TYPE_TASK else ""
+    return (first + READ_NEXT_OTHERS).format(domain=arg)
+
+
 @tool("core")
 def pulse(domain: str = "") -> dict:
-    """Session warm-up: latest checkpoint + open handoffs/anti-patterns + recent notes.
+    """Session warm-up: the latest checkpoint, what is pending, and what to read next.
 
-    Picks the checkpoint by created_at DESC, never by similarity --
+    Returns {project, latest_checkpoint, pending, read_next, scope}.
+
+    latest_checkpoint is picked by created_at DESC, never by similarity --
     a similarity-ranked top-1 can return a stale checkpoint over a
-    same-day one, which is exactly the failure mode this avoids.
-    latest_checkpoint is returned in full (that's the point of pulse),
-    with its relations attached so linked memories are visible without
-    a separate get_relations call. handoffs and anti_patterns are notes
-    left for whoever resumes; recent_notes are the newest note()'d
-    facts, as recency breadcrumbs -- for relevance-ranked recall use
-    recall()/search(). Those three lists are snippet-truncated -- call
-    get_memory(uid) for one in full.
+    same-day one, which is exactly the failure mode this avoids. It is
+    returned in full (that's the point of pulse), with its relations
+    attached so linked memories are visible without a separate
+    get_relations call, and carries `est_tokens`, what this response already
+    spent on it.
 
-    latest_checkpoint and those three lists carry `est_tokens`, the
-    estimated cost of a record's FULL content: on a truncated one that is
-    what the get_memory(uid) would cost, on latest_checkpoint it is what
-    this response already spent. `diagrams` has no bodies to price.
-
-    diagrams lists the documented flows by title only, never inlined:
-    a whole graph would swamp a warm-up. Read one with get_diagram(uid)
-    when the work actually touches that routine.
+    `pending` is what pending(domain) returns without a type: a count per
+    category (task, anti_pattern, handoff, note, diagram), leaving out the
+    empty ones. `read_next` is the instruction to follow with it: open tasks
+    first, then pending(domain, type=...) for each other category, before
+    acting. It is "" when nothing is pending. A pulse lists no memories
+    besides the checkpoint; pending(domain, type=...) lists headers and
+    get_memory(uid) opens one.
 
     domain warms up a path and everything under it, so pulse('acme/x100')
     is the module-wide brief and pulse('acme/x100/p200') the routine's.
@@ -1447,15 +1432,12 @@ def pulse(domain: str = "") -> dict:
     to the branches it sits in -- `scope.paths` reports which, and an
     ambiguous name resolves to ALL of them.
 
-    `scope` is the rest of the brief: what the scope HOLDS, next to what
-    came back. This is a warm-up, so each list stops at a handful and the
-    newest few of a busy child can fill it on their own -- `scope.not_shown`
-    counts what that left behind, per type, and `scope.subdomains` says
-    which level it is sitting in (`own` = filed there, `subtree` = with its
-    descendants). Read them as the drill-down plan: search(query,
-    domain=...) or list_by_domain(domain, type=..., limit=...) on the child
-    that holds what this pass only counted. A pulse is the state of a
-    scope, never its contents.
+    `scope` is the rest of the brief: what the scope HOLDS. `scope.by_type`
+    counts every memory per type and `scope.subdomains` says which level it
+    is sitting in (`own` = filed there, `subtree` = with its descendants).
+    Read them as the drill-down plan: search(query, domain=...) or
+    list_by_domain(domain, type=..., limit=...) on the child that holds what
+    you need. A pulse is the state of a scope, never its contents.
 
     `scope.stale` is the one thing here about DECAY rather than contents:
     how many memories in the scope carry a `review_after` date that has
@@ -1474,50 +1456,19 @@ def pulse(domain: str = "") -> dict:
         census = db.domain_census(conn, domain)
         latest_checkpoint = db.latest_by_type(conn, TYPE_CHECKPOINT, domain=domain,
                                               exclude_contradicted=True)
-        handoffs = _list_scoped(conn, domain, TYPE_HANDOFF, PULSE_HANDOFFS)
-        anti_patterns = _list_scoped(conn, domain, TYPE_ANTI_PATTERN, PULSE_ANTI_PATTERNS)
-        recent_notes = _list_scoped(conn, domain, TYPE_NOTE, PULSE_NOTES)
-        diagram_rows = _list_scoped(conn, domain, TYPE_DIAGRAM, PULSE_DIAGRAMS)
-        diagrams = []
-        for r in diagram_rows:
-            meta = db.get_diagram_row(conn, r["uid"])
-            diagrams.append({
-                "uid": r["uid"],
-                "domain": r["domain"],
-                "title": meta["title"] if meta else "",
-            })
+        categories = pending_lists.counts(conn, domain)
         checkpoint_dict = _row_to_dict(latest_checkpoint)
         if checkpoint_dict:
             # Returned whole, so its est_tokens is what this response spent
             # on it rather than what a fetch would cost.
             _with_est_tokens(checkpoint_dict)
             checkpoint_dict["relations"] = [_row_to_dict(r) for r in db.get_relations(conn, checkpoint_dict["uid"])]
-        # A warm-up hands all of this to the caller, so all of it counts as
-        # read -- diagrams included, which are named here and nothing else.
-        _read(conn, [*handoffs, *anti_patterns, *recent_notes, *diagram_rows,
-                     *([latest_checkpoint] if latest_checkpoint else [])])
-    shown = {
-        "latest_checkpoint": [checkpoint_dict] if checkpoint_dict else [],
-        "handoffs": handoffs,
-        "anti_patterns": anti_patterns,
-        "recent_notes": recent_notes,
-        "diagrams": diagrams,
-    }
-    # what each list left behind, from the census -- reported per LIST, since
-    # that is what the reader is looking at, and only where something was
-    # actually left (a zero everywhere teaches the block to be skipped)
-    not_shown = {}
-    for key, type_ in PULSE_LIST_TYPES.items():
-        left = census["by_type"].get(type_, 0) - len(shown[key])
-        if left > 0:
-            not_shown[key] = left
+            _read(conn, [latest_checkpoint])
     return {
         "project": db.active_project(),
         "latest_checkpoint": checkpoint_dict,
-        "handoffs": [_snippet_dict(_row_to_dict(r)) for r in handoffs],
-        "anti_patterns": [_snippet_dict(_row_to_dict(r)) for r in anti_patterns],
-        "recent_notes": [_snippet_dict(_row_to_dict(r)) for r in recent_notes],
-        "diagrams": diagrams,
+        "pending": categories,
+        "read_next": _read_next(domain, categories),
         "scope": {
             "domain": domain,
             "paths": census["paths"],
@@ -1525,7 +1476,6 @@ def pulse(domain: str = "") -> dict:
             **({"also": census["also"]} if census.get("also") else {}),
             **({"stale": census["stale"]} if census.get("stale") else {}),
             "by_type": census["by_type"],
-            "not_shown": not_shown,
             "subdomains": census["children"],
         },
     }

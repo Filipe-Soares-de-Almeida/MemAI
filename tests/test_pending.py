@@ -196,3 +196,60 @@ def test_pending_tool_refuses_a_type_it_does_not_serve(store):
 
 def test_pending_on_an_unknown_domain_is_empty_not_an_error(seeded):
     assert server.pending(domain="nowhere/at/all") == {"categories": []}
+
+
+# -------------------------------------------------------------------- pulse
+
+
+def test_pulse_returns_counts_not_lists(seeded):
+    result = server.pulse(DOMAIN)
+    assert set(result) == {"project", "latest_checkpoint", "pending", "read_next", "scope"}
+    for gone in ("handoffs", "anti_patterns", "recent_notes", "diagrams"):
+        assert gone not in result
+    assert result["pending"] == FULL
+    assert "not_shown" not in result["scope"]
+
+
+def test_pulse_still_returns_the_checkpoint_in_full(store):
+    body = "Where the parser stands. " * 60
+    uid = server.checkpoint(title="Parser bearing", intent="Finish the parser",
+                            established=body, pursuing="The lexer",
+                            open_questions="None", domain=DOMAIN)["uid"]
+    server.link_memories(uid, server.note(title="Lexer fact", content="Lex once.",
+                                          domain=DOMAIN)["uid"], "relates_to")
+    checkpoint = server.pulse(DOMAIN)["latest_checkpoint"]
+    assert checkpoint["uid"] == uid
+    assert body.strip() in checkpoint["content"]
+    assert "[+" not in checkpoint["content"]
+    assert len(checkpoint["relations"]) == 1
+
+
+def test_pulse_counts_do_not_include_contradicted_rows(seeded):
+    by_type = {c["type"]: c["count"] for c in server.pulse(DOMAIN)["pending"]}
+    assert by_type["anti_pattern"] == 1
+
+
+def test_read_next_puts_tasks_first(seeded):
+    read_next = server.pulse(DOMAIN)["read_next"]
+    assert read_next.startswith("Open tasks first: pending('acme/x100', type='task')")
+    assert "get_memory(uid)" in read_next
+    assert "pending('acme/x100', type=<t>)" in read_next
+
+
+def test_read_next_without_a_domain_omits_the_argument(seeded):
+    assert server.pulse()["read_next"].startswith("Open tasks first: pending(type='task')")
+
+
+def test_read_next_without_tasks_and_when_empty(store):
+    assert server.pulse(DOMAIN)["read_next"] == ""
+    assert server.pulse(DOMAIN)["pending"] == []
+    server.note(title="Parser fact", content="Fact.", domain=DOMAIN)
+    read_next = server.pulse(DOMAIN)["read_next"]
+    assert read_next.startswith("Then pending('acme/x100', type=<t>)")
+    assert "Open tasks" not in read_next
+
+
+def test_instructions_name_pending_and_tasks():
+    assert "pending(" in server.INSTRUCTIONS
+    assert "task(" in server.INSTRUCTIONS
+    assert "pulse(domain)" in server.INSTRUCTIONS

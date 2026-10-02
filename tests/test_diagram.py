@@ -903,13 +903,13 @@ def test_mcp_jump_is_visible_on_both_diagrams(mcp):
     assert mcp.diagram_jump(b, "load", a, "write", delete=True)["ok"] is False
 
 
-def test_mcp_pulse_names_diagrams_without_inlining_them(mcp):
-    uid = mcp.diagram(
+def test_mcp_pulse_counts_diagrams_without_listing_them(mcp):
+    mcp.diagram(
         title="Nightly export routine", nodes=NODES, edges=EDGES, domain="proj-1042",
-    )["uid"]
-    entry = mcp.pulse(domain="proj-1042")["diagrams"][0]
-    assert entry == {"uid": uid, "domain": "proj-1042", "title": "Nightly export routine"}
-    assert "content" not in entry  # a whole graph would swamp a warm-up
+    )
+    p = mcp.pulse(domain="proj-1042")
+    assert p["pending"] == [{"type": "diagram", "count": 1}]
+    assert "diagrams" not in p  # a whole graph would swamp a warm-up
 
 
 def test_mcp_relayout_reports_what_it_moved(mcp):
