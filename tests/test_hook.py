@@ -626,3 +626,149 @@ def test_the_flag_overrides_the_stored_interval(store, capsysbinary, tmp_path):
         json.dumps({**warden.read("session-1"), "asked_at": hours}), encoding="utf-8")
     assert _run("stop", {"session_id": "session-1"}, capsysbinary,
                 argv=(*argv, "--warden-minutes", "1"))
+
+
+# ------------------------------------------------------- asking about tasks
+
+def _open_tasks(count: int = 2, *, backdate: bool = False) -> None:
+    """`count` open tasks in the store; `backdate` ages every memory so the
+    checkpoint nudge is owed too."""
+    with db.connect() as conn:
+        for _ in range(count):
+            _seed_task(conn)
+        if backdate:
+            old = (datetime.now(timezone.utc) - timedelta(days=3)).isoformat()
+            conn.execute("UPDATE memories SET created_at = ?", (old,))
+
+
+def _age_task_ask(session_id: str, minutes: int) -> None:
+    """Move the task ask's stamp back, as if that long had passed."""
+    earlier = (datetime.now(timezone.utc) - timedelta(minutes=minutes)).isoformat()
+    warden.state_path(session_id).write_text(
+        json.dumps({**warden.read(session_id), "tasks_asked_at": earlier}),
+        encoding="utf-8")
+
+
+def test_stop_blocks_when_tasks_are_open(store, capsysbinary):
+    _open_tasks(2)
+    out = _run("stop", {"session_id": "session-1"}, capsysbinary)
+    assert out["decision"] == "block"
+    assert "2 open tasks" in out["reason"]
+    assert "pending(type='task')" in out["reason"]
+    assert set(out) == {"decision", "reason"}
+
+
+def test_the_block_says_one_task_in_the_singular(store, capsysbinary):
+    _open_tasks(1)
+    out = _run("stop", {"session_id": "session-1"}, capsysbinary)
+    assert "1 open task." in out["reason"]
+
+
+def test_stop_does_not_block_twice_in_one_interval(store, capsysbinary):
+    _open_tasks(2)
+    assert _run("stop", {"session_id": "session-1"}, capsysbinary)["decision"] == "block"
+    assert _run("stop", {"session_id": "session-1"}, capsysbinary) is None
+
+
+def test_stop_blocks_again_after_the_interval(store, capsysbinary):
+    _open_tasks(2)
+    assert _run("stop", {"session_id": "session-1"}, capsysbinary)
+    _age_task_ask("session-1", 2)
+    out = _run("stop", {"session_id": "session-1"}, capsysbinary,
+               argv=("--task-minutes", "1"))
+    assert out["decision"] == "block"
+
+
+def test_the_task_flag_overrides_the_stored_interval(store, capsysbinary):
+    _open_tasks(2)
+    with db.connect() as conn:
+        db.set_task_ask_minutes(conn, 480)
+    assert _run("stop", {"session_id": "session-1"}, capsysbinary)
+    _age_task_ask("session-1", 2)
+    assert _run("stop", {"session_id": "session-1"}, capsysbinary) is None
+    assert _run("stop", {"session_id": "session-1"}, capsysbinary,
+                argv=("--task-minutes", "1"))["decision"] == "block"
+
+
+def test_the_block_carries_the_other_notes(store, capsysbinary, tmp_path):
+    """The reason leads with the task ask, then the checkpoint nudge and the
+    warden ask, joined by a blank line."""
+    _open_tasks(2, backdate=True)
+    out = _run("stop", {"session_id": "session-1"}, capsysbinary,
+               argv=_with_agent(tmp_path))
+    reason = out["reason"]
+    assert reason.startswith("MemAI: this project has 2 open tasks.")
+    assert reason.index("2 open tasks") < reason.index("note()") < reason.index("memai-warden")
+    assert "\n\n" in reason
+    assert "hookSpecificOutput" not in out
+
+
+def test_no_block_without_open_tasks(store, capsysbinary):
+    """A completed task is not open, so the output is what it was before."""
+    with db.connect() as conn:
+        uid = tasks.create_task(conn, title="Ship the retry path", goal="Retries back off",
+                                items=["add the backoff"], domain="acme/x100")
+        tasks.set_item_state(conn, uid, "i1", "done")
+    assert _run("stop", {"session_id": "session-1"}, capsysbinary) is None
+
+
+def test_no_block_when_switched_off(store, capsysbinary):
+    _open_tasks(2)
+    with db.connect() as conn:
+        db.set_task_ask_enabled(conn, False)
+    assert _run("stop", {"session_id": "session-1"}, capsysbinary) is None
+
+
+def test_the_task_switch_does_not_touch_the_warden_switch(store):
+    with db.connect() as conn:
+        db.set_task_ask_enabled(conn, False)
+        assert db.get_warden_enabled(conn) is True
+
+
+def test_no_block_without_a_session_id(store, capsysbinary):
+    """Nothing can record the ask, so making it would repeat it every turn."""
+    _open_tasks(2)
+    assert _run("stop", {}, capsysbinary) is None
+
+
+def test_no_block_for_an_unsafe_session_id(store, capsysbinary):
+    _open_tasks(2)
+    assert _run("stop", {"session_id": "../escape"}, capsysbinary) is None
+
+
+def test_stop_hook_active_still_returns_first(store, capsysbinary):
+    _open_tasks(2)
+    assert _run("stop", {"session_id": "session-1", "stop_hook_active": True},
+                capsysbinary) is None
+    assert warden.read("session-1") == {}
+
+
+def test_a_failed_stamp_cancels_the_block(store, capsysbinary, monkeypatch):
+    """An ask the interval cannot see would repeat on every turn."""
+    _open_tasks(2)
+    monkeypatch.setattr(warden, "mark_tasks", lambda session_id: {})
+    assert _run("stop", {"session_id": "session-1"}, capsysbinary) is None
+
+
+def test_a_store_that_cannot_be_opened_does_not_block(store, capsysbinary, monkeypatch):
+    """The hook is attached to somebody's session: no store, no ask, exit 0."""
+    def refuse(*args, **kwargs):
+        raise OSError("store is not readable")
+    monkeypatch.setattr(db, "connect", refuse)
+    assert _run("stop", {"session_id": "session-1"}, capsysbinary) is None
+
+
+def test_a_failing_task_read_asks_nothing_and_leaves_the_other_notes(
+        store, capsysbinary, monkeypatch):
+    """Only the task ask is lost when counting the open tasks raises."""
+    from memai import pending
+    _open_tasks(2, backdate=True)
+
+    def refuse(*args, **kwargs):
+        raise RuntimeError("cannot count")
+    monkeypatch.setattr(pending, "counts", refuse)
+    args = hook.argparse.Namespace(task_minutes=None)
+    assert hook._task_ask(args, {"session_id": "session-1"}) == ""
+    out = _run("stop", {"session_id": "session-1"}, capsysbinary)
+    assert "decision" not in out
+    assert "note()" in _context(out)

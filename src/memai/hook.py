@@ -7,8 +7,9 @@ JSON object on stdout:
                   a note when a newer memai has been released
   pre-compact     a reminder to checkpoint before the context is summarised
   stop            a nudge to checkpoint when nothing was written, a request
-                  for the warden subagent when one is owed, and the release
-                  check memai.update caches for the next session
+                  for the warden subagent when one is owed, a block asking
+                  about the project's open tasks when that is owed, and the
+                  release check memai.update caches for the next session
 
 A fourth reads the call the host is about to make instead of the store, and
 is the one exception to everything the last paragraph of this docstring says:
@@ -44,7 +45,7 @@ import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from memai import brief, db, guard, hook_install, update, warden
+from memai import brief, db, guard, hook_install, pending, update, warden
 
 # How long after the last write a Stop hook assumes the session already
 # recorded what it learned. Long enough to cover a stretch of reading and
@@ -85,6 +86,16 @@ def _emit(event: str, context: str, *, system: str = "") -> None:
     out: dict = {"hookSpecificOutput": {"hookEventName": event, "additionalContext": context}}
     if system:
         out["systemMessage"] = system
+    sys.stdout.buffer.write(json.dumps(out, ensure_ascii=False).encode("utf-8"))
+    sys.stdout.buffer.flush()
+
+
+def _block(reason: str) -> None:
+    """A Stop result that keeps the session working, with `reason` as the ask.
+
+    Bytes rather than sys.stdout for the reason given in _emit.
+    """
+    out = {"decision": "block", "reason": reason}
     sys.stdout.buffer.write(json.dumps(out, ensure_ascii=False).encode("utf-8"))
     sys.stdout.buffer.flush()
 
@@ -196,12 +207,46 @@ def _warden_ask(args, payload) -> str:
     return warden.request(session_id, transcript=transcript, since=since)
 
 
+def _task_ask(args, payload) -> str:
+    """Ask the session to settle the project's open tasks, or "" when it is not owed.
+
+    The ask is stamped BEFORE it is returned and a stamp that could not be
+    written cancels it. Any failure reading the store is no ask: the hook
+    never interrupts a session over a store it cannot read.
+    """
+    try:
+        session_id = payload.get("session_id", "")
+        if not warden.safe_id(session_id):
+            return ""
+        with db.connect() as conn:
+            if not db.get_task_ask_enabled(conn):
+                return ""
+            minutes = (args.task_minutes if args.task_minutes is not None
+                       else db.get_task_ask_minutes(conn))
+            open_tasks = sum(c["count"] for c in pending.counts(conn)
+                             if c["type"] == db.TASK_TYPE)
+        if not open_tasks or not warden.task_due(session_id, minutes):
+            return ""
+        if not warden.mark_tasks(session_id):
+            return ""
+    except Exception:
+        return ""
+    count = f"{open_tasks} open task" + ("" if open_tasks == 1 else "s")
+    return (f"MemAI: this project has {count}. Call pending(type='task'). For each "
+            "task this session worked on, update its items with task_item(uid, "
+            "item, state, comment, related) -- a task closes itself once every "
+            "item is done or dropped. If this session did not touch any of them, "
+            "say so in one line and stop.")
+
+
 def _stop(args, payload) -> None:
     """Whatever the store has to say at the end of a turn, as one result.
 
-    Both notes read state before they speak, and either can be silent, so a
-    turn with nothing to say emits nothing at all. Then the release check
-    refreshes what it caches, which is read by the sessions after this one.
+    Every note reads state before it speaks, and any can be silent, so a turn
+    with nothing to say emits nothing at all. An owed task ask turns the
+    result into a block that carries the other notes after it. Then the
+    release check refreshes what it caches, which is read by the sessions
+    after this one.
     """
     if payload.get("stop_hook_active"):
         return
@@ -211,7 +256,10 @@ def _stop(args, payload) -> None:
         if note:
             notes.append(note)
             systems.append(system)
-    if notes:
+    tasks_ask = _task_ask(args, payload)
+    if tasks_ask:
+        _block("\n\n".join([tasks_ask, *notes]))
+    elif notes:
         _emit("Stop", "\n\n".join(notes), system="MemAI: " + "; ".join(systems) + ".")
     # After the emit, and never part of it: the answer is for the next session
     # to read, and this is the end of a turn, where the request costs nobody
@@ -454,6 +502,11 @@ def main(argv: list[str] | None = None) -> int:
                              "is asked for again (stop only); overrides the "
                              "interval the dashboard writes, which defaults to "
                              f"{db.WARDEN_MINUTES_DEFAULT}")
+    parser.add_argument("--task-minutes", type=int, default=None,
+                        help="how long a session goes before the open tasks are "
+                             "asked about again (stop only); overrides the "
+                             "interval the dashboard writes, which defaults to "
+                             f"{db.TASK_ASK_MINUTES_DEFAULT}")
     parser.add_argument("--settings", default="",
                         help="install into this settings file instead of the user's; "
                              "memai maintains the user's settings and checks nothing "

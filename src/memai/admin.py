@@ -1473,6 +1473,8 @@ def get_config(request, payload) -> dict:
                 "svg_retention": db.get_svg_retention(conn),
                 "warden_enabled": db.get_warden_enabled(conn),
                 "warden_minutes": db.get_warden_minutes(conn),
+                "task_ask_enabled": db.get_task_ask_enabled(conn),
+                "task_ask_minutes": db.get_task_ask_minutes(conn),
                 "sections": {type_: [_section_spec(s) for s in spec]
                              for type_, spec in sections.SECTION_SPEC.items()}}
 
@@ -1487,7 +1489,9 @@ def set_config(request, payload) -> dict:
     writers = {"domain_case": db.set_domain_case,
                "svg_retention": db.set_svg_retention,
                "warden_enabled": db.set_warden_enabled,
-               "warden_minutes": db.set_warden_minutes}
+               "warden_minutes": db.set_warden_minutes,
+               "task_ask_enabled": db.set_task_ask_enabled,
+               "task_ask_minutes": db.set_task_ask_minutes}
     given = {k: payload[k] for k in writers if payload.get(k) is not None}
     if not given:
         raise ValueError(f"expected one of {', '.join(writers)}")
@@ -1497,7 +1501,9 @@ def set_config(request, payload) -> dict:
         return {"domain_case": db.get_domain_case(conn),
                 "svg_retention": db.get_svg_retention(conn),
                 "warden_enabled": db.get_warden_enabled(conn),
-                "warden_minutes": db.get_warden_minutes(conn)}
+                "warden_minutes": db.get_warden_minutes(conn),
+                "task_ask_enabled": db.get_task_ask_enabled(conn),
+                "task_ask_minutes": db.get_task_ask_minutes(conn)}
 
 
 # ------------------------------------------------------------- maintenance

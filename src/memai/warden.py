@@ -109,6 +109,15 @@ def mark(session_id: str, **fields) -> dict:
     return _write(session_id, {**fields, "asked_at": db.now_iso()})
 
 
+def mark_tasks(session_id: str) -> dict:
+    """Stamp `tasks_asked_at` in `session_id`'s state and return it.
+
+    Independent of `mark`: the task ask and the warden ask keep separate
+    intervals in the same file.
+    """
+    return _write(session_id, {"tasks_asked_at": db.now_iso()})
+
+
 def began(session_id: str) -> dict:
     """Record that `session_id` has just started, without asking for anything.
 
@@ -145,17 +154,10 @@ def loaded(session_id: str, agent: Path) -> bool:
     return installed <= at + GRACE
 
 
-def due(session_id: str, minutes: int = db.WARDEN_MINUTES_DEFAULT,
-        *, now: datetime | None = None) -> bool:
-    """Whether the warden is owed a run in `session_id`.
-
-    True for a session that has never been asked, and for one whose last ask
-    is older than `minutes`. An `asked_at` that cannot be parsed counts as
-    never asked -- the same reasoning as `read`.
-    """
+def _elapsed(session_id: str, field: str, minutes: int, now: datetime | None) -> bool:
     if not safe_id(session_id):
         return False
-    asked = read(session_id).get("asked_at")
+    asked = read(session_id).get(field)
     if not isinstance(asked, str) or not asked:
         return True
     try:
@@ -166,6 +168,27 @@ def due(session_id: str, minutes: int = db.WARDEN_MINUTES_DEFAULT,
         stamp = stamp.replace(tzinfo=timezone.utc)
     at = now or datetime.now(timezone.utc)
     return at - stamp >= timedelta(minutes=minutes)
+
+
+def due(session_id: str, minutes: int = db.WARDEN_MINUTES_DEFAULT,
+        *, now: datetime | None = None) -> bool:
+    """Whether the warden is owed a run in `session_id`.
+
+    True for a session that has never been asked, and for one whose last ask
+    is older than `minutes`. An `asked_at` that cannot be parsed counts as
+    never asked -- the same reasoning as `read`.
+    """
+    return _elapsed(session_id, "asked_at", minutes, now)
+
+
+def task_due(session_id: str, minutes: int = db.TASK_ASK_MINUTES_DEFAULT,
+             *, now: datetime | None = None) -> bool:
+    """Whether `session_id` is owed the ask about its open tasks.
+
+    Same rules as `due`, read from `tasks_asked_at`: a session with no safe
+    id is never owed it, and an unparseable stamp counts as never asked.
+    """
+    return _elapsed(session_id, "tasks_asked_at", minutes, now)
 
 
 def prune(days: int = 14) -> int:

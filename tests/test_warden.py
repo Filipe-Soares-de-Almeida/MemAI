@@ -254,3 +254,85 @@ def test_a_stored_interval_out_of_range_reads_as_the_default(store):
         conn.execute("INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)",
                      (db.WARDEN_MINUTES_KEY, "not a number"))
         assert db.get_warden_minutes(conn) == db.WARDEN_MINUTES_DEFAULT
+
+
+# ------------------------------------------------------- the task ask's stamp
+
+def test_a_session_never_asked_about_tasks_is_owed_the_ask(store):
+    assert warden.task_due("session-1", 30) is True
+
+
+def test_marking_the_task_ask_satisfies_its_interval(store):
+    warden.mark_tasks("session-1")
+    assert warden.task_due("session-1", 30) is False
+    later = datetime.now(timezone.utc) + timedelta(minutes=31)
+    assert warden.task_due("session-1", 30, now=later) is True
+
+
+def test_the_task_ask_and_the_warden_ask_are_independent(store):
+    """Stamping one leaves the other owed."""
+    warden.mark_tasks("session-1")
+    assert warden.due("session-1") is True
+    warden.mark("session-1")
+    assert warden.task_due("session-1", 30) is False
+    other = "session-2"
+    warden.mark(other)
+    assert warden.task_due(other, 30) is True
+
+
+def test_a_task_stamp_merges_with_what_is_on_file(store):
+    warden.mark("session-1", transcript="/tmp/a.jsonl")
+    state = warden.mark_tasks("session-1")
+    assert state["tasks_asked_at"]
+    assert warden.read("session-1")["transcript"] == "/tmp/a.jsonl"
+    assert warden.read("session-1")["asked_at"]
+
+
+def test_a_session_without_a_safe_id_is_never_owed_the_task_ask(store):
+    assert warden.task_due("", 30) is False
+    assert warden.task_due("../escape", 30) is False
+    assert warden.mark_tasks("") == {}
+
+
+def test_an_unreadable_task_stamp_counts_as_never_asked(store):
+    warden.state_path("session-1").write_text(
+        json.dumps({"tasks_asked_at": "not a timestamp"}), encoding="utf-8")
+    assert warden.task_due("session-1", 30) is True
+
+
+# --------------------------------------------------- the task ask's own settings
+
+def test_the_task_ask_is_on_every_thirty_minutes_by_default(store):
+    with db.connect() as conn:
+        assert db.get_task_ask_enabled(conn) is True
+        assert db.get_task_ask_minutes(conn) == db.TASK_ASK_MINUTES_DEFAULT == 30
+
+
+@pytest.mark.parametrize("given, expected", [
+    (False, False), (True, True), ("off", False), ("0", False), ("on", True),
+])
+def test_the_task_switch_takes_a_bool_or_what_a_form_sends(store, given, expected):
+    with db.connect() as conn:
+        assert db.set_task_ask_enabled(conn, given) is expected
+        assert db.get_task_ask_enabled(conn) is expected
+
+
+@pytest.mark.parametrize("bad", [0, -5, 481, "", "soon", None, 3.7])
+def test_a_task_interval_outside_the_range_is_refused(store, bad):
+    with db.connect() as conn:
+        with pytest.raises(ValueError):
+            db.set_task_ask_minutes(conn, bad)
+
+
+def test_the_task_interval_round_trips_apart_from_the_warden_s(store):
+    with db.connect() as conn:
+        assert db.set_task_ask_minutes(conn, 45) == 45
+        assert db.get_task_ask_minutes(conn) == 45
+        assert db.get_warden_minutes(conn) == db.WARDEN_MINUTES_DEFAULT
+
+
+def test_a_stored_task_interval_out_of_range_reads_as_the_default(store):
+    with db.connect() as conn:
+        conn.execute("INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)",
+                     (db.TASK_ASK_MINUTES_KEY, "99999"))
+        assert db.get_task_ask_minutes(conn) == db.TASK_ASK_MINUTES_DEFAULT

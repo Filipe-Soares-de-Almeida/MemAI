@@ -1101,6 +1101,56 @@ def set_warden_minutes(conn: sqlite3.Connection, minutes: object) -> int:
     return value
 
 
+TASK_ASK_ENABLED_KEY = "task_ask_enabled"
+TASK_ASK_ENABLED_DEFAULT = True
+TASK_ASK_MINUTES_KEY = "task_ask_minutes"
+TASK_ASK_MINUTES_DEFAULT = 30
+# Same bounds as the warden's: a session is one conversation, and below a
+# minute the ask would land on every turn.
+TASK_ASK_MINUTES_RANGE = (1, 480)
+
+
+def get_task_ask_enabled(conn: sqlite3.Connection) -> bool:
+    """Whether the Stop hook may block a session to ask about its open tasks.
+
+    Read from the project `conn` is on, like the warden's switch.
+    """
+    value = _get_meta(conn, TASK_ASK_ENABLED_KEY)
+    return TASK_ASK_ENABLED_DEFAULT if value is None else value == "1"
+
+
+def set_task_ask_enabled(conn: sqlite3.Connection, enabled: object) -> bool:
+    """Persist the task-ask switch. Accepts a bool or the strings a form sends."""
+    if isinstance(enabled, str):
+        enabled = enabled.strip().lower() not in ("", "0", "false", "off", "no")
+    _set_meta(conn, TASK_ASK_ENABLED_KEY, "1" if enabled else "0")
+    return bool(enabled)
+
+
+def get_task_ask_minutes(conn: sqlite3.Connection) -> int:
+    """How long a session goes before the Stop hook asks about tasks again."""
+    try:
+        value = int(_get_meta(conn, TASK_ASK_MINUTES_KEY) or "")
+    except ValueError:
+        return TASK_ASK_MINUTES_DEFAULT
+    low, high = TASK_ASK_MINUTES_RANGE
+    return value if low <= value <= high else TASK_ASK_MINUTES_DEFAULT
+
+
+def set_task_ask_minutes(conn: sqlite3.Connection, minutes: object) -> int:
+    """Persist the task-ask interval, in minutes."""
+    low, high = TASK_ASK_MINUTES_RANGE
+    try:
+        value = int(str(minutes).strip())
+    except (TypeError, ValueError):
+        raise ValueError(f"task_ask_minutes must be a whole number of minutes "
+                         f"between {low} and {high}")
+    if not low <= value <= high:
+        raise ValueError(f"task_ask_minutes must be between {low} and {high}")
+    _set_meta(conn, TASK_ASK_MINUTES_KEY, str(value))
+    return value
+
+
 def renders_usage() -> dict:
     """What the render folder currently costs, for the maintenance view."""
     files = [p for p in renders_dir().iterdir()

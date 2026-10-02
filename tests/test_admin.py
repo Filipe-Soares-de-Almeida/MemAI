@@ -964,3 +964,27 @@ def test_dashboard_refuses_to_create_a_task_as_a_plain_memory(client):
     assert "task tools" in res.json()["error"]
     with db.connect() as conn:
         assert conn.execute("SELECT COUNT(*) FROM memories").fetchone()[0] == 0
+
+
+def test_config_carries_the_task_ask_settings(client):
+    body = client.get("/api/config").json()
+    assert body["task_ask_enabled"] is True
+    assert body["task_ask_minutes"] == 30
+
+
+def test_config_round_trips_the_task_ask_settings(client):
+    res = client.post("/api/config", json={"task_ask_minutes": 45})
+    assert res.status_code == 200
+    assert res.json()["task_ask_minutes"] == 45
+    assert client.get("/api/config").json()["task_ask_minutes"] == 45
+    res = client.post("/api/config", json={"task_ask_enabled": False})
+    assert res.json()["task_ask_enabled"] is False
+    assert res.json()["task_ask_minutes"] == 45
+    assert res.json()["warden_enabled"] is True
+
+
+@pytest.mark.parametrize("minutes", [0, 481])
+def test_config_refuses_a_task_interval_out_of_range(client, minutes):
+    assert client.post("/api/config",
+                       json={"task_ask_minutes": minutes}).status_code == 400
+    assert client.get("/api/config").json()["task_ask_minutes"] == 30
