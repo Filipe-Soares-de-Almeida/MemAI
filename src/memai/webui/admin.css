@@ -2773,15 +2773,14 @@ button.rs-mono:hover { color: var(--accent); }
 .tk-main:hover .tk-counts, .tk-main:hover .tk-chev { color: var(--ink); }
 .tk-main[aria-expanded="true"] .tk-chev { transform: rotate(90deg); }
 
-/* One item's links and comments, open under its row: an inset well as wide as the
-   row, darker than the list, flush with it. A rule drops from the centre of the
-   state mark, and the content lines up with the item's text. */
+/* One item's links and comments, open under its row: a flush --inset well, between the
+   page and the list rows. A rule drops from the state mark; content aligns with the text. */
 .tk-panel {
   --mark: calc(var(--sp-3) + var(--ctl-h-sm) / 2);
   position: relative;
   display: flex; flex-direction: column; gap: var(--sp-3);
   padding: var(--sp-3) var(--sp-3) var(--sp-4) calc(var(--sp-3) + var(--ctl-h-sm) + var(--sp-2));
-  background: var(--bg);
+  background: var(--inset);
   box-shadow: inset 0 5px 6px -5px rgba(0, 0, 0, .55);
 }
 .tk-panel::before {

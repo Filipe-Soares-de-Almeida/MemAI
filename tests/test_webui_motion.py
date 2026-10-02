@@ -175,13 +175,13 @@ def _ratio(a: float, b: float) -> float:
     return (hi + 0.05) / (lo + 0.05)
 
 
-def test_the_item_panel_is_darker_than_its_row_and_its_text_reads_on_it():
+def test_the_item_panel_sits_between_the_page_and_its_row_and_its_text_reads_on_it():
     css = _css()
     panel = re.search(r"^\.tk-panel \{([^}]*)\}", css, re.M).group(1)
-    assert "background: var(--bg)" in panel
+    assert "background: var(--inset)" in panel
     assert "margin" not in panel and "border-radius" not in panel
-    well, rows = _hex(css, "bg"), _hex(css, "surface")
-    assert _lum(well) < _lum(rows)
+    page, well, rows = _hex(css, "bg"), _hex(css, "inset"), _hex(css, "surface")
+    assert _lum(page) < _lum(well) < _lum(rows)
     for tier in ("ink", "ink-2", "ink-3"):
         a = _alpha(css, tier)
         text = tuple(a * 255 + (1 - a) * c for c in well)
