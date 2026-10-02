@@ -311,6 +311,47 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_diagram_jumps_pair
     ON diagram_jumps(from_uid, from_node, to_uid, to_node);
 CREATE INDEX IF NOT EXISTS idx_diagram_jumps_to ON diagram_jumps(to_uid);
 
+CREATE TABLE IF NOT EXISTS tasks (
+    memory_uid   TEXT PRIMARY KEY REFERENCES memories(uid),
+    goal         TEXT NOT NULL,
+    state        TEXT NOT NULL DEFAULT 'open',    -- open | completed | cancelled
+    completed_at TEXT NOT NULL DEFAULT ''
+);
+
+CREATE TABLE IF NOT EXISTS task_items (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    memory_uid      TEXT NOT NULL REFERENCES memories(uid),
+    item_key        TEXT NOT NULL,                -- i1, i2, ... never reused
+    seq             INTEGER NOT NULL,
+    text            TEXT NOT NULL,
+    state           TEXT NOT NULL DEFAULT 'todo', -- todo | doing | done | dropped
+    updated_at      TEXT NOT NULL,
+    updated_session TEXT NOT NULL DEFAULT '',
+    UNIQUE (memory_uid, item_key)
+);
+
+CREATE INDEX IF NOT EXISTS idx_task_items_mem ON task_items(memory_uid);
+
+CREATE TABLE IF NOT EXISTS task_item_links (
+    memory_uid TEXT NOT NULL REFERENCES memories(uid),
+    item_key   TEXT NOT NULL,
+    target_uid TEXT NOT NULL REFERENCES memories(uid),
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (memory_uid, item_key, target_uid)
+);
+
+CREATE TABLE IF NOT EXISTS task_comments (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    memory_uid TEXT NOT NULL REFERENCES memories(uid),
+    item_key   TEXT NOT NULL DEFAULT '',          -- '' = on the task as a whole
+    body       TEXT NOT NULL,
+    author     TEXT NOT NULL DEFAULT 'agent',     -- agent | person
+    session    TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_task_comments_mem ON task_comments(memory_uid);
+
 CREATE TABLE IF NOT EXISTS meta (
     key    TEXT PRIMARY KEY,
     value  TEXT NOT NULL
@@ -2418,6 +2459,7 @@ def get_relations(conn: sqlite3.Connection, uid: str) -> list[sqlite3.Row]:
 # reason (see is_diagram).
 
 DIAGRAM_TYPE = "diagram"
+TASK_TYPE = "task"
 DIAGRAM_KINDS = ("flowchart",)
 NODE_SHAPES = ("start", "step", "decision", "io", "end")
 
