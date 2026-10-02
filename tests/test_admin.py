@@ -907,3 +907,51 @@ def test_handlers_run_off_the_event_loop():
         released.set()
         worker.join(timeout=10)
     assert answered == {"slow": True}
+
+
+# ── tasks ───────────────────────────────────────────────────────────────
+
+def _task(**kw) -> str:
+    from memai import tasks
+
+    with db.connect() as conn:
+        return tasks.create_task(
+            conn, title="Ship the parser", goal="Parse every config file",
+            items=["read the spec", "write the lexer"], domain="acme/parser", **kw)
+
+
+def test_clean_orphans_removes_dangling_item_links(client):
+    uid = _task()
+    note = _create(client, content="the lexer reads one token")
+    with db.connect() as conn:
+        conn.execute(
+            "INSERT INTO task_item_links (memory_uid, item_key, target_uid, created_at) "
+            "VALUES (?, 'i1', ?, '2026-01-01T00:00:00+00:00')", (uid, note))
+    raw = sqlite3.connect(db.default_db_path())
+    try:
+        raw.execute("PRAGMA foreign_keys=OFF")
+        raw.execute(
+            "INSERT INTO task_item_links (memory_uid, item_key, target_uid, created_at) "
+            "VALUES (?, 'i2', 'ffffffffffffffff', '2026-01-01T00:00:00+00:00')", (uid,))
+        raw.commit()
+    finally:
+        raw.close()
+    res = client.post("/api/maintenance/clean-orphans", json={}).json()
+    assert res["ok"] and res["task_links_removed"] == 1
+    with db.connect() as conn:
+        assert [r["target_uid"] for r in conn.execute("SELECT target_uid FROM task_item_links")] == [note]
+
+
+def test_dashboard_refuses_free_text_edit_and_retype_of_a_task(client):
+    uid = _task()
+    note = _create(client, content="a plain note")
+    before = client.get(f"/api/memories/{uid}").json()["content"]
+    res = client.post(f"/api/memories/{uid}/content", json={"content": "x"})
+    assert res.status_code == 400
+    assert client.get(f"/api/memories/{uid}").json()["content"] == before
+    assert client.post(f"/api/memories/{uid}/meta", json={"type": "note"}).status_code == 400
+    assert client.post(f"/api/memories/{note}/meta", json={"type": "task"}).status_code == 400
+    assert client.get(f"/api/memories/{uid}").json()["type"] == "task"
+    assert client.get(f"/api/memories/{note}").json()["type"] == "note"
+    # the other fields of a task stay editable
+    assert client.post(f"/api/memories/{uid}/meta", json={"tags": "parser"}).status_code == 200

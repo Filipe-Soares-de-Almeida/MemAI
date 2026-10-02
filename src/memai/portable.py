@@ -8,9 +8,10 @@ with no Python. A store nobody can inspect is a store nobody audits.
 
 Two formats, for the two jobs:
 
-  jsonl  one record per line -- every column, cross-listings, relations and
+  jsonl  one record per line -- every column, cross-listings, relations,
          whole diagram graphs including the positions somebody arranged by
-         hand. Round-trippable, and line-oriented so a diff is per memory.
+         hand, and whole task checklists. Round-trippable, and line-oriented
+         so a diff is per memory.
   md     one document, grouped by domain. Export only, for reading and
          grepping.
 
@@ -28,7 +29,7 @@ import sys
 from collections import Counter
 from pathlib import Path
 
-from memai import db
+from memai import db, tasks
 
 FORMATS = ("jsonl", "md")
 FORMAT_VERSION = 1
@@ -68,7 +69,8 @@ def export_records(conn, *, domain: str = "", uids=None, include_archived: bool 
     """Every record of the export, in the order an import has to read them.
 
     Memories first, then their edit history when `include_edits` asks for
-    it, then the diagram graphs, then relations and diagram references:
+    it, then the diagram graphs, then the tasks, then relations and diagram
+    references:
     each of those names a memory that has to exist before the row about it
     can.
 
@@ -131,6 +133,11 @@ def export_records(conn, *, domain: str = "", uids=None, include_archived: bool 
                        "label": j["label"], "created_at": j["created_at"]}
                       for j in graph["jumps"]],
         }
+    for row in rows:
+        if row["type"] == db.TASK_TYPE:
+            record = _task_record(conn, row["uid"])
+            if record is not None:
+                yield record
     for r in conn.execute(
         "SELECT from_uid, to_uid, relation_type, note, created_at FROM relations "
         "ORDER BY created_at, id"
@@ -139,6 +146,30 @@ def export_records(conn, *, domain: str = "", uids=None, include_archived: bool 
         # an edge to nothing; the slice is the unit being carried
         if r["from_uid"] in inside and r["to_uid"] in inside:
             yield {"record": "relation", **dict(r)}
+
+
+def _task_record(conn, uid: str) -> dict | None:
+    """A task's goal, items, item links and comments, or None when it has no rows."""
+    head = conn.execute("SELECT * FROM tasks WHERE memory_uid = ?", (uid,)).fetchone()
+    if head is None:
+        return None
+    items = conn.execute(
+        "SELECT item_key, seq, text, state, updated_at, updated_session FROM task_items "
+        "WHERE memory_uid = ? ORDER BY seq, id", (uid,)).fetchall()
+    links = conn.execute(
+        "SELECT item_key, target_uid, created_at FROM task_item_links "
+        "WHERE memory_uid = ? ORDER BY created_at, target_uid", (uid,)).fetchall()
+    comments = conn.execute(
+        "SELECT item_key, body, author, session, created_at FROM task_comments "
+        "WHERE memory_uid = ? ORDER BY created_at, id", (uid,)).fetchall()
+    return {
+        "record": "task", "uid": uid, "goal": head["goal"], "state": head["state"],
+        "completed_at": head["completed_at"],
+        "items": [{"key": r["item_key"], **{k: r[k] for k in (
+            "seq", "text", "state", "updated_at", "updated_session")}} for r in items],
+        "links": [dict(r) for r in links],
+        "comments": [dict(r) for r in comments],
+    }
 
 
 def to_jsonl(records) -> str:
@@ -215,7 +246,7 @@ def import_records(conn, records) -> dict:
     """
     added, skipped, errors = 0, 0, []
     fresh: set[str] = set()
-    diagrams, relations, edits = [], [], []
+    diagrams, task_records, relations, edits = [], [], [], []
     for i, rec in enumerate(records):
         kind = rec.get("record")
         try:
@@ -230,6 +261,8 @@ def import_records(conn, records) -> dict:
                 edits.append(rec)
             elif kind == "diagram":
                 diagrams.append(rec)
+            elif kind == "task":
+                task_records.append(rec)
             elif kind == "relation":
                 relations.append(rec)
         except Exception as exc:  # one bad line must not lose the rest
@@ -251,6 +284,15 @@ def import_records(conn, records) -> dict:
             if db.get_diagram_row(conn, rec["uid"]) is None:
                 db.restore_diagram(conn, rec)
             db.restore_diagram_refs(conn, rec)
+        except Exception as exc:
+            errors.append({"uid": rec.get("uid"), "error": str(exc)})
+    for rec in task_records:
+        try:
+            uid = str(rec["uid"])
+            if uid in fresh and conn.execute(
+                "SELECT 1 FROM tasks WHERE memory_uid = ?", (uid,)
+            ).fetchone() is None:
+                tasks.restore_task(conn, rec)
         except Exception as exc:
             errors.append({"uid": rec.get("uid"), "error": str(exc)})
     linked = 0
@@ -278,7 +320,7 @@ def boundary(conn, uids) -> dict:
     """What a slice of memories points at, or is pointed at from, outside itself.
 
     An export carries only what joins two memories of the slice, so a
-    relation, a diagram link or jump, a `superseded_by` or a [[uid]] written
+    relation, a diagram link or jump, a task item link, a `superseded_by` or a [[uid]] written
     in a body that crosses the edge of the slice is dropped by the copy and
     deleted with the originals. Each kind comes back as `count` plus up to
     BOUNDARY_LIMIT `items`; the count is always the whole number.
@@ -301,6 +343,9 @@ def boundary(conn, uids) -> dict:
                 f"WHERE (from_uid {held}) <> (to_uid {held}) ORDER BY id"),
             "diagram_links": crossing(
                 "SELECT memory_uid AS diagram_uid, node_key, target_uid FROM diagram_node_links "
+                f"WHERE (memory_uid {held}) <> (target_uid {held}) ORDER BY created_at"),
+            "task_links": crossing(
+                "SELECT memory_uid AS task_uid, item_key, target_uid FROM task_item_links "
                 f"WHERE (memory_uid {held}) <> (target_uid {held}) ORDER BY created_at"),
             "diagram_jumps": crossing(
                 "SELECT from_uid, from_node, to_uid FROM diagram_jumps "
@@ -385,6 +430,7 @@ def move(source: str, target: str, *, uids=(), domain: str = "", dry_run: bool =
     report = {
         "source": source, "target": target, "creates": creates,
         "memories": len(slice_uids), "diagrams": kinds.get("diagram", 0),
+        "tasks": kinds.get("task", 0),
         "relations": kinds.get("relation", 0), "edits": kinds.get("edit", 0),
         "conflicts": conflicts, "unknown": sorted(set(wanted) - set(slice_uids)),
         "outside": outside,

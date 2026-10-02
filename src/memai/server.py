@@ -40,7 +40,7 @@ import os
 from mcp.server.fastmcp import FastMCP
 
 from memai import (autostart, brief, db, diagram_svg, hook_install, portable,
-                   sections, update)
+                   sections, tasks, update)
 
 # Sent to the host in the initialize handshake, and injected into the
 # model's context by the hosts that support it. Kept to a paragraph on
@@ -1469,7 +1469,8 @@ def edit_memory(uid: str, new_content: str = "", note: str = "", mode: str = "re
     graph, so a hand-written replacement would be silently overwritten by
     the next structural change -- edit the flow through
     diagram_node/diagram_edge. Its source_ref is ordinary metadata and is
-    editable here like any other memory's.
+    editable here like any other memory's. A task's content is generated
+    from its goal and items the same way, and is refused the same way.
     """
     if mode not in ("replace", "append"):
         return _errors([f"mode must be 'replace' or 'append'; got {mode!r}"])
@@ -1482,6 +1483,11 @@ def edit_memory(uid: str, new_content: str = "", note: str = "", mode: str = "re
                 return _errors([
                     f"{uid} is a diagram: its content is generated from the graph. "
                     "Use diagram_node/diagram_edge to change the flow."
+                ])
+            if tasks.is_task(conn, uid):
+                return _errors([
+                    f"{uid} is a task: its content is generated from the goal and "
+                    "items. Change them through the task tools."
                 ])
             try:
                 if not db.update_memory_content(conn, uid, new_content, note=note,

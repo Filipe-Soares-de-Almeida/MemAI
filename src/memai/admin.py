@@ -51,7 +51,7 @@ from starlette.responses import FileResponse, JSONResponse, Response
 from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 
-from memai import __version__, autostart, changelog, db, portable, sections, update
+from memai import __version__, autostart, changelog, db, portable, sections, tasks, update
 
 # Windows' registry-derived mimetypes map serves .js as text/plain, which
 # browsers refuse to execute as an ES module. Force the correct types.
@@ -682,6 +682,12 @@ def edit_content(request, payload) -> dict:
                 "so a hand-written version would be overwritten by the next change. "
                 "Edit the flow instead."
             )
+        if tasks.is_task(conn, uid):
+            raise ValueError(
+                "this memory is a task: its content is generated from the goal and "
+                "items, so a hand-written version would be overwritten by the next "
+                "change. Edit the goal or the items instead."
+            )
         ok = db.update_memory_content(conn, uid, content, note=payload.get("note", ""))
     if not ok:
         raise ValueError(f"unknown memory: {uid}")
@@ -714,7 +720,7 @@ def edit_meta(request, payload) -> dict:
         error = db.title_error(updates["title"])
         if error:
             raise ValueError(error)
-    if "type" in updates and updates["type"] not in KNOWN_TYPES:
+    if "type" in updates and updates["type"] not in KNOWN_TYPES + (db.TASK_TYPE,):
         raise ValueError(f"type must be one of {KNOWN_TYPES}")
     with db.connect() as conn:
         row = db.get_memory(conn, uid)
@@ -726,6 +732,12 @@ def edit_meta(request, payload) -> dict:
             # retyping away from 'diagram' orphans the graph; retyping into
             # it claims a generated content field with nothing generating it
             raise ValueError("a diagram's type cannot be changed")
+        if "type" in updates and updates["type"] != row["type"] and (
+            db.TASK_TYPE in (updates["type"], row["type"])
+        ):
+            # a task's content is generated from its rows, and a retyped memory
+            # has no rows to generate it from
+            raise ValueError("a task's type cannot be changed")
         if "type" in updates:
             # only on the way IN: leaving a type that has fields just drops
             # a cache, but claiming one means the body has to read that way
@@ -1598,6 +1610,10 @@ def clean_orphans(request, payload) -> dict:
                         SELECT node_key FROM diagram_nodes
                         WHERE diagram_nodes.memory_uid = diagram_node_links.memory_uid)""")
         links = cur.rowcount
+        cur = conn.execute(
+            """DELETE FROM task_item_links
+               WHERE target_uid NOT IN (SELECT uid FROM memories)""")
+        task_links = cur.rowcount
         # a jump has four things that can rot -- both diagrams and both node
         # keys -- and `to_node` is legitimately empty for a whole-diagram jump
         cur = conn.execute(
@@ -1613,7 +1629,7 @@ def clean_orphans(request, payload) -> dict:
         jumps = cur.rowcount
     return {"ok": True, "relations_removed": rels,
             "suggestions_removed": sugs, "node_links_removed": links,
-            "jumps_removed": jumps}
+            "jumps_removed": jumps, "task_links_removed": task_links}
 
 
 def prune_renders(request, payload) -> dict:

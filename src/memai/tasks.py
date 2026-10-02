@@ -343,3 +343,43 @@ def unlink_item(conn: sqlite3.Connection, uid: str, item: str, target: str) -> b
         (uid, key, str(target).strip()),
     )
     return cur.rowcount > 0
+
+
+def restore_task(conn: sqlite3.Connection, record: dict) -> None:
+    """Write a task's rows from an export record, under an already-restored memory.
+
+    Skips a link whose target is not in the store and writes no edit.
+    """
+    uid = str(record["uid"])
+    conn.execute(
+        "INSERT INTO tasks (memory_uid, goal, state, completed_at) VALUES (?, ?, ?, ?)",
+        (uid, record.get("goal", ""), record.get("state", "open"), record.get("completed_at", "")),
+    )
+    conn.executemany(
+        """INSERT INTO task_items
+           (memory_uid, item_key, seq, text, state, updated_at, updated_session)
+           VALUES (?, ?, ?, ?, ?, ?, ?)""",
+        [
+            (uid, i["key"], i["seq"], i["text"], i.get("state", "todo"),
+             i.get("updated_at") or db.now_iso(), i.get("updated_session", ""))
+            for i in record.get("items") or []
+        ],
+    )
+    conn.executemany(
+        """INSERT OR IGNORE INTO task_item_links (memory_uid, item_key, target_uid, created_at)
+           VALUES (?, ?, ?, ?)""",
+        [
+            (uid, l["item_key"], l["target_uid"], l.get("created_at") or db.now_iso())
+            for l in record.get("links") or []
+            if db.get_memory(conn, l["target_uid"]) is not None
+        ],
+    )
+    conn.executemany(
+        """INSERT INTO task_comments (memory_uid, item_key, body, author, session, created_at)
+           VALUES (?, ?, ?, ?, ?, ?)""",
+        [
+            (uid, c.get("item_key", ""), c["body"], c.get("author", "agent"),
+             c.get("session", ""), c.get("created_at") or db.now_iso())
+            for c in record.get("comments") or []
+        ],
+    )

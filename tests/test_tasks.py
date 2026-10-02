@@ -347,3 +347,146 @@ def test_progress_counts_done_and_dropped(conn):
     assert tasks.progress(conn, uid) == {"done": 0, "dropped": 0, "total": 2}
     tasks.set_item_state(conn, uid, "i1", "done")
     assert tasks.progress(conn, uid) == {"done": 1, "dropped": 0, "total": 2}
+
+
+# ------------------------------------------------- purge, portability, exclusions
+
+def _full_task(conn, title="Ship the parser"):
+    """A task with a link, a task-level comment and an item comment."""
+    note = db.insert_memory(conn, type="note", content="the lexer reads one token", domain="acme/parser")
+    uid = tasks.create_task(
+        conn, title=title, goal="Parse every config file",
+        items=["read the spec", "write the lexer"], domain="acme/parser", tags="parser, lexer",
+    )
+    tasks.link_item(conn, uid, "i2", [note])
+    tasks.add_comment(conn, uid, "start with the spec", author="person")
+    tasks.add_comment(conn, uid, "lexer drafted", item="i2", author="agent", session="s1")
+    tasks.set_item_state(conn, uid, "i1", "done")
+    return uid, note
+
+
+def _task_rows(conn, uid):
+    return [
+        conn.execute(f"SELECT COUNT(*) FROM {table} WHERE memory_uid = ?", (uid,)).fetchone()[0]
+        for table in ("tasks", "task_items", "task_item_links", "task_comments")
+    ]
+
+
+def test_purging_a_task_removes_every_child_row(conn):
+    uid, _ = _full_task(conn)
+    assert all(_task_rows(conn, uid))
+    assert db.purge_memory(conn, uid) is True
+    assert _task_rows(conn, uid) == [0, 0, 0, 0]
+    assert db.get_memory(conn, uid) is None
+
+
+def test_purging_a_linked_memory_removes_the_item_link(conn):
+    uid, note = _full_task(conn)
+    assert db.purge_memory(conn, note) is True
+    assert conn.execute("SELECT COUNT(*) FROM task_item_links").fetchone()[0] == 0
+    assert db.get_memory(conn, uid) is not None
+    assert tasks.get_task(conn, uid)["items"][1]["links"] == []
+
+
+def _shape(task):
+    return {
+        "goal": task["goal"], "state": task["state"],
+        "items": [(i["key"], i["text"], i["state"], [l["uid"] for l in i["links"]])
+                  for i in task["items"]],
+        "comments": [(c["body"], c["author"], c["item"]) for c in task["comments"]],
+    }
+
+
+def test_a_task_round_trips_through_export_and_import(tmp_path):
+    from memai import portable
+
+    with db.connect(tmp_path / "a.db") as a:
+        uid, note = _full_task(a)
+        tasks.set_item_state(a, uid, "i2", "done")
+        records = list(portable.export_records(a, include_archived=True, include_edits=True))
+        expected = tasks.get_task(a, uid)
+        edits = a.execute("SELECT COUNT(*) FROM edits WHERE memory_uid = ?", (uid,)).fetchone()[0]
+    assert [r for r in records if r["record"] == "task"][0]["uid"] == uid
+    with db.connect(tmp_path / "b.db") as b:
+        result = portable.import_records(b, records)
+        assert result["errors"] == []
+        got = tasks.get_task(b, uid)
+        assert _shape(got) == _shape(expected)
+        assert got["completed_at"] == expected["completed_at"] != ""
+        assert got["items"][1]["links"][0]["uid"] == note
+        assert [i["updated_at"] for i in got["items"]] == [i["updated_at"] for i in expected["items"]]
+        assert b.execute("SELECT COUNT(*) FROM edits WHERE memory_uid = ?", (uid,)).fetchone()[0] == edits
+        # a second import adds nothing
+        portable.import_records(b, records)
+        assert _task_rows(b, uid) == [1, 2, 1, 2]
+
+
+def test_importing_into_a_store_that_holds_the_task_keeps_its_rows(tmp_path):
+    from memai import portable
+
+    with db.connect(tmp_path / "a.db") as a:
+        uid, _ = _full_task(a)
+        records = list(portable.export_records(a, include_archived=True))
+        tasks.add_comment(a, uid, "later remark")
+        portable.import_records(a, records)
+        assert _task_rows(a, uid) == [1, 2, 1, 3]
+
+
+def test_restore_task_skips_a_link_whose_target_is_missing(conn):
+    note = db.insert_memory(conn, type="note", content="a plain note", domain="acme/parser")
+    db.restore_memory(conn, {"record": "memory", "uid": "aaaaaaaaaaaaaaaa", "type": "task",
+                             "content": "GOAL: g\n[ ] i1 step", "domain": "acme/parser"})
+    tasks.restore_task(conn, {
+        "record": "task", "uid": "aaaaaaaaaaaaaaaa", "goal": "g", "state": "open",
+        "completed_at": "",
+        "items": [{"key": "i1", "seq": 1, "text": "step", "state": "todo",
+                   "updated_at": "2026-01-01T00:00:00+00:00", "updated_session": ""}],
+        "links": [{"item_key": "i1", "target_uid": note, "created_at": "2026-01-01T00:00:00+00:00"},
+                  {"item_key": "i1", "target_uid": "bbbbbbbbbbbbbbbb",
+                   "created_at": "2026-01-01T00:00:00+00:00"}],
+        "comments": [],
+    })
+    assert [l["uid"] for l in tasks.get_task(conn, "aaaaaaaaaaaaaaaa")["items"][0]["links"]] == [note]
+
+
+def test_tasks_are_not_dedup_or_similar_candidates(conn):
+    one, _ = _full_task(conn, title="Ship the parser")
+    two = tasks.create_task(
+        conn, title="Ship the parser again", goal="Parse every config file",
+        items=["read the spec", "write the lexer"], domain="acme/parser",
+    )
+    tasks.set_item_state(conn, two, "i1", "done")
+    assert db.get_memory(conn, one)["content"] == db.get_memory(conn, two)["content"]
+    assert db.dedup_candidates(conn, threshold=0.1) == []
+    assert db.dedup_candidates(conn, type="task", threshold=0.1) == []
+    assert db.similar_memories(conn, one, threshold=0.1) == []
+    twin = db.insert_memory(conn, type="note", content=db.get_memory(conn, one)["content"],
+                            domain="acme/parser")
+    assert {s["type"] for s in db.similar_memories(conn, twin, threshold=0.1)} <= {"note"}
+
+
+def test_a_task_is_not_a_distill_source(conn):
+    uid, _ = _full_task(conn)
+    other = db.insert_memory(conn, type="note", content="a plain note", domain="acme/parser")
+    res = db.stage_optimization(conn, "distill a task", [{
+        "kind": "distill", "verified": "checked",
+        "payload": {"source_uids": [uid, other], "new_type": "note",
+                    "new_content": "the durable fact", "title": "What the parser reads"},
+    }])
+    assert res["staged"] == 0
+    assert "task" in res["errors"][0]["error"]
+
+
+def test_edit_memory_refuses_a_task(tmp_path, monkeypatch):
+    from memai import server
+
+    monkeypatch.setenv("MEMAI_HOME", str(tmp_path))
+
+    with db.connect() as conn:
+        uid = tasks.create_task(conn, title="Ship the parser", goal="Parse every config file",
+                                items=["read the spec"], domain="acme/parser")
+        before = db.get_memory(conn, uid)["content"]
+    res = server.edit_memory(uid, new_content="x")
+    assert res["ok"] is False and "task" in res["errors"][0]
+    with db.connect() as conn:
+        assert db.get_memory(conn, uid)["content"] == before

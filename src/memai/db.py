@@ -2307,6 +2307,9 @@ def purge_memory(conn: sqlite3.Connection, uid: str) -> bool:
     memory -- otherwise a purged note leaves a node link dangling at a uid
     that no longer resolves.
 
+    A task's rows (comments, item links, items, the head row) go with it,
+    and so does any task item link that pointed at this memory.
+
     `memory_domains` goes with it for the same reason, and the FK on that
     table means it HAS to: the DELETE below is refused outright while a
     cross-listing still names this uid. No mirror to rewrite -- the row
@@ -2330,6 +2333,12 @@ def purge_memory(conn: sqlite3.Connection, uid: str) -> bool:
     conn.execute("DELETE FROM diagram_nodes WHERE memory_uid = ?", (uid,))
     conn.execute("DELETE FROM diagram_edges WHERE memory_uid = ?", (uid,))
     conn.execute("DELETE FROM diagrams WHERE memory_uid = ?", (uid,))
+    conn.execute("DELETE FROM task_comments WHERE memory_uid = ?", (uid,))
+    conn.execute(
+        "DELETE FROM task_item_links WHERE memory_uid = ? OR target_uid = ?", (uid, uid)
+    )
+    conn.execute("DELETE FROM task_items WHERE memory_uid = ?", (uid,))
+    conn.execute("DELETE FROM tasks WHERE memory_uid = ?", (uid,))
     conn.execute("DELETE FROM memories WHERE uid = ?", (uid,))
     return True
 
@@ -2469,6 +2478,8 @@ def get_relations(conn: sqlite3.Connection, uid: str) -> list[sqlite3.Row]:
 
 DIAGRAM_TYPE = "diagram"
 TASK_TYPE = "task"
+# types whose content is generated from rows, so no prose scan or merge applies
+GENERATED_TYPES = (DIAGRAM_TYPE, TASK_TYPE)
 DIAGRAM_KINDS = ("flowchart",)
 NODE_SHAPES = ("start", "step", "decision", "io", "end")
 
@@ -4788,14 +4799,14 @@ def similar_memories(
     whole store, for a human to answer.
 
     Never blocks a write and never merges anything -- the memory is
-    already stored when this runs. Diagrams are out on both sides: their
-    content is a projection of a graph, so a resemblance between two of
+    already stored when this runs. Diagrams and tasks are out on both sides:
+    their content is a projection of rows, so a resemblance between two of
     them is not a merge anyone could apply. Consecutive checkpoints of one
     effort are out too (see _timeline_pair) -- they share a skeleton by
     design and would fire on every write.
     """
     row = get_memory(conn, uid)
-    if row is None or row["type"] == DIAGRAM_TYPE:
+    if row is None or row["type"] in GENERATED_TYPES:
         return []
 
     # A scan, so it stays inside the scope the memory was filed under -- a
@@ -4813,7 +4824,7 @@ def similar_memories(
 
     out = []
     for other, score, method in sorted(scored, key=lambda s: -s[1]):
-        if other["status"] != "active" or other["type"] == DIAGRAM_TYPE:
+        if other["status"] != "active" or other["type"] in GENERATED_TYPES:
             continue
         if _timeline_pair(row, other):
             continue
@@ -4854,13 +4865,13 @@ def dedup_candidates(
     score -- real merges live in durable types. The returned score is
     never altered, only the ordering.
 
-    Diagrams never enter the candidate pool: their content is a generated
-    projection of a graph, so two similar flows are not a prose merge
+    Diagrams and tasks never enter the candidate pool: their content is a
+    generated projection of rows, so two similar flows are not a prose merge
     anybody could apply -- proposing one would only produce a suggestion
     that cannot be carried out.
     """
-    sql = ["SELECT * FROM memories WHERE status = 'active' AND type != ?"]
-    params: list = [DIAGRAM_TYPE]
+    sql = ["SELECT * FROM memories WHERE status = 'active' AND type NOT IN (?, ?)"]
+    params: list = [*GENERATED_TYPES]
     if domain:
         clause, values, _ = domain_scope_clause(conn, domain, alias="", subtree=subtree)
         sql.append(clause)
@@ -5526,6 +5537,9 @@ def _validate_suggestion(conn: sqlite3.Connection, s: object) -> tuple[dict | No
             if is_diagram(conn, u):
                 return None, (f"{u} is a diagram: distill archives its sources. "
                               "Use archive to retire a flow on its own.")
+            if get_memory(conn, u)["type"] == TASK_TYPE:
+                return None, (f"{u} is a task: distill archives its sources, and a task "
+                              "closes through its own items.")
         if payload.get("new_type") not in DISTILL_TYPES:
             return None, f"payload.new_type must be one of {DISTILL_TYPES}"
         if not str(payload.get("new_content", "")).strip():
