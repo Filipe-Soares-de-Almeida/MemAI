@@ -249,6 +249,8 @@ def _row_to_dict(row) -> dict:
 
 SNIPPET_LIMIT = 400
 
+LIST_STATUSES = ("active", "archived", "all")
+
 # Memory type tag per writer -- the retrieval tools filter on these exact
 # strings (search/recall/list_*(type=...)). Each writer tool is named
 # after the type it stores, so tool name and stored type cannot drift.
@@ -1101,9 +1103,10 @@ def recall(query: str, domain: str = "", limit: int = 10) -> dict:
 
 @tool("core")
 def list_by_domain(
-    domain: str, type: str = "", limit: int = 50, subtree: bool = True
+    domain: str, type: str = "", limit: int = 50, subtree: bool = True,
+    status: str = "active",
 ) -> dict:
-    """List active memories for a domain and its subdomains, most recent first.
+    """List memories for a domain and its subdomains, most recent first.
 
     Fallback when search misses. domain is a path, matched from the
     outermost segment in: 'acme/x100' lists the module's own memories plus
@@ -1117,6 +1120,12 @@ def list_by_domain(
     branches rather than picking one -- each row's `domain` says which
     branch it came from. list_domains() is the way to see the paths first.
 
+    status is 'active' (the default), 'archived' or 'all'. Closing a task
+    archives its memory, so list_by_domain(domain, type='task',
+    status='archived') returns the completed and cancelled tasks. A task
+    row carries `state` (open, completed or cancelled) and `progress`
+    {done, total}.
+
     Returns {"results": [...], "est_tokens": N}. Content is
     snippet-truncated per result -- call get_memory(uid) for the full
     record; a result's `est_tokens` estimates what that full record costs,
@@ -1124,10 +1133,18 @@ def list_by_domain(
     """
     if error := db.type_error(type):
         return _errors([error])
+    if status not in LIST_STATUSES:
+        return _errors([f"{status!r} is not a status; use one of {', '.join(LIST_STATUSES)}"])
     with db.connect() as conn:
-        rows = _read(conn, db.list_by_domain(conn, domain, type=type, limit=limit,
-                                            subtree=subtree))
-    return _listing(rows)
+        rows = _read(conn, db.list_by_domain(
+            conn, domain, type=type, status="" if status == "all" else status,
+            limit=limit, subtree=subtree))
+        listing = _listing(rows)
+        for result in listing["results"]:
+            if result["type"] == db.TASK_TYPE:
+                result["state"] = pending_lists.task_state(conn, result["uid"])
+                result["progress"] = pending_lists.task_progress(conn, result["uid"])
+    return listing
 
 
 @tool("core")

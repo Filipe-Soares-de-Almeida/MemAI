@@ -424,8 +424,10 @@ way it is archived — no `forget()` needed (`archived: true` in the result says
 so). Adding an item to a closed task, or moving one of its items back to
 `todo` or `doing`, reopens it. `forget()` on an open task cancels it.
 A closed task stays in the store as an archived record: `get_memory(uid)`
-opens it and the dashboard's archived filter lists it. The MCP `search` and
-list tools read active memories only.
+opens it, the dashboard's archived filter lists it, and
+`list_by_domain(domain, type='task', status='archived')` lists the completed
+and cancelled ones, each with its `state` and `progress`. `search`,
+`list_recent` and `pending` read active memories only.
 
 Tasks are left out of duplicate detection and distillation, and a memory is
 never retyped to or from `task`: two tasks with similar items are still two
@@ -599,7 +601,7 @@ always published, `diagrams` and `curation` only when named (or under the
 | `pending(domain, type, limit, offset)` | Without `type`: `{"categories": [{"type", "count"}, ...]}`, one per category with something waiting. With `type`: one page of headers (`uid`, `title`, `domain`, `est_tokens`; a task adds `progress` and `doing`) and `next_offset`. An unknown `type` is an error | core |
 | `search(query, domain, type, limit)` | BM25, annotated with `match_source`/`fts_rank` | core |
 | `recall(query, domain, limit)` | Relevance-ranked recall of `note()`d knowledge (`search` scoped to `type='note'`) | core |
-| `list_by_domain(domain, type, limit, subtree)` | Recency-ordered, scoped to a path and its subdomains | core |
+| `list_by_domain(domain, type, limit, subtree, status)` | Recency-ordered, scoped to a path and its subdomains; `status` is `active` (default), `archived` or `all`, and a task row carries `state` and `progress` | core |
 | `list_recent(type, domain, limit, subtree)` | Recency-ordered, global unless a `type`/`domain` narrows it | core |
 | | The four above return `{"results": [...], "est_tokens": N}` — index into `results` | |
 | `timeline(uid, query, before, after, domain, type)` | The records created immediately before and after one anchor, oldest first: `{"anchored_by", "anchor", "before", "after"}` | core |

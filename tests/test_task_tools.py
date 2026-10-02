@@ -194,3 +194,57 @@ def test_the_comment_tools_refuse_a_tool_calls_closing_tag(store):
     assert _comments(uid) == []
     with db.connect() as conn:
         assert [i["state"] for i in server.tasks.get_task(conn, uid)["items"]] == ["todo", "todo"]
+
+
+def _harbor_task(title: str, **over) -> str:
+    return _task(title=title, domain="acme/harbor", **over)["uid"]
+
+
+def test_list_by_domain_status_archived_lists_closed_tasks(store):
+    open_uid = _harbor_task("Dredge the channel")
+    done_uid = _harbor_task("Paint the lighthouse", items="scrape\nprime")
+    server.task_item(done_uid, "i1", state="done")
+    server.task_item(done_uid, "i2", state="done")
+    gone_uid = _harbor_task("Rebuild the pier", items="survey\nquote")
+    server.task_item(gone_uid, "i1", state="done")
+    server.forget(gone_uid)
+    note_uid = server.note("Tide table", content="a fact about tides", domain="acme/harbor")["uid"]
+    server.forget(note_uid)
+
+    closed = server.list_by_domain("acme/harbor", type="task", status="archived")["results"]
+    assert {r["uid"] for r in closed} == {done_uid, gone_uid}
+    by_uid = {r["uid"]: r for r in closed}
+    assert by_uid[done_uid]["state"] == "completed"
+    assert by_uid[done_uid]["progress"] == {"done": 2, "total": 2}
+    assert by_uid[gone_uid]["state"] == "cancelled"
+    assert by_uid[gone_uid]["progress"] == {"done": 1, "total": 2}
+
+    active = server.list_by_domain("acme/harbor", type="task", status="active")["results"]
+    assert [r["uid"] for r in active] == [open_uid]
+    assert active[0]["state"] == "open"
+    assert active[0]["progress"] == {"done": 0, "total": 2}
+
+    every = server.list_by_domain("acme/harbor", type="task", status="all")["results"]
+    assert {r["uid"] for r in every} == {open_uid, done_uid, gone_uid}
+
+
+def test_list_by_domain_leaves_non_task_rows_unchanged(store):
+    server.note("Tide table", content="a fact about tides", domain="acme/harbor")
+    row = server.list_by_domain("acme/harbor")["results"][0]
+    assert "state" not in row and "progress" not in row
+
+
+def test_list_by_domain_default_status_is_active(store):
+    kept = server.note("Mooring rule", content="a fact about moorings", domain="acme/harbor")["uid"]
+    gone = server.note("Old berth plan", content="a stale fact", domain="acme/harbor")["uid"]
+    server.forget(gone)
+    assert [r["uid"] for r in server.list_by_domain("acme/harbor")["results"]] == [kept]
+    archived = server.list_by_domain("acme/harbor", status="archived")["results"]
+    assert [r["uid"] for r in archived] == [gone]
+
+
+def test_list_by_domain_rejects_an_unknown_status(store):
+    result = server.list_by_domain("acme/harbor", status="closed")
+    assert result["ok"] is False
+    message = " ".join(result["errors"])
+    assert "active" in message and "archived" in message and "all" in message

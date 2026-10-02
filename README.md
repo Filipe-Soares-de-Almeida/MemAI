@@ -94,7 +94,9 @@ task_item(uid, "i1", state="done", comment="Handler keys off the event id.")
 Open tasks come first in the session-start brief, and at the end of a turn the
 `stop` hook blocks once per interval to ask the agent to update them. The
 dashboard's Maintenance view switches that reminder off and sets its interval;
-a task's checklist, comments and linked memories are worked there as well.
+a task's checklist, comments and linked memories are worked there as well. A
+closed task is an archived memory, so `list_by_domain(domain, type="task",
+status="archived")` lists the completed and cancelled ones.
 
 ---
 

@@ -49,12 +49,22 @@ def _doing(conn: sqlite3.Connection, uid: str) -> list[str]:
         "ORDER BY seq, id", (uid,))]
 
 
+def task_progress(conn: sqlite3.Connection, uid: str) -> dict:
+    """{"done", "total"} for a task: the progress shape listings carry."""
+    progress = tasks.progress(conn, uid)
+    return {"done": progress["done"], "total": progress["total"]}
+
+
+def task_state(conn: sqlite3.Connection, uid: str) -> str:
+    """The task's state: open, completed or cancelled."""
+    return conn.execute("SELECT state FROM tasks WHERE memory_uid = ?", (uid,)).fetchone()["state"]
+
+
 def _header(conn: sqlite3.Connection, row: sqlite3.Row) -> dict:
     item = {"uid": row["uid"], "title": row["title"], "domain": row["domain"],
             "est_tokens": db.est_tokens(len(row["content"]))}
     if row["type"] == db.TASK_TYPE:
-        progress = tasks.progress(conn, row["uid"])
-        item["progress"] = {"done": progress["done"], "total": progress["total"]}
+        item["progress"] = task_progress(conn, row["uid"])
         item["doing"] = _doing(conn, row["uid"])
     return item
 
