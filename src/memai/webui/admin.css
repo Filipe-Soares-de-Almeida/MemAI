@@ -2646,7 +2646,7 @@ button.rs-mono:hover { color: var(--accent); }
 /* A task's checklist: an item's state is its mark's shape first, colour second (--f-live, --f-go);
    dropped is struck through, so it never passes for done. */
 
-.tk { display: flex; flex-direction: column; gap: var(--sp-3); min-width: 0; }
+.tk { --spin: 3.2s; display: flex; flex-direction: column; gap: var(--sp-3); min-width: 0; }
 .tk-card { background: var(--surface); border-radius: var(--r-lg); min-width: 0; }
 .tk-h { font: 500 var(--fs-md)/1.3 var(--font-ui); color: var(--ink); display: flex; align-items: baseline; gap: var(--sp-2); }
 
@@ -2684,9 +2684,8 @@ button.rs-mono:hover { color: var(--accent); }
 .tk-prog-n b { font: 500 var(--fs-lg) var(--font-ui); color: var(--ink); }
 .tk-bar { height: 8px; border-radius: var(--r-pill); }
 .tk-bar .bar-fill { --c: var(--f-go); }
-/* what was dropped sits right after what was done, hatched: it is part of
-   the whole the bar counts out of, and it is not progress. The hatch fills the
-   track and a clip leaves the dropped span, so it eases like the fill does */
+/* What was dropped follows what was done, hatched: part of the whole, not progress. The hatch
+   fills the track and a clip leaves its span, so it eases like the fill. */
 .tk-bar-drop {
   position: absolute; inset: 0;
   background: repeating-linear-gradient(135deg, rgba(255, 255, 255, .3) 0 2px, transparent 2px 5px);
@@ -2728,7 +2727,7 @@ button.rs-mono:hover { color: var(--accent); }
    the arc turns slowly, one lap in three seconds, so the item reads as live */
 .tk-state[data-s="doing"]   { --sc: var(--f-live); }
 .tk-state[data-s="doing"] .tk-ring { border: 0; background: none; color: var(--f-live); --ico: 20px; }
-.tk-state[data-s="doing"] .ico { animation: spin 3.2s linear infinite; }
+.tk-state[data-s="doing"] .ico { animation: spin var(--spin) linear infinite var(--spin-at, 0s); }
 .tk-state[data-s="done"]    { --sc: var(--f-go); }
 .tk-state[data-s="done"] .tk-ring { background: var(--f-go); color: var(--accent-ink); }
 .tk-state[data-s="dropped"] .tk-ring { border-style: dashed; color: var(--ink-3); }
@@ -2801,10 +2800,8 @@ textarea.tk-box {
 }
 .tk-actions { display: flex; gap: var(--sp-2); }
 
-/* A thread: each comment is a line under the mark of whoever wrote it, joined
-   to the next by a rule, and the reply box is the thread's last line. A person
-   is a round mark with a figure, an agent a square one with a prompt, and each
-   says who in words, so neither depends on colour. */
+/* A thread: a comment is a line under its writer's mark, the reply box its last line. A person's
+   mark is round, an agent's square, and each says who in words, so colour is not the cue. */
 .tk-thread { padding: var(--sp-4) var(--sp-5); display: flex; flex-direction: column; gap: var(--sp-3); }
 .tk-older { margin-left: 0; align-self: flex-start; }
 .tk-cs { display: flex; flex-direction: column; }
@@ -4581,6 +4578,11 @@ input.pick-q:focus { box-shadow: inset 0 -2px 0 var(--accent); }
 .ctx-item.danger:focus-visible { background: var(--bad-wash); color: var(--bad-ink); }
 .ctx-item.danger { color: var(--bad-ink); }
 .ctx-item.danger:hover { background: var(--bad-wash); color: var(--bad-ink); }
+/* an entry that cannot run keeps its place and says why */
+.ctx-item[aria-disabled="true"], .ctx-item.danger[aria-disabled="true"] { cursor: default; color: var(--ink-3); background: none; }
+.ctx-item.danger[aria-disabled="true"]:hover, .ctx-item[aria-disabled="true"]:hover { background: none; color: var(--ink-3); }
+.ctx-item[aria-disabled="true"]:focus-visible { background: var(--hover-2); }
+.ctx-note { display: block; margin-top: 2px; font-size: var(--fs-label); color: var(--ink-2); white-space: normal; }
 .ctx-sep { height: 1px; margin: var(--sp-1) var(--sp-2); background: var(--line); }
 
 .empty {

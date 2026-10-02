@@ -124,7 +124,12 @@ def test_the_delete_strings_exist_in_both_catalogs():
 
 def test_the_doing_mark_turns_and_reduced_motion_stops_it():
     css = (WEBUI / "admin.css").read_text(encoding="utf-8")
-    assert re.search(r'\.tk-state\[data-s="doing"\] \.ico \{ animation: spin [\d.]+s linear infinite; \}', css)
+    assert re.search(r'\.tk-state\[data-s="doing"\] \.ico \{ animation: spin var\(--spin\) linear infinite var\(--spin-at, 0s\); \}', css)
+    # the arc's phase comes from a shared clock, so a repaint does not restart it
+    src = _view("task.js")
+    lap = float(re.search(r"--spin: ([\d.]+)s", css).group(1))
+    assert f"const SPIN_S = {lap};" in src
+    assert "performance.now()" in src and "--spin-at:" in src
     reduced = re.findall(r"@media \(prefers-reduced-motion: reduce\) \{(.*?)\n\}", css, re.S)
     block = next(b for b in reduced if ".tk-state" in b)
     assert '.tk-state[data-s="doing"] .ico { animation: none; }' in block
@@ -186,5 +191,23 @@ def test_the_reminder_copy_names_the_domains_a_session_worked_in():
 def test_a_menu_dropped_from_a_button_takes_the_keyboard():
     src = (WEBUI / "core" / "ui.js").read_text(encoding="utf-8")
     assert "if (at.btn) entries[0]?.focus();" in src
-    assert "ArrowDown: i + 1, ArrowUp: i - 1" in src
-    assert "at.btn?.focus()" in src
+    assert "ArrowDown: i + 1" in src
+    assert "ArrowUp: i < 0 ? entries.length - 1 : i - 1" in src
+    # an entry chosen with focus inside the menu hands focus back before it runs
+    assert re.search(r"closeCtxMenu\(\);\s*if \(held\) restore\(\);\s*it\.run\?\.\(\);", src)
+
+
+def test_deleting_the_only_item_is_offered_as_a_disabled_entry_with_its_reason():
+    src = _view("task.js")
+    assert "note: current.items.length < 2 ? t('task.item.deleteLast') : ''" in src
+    ui = (WEBUI / "core" / "ui.js").read_text(encoding="utf-8")
+    assert 'aria-disabled="true"' in ui and "aria-describedby" in ui and "if (it.note) return;" in ui
+    for code in ("en", "pt-BR"):
+        assert _catalog(code)["task.item.deleteLast"]
+
+
+def test_the_reminder_copy_says_the_hook_names_domains_and_asks_for_a_look_at_similar_ones():
+    en = _catalog("en")["mn.ta.body"]
+    assert "how many there are and in which domains" in en
+    assert "similar domains" in en
+    assert "names them" not in en

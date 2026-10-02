@@ -1,6 +1,5 @@
-/* A task's checklist in the record view; every write repaints it from the {task, status} the server answers.
-   One item's links and comments are open at a time; `onStatus` tells the record when the task closes
-   and `onWrite` when any write was accepted. */
+/* A task's checklist: every write repaints it from the {task, status} the server answers; one item's
+   panel is open at a time. `onStatus` reports a close or reopen, `onWrite` any accepted write. */
 
 import { esc, fmtAgo, fmtDate, fmtInt } from '../core/dom.js';
 import { api, seg } from '../core/api.js';
@@ -31,6 +30,8 @@ const fresh = uid => ({
 
 /* how long a deleted item takes to leave before the list is repainted */
 const LEAVE_MS = 160;
+/* one lap of the in-progress arc, as --spin in admin.css */
+const SPIN_S = 3.2;
 const commentKey = c => `${c.created_at}|${c.item}|${c.author}|${c.body.length}`;
 
 /* A selector that finds the same control again after a repaint. */
@@ -116,20 +117,15 @@ export function mountTask(host, { uid, task, status }, { onStatus, onWrite } = {
     }
   };
 
-  /* Deleting asks first (it has no undo), plays the row out, and hands focus to
-     the next item's mark, else the previous one's, else the add control. A
-     refusal leaves the item where it is, with focus back on its menu. */
+  /* Deleting asks first, plays the row out, then focuses the next item's mark, else the
+     previous one's, else the add control. */
   const deleteItem = async key => {
     const item = current.items.find(i => i.key === key);
     if (!item || busy) return;
-    const menu = () => host.querySelector(attr('data-menu', key))?.focus();
-    /* the dialog hands focus back to whoever held it when it opened, by any
-       way out of it, so that is the item's menu button */
-    menu();
     const ok = await confirmModal({
       title: t('task.delete.title'), body: t('task.delete.body', { text: esc(item.text) }),
       okLabel: t('task.item.delete'), danger: true });
-    if (!ok) { menu(); return; }
+    if (!ok) return;
     const at = current.items.findIndex(i => i.key === key);
     if (at < 0) return;
     const wasOpen = current.state === 'open';
@@ -144,7 +140,7 @@ export function mountTask(host, { uid, task, status }, { onStatus, onWrite } = {
         await new Promise(done => setTimeout(done, LEAVE_MS));
       },
     });
-    if (!res) { menu(); return; }
+    if (!res) return;
     toast(t(wasOpen && res.task.state !== 'open' ? `task.toast.${res.task.state}` : 'task.toast.deleted'), 'ok');
   };
 
@@ -216,6 +212,9 @@ export function mountTask(host, { uid, task, status }, { onStatus, onWrite } = {
     </div>`;
   };
 
+  /* a repaint rebuilds the arc, so its turn starts at the angle the shared clock says */
+  const spinAt = () => -((performance.now() / 1000) % SPIN_S).toFixed(3);
+
   const itemHTML = item => {
     const open = state.open === item.key;
     const links = item.links.length;
@@ -228,7 +227,7 @@ export function mountTask(host, { uid, task, status }, { onStatus, onWrite } = {
         <button type="button" class="tk-state${enter.pulse === item.key ? ' is-pulse' : ''}" data-s="${esc(item.state)}" data-step="${esc(item.key)}"
                 title="${esc(action)}"
                 aria-label="${esc(t('task.state.aria', { text: item.text, state: stateName, action }))}">
-          <span class="tk-ring">${{ doing: icon('ongoing'), done: icon('check'), dropped: icon('minus') }[item.state] || ''}</span>
+          <span class="tk-ring"${item.state === 'doing' ? ` style="--spin-at:${spinAt()}s"` : ''}>${{ doing: icon('ongoing'), done: icon('check'), dropped: icon('minus') }[item.state] || ''}</span>
         </button>
         <button type="button" class="tk-main" data-toggle="${esc(item.key)}"
                 aria-expanded="${open}"${open ? ` aria-controls="tkp-${esc(item.key)}"` : ''}>
@@ -405,7 +404,8 @@ export function mountTask(host, { uid, task, status }, { onStatus, onWrite } = {
           run: () => { focusAfter(attr('data-menu', item.key)); setItem(item.key, s); },
         })),
         { sep: true },
-        { label: t('task.item.delete'), danger: true, run: () => deleteItem(item.key) },
+        { label: t('task.item.delete'), danger: true, run: () => deleteItem(item.key),
+          note: current.items.length < 2 ? t('task.item.deleteLast') : '' },
       ], { align: 'right' });
     }));
 
