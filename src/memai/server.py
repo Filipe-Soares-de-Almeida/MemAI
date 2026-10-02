@@ -1387,13 +1387,13 @@ def pulse(domain: str = "") -> dict:
     get_relations call, and carries `est_tokens`, what this response already
     spent on it.
 
-    `pending` is the list of categories pending(domain) returns without a
+    `pending` is the `categories` list pending(domain) returns without a
     type: a count per category (task, anti_pattern, handoff, note, diagram),
-    leaving out the empty ones. `read_next` is the instruction to follow with it: open tasks
-    first, then pending(domain, type=...) for each other category, before
-    acting. It is "" when nothing is pending. A pulse lists no memories
-    besides the checkpoint; pending(domain, type=...) lists headers and
-    get_memory(uid) opens one.
+    leaving out the empty ones. `read_next` is the instruction to follow with
+    it: open tasks first, then pending(domain, type=...) for each other
+    category, before acting. It is "" when nothing is pending. A pulse lists
+    no memories besides the checkpoint; pending(domain, type=...) lists
+    headers and get_memory(uid) opens one.
 
     domain warms up a path and everything under it, so pulse('acme/x100')
     is the module-wide brief and pulse('acme/x100/p200') the routine's.

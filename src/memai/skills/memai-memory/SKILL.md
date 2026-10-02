@@ -59,7 +59,7 @@ happened to use.
 
 Six types, one writer each. Choosing the type is choosing how the memory
 comes back later ([§3.1](#31-getting-back-what-you-wrote-which-tool-to-call)).
-A seventh type, `handoff`, is carried by memories stored earlier: they are
+A seventh type, `handoff`, is carried by memories already in the store: they are
 read, searched and counted as pending like any other, and nothing writes a new
 one — a task carries unfinished work to the next session.
 
@@ -225,10 +225,10 @@ When the session-start hook fires, or when resuming work:
    - **`latest_checkpoint`** — by `created_at DESC`, never by similarity,
      returned **in full** with its **relations** attached. It is the only body
      a pulse carries.
-   - **`pending`** — a **count** per category that has something waiting:
-     `task` (open), `anti_pattern`, `handoff` and `note` (active and not
-     contradicted), `diagram` (active), in that order, empty ones left out. No
-     list of memories comes with it.
+   - **`pending`** — the `categories` list that `pending()` without a `type`
+     returns, `[{"type", "count"}, ...]`: `task` (open), `anti_pattern`,
+     `handoff` and `note` (active and not contradicted), `diagram` (active), in
+     that order, empty ones left out. No list of memories comes with it.
    - **`read_next`** — one instruction naming what to call next: open tasks
      first, then `pending(domain, type=…)` for each other category, before
      acting. Empty when nothing is pending.
@@ -240,8 +240,8 @@ When the session-start hook fires, or when resuming work:
      plan: `search(query, domain=…)` or `list_by_domain(domain, type=…,
      limit=…)` on the child that was only counted.
 2. **`pending(domain, type, limit, offset)`** — the read that lists what a
-   pulse only counts. Without `type` it returns the same per-category counts;
-   with `type` (`task`, `anti_pattern`, `handoff`, `note` or `diagram`) it
+   pulse only counts. Without `type` it returns
+   `{"categories": [{"type", "count"}, ...]}`; with `type` (`task`, `anti_pattern`, `handoff`, `note` or `diagram`) it
    returns `{type, total, items, next_offset}`: one page of **headers** — `uid`,
    `title`, `domain`, `est_tokens` — newest first, a task by its latest item
    update. A task header adds `progress` (`{done, total}`) and `doing`, the keys
@@ -423,8 +423,9 @@ write that leaves every item `done` or `dropped` closes it itself: at least one
 way it is archived — no `forget()` needed (`archived: true` in the result says
 so). Adding an item to a closed task, or moving one of its items back to
 `todo` or `doing`, reopens it. `forget()` on an open task cancels it.
-A closed task stays reachable through `search(..., status='')` and the
-dashboard's archived filter.
+A closed task stays in the store as an archived record: `get_memory(uid)`
+opens it and the dashboard's archived filter lists it. The MCP `search` and
+list tools read active memories only.
 
 Tasks are left out of duplicate detection and distillation, and a memory is
 never retyped to or from `task`: two tasks with similar items are still two
@@ -538,7 +539,7 @@ all exit 0 with no output). **Four events:**
 |---|---|
 | `session-start` | the store's state as context — the memory count, active domains, the latest checkpoint and one line of what is pending (`Pending in …: 2 open tasks, 21 pitfalls, …`, left out when nothing is) — ending in the instruction to call `pending()` and `pulse(domain)` for the subject **before the session's first tool call**, and what the store's casing policy means for that path. When tasks are open the line tells the agent to work through them first |
 | `pre-compact` | a reminder that whatever should outlive the transcript belongs in the store: `checkpoint()` where the work stands, `note()` what was established, `anti_pattern()` what turned out to be a trap |
-| `stop` | a nudge to checkpoint, and **only when nothing was written recently** (`--quiet-minutes`, 45 by default) — a nudge that fires regardless of whether there is anything to record teaches the agent to skip it. When the project has **open tasks** it **blocks** the stop once per interval (30 minutes by default, per project and per session) with the count and the request to call `pending(type='task')` and update the ones the session touched with `task_item`, or to say in one line that it touched none; a nudge due at the same time follows it in the same reason. The switch and the interval are the dashboard's Maintenance → Reminders tab, and `memai-hook stop --task-minutes N` overrides the stored interval |
+| `stop` | a nudge to checkpoint, and **only when nothing was written recently** (`--quiet-minutes`, 45 by default) — a nudge that fires regardless of whether there is anything to record teaches the agent to skip it. When the project has **open tasks** it **blocks** the stop once per interval (30 minutes by default, per project and per session) with the count and the request to call `pending(type='task')` and update the ones the session touched with `task_item`, or to say in one line that it touched none; the checkpoint nudge and the warden ask, when due, follow it in the same reason. The switch and the interval are the dashboard's Maintenance → Reminders tab, and `memai-hook stop --task-minutes N` overrides the stored interval |
 | `guard` | refuses a memai write whose **required** text never arrived — a parameter tag opened without the `antml:` prefix is dropped before the call leaves the client, so the text it held is gone. It exits 2 with the cause on stderr, the one event that stops the call it reads rather than emitting context. The refusal spells each tool as a signature: those fields are positional, so the retry is the WHOLE call retyped in that order, not the one field the message named. A parameter the tool does not require cannot break the write, so that is a `systemMessage` and the call goes through |
 
 Register all four with `memai-hook install`, which writes them into the user's
@@ -594,8 +595,8 @@ always published, `diagrams` and `curation` only when named (or under the
 
 | Reading | | group |
 |---|---|---|
-| `pulse(domain)` | Warm-up: `{project, latest_checkpoint (+ relations), pending (a count per category), read_next, scope}` — the `scope` census includes `stale` | core |
-| `pending(domain, type, limit, offset)` | Without `type`: the count per category (`task`, `anti_pattern`, `handoff`, `note`, `diagram`). With `type`: one page of headers (`uid`, `title`, `domain`, `est_tokens`; a task adds `progress` and `doing`) and `next_offset`. An unknown `type` is an error | core |
+| `pulse(domain)` | Warm-up: `{project, latest_checkpoint (+ relations), pending (the `categories` list), read_next, scope}` — the `scope` census includes `stale` | core |
+| `pending(domain, type, limit, offset)` | Without `type`: `{"categories": [{"type", "count"}, ...]}`, one per category with something waiting. With `type`: one page of headers (`uid`, `title`, `domain`, `est_tokens`; a task adds `progress` and `doing`) and `next_offset`. An unknown `type` is an error | core |
 | `search(query, domain, type, limit)` | BM25, annotated with `match_source`/`fts_rank` | core |
 | `recall(query, domain, limit)` | Relevance-ranked recall of `note()`d knowledge (`search` scoped to `type='note'`) | core |
 | `list_by_domain(domain, type, limit, subtree)` | Recency-ordered, scoped to a path and its subdomains | core |
