@@ -219,7 +219,7 @@ def test_pending_on_an_unknown_domain_is_empty_not_an_error(seeded):
 
 def test_pulse_returns_counts_not_lists(seeded):
     result = server.pulse(DOMAIN)
-    assert set(result) == {"project", "latest_checkpoint", "pending", "read_next", "scope"}
+    assert set(result) == {"project", "latest_checkpoint", "pending", "pinned", "read_next", "scope"}
     for gone in ("handoffs", "anti_patterns", "recent_notes", "diagrams"):
         assert gone not in result
     assert result["pending"] == FULL

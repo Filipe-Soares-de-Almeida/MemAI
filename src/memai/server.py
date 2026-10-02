@@ -60,7 +60,9 @@ its own body; set_confidence(uid, 'confirmed'|'contradicted') closes it
 once the evidence turns up. pending() says which memories wait to be read
 in a scope -- open tasks first (task() files one), then pitfalls, handoffs,
 notes and flows; work an open task with task_item() and it closes itself
-once every item is done or dropped.
+once every item is done or dropped. `pinned` in pending() counts memories a
+person marked as mandatory reading: list them with pending(type=...,
+pinned=true) and open every one before acting.
 
 A domain is a path ('acme/x100/p200') and every read covers its
 subdomains, so the same call asks about a product or one routine depending
@@ -1351,58 +1353,80 @@ def set_domain_case(mode: str) -> dict:
 
 
 @tool("core")
-def pending(domain: str = "", type: str = "", limit: int = 10, offset: int = 0) -> dict:
+def pending(domain: str = "", type: str = "", limit: int = 10, offset: int = 0,
+            pinned: bool = False) -> dict:
     """What is still open in a scope: counts per category, or one category's headers.
 
     Without type: {"categories": [{"type", "count"}, ...]} for task,
     anti_pattern, handoff, note and diagram, in that order, leaving out the
-    empty ones. With type: {"type", "total", "items", "next_offset"} -- one
-    page of headers (uid, title, domain, est_tokens; a task adds
-    `progress` {done, total} and `doing`, the keys of its items in progress),
-    newest first, a task by its latest item update. Open a header with
-    get_memory(uid). `next_offset` is absent on the last page.
+    empty ones, plus "pinned" -- the same shape, counting the memories a
+    person pinned as mandatory reading -- when any pin is in scope. A pinned
+    memory still counts in its category. With type: {"type", "total",
+    "items", "next_offset"} -- one page of headers (uid, title, domain,
+    est_tokens; a task adds `progress` {done, total} and `doing`, the keys of
+    its items in progress), newest first, a task by its latest item update.
+    Open a header with get_memory(uid). `next_offset` is absent on the last
+    page.
+
+    pinned=true narrows the page to the pins of that type, and also accepts
+    checkpoint and reasoning. Every pin listed is read with get_memory(uid)
+    before acting, none skipped.
 
     Pending means: a task that is open; an active anti_pattern, handoff or
     note that is not contradicted; an active diagram.
 
     domain covers its subdomains and what is cross-listed there; empty is the
-    whole project. limit is 1 to 50. Any other type is an error.
+    whole project. A pin is in scope when it is global, or when the memory's
+    domain or one of its also paths is the asked domain or above it; the
+    whole project counts global pins only. limit is 1 to 50. Any other type
+    is an error.
     """
-    if error := db.type_error(type, allowed=pending_lists.CATEGORIES):
+    allowed = pending_lists.PINNED_TYPES if pinned else pending_lists.CATEGORIES
+    if error := db.type_error(type, allowed=allowed):
         return _errors([error])
     with db.connect() as conn:
         if not type:
-            return {"categories": pending_lists.counts(conn, domain)}
+            result = {"categories": pending_lists.counts(conn, domain)}
+            pins = pending_lists.pinned_counts(conn, domain)
+            if pins:
+                result["pinned"] = pins
+            return result
         try:
             page = {"limit": int(limit), "offset": int(offset)}
         except (TypeError, ValueError):
             return _errors(["limit and offset must be a whole number, "
                             f"got limit={limit!r} offset={offset!r}"])
-        result = pending_lists.headers(conn, domain, type, **page)
+        result = pending_lists.headers(conn, domain, type, pinned=bool(pinned), **page)
         _read(conn, result["items"])
     return result
 
 
 READ_NEXT_TASKS = ("Open tasks first: pending({domain}type='task'), then get_memory(uid) "
                    "for each task you will touch. ")
+READ_NEXT_PINNED = ("Pinned memories are mandatory reading: for each type in `pinned`, "
+                    "pending({domain}type=<t>, pinned=true), then get_memory(uid) on every "
+                    "one, skipping none. ")
 READ_NEXT_OTHERS = ("Then pending({domain}type=<t>) for each other category listed in "
                     "`pending`, before acting.")
 
 
-def _read_next(domain: str, categories: list[dict]) -> str:
-    """The reading order for what is pending, or "" when nothing is."""
-    if not categories:
+def _read_next(domain: str, categories: list[dict], pinned: list[dict]) -> str:
+    """The reading order for what is pending and pinned, or "" when nothing is."""
+    if not categories and not pinned:
         return ""
     arg = f"'{domain}', " if domain else ""
-    first = READ_NEXT_TASKS if categories[0]["type"] == TYPE_TASK else ""
-    return (first + READ_NEXT_OTHERS).format(domain=arg)
+    text = READ_NEXT_PINNED if pinned else ""
+    if categories:
+        text += READ_NEXT_TASKS if categories[0]["type"] == TYPE_TASK else ""
+        text += READ_NEXT_OTHERS
+    return text.format(domain=arg).strip()
 
 
 @tool("core")
 def pulse(domain: str = "") -> dict:
     """Session warm-up: the latest checkpoint, what is pending, and what to read next.
 
-    Returns {project, latest_checkpoint, pending, read_next, scope}.
+    Returns {project, latest_checkpoint, pending, pinned, read_next, scope}.
 
     latest_checkpoint is picked by created_at DESC, never by similarity --
     a similarity-ranked top-1 can return a stale checkpoint over a
@@ -1419,6 +1443,9 @@ def pulse(domain: str = "") -> dict:
     category, before acting. It is "" when nothing is pending. A pulse lists
     no memories besides the checkpoint; pending(domain, type=...) lists
     headers and get_memory(uid) opens one.
+
+    `pinned` counts the pins in scope the same way (see pending()); when it
+    is non-empty `read_next` asks for them before anything else.
 
     domain warms up a path and everything under it, so pulse('acme/x100')
     is the module-wide brief and pulse('acme/x100/p200') the routine's.
@@ -1451,6 +1478,7 @@ def pulse(domain: str = "") -> dict:
         latest_checkpoint = db.latest_by_type(conn, TYPE_CHECKPOINT, domain=domain,
                                               exclude_contradicted=True)
         categories = pending_lists.counts(conn, domain)
+        pins = pending_lists.pinned_counts(conn, domain)
         checkpoint_dict = _row_to_dict(latest_checkpoint)
         if checkpoint_dict:
             # Returned whole, so its est_tokens is what this response spent
@@ -1462,7 +1490,8 @@ def pulse(domain: str = "") -> dict:
         "project": db.active_project(),
         "latest_checkpoint": checkpoint_dict,
         "pending": categories,
-        "read_next": _read_next(domain, categories),
+        "pinned": pins,
+        "read_next": _read_next(domain, categories, pins),
         "scope": {
             "domain": domain,
             "paths": census["paths"],

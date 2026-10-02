@@ -196,3 +196,57 @@ def test_pinned_headers_list_only_pins_of_the_type(store):
         page = pending.headers(conn, "acme/x100", "note", pinned=True)
         assert page["total"] == 1 and [i["uid"] for i in page["items"]] == [uid]
         assert pending.headers(conn, "", "note", pinned=True)["total"] == 0
+
+
+# ---------------------------------------------------------------- the tools
+
+def _seed_pins():
+    with db.connect() as conn:
+        _pinned(conn, "global", title="Global pin")
+        _pinned(conn, "domain", title="Domain pin")
+        _note(conn, title="Plain fact")
+
+
+def test_pending_tool_adds_pinned_counts_only_when_pinned(store):
+    with db.connect() as conn:
+        _note(conn)
+    assert server.pending() == {"categories": [{"type": "note", "count": 1}]}
+    _seed_pins()
+    assert server.pending()["pinned"] == [{"type": "note", "count": 1}]
+    assert server.pending("acme/x100")["pinned"] == [{"type": "note", "count": 2}]
+
+
+def test_pending_tool_lists_pinned_headers(store):
+    _seed_pins()
+    page = server.pending("acme/x100", type="note", pinned=True)
+    assert page["total"] == 2
+    assert {i["title"] for i in page["items"]} == {"Global pin", "Domain pin"}
+
+
+def test_pending_tool_accepts_checkpoint_only_with_pinned(store):
+    assert server.pending(type="checkpoint")["errors"] == [
+        "unknown type 'checkpoint'; valid types: task, anti_pattern, handoff, note, diagram"]
+    assert server.pending(type="checkpoint", pinned=True)["total"] == 0
+    assert "errors" in server.pending(type="optimizer", pinned=True)
+
+
+def test_pulse_reports_pins_and_reads_them_first(store):
+    _seed_pins()
+    result = server.pulse("acme/x100")
+    assert result["pinned"] == [{"type": "note", "count": 2}]
+    assert result["read_next"].startswith(
+        "Pinned memories are mandatory reading: for each type in `pinned`, "
+        "pending('acme/x100', type=<t>, pinned=true), then get_memory(uid) on every "
+        "one, skipping none. Then pending(")
+
+
+def test_pulse_without_pins_reads_as_before(store):
+    with db.connect() as conn:
+        _note(conn)
+    result = server.pulse("acme/x100")
+    assert result["pinned"] == []
+    assert result["read_next"].startswith("Then pending(")
+
+
+def test_instructions_name_the_pins():
+    assert "pinned=true" in server.INSTRUCTIONS
