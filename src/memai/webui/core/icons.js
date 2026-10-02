@@ -185,7 +185,7 @@ const ICONS = {
   },
   check: {
     viewBox: '0 0 16 16',
-    body: `<path d="M3 8.4l3.2 3.2L13 4.8" fill="none" stroke="currentColor"
+    body: `<path d="M3 8.4l3.2 3.2L13 4.8" pathLength="1" fill="none" stroke="currentColor"
                  stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>`,
   },
   ongoing: {  /* one open arc ending in an arrowhead: a task item in progress */
@@ -202,6 +202,16 @@ const ICONS = {
   comment: {  /* a speech bubble with its tail at the lower left */
     viewBox: '0 0 16 16',
     body: `<path d="M3.2 2.8h9.6a1 1 0 011 1v6.4a1 1 0 01-1 1H7.4L4.4 13.6v-2.4H3.2a1 1 0 01-1-1V3.8a1 1 0 011-1z"/>`,
+  },
+  person: {   /* a head over shoulders: a comment written by a person */
+    viewBox: '0 0 16 16',
+    body: `<circle cx="8" cy="5.6" r="2.4"/>
+           <path d="M3.2 13.2c.4-2.4 2.2-3.7 4.8-3.7s4.4 1.3 4.8 3.7"/>`,
+  },
+  agent: {    /* a prompt: a comment written by an agent's session */
+    viewBox: '0 0 16 16',
+    body: `<path d="M3.6 5.4L6.9 8l-3.3 2.6"/>
+           <path d="M8.6 11h3.8"/>`,
   },
   more: {     /* three dots in a row: the menu behind a control */
     viewBox: '0 0 16 16',

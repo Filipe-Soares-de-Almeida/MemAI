@@ -1,10 +1,11 @@
 /* A task's checklist in the record view; every write repaints it from the {task, status} the server answers.
-   One item's links and comments are open at a time, and `onStatus` tells the record when the task closes. */
+   One item's links and comments are open at a time; `onStatus` tells the record when the task closes
+   and `onWrite` when any write was accepted. */
 
 import { esc, fmtAgo, fmtDate, fmtInt } from '../core/dom.js';
 import { api, seg } from '../core/api.js';
 import { icon } from '../core/icons.js';
-import { toast, failed, openDropMenu } from '../core/ui.js';
+import { toast, failed, openDropMenu, confirmModal } from '../core/ui.js';
 import { pickMemories } from '../core/link-picker.js';
 import { typeTag } from '../core/shared.js';
 import { go, parseHash, refreshBehind } from '../core/router.js';
@@ -24,20 +25,26 @@ let ui = null;
 const fresh = uid => ({
   uid, open: '', goalEditing: false, adding: false, allComments: false,
   drafts: new Map(), progress: null,
+  /* what the last paint drew, so the next one animates only what is new */
+  seen: null, pulse: '', opened: '',
 });
+
+/* how long a deleted item takes to leave before the list is repainted */
+const LEAVE_MS = 160;
+const commentKey = c => `${c.created_at}|${c.item}|${c.author}|${c.body.length}`;
 
 /* A selector that finds the same control again after a repaint. */
 const selectorOf = el => {
   if (el.id) return `#${CSS.escape(el.id)}`;
   if (el.hasAttribute('data-unlink'))
     return `[data-unlink="${CSS.escape(el.dataset.unlink)}"][data-item="${CSS.escape(el.dataset.item)}"]`;
-  for (const a of ['data-step', 'data-toggle', 'data-menu', 'data-draft', 'data-link'])
+  for (const a of ['data-step', 'data-toggle', 'data-menu', 'data-draft', 'data-send', 'data-link'])
     if (el.hasAttribute(a)) return `[${a}="${CSS.escape(el.getAttribute(a))}"]`;
   return '';
 };
 const attr = (name, value) => `[${name}="${CSS.escape(value)}"]`;
 
-export function mountTask(host, { uid, task, status }, { onStatus } = {}) {
+export function mountTask(host, { uid, task, status }, { onStatus, onWrite } = {}) {
   if (!ui || ui.uid !== uid) ui = fresh(uid);
   /* this mount's own state: a write that lands after another task has taken
      the module's `ui` still clears its drafts on the object it was started on */
@@ -50,6 +57,9 @@ export function mountTask(host, { uid, task, status }, { onStatus } = {}) {
   let want = [];
   const focusAfter = (...selectors) => { want = selectors; };
   const alive = () => host.isConnected;
+  /* what this paint animates in: items and comments not drawn before, the
+     mark that just changed, the panel that just opened, a task that just closed */
+  let enter = { items: new Set(), comments: new Set(), pulse: '', opened: '', closed: false };
 
   /* ── the write path ── */
 
@@ -62,15 +72,16 @@ export function mountTask(host, { uid, task, status }, { onStatus } = {}) {
   };
 
   /* One write at a time, so a second click cannot read a stale state; `onOk`
-     runs on acceptance, before the repaint. */
+     runs (and is awaited) on acceptance, before the repaint. */
   const write = async (path, body, { method = 'POST', errKey = 'task.err.save', onOk } = {}) => {
     if (busy) { want = []; return null; }
     busy = true;
     try {
       const res = await api(`/api/tasks/${seg(uid)}/${path}`, { method, body });
-      onOk?.(state);
+      await onOk?.(state);
       apply(res);
       if (!alive()) refreshIfShown();
+      else onWrite?.(res);
       return res;
     } catch (err) {
       want = [];
@@ -91,7 +102,7 @@ export function mountTask(host, { uid, task, status }, { onStatus } = {}) {
   const setItem = async (key, next, { quiet = false } = {}) => {
     const before = current.items.find(i => i.key === key)?.state;
     const wasOpen = current.state === 'open';
-    const res = await write('item', { item: key, state: next });
+    const res = await write('item', { item: key, state: next }, { onOk: s => { s.pulse = key; } });
     if (!res || quiet) return;
     if (wasOpen && res.task.state !== 'open') {
       toast(t(`task.toast.${res.task.state}`), 'ok', {
@@ -105,6 +116,38 @@ export function mountTask(host, { uid, task, status }, { onStatus } = {}) {
     }
   };
 
+  /* Deleting asks first (it has no undo), plays the row out, and hands focus to
+     the next item's mark, else the previous one's, else the add control. A
+     refusal leaves the item where it is, with focus back on its menu. */
+  const deleteItem = async key => {
+    const item = current.items.find(i => i.key === key);
+    if (!item || busy) return;
+    const menu = () => host.querySelector(attr('data-menu', key))?.focus();
+    /* the dialog hands focus back to whoever held it when it opened, by any
+       way out of it, so that is the item's menu button */
+    menu();
+    const ok = await confirmModal({
+      title: t('task.delete.title'), body: t('task.delete.body', { text: esc(item.text) }),
+      okLabel: t('task.item.delete'), danger: true });
+    if (!ok) { menu(); return; }
+    const at = current.items.findIndex(i => i.key === key);
+    if (at < 0) return;
+    const wasOpen = current.state === 'open';
+    focusAfter(...[current.items[at + 1], current.items[at - 1]].filter(Boolean)
+      .map(i => attr('data-step', i.key)), '#tkAddOpen');
+    const res = await write('item', { item: key }, {
+      method: 'DELETE', errKey: 'task.err.delete',
+      onOk: async s => {
+        if (s.open === key) s.open = '';
+        s.drafts.delete(key);
+        host.querySelector(`.tk-item${attr('data-key', key)}`)?.classList.add('is-leaving');
+        await new Promise(done => setTimeout(done, LEAVE_MS));
+      },
+    });
+    if (!res) { menu(); return; }
+    toast(t(wasOpen && res.task.state !== 'open' ? `task.toast.${res.task.state}` : 'task.toast.deleted'), 'ok');
+  };
+
   /* ── painting ── */
 
   const progressOf = () => {
@@ -113,26 +156,44 @@ export function mountTask(host, { uid, task, status }, { onStatus } = {}) {
     return { total, done: count('done'), dropped: count('dropped') };
   };
 
-  const commentHTML = c => `<div class="tk-c ${c.author === 'person' ? 'is-person' : 'is-agent'}">
-    <div class="tk-c-head">
-      <span class="tk-c-who">${esc(t(c.author === 'person' ? 'task.author.person' : 'task.author.agent'))}</span>
-      ${c.session && c.author !== 'person'
-        ? `<span class="tk-c-session" title="${esc(c.session)}">${esc(c.session.slice(0, 14))}</span>` : ''}
-      <time class="tk-c-when" datetime="${esc(c.created_at)}" title="${esc(c.created_at)}">${fmtAgo(c.created_at)}</time>
-    </div>
-    <p class="tk-c-body">${esc(c.body)}</p>
-  </div>`;
+  /* A comment is a line of a thread: the writer's mark (a round person, or a
+     square prompt for an agent), who and when, then the message. */
+  const commentHTML = c => {
+    const person = c.author === 'person';
+    return `<article class="tk-c ${person ? 'is-person' : 'is-agent'}${enter.comments.has(commentKey(c)) ? ' is-new' : ''}">
+      <span class="tk-c-av" aria-hidden="true">${icon(person ? 'person' : 'agent')}</span>
+      <div class="tk-c-main">
+        <header class="tk-c-head">
+          <span class="tk-c-who">${esc(t(person ? 'task.author.person' : 'task.author.agent'))}</span>
+          ${c.session && !person
+            ? `<span class="tk-c-session" title="${esc(c.session)}">${esc(c.session.slice(0, 14))}</span>` : ''}
+          <time class="tk-c-when" datetime="${esc(c.created_at)}" title="${esc(c.created_at)}">${fmtAgo(c.created_at)}</time>
+        </header>
+        <p class="tk-c-body">${esc(c.body)}</p>
+      </div>
+    </article>`;
+  };
 
-  const composerHTML = (scope, { rows = 2 } = {}) => `<div class="tk-compose">
-    <textarea class="tk-box" rows="${rows}" data-draft="${esc(scope)}"
-              placeholder="${esc(t('task.comment.placeholder'))}"
-              aria-label="${esc(t('task.comment.placeholder'))}">${esc(state.drafts.get(scope) || '')}</textarea>
-    <button type="button" class="btn btn-sm" data-send="${esc(scope)}" ${(state.drafts.get(scope) || '').trim() ? '' : 'disabled'}>${t('task.comment.send')}</button>
-  </div>`;
+  /* the thread's last line: your reply, with the send control inside its box */
+  const composerHTML = (scope, { reply = false } = {}) => {
+    const ph = t(reply ? 'task.comment.reply' : 'task.comment.placeholder');
+    const draft = state.drafts.get(scope) || '';
+    return `<div class="tk-c tk-compose is-person">
+      <span class="tk-c-av" aria-hidden="true">${icon('person')}</span>
+      <div class="tk-reply">
+        <textarea class="tk-box" rows="2" data-draft="${esc(scope)}"
+                  placeholder="${esc(ph)}" aria-label="${esc(ph)}">${esc(draft)}</textarea>
+        <div class="tk-reply-foot">
+          <span class="tk-hint">${t('task.comment.hint')}</span>
+          <button type="button" class="btn btn-sm btn-solid" data-send="${esc(scope)}" ${draft.trim() ? '' : 'disabled'}>${t('task.comment.send')}</button>
+        </div>
+      </div>
+    </div>`;
+  };
 
   const itemPanelHTML = item => {
     const thread = current.comments.filter(c => c.item === item.key);
-    return `<div class="tk-panel" id="tkp-${esc(item.key)}" role="group"
+    return `<div class="tk-panel${enter.opened === item.key ? ' is-enter' : ''}" id="tkp-${esc(item.key)}" role="group"
                  aria-label="${esc(t('task.panel.aria', { text: item.text }))}">
       <div class="tk-sub">
         <h3 class="tk-sub-h">${t('task.links')}<span class="rs-n">${item.links.length}</span></h3>
@@ -148,8 +209,10 @@ export function mountTask(host, { uid, task, status }, { onStatus } = {}) {
         </div>`).join('')}</div>`
         : `<div class="hint-sm">${t('task.links.empty')}</div>`}
       <div class="tk-sub"><h3 class="tk-sub-h">${t('task.comments')}<span class="rs-n">${thread.length}</span></h3></div>
-      ${thread.map(commentHTML).join('')}
-      ${composerHTML(item.key)}
+      <div class="tk-cs">
+        ${thread.map(commentHTML).join('')}
+        ${composerHTML(item.key, { reply: thread.length > 0 })}
+      </div>
     </div>`;
   };
 
@@ -160,9 +223,9 @@ export function mountTask(host, { uid, task, status }, { onStatus } = {}) {
     const next = NEXT[item.state];
     const action = t(`task.mark.${next}`);
     const stateName = t(`task.state.${item.state}`);
-    return `<li class="tk-item${open ? ' is-open' : ''}" data-s="${esc(item.state)}" data-key="${esc(item.key)}">
+    return `<li class="tk-item${open ? ' is-open' : ''}${enter.items.has(item.key) ? ' is-new' : ''}" data-s="${esc(item.state)}" data-key="${esc(item.key)}">
       <div class="tk-row">
-        <button type="button" class="tk-state" data-s="${esc(item.state)}" data-step="${esc(item.key)}"
+        <button type="button" class="tk-state${enter.pulse === item.key ? ' is-pulse' : ''}" data-s="${esc(item.state)}" data-step="${esc(item.key)}"
                 title="${esc(action)}"
                 aria-label="${esc(t('task.state.aria', { text: item.text, state: stateName, action }))}">
           <span class="tk-ring">${{ doing: icon('ongoing'), done: icon('check'), dropped: icon('minus') }[item.state] || ''}</span>
@@ -187,7 +250,7 @@ export function mountTask(host, { uid, task, status }, { onStatus } = {}) {
     const p = progressOf();
     const before = state.progress || p;
     const frac = n => (p.total ? n / p.total : 0);
-    const shown = p.total ? before.done / p.total : 0;
+    const was = n => (before.total ? n / before.total : 0);
     return `<div class="tk-prog">
       <div class="tk-prog-line">
         <span class="tk-prog-n">${p.total
@@ -199,8 +262,9 @@ export function mountTask(host, { uid, task, status }, { onStatus } = {}) {
            aria-valuenow="${p.done}"
            aria-valuetext="${esc(t('task.progress.text', { done: p.done, total: p.total })
              + (p.dropped ? `, ${t('task.dropped', { n: p.dropped })}` : ''))}">
-        <div class="bar-fill" data-fill="${frac(p.done)}" style="--v:${shown}"></div>
-        ${p.dropped ? `<div class="tk-bar-drop" style="--v0:${frac(p.done)};--v:${frac(p.dropped)}"></div>` : ''}
+        <div class="bar-fill" data-fill="${frac(p.done)}" style="--v:${was(before.done)}"></div>
+        ${p.dropped ? `<div class="tk-bar-drop" data-v0="${frac(p.done)}" data-v="${frac(p.dropped)}"
+             style="--v0:${was(before.done)};--v:${was(before.dropped)}"></div>` : ''}
       </div>
     </div>`;
   };
@@ -208,7 +272,7 @@ export function mountTask(host, { uid, task, status }, { onStatus } = {}) {
   const closedHTML = () => {
     if (current.state === 'open') return '';
     const done = current.state === 'completed';
-    return `<div class="tk-closed ${done ? 'is-completed' : 'is-cancelled'}" role="status">
+    return `<div class="tk-closed ${done ? 'is-completed' : 'is-cancelled'}${enter.closed ? ' is-new' : ''}" role="status">
       <span class="tk-closed-mark">${icon(done ? 'check' : 'minus')}</span>
       <span class="tk-closed-text"><b>${t(`task.state.${current.state}`)}</b>
         ${current.completed_at
@@ -255,9 +319,11 @@ export function mountTask(host, { uid, task, status }, { onStatus } = {}) {
     return `<section class="tk-thread tk-card" aria-label="${esc(t('task.comments.aria'))}">
       <h3 class="tk-h">${t('task.comments')}<span class="rs-n">${all.length}</span></h3>
       ${hidden ? `<button type="button" class="rs-more tk-older" id="tkOlder">${t('task.comments.older', { n: hidden })}</button>` : ''}
-      ${all.slice(hidden).map(commentHTML).join('')
-        || `<div class="hint-sm">${t('task.comments.empty')}</div>`}
-      ${composerHTML('')}
+      <div class="tk-cs">
+        ${all.slice(hidden).map(commentHTML).join('')
+          || `<div class="hint-sm tk-empty">${t('task.comments.empty')}</div>`}
+        ${composerHTML('', { reply: all.length > 0 })}
+      </div>
     </section>`;
   };
 
@@ -269,6 +335,15 @@ export function mountTask(host, { uid, task, status }, { onStatus } = {}) {
     const caret = was?.selectionStart ?? null;
     const tries = want.length ? want : [kept];
     want = [];
+    const seen = state.seen;
+    enter = {
+      items: new Set(seen ? current.items.map(i => i.key).filter(k => !seen.items.has(k)) : []),
+      comments: new Set(seen ? current.comments.map(commentKey).filter(k => !seen.comments.has(k)) : []),
+      pulse: state.pulse, opened: state.opened,
+      closed: Boolean(seen) && seen.open && current.state !== 'open',
+    };
+    state.pulse = '';
+    state.opened = '';
     host.innerHTML = `<div class="tk">
       <div class="tk-head tk-card${current.state === 'open' ? '' : ' is-closed'}">
         ${closedHTML()}
@@ -290,10 +365,18 @@ export function mountTask(host, { uid, task, status }, { onStatus } = {}) {
     /* the fill is drawn at its old value and moves on the next frame, so the
        bar transitions */
     const fill = host.querySelector('.bar-fill');
+    const drop = host.querySelector('.tk-bar-drop');
     if (fill) requestAnimationFrame(() => requestAnimationFrame(() => {
       fill.style.setProperty('--v', fill.dataset.fill);
+      drop?.style.setProperty('--v0', drop.dataset.v0);
+      drop?.style.setProperty('--v', drop.dataset.v);
     }));
     state.progress = progressOf();
+    state.seen = {
+      items: new Set(current.items.map(i => i.key)),
+      comments: new Set(current.comments.map(commentKey)),
+      open: current.state === 'open',
+    };
   }
 
   /* ── wiring ── */
@@ -309,16 +392,21 @@ export function mountTask(host, { uid, task, status }, { onStatus } = {}) {
 
     all('[data-toggle]').forEach(b => b.addEventListener('click', () => {
       state.open = state.open === b.dataset.toggle ? '' : b.dataset.toggle;
+      state.opened = state.open;
       paint();
     }));
 
     all('[data-menu]').forEach(b => b.addEventListener('click', () => {
       const item = current.items.find(i => i.key === b.dataset.menu);
       if (!item) return;
-      openDropMenu(b, STATES.filter(s => s !== item.state).map(s => ({
-        label: t(`task.mark.${s}`), danger: s === 'dropped',
-        run: () => { focusAfter(attr('data-menu', item.key)); setItem(item.key, s); },
-      })), { align: 'right' });
+      openDropMenu(b, [
+        ...STATES.filter(s => s !== item.state).map(s => ({
+          label: t(`task.mark.${s}`), danger: s === 'dropped',
+          run: () => { focusAfter(attr('data-menu', item.key)); setItem(item.key, s); },
+        })),
+        { sep: true },
+        { label: t('task.item.delete'), danger: true, run: () => deleteItem(item.key) },
+      ], { align: 'right' });
     }));
 
     all('[data-link]').forEach(b => b.addEventListener('click', async () => {

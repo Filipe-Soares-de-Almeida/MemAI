@@ -476,10 +476,27 @@ function openMenu(items, at) {
   /* dismissed by whatever you do next -- clicking elsewhere, Escape,
      zooming the canvas. closeCtxMenu takes the listeners off with it. */
   const away = e => { if (!el.contains(e.target)) closeCtxMenu(); };
-  const key = e => { if (e.key === 'Escape') closeCtxMenu(); };
+  /* a menu dropped from a button takes the keyboard: focus goes to its first
+     entry, the arrows walk the entries, and Escape or Tab hands focus back */
+  const entries = [...el.querySelectorAll('.ctx-item')];
+  const key = e => {
+    if (e.key === 'Escape') { closeCtxMenu(); at.btn?.focus(); return; }
+    if (!at.btn) return;
+    const i = entries.indexOf(document.activeElement);
+    const to = { ArrowDown: i + 1, ArrowUp: i - 1, Home: 0, End: entries.length - 1 }[e.key];
+    if (to !== undefined) {
+      e.preventDefault();
+      entries[(to + entries.length) % entries.length].focus();
+    } else if (e.key === 'Tab') {
+      e.preventDefault();
+      closeCtxMenu();
+      at.btn.focus();
+    }
+  };
   addEventListener('mousedown', away, true);
   addEventListener('keydown', key, true);
   addEventListener('wheel', closeCtxMenu, true);
+  if (at.btn) entries[0]?.focus();
   ctxDrop = () => {
     removeEventListener('mousedown', away, true);
     removeEventListener('keydown', key, true);

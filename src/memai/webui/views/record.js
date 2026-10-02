@@ -239,7 +239,8 @@ export async function renderRecord(view, params, ctx) {
   if (isTask) {
     mountTask(view.querySelector('#taskHost'),
               { uid, task: m.task, status: m.status },
-              { onStatus: status => paintStatus(view, m, uid, status) });
+              { onStatus: status => paintStatus(view, m, uid, status),
+                onWrite: () => refreshTrail(view, m, uid) });
   }
 }
 
@@ -459,18 +460,7 @@ function sideHTML(m, uid) {
       ${r.note ? `<span class="rs-rel-note">${esc(r.note)}</span>` : ''}
     </div>`).join('') || `<div class="hint-sm">${t('dr.rel.empty')}</div>`;
 
-  const hist = m.edit_history.slice().reverse().map((e, i) => `
-    <div class="rs-hist">
-      <span class="rs-hist-when" title="${esc(e.edited_at)}">${fmtDate(e.edited_at)}</span>
-      <span class="rs-hist-note">${esc(e.note || '')
-        || (e.prev_content !== e.new_content ? t('dr.hist.contentEdited') : t('dr.hist.entry'))}</span>
-      ${e.prev_content !== e.new_content
-        ? `<button type="button" class="rs-hist-diff" data-diff="${i}" aria-expanded="false"
-                   aria-controls="histDiff${i}">${t('dr.hist.show')}</button>
-           <div class="hist-diff" id="histDiff${i}" data-diffbody="${i}" hidden></div>` : ''}
-    </div>`).join('') || `<div class="hint-sm">${t('dr.hist.empty')}</div>`;
-
-  return `<aside class="rec-side">
+  return `<aside class="rec-side" data-uid="${esc(m.uid)}">
     <div class="rs-head">
       <div class="rs-head-row">
         ${typeTag(m.type)}${uidChip(m.uid)}
@@ -517,9 +507,9 @@ function sideHTML(m, uid) {
           : `<b class="rs-mono">—</b>`}</div>
         <div><span>${t('dr.meta.created')}</span><b class="rs-mono"
           title="${esc(m.created_at)}">${fmtDate(m.created_at)}</b></div>
-        <div><span>${t('dr.meta.updated')}</span><b class="rs-mono"
+        <div><span>${t('dr.meta.updated')}</span><b class="rs-mono" data-rs="updated"
           title="${esc(m.updated_at)}">${fmtDate(m.updated_at)}</b></div>
-        <div><span>${t('dr.meta.size')}</span><b class="rs-mono">${
+        <div><span>${t('dr.meta.size')}</span><b class="rs-mono" data-rs="size">${
           t('dr.chars', { n: fmtInt(m.content.length) })}</b></div>
         ${m.superseded_by ? `<div><span>${t('dr.meta.supersededBy')}</span>
           <button type="button" class="rs-mono" data-open="${esc(m.superseded_by)}"
@@ -533,11 +523,7 @@ function sideHTML(m, uid) {
         ${rels}
       </div>
 
-      <div class="rs-field">
-        <div class="rs-field-head"><span class="mg-label">${t('dr.history')}</span>
-          <span class="rs-n">${m.edit_history.length}</span></div>
-        ${hist}
-      </div>
+      <div class="rs-field" data-rs="history">${historyHTML(m)}</div>
     </div>
 
     <div class="rs-foot">
@@ -545,6 +531,39 @@ function sideHTML(m, uid) {
       <button class="btn btn-sm btn-danger" id="dDelete">${icon('trash')}${t('dz.button')}</button>
     </div>
   </aside>`;
+}
+
+/* The edit history's head and rows, newest first. */
+function historyHTML(m) {
+  const rows = m.edit_history.slice().reverse().map((e, i) => `
+    <div class="rs-hist">
+      <span class="rs-hist-when" title="${esc(e.edited_at)}">${fmtDate(e.edited_at)}</span>
+      <span class="rs-hist-note">${esc(e.note || '')
+        || (e.prev_content !== e.new_content ? t('dr.hist.contentEdited') : t('dr.hist.entry'))}</span>
+      ${e.prev_content !== e.new_content
+        ? `<button type="button" class="rs-hist-diff" data-diff="${i}" aria-expanded="false"
+                   aria-controls="histDiff${i}">${t('dr.hist.show')}</button>
+           <div class="hist-diff" id="histDiff${i}" data-diffbody="${i}" hidden></div>` : ''}
+    </div>`).join('') || `<div class="hint-sm">${t('dr.hist.empty')}</div>`;
+  return `<div class="rs-field-head"><span class="mg-label">${t('dr.history')}</span>
+      <span class="rs-n">${m.edit_history.length}</span></div>
+    ${rows}`;
+}
+
+/* A write the task view made in place changed the record's Updated time, its
+   size and its edit history; the side panel reads them again. */
+async function refreshTrail(view, m, uid) {
+  let now;
+  try { now = await api(`/api/memories/${seg(uid)}`); } catch { return; }
+  const side = view.querySelector('.rec-side');
+  if (!side || side.dataset.uid !== uid) return;
+  Object.assign(m, { updated_at: now.updated_at, content: now.content, edit_history: now.edit_history });
+  const updated = side.querySelector('[data-rs="updated"]');
+  updated.textContent = fmtDate(m.updated_at);
+  updated.title = m.updated_at;
+  side.querySelector('[data-rs="size"]').textContent = t('dr.chars', { n: fmtInt(m.content.length) });
+  side.querySelector('[data-rs="history"]').innerHTML = historyHTML(m);
+  wireHistory(view, m);
 }
 
 /* The one control that moves a record between active and archived. */
@@ -819,7 +838,11 @@ function wire(view, m, uid, fields, isDiagram) {
     save();
   });
 
-  /* ── history diffs (lazy) ── */
+  wireHistory(view, m);
+}
+
+/* ── history diffs (lazy) ── */
+function wireHistory(view, m) {
   const histRev = m.edit_history.slice().reverse();
   view.querySelectorAll('[data-diff]').forEach(b => b.addEventListener('click', () => {
     const i = b.dataset.diff;

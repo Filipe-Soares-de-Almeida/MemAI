@@ -263,10 +263,11 @@ function symptomsPanel(symptoms, active) {
 
 function tasksPanel(n) {
   if (!n) return '';
+  const open = fmtInt(n);
   return `<div class="panel hx-tasks">
     ${typeTag('task')}
     <div class="hx-tasks-text">
-      <span class="hx-tasks-title">${t('ov.tasks.open', { n })}</span>
+      <span class="hx-tasks-title">${t('ov.tasks.open', { n: open })}</span>
       <span class="hx-tasks-aside">${t('ov.tasks.aside')}</span>
     </div>
     <button type="button" class="btn btn-sm" data-open-tasks>${t('ov.tasks.act')}</button>

@@ -2685,30 +2685,35 @@ button.rs-mono:hover { color: var(--accent); }
 .tk-bar { height: 8px; border-radius: var(--r-pill); }
 .tk-bar .bar-fill { --c: var(--f-go); }
 /* what was dropped sits right after what was done, hatched: it is part of
-   the whole the bar counts out of, and it is not progress */
+   the whole the bar counts out of, and it is not progress. The hatch fills the
+   track and a clip leaves the dropped span, so it eases like the fill does */
 .tk-bar-drop {
-  position: absolute; top: 0; bottom: 0;
-  left: calc(var(--v0) * 100%); width: calc(var(--v) * 100%);
+  position: absolute; inset: 0;
   background: repeating-linear-gradient(135deg, rgba(255, 255, 255, .3) 0 2px, transparent 2px 5px);
+  clip-path: inset(0 calc((1 - var(--v0) - var(--v)) * 100%) 0 calc(var(--v0) * 100%));
+  transition: clip-path .6s cubic-bezier(.25, .9, .3, 1);
 }
 
 /* the items */
 .tk-items { list-style: none; margin: 0; padding: 0; }
 /* the row and the panel it opens are one surface, so the wash is the item's */
 .tk-item { border-bottom: 1px solid var(--line-soft); transition: background .15s; }
+.tk-item.is-new { animation: rise .28s cubic-bezier(.2, .7, .3, 1) both; }
+.tk-item.is-leaving { animation: tk-leave .16s cubic-bezier(.4, 0, 1, 1) both; pointer-events: none; }
+@keyframes tk-leave { to { opacity: 0; transform: translateX(var(--leave-x, -10px)); } }
 .tk-item[data-s="doing"] { background: color-mix(in srgb, var(--f-live) 7%, transparent); }
 .tk-item.is-open { background: var(--hover-2); }
 .tk-item[data-s="doing"].is-open { background: color-mix(in srgb, var(--f-live) 7%, var(--hover-2)); }
 .tk-item:last-child { border-bottom: 0; }
 .tk-row {
-  display: grid; grid-template-columns: 28px minmax(0, 1fr) var(--ctl-h-sm);
+  display: grid; grid-template-columns: var(--ctl-h-sm) minmax(0, 1fr) var(--ctl-h-sm);
   align-items: start; gap: var(--sp-2);
   padding: var(--sp-2) var(--sp-3);
 }
 
 .tk-state {
   --sc: var(--ink-3);
-  width: max(28px, var(--tap)); height: max(28px, var(--tap)); padding: 0;
+  width: var(--ctl-h-sm); height: var(--ctl-h-sm); padding: 0;
   display: grid; place-items: center;
   background: none; border: 0; border-radius: 50%; cursor: pointer;
 }
@@ -2719,16 +2724,26 @@ button.rs-mono:hover { color: var(--accent); }
   transition: background-color .15s, border-color .15s, box-shadow .15s;
 }
 .tk-state:hover .tk-ring { box-shadow: 0 0 0 4px var(--hover-3); }
-/* in progress: the ring opens into an arc with an arrowhead, so it is not todo's ring */
+/* in progress: the ring opens into an arc with an arrowhead, so it is not todo's ring;
+   the arc turns slowly, one lap in three seconds, so the item reads as live */
 .tk-state[data-s="doing"]   { --sc: var(--f-live); }
 .tk-state[data-s="doing"] .tk-ring { border: 0; background: none; color: var(--f-live); --ico: 20px; }
+.tk-state[data-s="doing"] .ico { animation: spin 3.2s linear infinite; }
 .tk-state[data-s="done"]    { --sc: var(--f-go); }
 .tk-state[data-s="done"] .tk-ring { background: var(--f-go); color: var(--accent-ink); }
 .tk-state[data-s="dropped"] .tk-ring { border-style: dashed; color: var(--ink-3); }
+/* the mark that was just changed arrives: the ring scales in, and a done tick draws itself */
+.tk-state.is-pulse .tk-ring { animation: tk-pop .26s cubic-bezier(.2, .8, .2, 1) both; }
+.tk-state.is-pulse[data-s="done"] .ico path {
+  stroke-dasharray: 1 2;
+  animation: tk-draw .3s .1s cubic-bezier(.3, .7, .2, 1) both;
+}
+@keyframes tk-pop { from { opacity: .2; transform: scale(var(--pop-from, .6)); } }
+@keyframes tk-draw { from { stroke-dashoffset: 1; } }
 
 .tk-main {
   display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: start; gap: var(--sp-3);
-  width: 100%; min-height: 28px; padding: var(--sp-1) 0; text-align: left;
+  width: 100%; min-height: var(--ctl-h-sm); padding: var(--sp-1) 0; text-align: left;
   background: none; border: 0; border-radius: var(--r-sm); cursor: pointer;
   font: 400 var(--fs-body)/1.5 var(--font-ui); color: var(--ink);
 }
@@ -2738,7 +2753,7 @@ button.rs-mono:hover { color: var(--accent); }
   color: var(--ink-3); text-decoration: line-through;
   text-decoration-color: var(--ink-3);
 }
-.tk-counts { display: inline-flex; align-items: center; gap: var(--sp-3); color: var(--ink-3); min-height: 22px; }
+.tk-counts { display: inline-flex; align-items: center; gap: var(--sp-3); color: var(--ink-2); min-height: 22px; }
 .tk-counts:empty { display: none; }
 .tk-count {
   display: inline-flex; align-items: center; gap: var(--sp-1);
@@ -2752,12 +2767,14 @@ button.rs-mono:hover { color: var(--accent); }
    rule drops from the centre of the state mark, and the content lines up with
    the item's text. */
 .tk-panel {
-  --mark: calc(var(--sp-3) + 14px);
+  --mark: calc(var(--sp-3) + var(--ctl-h-sm) / 2);
   display: flex; flex-direction: column; gap: var(--sp-3);
   margin: 0 var(--sp-3) 0 var(--mark);
-  padding: var(--sp-1) 0 var(--sp-4) calc(28px + var(--sp-2) + var(--sp-3) - var(--mark) - 1px);
+  padding: var(--sp-1) 0 var(--sp-4) calc(var(--ctl-h-sm) + var(--sp-2) + var(--sp-3) - var(--mark) - 1px);
   border-left: 1px solid var(--line);
 }
+.tk-panel.is-enter { animation: tk-in .22s cubic-bezier(.2, .7, .3, 1) both; }
+@keyframes tk-in { from { opacity: 0; transform: translateY(var(--tk-in-y, -4px)); } }
 .tk-sub { display: flex; align-items: baseline; gap: var(--sp-2); }
 .tk-sub-h {
   font: 500 var(--fs-sm) var(--font-ui); color: var(--ink-2);
@@ -2784,27 +2801,61 @@ textarea.tk-box {
 }
 .tk-actions { display: flex; gap: var(--sp-2); }
 
-/* A comment from a person is indented and washed in the accent; an agent's
-   runs flush on the neutral well. Each says who wrote it. */
+/* A thread: each comment is a line under the mark of whoever wrote it, joined
+   to the next by a rule, and the reply box is the thread's last line. A person
+   is a round mark with a figure, an agent a square one with a prompt, and each
+   says who in words, so neither depends on colour. */
 .tk-thread { padding: var(--sp-4) var(--sp-5); display: flex; flex-direction: column; gap: var(--sp-3); }
 .tk-older { margin-left: 0; align-self: flex-start; }
+.tk-cs { display: flex; flex-direction: column; }
 .tk-c {
-  display: flex; flex-direction: column; gap: var(--sp-1);
-  padding: var(--sp-2) var(--sp-3); border-radius: var(--r-md);
-  background: var(--chip-fill);
+  --av: 24px;
+  position: relative; display: grid; grid-template-columns: var(--av) minmax(0, 1fr);
+  column-gap: var(--sp-3); padding-bottom: var(--sp-4);
 }
-.tk-c.is-person { margin-left: var(--sp-5); background: var(--accent-dim); }
-.tk-c-head { display: flex; align-items: baseline; gap: var(--sp-2); }
-.tk-c-who { font: 500 var(--fs-sm) var(--font-ui); color: var(--ink-2); }
-.tk-c.is-person .tk-c-who { color: var(--accent); }
-.tk-c-session { font: 400 var(--fs-label) var(--font-m); color: var(--ink-3); }
-.tk-c-when { margin-left: auto; font-size: var(--fs-label); color: var(--ink-3); }
+.tk-c::before {
+  content: ''; position: absolute; width: 1px; background: var(--line);
+  left: calc(var(--av) / 2 - .5px); top: calc(var(--av) + var(--sp-1)); bottom: var(--sp-1);
+}
+.tk-c.is-new { animation: rise .28s cubic-bezier(.2, .7, .3, 1) both; }
+.tk-c-av {
+  width: var(--av); height: var(--av); display: grid; place-items: center; --ico: 14px;
+}
+.tk-c.is-person .tk-c-av { border-radius: 50%; background: var(--accent-dim); color: var(--accent-hi); }
+.tk-c.is-agent .tk-c-av {
+  border-radius: var(--r-sm); background: var(--chip-fill); color: var(--ink-2);
+  box-shadow: inset 0 0 0 1px var(--line);
+}
+.tk-c-main { min-width: 0; }
+.tk-c-head { display: flex; align-items: center; gap: var(--sp-2); min-height: var(--av); flex-wrap: wrap; }
+.tk-c-who { font: 500 var(--fs-sm) var(--font-ui); color: var(--ink); }
+.tk-c-session {
+  font: 400 var(--fs-label) var(--font-m); color: var(--ink-2);
+  padding: 0 var(--sp-2); border-radius: var(--r-sm); background: var(--chip-fill);
+}
+.tk-c-when { font-size: var(--fs-label); color: var(--ink-2); }
 .tk-c-body {
-  font: 400 var(--fs-body)/1.5 var(--font-ui); color: var(--ink);
+  margin: 0; max-width: 72ch;
+  font: 400 var(--fs-body)/1.55 var(--font-ui); color: var(--ink);
   white-space: pre-wrap; overflow-wrap: anywhere;
 }
-.tk-compose { display: flex; flex-direction: column; align-items: flex-start; gap: var(--sp-2); }
-.tk-compose .tk-box { width: 100%; }
+.tk-empty { padding-bottom: var(--sp-3); }
+.tk-compose { padding-bottom: 0; align-items: start; }
+.tk-compose::before { display: none; }
+.tk-reply {
+  min-width: 0; background: var(--inset); border: 1px solid var(--line); border-radius: var(--r-md);
+  transition: border-color .15s, box-shadow .15s;
+}
+.tk-reply:focus-within { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+.tk-reply textarea.tk-box {
+  display: block; width: 100%; border: 0; background: transparent; border-radius: var(--r-md);
+  padding: var(--sp-2) var(--sp-3) var(--sp-1); outline: none;
+}
+.tk-reply-foot {
+  display: flex; align-items: center; justify-content: space-between; gap: var(--sp-3);
+  padding: var(--sp-1) var(--sp-2) var(--sp-2) var(--sp-3);
+}
+.tk-hint { font-size: var(--fs-label); color: var(--ink-3); }
 
 @media (max-width: 640px) {
   .tk-head, .tk-thread { padding: var(--sp-3) var(--sp-4); }
@@ -2812,7 +2863,8 @@ textarea.tk-box {
   .tk-main { grid-template-columns: minmax(0, 1fr) auto; gap: var(--sp-1) var(--sp-3); }
   .tk-counts { grid-column: 1; grid-row: 2; }
   .tk-chev { grid-column: 2; grid-row: 1; }
-  .tk-c.is-person { margin-left: var(--sp-3); }
+  .tk-hint { display: none; }
+  .tk-reply-foot { justify-content: flex-end; }
   /* the name gets the full width, under its type */
   .rs-rel.tk-link, .rs-rel.tk-link:last-child {
     display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; row-gap: 0;
@@ -2822,8 +2874,17 @@ textarea.tk-box {
   .tk-link-open { grid-column: 1 / -1; grid-row: 2; white-space: normal; text-align: left; min-height: 0; padding-bottom: var(--sp-1); }
 }
 
+/* closing the task: the banner arrives and its mark scales in */
+.tk-closed.is-new { animation: rise .4s cubic-bezier(.2, .7, .3, 1) both; }
+.tk-closed.is-new .tk-closed-mark { animation: tk-pop .4s .12s cubic-bezier(.2, .8, .2, 1) both; }
+
+/* Nothing turns, draws or slides; the fades and the colour changes stay. */
 @media (prefers-reduced-motion: reduce) {
-  .tk-ring, .tk-chev, .tk-row { transition: none; }
+  .tk { --pop-from: 1; --leave-x: 0px; --tk-in-y: 0px; }
+  .tk-state[data-s="doing"] .ico { animation: none; }
+  .tk-state.is-pulse[data-s="done"] .ico path { animation: none; }
+  .tk-bar-drop { transition: none; }
+  .tk-ring, .tk-chev, .tk-row, .tk-reply { transition: none; }
 }
 
 /* a task in the memories list: how far it has got, as a short bar and the
@@ -4516,6 +4577,8 @@ input.pick-q:focus { box-shadow: inset 0 -2px 0 var(--accent); }
   cursor: pointer;
 }
 .ctx-item:hover { background: var(--hover-2); color: var(--accent); }
+.ctx-item:focus-visible { outline-offset: -2px; background: var(--hover-2); color: var(--accent); }
+.ctx-item.danger:focus-visible { background: var(--bad-wash); color: var(--bad-ink); }
 .ctx-item.danger { color: var(--bad-ink); }
 .ctx-item.danger:hover { background: var(--bad-wash); color: var(--bad-ink); }
 .ctx-sep { height: 1px; margin: var(--sp-1) var(--sp-2); background: var(--line); }

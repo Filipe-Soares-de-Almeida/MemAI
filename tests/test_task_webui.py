@@ -95,3 +95,96 @@ def test_an_item_names_its_panel_only_while_the_panel_is_drawn():
     src = (WEBUI / "views" / "task.js").read_text(encoding="utf-8")
     uses = re.findall(r"[^\n]*aria-controls[^\n]*", src)
     assert uses and all("open ?" in line for line in uses)
+
+
+def _view(name: str) -> str:
+    return (WEBUI / "views" / name).read_text(encoding="utf-8")
+
+
+def test_an_item_menu_deletes_through_a_confirm_and_names_a_neighbour_for_focus():
+    src = _view("task.js")
+    assert "method: 'DELETE', errKey: 'task.err.delete'" in src
+    assert "write('item', { item: key }" in src
+    assert "confirmModal" in src and "danger: true" in src
+    # the entry sits below a separator, after the state entries
+    assert re.search(r"\{ sep: true \},\s*\{ label: t\('task\.item\.delete'\), danger: true", src)
+    # next item's mark, else the previous one's, else the add control
+    assert re.search(r"current\.items\[at \+ 1\], current\.items\[at - 1\]", src)
+    assert "'#tkAddOpen'" in src
+
+
+def test_the_delete_strings_exist_in_both_catalogs():
+    for code in ("en", "pt-BR"):
+        strings = _catalog(code)
+        for key in ("task.item.delete", "task.delete.title", "task.delete.body",
+                    "task.err.delete", "task.toast.deleted"):
+            assert strings.get(key), f"{code} lacks {key}"
+        assert "{text}" in strings["task.delete.body"]
+
+
+def test_the_doing_mark_turns_and_reduced_motion_stops_it():
+    css = (WEBUI / "admin.css").read_text(encoding="utf-8")
+    assert re.search(r'\.tk-state\[data-s="doing"\] \.ico \{ animation: spin [\d.]+s linear infinite; \}', css)
+    reduced = re.findall(r"@media \(prefers-reduced-motion: reduce\) \{(.*?)\n\}", css, re.S)
+    block = next(b for b in reduced if ".tk-state" in b)
+    assert '.tk-state[data-s="doing"] .ico { animation: none; }' in block
+    assert "--pop-from: 1" in block and "--leave-x: 0px" in block
+
+
+def test_the_checklist_animates_only_compositor_properties_and_never_layout():
+    css = (WEBUI / "admin.css").read_text(encoding="utf-8")
+    start = css.index("/* A task's checklist")
+    end = css.index("/* a task in the memories list")
+    tk = css[start:end]
+    for keyframes in re.findall(r"@keyframes tk-[\w-]+ \{[^}]*\}", tk):
+        assert not re.search(r"\b(width|height|top|left|margin|padding)\s*:", keyframes), keyframes
+    # the dropped hatch is clipped, not resized
+    assert re.search(r"\.tk-bar-drop \{[^}]*clip-path: inset", tk, re.S)
+    assert "transition: clip-path" in tk
+
+
+def test_the_item_row_column_comes_from_a_token_not_a_literal():
+    css = (WEBUI / "admin.css").read_text(encoding="utf-8")
+    row = re.search(r"\.tk-row \{([^}]*)\}", css).group(1)
+    assert "28px" not in row
+    assert "var(--ctl-h-sm)" in row.split("grid-template-columns:")[1].split(";")[0]
+
+
+def test_a_comment_names_its_writer_with_a_mark_and_a_word():
+    src = _view("task.js")
+    assert "icon(person ? 'person' : 'agent')" in src
+    assert "task.author.person" in src and "task.author.agent" in src
+    css = (WEBUI / "admin.css").read_text(encoding="utf-8")
+    # a person's mark is round and an agent's is square: shape, not colour alone
+    assert re.search(r"\.tk-c\.is-person \.tk-c-av \{[^}]*border-radius: 50%", css)
+    assert re.search(r"\.tk-c\.is-agent \.tk-c-av \{[^}]*border-radius: var\(--r-sm\)", css)
+    # no tinted bubble per comment
+    assert not re.search(r"\.tk-c \{[^}]*background", css)
+
+
+def test_a_write_made_in_place_refreshes_the_record_side_panel():
+    record = _view("record.js")
+    assert "onWrite: () => refreshTrail(view, m, uid)" in record
+    assert 'data-rs="updated"' in record and 'data-rs="history"' in record
+    assert "onWrite?.(res)" in _view("task.js")
+
+
+def test_the_health_open_tasks_figure_is_formatted():
+    src = _view("overview.js")
+    assert "t('ov.tasks.open', { n: open })" in src and "fmtInt(n)" in src
+
+
+def test_the_reminder_copy_names_the_domains_a_session_worked_in():
+    for code in ("en", "pt-BR"):
+        body = _catalog(code)["mn.ta.body"]
+        assert "every open task" not in body.lower() and "todas as tarefas" not in body.lower()
+    assert "domains a session worked in" in _catalog("en")["mn.ta.body"]
+    assert "domínios em que uma sessão trabalhou" in _catalog("pt-BR")["mn.ta.body"]
+    assert "similar domains" in _catalog("en")["mn.ta.body"]
+
+
+def test_a_menu_dropped_from_a_button_takes_the_keyboard():
+    src = (WEBUI / "core" / "ui.js").read_text(encoding="utf-8")
+    assert "if (at.btn) entries[0]?.focus();" in src
+    assert "ArrowDown: i + 1, ArrowUp: i - 1" in src
+    assert "at.btn?.focus()" in src
