@@ -119,7 +119,7 @@ def test_the_brief_pluralizes_the_counts(conn):
 
 def test_the_brief_calls_a_diagram_a_flow(conn):
     uid = db.insert_memory(conn, type="diagram", domain="acme/x100",
-                                  content="export routine")
+                           content="export routine")
     text = brief.session_brief(conn)
     assert "1 flow." in text
     assert uid not in text
@@ -149,8 +149,9 @@ def test_a_tight_budget_drops_whole_sections_and_says_so(conn):
 
 
 def test_a_long_section_cannot_starve_the_ones_after_it(conn):
-    """A long domains line and a long checkpoint, tried in order, would leave
-    no room for the pending line behind them."""
+    """The room is divided between the sections. Spent in order, the opening
+    line and a long domains line would leave the pending line less than it
+    needs; its even share keeps it."""
     for i in range(DOMAIN_CAP):
         db.insert_memory(conn, type="note",
                          domain=f"acme/a-very-long-product-name-{i}/with/a/deep/path/to/walk",
@@ -159,9 +160,18 @@ def test_a_long_section_cannot_starve_the_ones_after_it(conn):
                      content=shaped("checkpoint", "ship the retry path " + "spelled out at length " * 12))
     db.insert_memory(conn, type="anti_pattern", domain="acme/x100",
                      content=shaped("anti_pattern", "retry without backoff"))
-    tail = len(brief.call_to_action(conn))
-    text = brief.session_brief(conn, budget=tail + 800)
-    assert "Pending in this project:" in text
+    whole = brief.session_brief(conn, budget=10_000).split("\n")
+    opening = whole[0]
+    domains = next(x for x in whole if x.startswith("Active domains"))
+    pending = next(x for x in whole if x.startswith("Pending in"))
+    assert len(domains) > 3 * len(pending)
+
+    # Room for the opening and the domains line plus half the pending line:
+    # in order, the pending line does not fit; split four ways, it does.
+    room = len(opening) + len(domains) + len(pending) // 2 + 2
+    assert room // 4 > len(pending)
+    text = brief.session_brief(conn, budget=len(brief.call_to_action(conn)) + 1 + room)
+    assert pending in text
     assert "more section(s) omitted" in text
 
 
