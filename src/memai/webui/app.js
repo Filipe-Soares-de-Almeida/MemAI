@@ -3,6 +3,7 @@
    This file owns the view table, the global keyboard shortcuts and
    nothing else. Everything it wires together lives in:
 
+     core/motion.js     the animation setting and the root's data-motion
      core/dom.js        formatting and DOM helpers
      core/api.js        the one door to the JSON API in memai/admin.py
      core/ui.js         toasts, hover tip, modals, context menu
@@ -17,6 +18,8 @@
    router so that no view has to import the router's importer: views
    import { go, refreshBehind } and the cycle stays broken. */
 
+/* first, so the root carries data-motion before anything is drawn */
+import './core/motion.js';
 import { $ } from './core/dom.js';
 import { paintIcons } from './core/icons.js';
 import { modalOpen, closeModal, toast } from './core/ui.js';

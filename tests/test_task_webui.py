@@ -130,10 +130,8 @@ def test_the_doing_mark_turns_and_reduced_motion_stops_it():
     lap = float(re.search(r"--spin: ([\d.]+)s", css).group(1))
     assert f"const SPIN_S = {lap};" in src
     assert "performance.now()" in src and "--spin-at:" in src
-    reduced = re.findall(r"@media \(prefers-reduced-motion: reduce\) \{(.*?)\n\}", css, re.S)
-    block = next(b for b in reduced if ".tk-state" in b)
-    assert '.tk-state[data-s="doing"] .ico { animation: none; }' in block
-    assert "--pop-from: 1" in block and "--leave-x: 0px" in block
+    assert ':root[data-motion="reduce"] .tk-state[data-s="doing"] .ico { animation: none; }' in css
+    assert ':root[data-motion="reduce"] .tk { --pop-from: 1; --leave-x: 0px; --tk-in-y: 0px; }' in css
 
 
 def test_the_checklist_animates_only_compositor_properties_and_never_layout():
@@ -150,7 +148,7 @@ def test_the_checklist_animates_only_compositor_properties_and_never_layout():
 
 def test_the_item_row_column_comes_from_a_token_not_a_literal():
     css = (WEBUI / "admin.css").read_text(encoding="utf-8")
-    row = re.search(r"\.tk-row \{([^}]*)\}", css).group(1)
+    row = re.search(r"^\.tk-row \{([^}]*)\}", css, re.M).group(1)
     assert "28px" not in row
     assert "var(--ctl-h-sm)" in row.split("grid-template-columns:")[1].split(";")[0]
 

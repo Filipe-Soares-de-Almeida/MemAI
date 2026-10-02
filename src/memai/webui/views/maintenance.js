@@ -19,10 +19,11 @@ import { pickerFor, pickerValue, setPickerValue, wirePicker, fixedItems } from '
 import { icon } from '../core/icons.js';
 import { replaceParams } from '../core/router.js';
 import { openRecord } from './record.js';
+import { MOTION_MODES, getMotion, setMotion } from '../core/motion.js';
 import { I18N, t } from '../i18n.js';
 
 /* The address of each workspace, as ?tab= and as the order of the strip. */
-const TABS = ['backups', 'storage', 'sections', 'dupes', 'log', 'warden'];
+const TABS = ['backups', 'storage', 'sections', 'dupes', 'log', 'warden', 'interface'];
 
 /* Free pages worth an amber dot and a mention. Below it the file is simply
    in use and compacting would give back nothing anyone would notice. */
@@ -1155,6 +1156,22 @@ export async function renderMaintenance(view, params) {
         toast(t('mn.msg.taskEvery', { n: value }), 'ok');
       } catch (err) { failed('err.maintenance', err); }
     } });
+  };
+
+  /* ── the interface ─────────────────────────────────────────────────── */
+
+  BUILD.interface = () => {
+    const modeItems = MOTION_MODES.map(m => ({ value: m, label: t('mn.ui.' + m) }));
+    panel('interface').innerHTML = `<section class="panel mnt-short">
+      <h3 class="panel-title">${t('mn.ui.title')}
+        <span class="panel-aside">${t('mn.ui.aside')}</span></h3>
+      <div class="list-toolbar toolbar-sm">
+        <label class="inline-label">${t('mn.ui.motion')}
+          ${pickerFor({ id: 'uiMotion', value: getMotion(), items: modeItems, ariaLabel: t('mn.ui.motion') })}</label>
+      </div>
+      <p class="hint">${t('mn.ui.body')}</p>
+    </section>`;
+    wirePicker(view, { id: 'uiMotion', items: fixedItems(modeItems), onPick: setMotion });
   };
 
   /* The tab that was asked for is the only one built at mount; the rest
