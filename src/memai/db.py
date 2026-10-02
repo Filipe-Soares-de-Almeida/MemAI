@@ -32,6 +32,9 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 from memai import guard, sections
+from memai.lite import (DOMAIN_SEP, TASK_ASK_MINUTES_DEFAULT,  # noqa: F401
+                        WARDEN_MINUTES_DEFAULT, home, normalize_domain, now_iso,
+                        split_domain)
 
 # Domain-casing policy. Stored in the `meta` table under DOMAIN_CASE_KEY and
 # enforced at every domain write path. 'preserve' keeps free-text casing;
@@ -48,7 +51,6 @@ DOMAIN_CASE_DEFAULT = "preserve"
 # The nesting lives in the string: no domains table, no id to resolve. A
 # store with no separator anywhere is a tree of depth 1, and FTS tokenizes
 # the ancestors into searchable words.
-DOMAIN_SEP = "/"
 
 # A memory is FILED at one path and can additionally BELONG to others. The
 # path says where it lives -- one direct parent, the thing a re-home
@@ -425,13 +427,6 @@ _PROJECT_BAD_CHARS = frozenset('<>:"/\\|?*') | frozenset(chr(c) for c in range(3
 _PROJECT_DEVICES = frozenset(
     ["con", "prn", "aux", "nul",
      *(f"com{i}" for i in range(1, 10)), *(f"lpt{i}" for i in range(1, 10))])
-
-
-def home() -> Path:
-    """`MEMAI_HOME`, or `~/.memai`, created if needed."""
-    path = Path(os.environ.get("MEMAI_HOME", Path.home() / ".memai"))
-    path.mkdir(parents=True, exist_ok=True)
-    return path
 
 
 def project_name_error(name: object) -> str | None:
@@ -1049,7 +1044,6 @@ def set_svg_retention(conn: sqlite3.Connection, mode: str) -> str:
 WARDEN_ENABLED_KEY = "warden_enabled"
 WARDEN_ENABLED_DEFAULT = True
 WARDEN_MINUTES_KEY = "warden_minutes"
-WARDEN_MINUTES_DEFAULT = 20
 # A session is one conversation, so an interval longer than a working day
 # would only ever fire once; below a minute the ask lands on every turn.
 WARDEN_MINUTES_RANGE = (1, 480)
@@ -1105,7 +1099,6 @@ def set_warden_minutes(conn: sqlite3.Connection, minutes: object) -> int:
 TASK_ASK_ENABLED_KEY = "task_ask_enabled"
 TASK_ASK_ENABLED_DEFAULT = True
 TASK_ASK_MINUTES_KEY = "task_ask_minutes"
-TASK_ASK_MINUTES_DEFAULT = 30
 # Same bounds as the warden's: a session is one conversation, and below a
 # minute the ask would land on every turn.
 TASK_ASK_MINUTES_RANGE = (1, 480)
@@ -1359,10 +1352,6 @@ def new_uid() -> str:
     return secrets.token_hex(8)
 
 
-def now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
-
-
 # Characters a token is worth in est_tokens. An ESTIMATE, not a tokenizer:
 # no host's tokenizer is reachable from here, so the count is a fixed ratio
 # over the character length.
@@ -1414,21 +1403,6 @@ def case_domain(mode: str, domain: str) -> str:
     if mode == "upper":
         return domain.upper()
     return domain
-
-
-def split_domain(domain: str) -> list[str]:
-    """A domain path's segments, outermost first. Blank segments drop out."""
-    return [s for s in (p.strip() for p in (domain or "").split(DOMAIN_SEP)) if s]
-
-
-def normalize_domain(domain: str) -> str:
-    """Canonical form of a domain path: trimmed segments, single separators.
-
-    Every write path runs this, so 'acme / x100//' and 'acme/x100' are one
-    domain and no caller can coin an empty segment -- a path with one
-    would sit in the tree at a level nothing can name.
-    """
-    return DOMAIN_SEP.join(split_domain(domain))
 
 
 def domain_parent(domain: str) -> str:

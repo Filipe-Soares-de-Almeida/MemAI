@@ -12,12 +12,12 @@ JSON object on stdout:
                   that is owed, and the release check memai.update caches for
                   the next session
 
-A fourth reads the call the host is about to make instead of the store, and
-is the one exception to everything the last paragraph of this docstring says:
+A fourth reads the call the host is about to make, not the store, and is the
+one exception to everything the last paragraph of this docstring says:
 
   guard           records the domain a memai call names in the session's
-                  state, and refuses a memai write whose required text never
-                  arrived
+                  state file, and refuses a memai write whose required text
+                  never arrived
 
 One more subcommand reads the store the same way and writes plain text
 instead:
@@ -35,21 +35,24 @@ running and no tool to have been loaded.
 Every failure path exits 0 with no output -- no store, an unreadable one, a
 payload that is not JSON, an unknown event -- so a hook cannot stop the
 session it is attached to. `guard` is the deliberate exception: stopping the
-call IS what it is for, and it exits 2 to do it. It reads the store only to
-find the domain of a memory a call names by uid, so the only way it can fail
-is by refusing, and it refuses only on a payload it read and understood.
+call IS what it is for, and it exits 2 to do it. It writes the session's state
+file, and reads the store (read-only) only for the domain of a memory a call
+names by uid; both fail open, so the only way it fails is by refusing, and it
+refuses only on a payload it read and understood. It loads neither the store
+module nor the release check for a call that names its domain.
 """
 
 from __future__ import annotations
 
-import argparse
 import json
 import sqlite3
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from memai import brief, db, guard, hook_install, pending, update, warden
+# `guard` runs in front of every memai tool call, so the module loads only what it
+# needs: the store, the brief, the release check and the installer load per event.
+from memai import guard, warden
 
 # How long after the last write a Stop hook assumes the session already
 # recorded what it learned. Long enough to cover a stretch of reading and
@@ -110,6 +113,8 @@ def _session_start(args, payload) -> None:
     `--budget` governs the brief; the update note is outside it, the way the
     warden's ask is outside what `stop` says about the store.
     """
+    from memai import brief, db, update
+
     # Both before the brief and never at its expense. `began` is what later
     # tells an agent the host loaded from one installed behind its back, and
     # a warden state left by a session that ended is nobody else's to clean up.
@@ -153,6 +158,8 @@ def _checkpoint_nudge(args) -> str:
     something was written in the last stretch, the session already did the
     thing being asked for, and it returns "".
     """
+    from memai import db
+
     with db.connect() as conn:
         if _wrote_recently(conn, args.quiet_minutes):
             return ""
@@ -166,6 +173,8 @@ def _checkpoint_nudge(args) -> str:
 
 def _agent_path(args) -> Path:
     """Where the warden definition belonging to this install lives."""
+    from memai import hook_install
+
     settings = Path(args.settings) if args.settings else hook_install.user_settings_path()
     return hook_install.agents_dir(settings) / warden.AGENT_FILE
 
@@ -178,6 +187,8 @@ def _warden_launchable(args, session_id: str) -> bool:
     read its agents, which it does once at startup. A definition somebody
     edited still counts -- the prompt is theirs to change.
     """
+    from memai import hook_install
+
     agent = _agent_path(args)
     state = hook_install.agent_state(agent.parent)
     if state.get(warden.AGENT_FILE) not in ("installed", "edited"):
@@ -192,6 +203,8 @@ def _warden_ask(args, payload) -> str:
     written cancels it: a request the interval cannot see is a request that
     repeats every turn, which is the noise this whole mechanism dies of.
     """
+    from memai import db
+
     session_id = payload.get("session_id", "")
     with db.connect() as conn:
         if not db.get_warden_enabled(conn):
@@ -222,6 +235,8 @@ def _task_ask(args, payload) -> str:
     store it cannot read.
     """
     try:
+        from memai import db, pending
+
         session_id = payload.get("session_id", "")
         if not warden.safe_id(session_id):
             return ""
@@ -264,6 +279,8 @@ def _stop(args, payload) -> None:
     release check refreshes what it caches, which is read by the sessions
     after this one.
     """
+    from memai import update
+
     if payload.get("stop_hook_active"):
         return
     notes, systems = [], []
@@ -338,6 +355,8 @@ def _statusline(args, payload) -> None:
 
     An empty store -- or an empty `--domain` scope -- emits no line.
     """
+    from memai import db
+
     with db.connect() as conn:
         census = db.domain_census(conn, args.domain)
         if not census["total"]:
@@ -390,6 +409,8 @@ def _domain_of(uid: str) -> str:
     A read-only connection with a short timeout and no migration: opening the
     store the usual way writes, and this runs before every task call.
     """
+    from memai import db
+
     conn = sqlite3.connect(db.default_db_path().as_uri() + "?mode=ro", uri=True,
                            timeout=1)
     try:
@@ -476,6 +497,8 @@ def _check(path, *, skills: bool = False, agents: bool = False) -> int:
     reading, so it asks GitHub when the cached answer is due rather than
     reporting an old one; it never gates the exit code.
     """
+    from memai import hook_install, update
+
     found = hook_install.registered(path)
     events = hook_install.event_state(path)
     print(f"{path}:")
@@ -534,6 +557,8 @@ def _install(args) -> int:
     error surface. --check reports all three, and exits 1 for whichever
     --skills or --agents selects.
     """
+    from memai import hook_install
+
     path = Path(args.settings) if args.settings else hook_install.user_settings_path()
     if args.check:
         return _check(path, skills=args.skills, agents=args.agents)
@@ -550,6 +575,15 @@ def _install(args) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
+    # The registered `guard` skips the parser, whose defaults load the store.
+    # Outside the catch below, like the branch after the parser: a refusal is its point.
+    if (sys.argv[1:] if argv is None else argv) == ["guard"]:
+        return _guard(_payload())
+
+    import argparse
+
+    from memai import brief, db
+
     parser = argparse.ArgumentParser(
         prog="memai-hook",
         description="Emit memai context for a host hook. Reads the hook payload on "

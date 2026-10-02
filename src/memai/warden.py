@@ -24,7 +24,7 @@ import tempfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from memai import db
+from memai import lite
 
 # How far an agent file may postdate a session start and still count as
 # something the host had. Covers two clocks disagreeing by microseconds, and
@@ -51,7 +51,7 @@ _DIRNAME = "warden"
 
 def state_dir() -> Path:
     """`<MEMAI_HOME>/warden`, created if needed."""
-    out = db.home() / _DIRNAME
+    out = lite.home() / _DIRNAME
     out.mkdir(parents=True, exist_ok=True)
     return out
 
@@ -123,7 +123,7 @@ def _write(session_id: str, fields: dict) -> dict:
 
 def mark(session_id: str, **fields) -> dict:
     """Merge `fields` into `session_id`'s state, stamp `asked_at`, return it."""
-    return _write(session_id, {**fields, "asked_at": db.now_iso()})
+    return _write(session_id, {**fields, "asked_at": lite.now_iso()})
 
 
 def mark_tasks(session_id: str) -> dict:
@@ -132,7 +132,7 @@ def mark_tasks(session_id: str) -> dict:
     Independent of `mark`: the task ask and the warden ask keep separate
     intervals in the same file.
     """
-    return _write(session_id, {"tasks_asked_at": db.now_iso()})
+    return _write(session_id, {"tasks_asked_at": lite.now_iso()})
 
 
 def record_domain(session_id: str, domain: str) -> dict:
@@ -143,7 +143,7 @@ def record_domain(session_id: str, domain: str) -> dict:
     write.
     """
     domain = str(domain or "").strip()
-    if not db.normalize_domain(domain):
+    if not lite.normalize_domain(domain):
         return {}
     named = read(session_id).get("domains")
     named = [d for d in named if isinstance(d, str)] if isinstance(named, list) else []
@@ -158,7 +158,7 @@ def began(session_id: str) -> dict:
     afterwards is on disk without being launchable in the session that is
     already running. The start time is what `loaded` compares against.
     """
-    return _write(session_id, {"started_at": db.now_iso()})
+    return _write(session_id, {"started_at": lite.now_iso()})
 
 
 def loaded(session_id: str, agent: Path) -> bool:
@@ -203,7 +203,7 @@ def _elapsed(session_id: str, field: str, minutes: int, now: datetime | None) ->
     return at - stamp >= timedelta(minutes=minutes)
 
 
-def due(session_id: str, minutes: int = db.WARDEN_MINUTES_DEFAULT,
+def due(session_id: str, minutes: int = lite.WARDEN_MINUTES_DEFAULT,
         *, now: datetime | None = None) -> bool:
     """Whether the warden is owed a run in `session_id`.
 
@@ -214,7 +214,7 @@ def due(session_id: str, minutes: int = db.WARDEN_MINUTES_DEFAULT,
     return _elapsed(session_id, "asked_at", minutes, now)
 
 
-def task_due(session_id: str, minutes: int = db.TASK_ASK_MINUTES_DEFAULT,
+def task_due(session_id: str, minutes: int = lite.TASK_ASK_MINUTES_DEFAULT,
              *, now: datetime | None = None) -> bool:
     """Whether `session_id` is owed the ask about its open tasks.
 

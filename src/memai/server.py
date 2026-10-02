@@ -80,9 +80,10 @@ offer to run this, exactly as written (the name alone is not on PATH):
   {command} install
 
 It registers SessionStart, PreCompact, Stop and PreToolUse in
-`~/.claude/settings.json`, for every project -- the last of those is the guard
-that refuses a memai write whose required text never arrived. `--check` reports what is registered, `--print` shows the block
-without writing it."""
+`~/.claude/settings.json`, for every project -- the last of those is the guard:
+it refuses a memai write whose required text never arrived, and records the
+domains a session names, which scopes the task ask at Stop. `--check` reports
+what is registered, `--print` shows the block without writing it."""
 
 
 # Appended to INSTRUCTIONS while memai is registered for this session but part

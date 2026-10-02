@@ -850,13 +850,15 @@ def test_a_store_that_cannot_be_opened_does_not_block(store, capsysbinary, monke
 def test_a_failing_task_read_asks_nothing_and_leaves_the_other_notes(
         store, capsysbinary, monkeypatch):
     """Only the task ask is lost when counting the open tasks raises."""
+    import argparse
+
     from memai import pending
     _open_tasks(2, backdate=True)
 
     def refuse(*args, **kwargs):
         raise RuntimeError("cannot count")
     monkeypatch.setattr(pending, "open_task_uids", refuse)
-    args = hook.argparse.Namespace(task_minutes=None)
+    args = argparse.Namespace(task_minutes=None)
     assert hook._task_ask(args, {"session_id": "session-1"}) == ""
     out = _run("stop", {"session_id": "session-1"}, capsysbinary)
     assert "decision" not in out

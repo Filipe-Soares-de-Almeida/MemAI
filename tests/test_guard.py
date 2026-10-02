@@ -569,3 +569,69 @@ def test_a_store_path_with_a_space_still_opens_for_the_lookup(
     uid = _seed_task("acme/docks")
     assert _guarded(_call("task_comment", uid=uid, body="x"), monkeypatch, capsys)[0] == 0
     assert _named() == ["acme/docks"]
+
+
+# ------------------------------------------------- the guard starts without the store
+
+_HEAVY = ("memai.db", "memai.brief", "memai.update", "memai.pending")
+
+_RUNNER = (
+    "import json, sys\n"
+    "from memai import hook\n"
+    "code = hook.main(['guard'])\n"
+    "open(sys.argv[1], 'w').write(json.dumps(sorted(m for m in sys.modules if m.startswith('memai'))))\n"
+    "sys.exit(code)\n"
+)
+
+
+def _guard_process(tmp_path, payload: dict) -> tuple[int, str, list[str]]:
+    """Run `memai-hook guard` in a fresh interpreter: the exit code, stderr, and
+    the memai modules loaded when it finished."""
+    import os
+    import subprocess
+    import sys
+    seen = tmp_path / "modules.json"
+    env = {**os.environ, "MEMAI_HOME": str(tmp_path / "home")}
+    done = subprocess.run([sys.executable, "-c", _RUNNER, str(seen)],
+                          input=json.dumps(payload), text=True, env=env,
+                          capture_output=True, timeout=60)
+    return done.returncode, done.stderr, json.loads(seen.read_text(encoding="utf-8"))
+
+
+def test_a_call_naming_a_domain_loads_neither_the_database_nor_the_release_check(tmp_path):
+    code, err, loaded = _guard_process(tmp_path, {
+        "session_id": "s-light", **_call("pulse", domain="acme/harbor")})
+    assert code == 0 and err == ""
+    assert [m for m in _HEAVY if m in loaded] == []
+    state = json.loads((tmp_path / "home" / "warden" / "s-light.json").read_text("utf-8"))
+    assert state["domains"] == ["acme/harbor"]
+
+
+def test_a_refused_write_loads_neither_the_database_nor_the_release_check(tmp_path):
+    code, err, loaded = _guard_process(tmp_path, {
+        "session_id": "s-light", **_call("note", domain="acme/harbor")})
+    assert code == 2 and "BLOCKED" in err
+    assert [m for m in _HEAVY if m in loaded] == []
+    state = json.loads((tmp_path / "home" / "warden" / "s-light.json").read_text("utf-8"))
+    assert state["domains"] == ["acme/harbor"]
+
+
+def test_a_uid_lookup_still_records_the_domain_of_the_memory(tmp_path, monkeypatch):
+    monkeypatch.setenv("MEMAI_HOME", str(tmp_path / "home"))
+    uid = _seed_task("acme/docks")
+    code, err, _ = _guard_process(tmp_path, {
+        "session_id": "s-uid", **_call("get_memory", uid=uid)})
+    assert (code, err) == (0, "")
+    state = json.loads((tmp_path / "home" / "warden" / "s-uid.json").read_text("utf-8"))
+    assert state["domains"] == ["acme/docks"]
+
+
+def test_the_light_home_resolves_the_way_the_store_does(tmp_path, monkeypatch):
+    from pathlib import Path
+
+    from memai import lite
+    monkeypatch.setenv("MEMAI_HOME", str(tmp_path / "set"))
+    assert lite.home() == db.home() == tmp_path / "set"
+    monkeypatch.delenv("MEMAI_HOME")
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path / "user"))
+    assert lite.home() == db.home() == tmp_path / "user" / ".memai"
