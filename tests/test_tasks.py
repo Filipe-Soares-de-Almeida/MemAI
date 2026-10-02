@@ -1,6 +1,6 @@
 import pytest
 
-from memai import db, tasks
+from memai import db, pending, tasks
 
 
 @pytest.fixture
@@ -290,6 +290,33 @@ def test_restoring_a_task_reopens_it(conn):
     task = tasks.get_task(conn, uid)
     assert task["state"] == "open" and task["completed_at"] == ""
     assert [i["state"] for i in task["items"]] == ["todo", "todo"]
+
+
+def test_restoring_a_completed_task_keeps_it_completed(conn):
+    uid = _make(conn)
+    _close_both(conn, uid)
+    completed_at = tasks.get_task(conn, uid)["completed_at"]
+    db.set_status(conn, uid, "active")
+    task = tasks.get_task(conn, uid)
+    assert task["state"] == "completed" and task["completed_at"] == completed_at
+    assert pending.open_task_uids(conn, ["acme/parser"]) == []
+
+
+def test_a_restored_completed_task_reopens_when_an_item_does(conn):
+    uid = _make(conn)
+    _close_both(conn, uid)
+    db.set_status(conn, uid, "active")
+    result = tasks.set_item_state(conn, uid, "i2", "todo")
+    assert result["task_state"] == "open" and result["archived"] is False
+    assert tasks.get_task(conn, uid)["completed_at"] == ""
+
+
+def test_restoring_a_cancelled_task_with_every_item_dropped_keeps_it_cancelled(conn):
+    uid = _make(conn)
+    tasks.set_item_state(conn, uid, "i1", "dropped")
+    tasks.set_item_state(conn, uid, "i2", "dropped")
+    db.set_status(conn, uid, "active")
+    assert tasks.get_task(conn, uid)["state"] == "cancelled"
 
 
 def test_set_status_leaves_other_types_alone(conn):

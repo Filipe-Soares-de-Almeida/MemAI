@@ -2183,7 +2183,8 @@ def set_status(
 ) -> bool:
     """Change a memory's status; optionally record why in the audit log.
 
-    A task keeps its state in step: archiving an open task cancels it, restoring reopens it.
+    A task keeps its state in step: archiving an open task cancels it, and
+    restoring reopens it only when an item is still todo or doing.
 
     When `note` is given it is stored as a status-change audit entry in
     `edits` (prev_content == new_content, since the content itself is not
@@ -2204,7 +2205,9 @@ def set_status(
             )
         elif status == "active":
             conn.execute(
-                "UPDATE tasks SET state = 'open', completed_at = '' WHERE memory_uid = ?", (uid,)
+                "UPDATE tasks SET state = 'open', completed_at = '' WHERE memory_uid = ? "
+                "AND EXISTS (SELECT 1 FROM task_items WHERE memory_uid = ? "
+                "AND state IN ('todo', 'doing'))", (uid, uid)
             )
     if note:
         conn.execute(
