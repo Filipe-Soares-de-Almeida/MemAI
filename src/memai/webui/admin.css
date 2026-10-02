@@ -364,7 +364,8 @@ body {
 ::-webkit-scrollbar-thumb:hover { background: rgba(255, 255, 255, .28); }
 
 /* A pane whose content can outgrow it keeps the room for its scrollbar, so
-   opening something in it does not narrow the column and slide what is there. */
+   opening something in it does not narrow the column and slide what is there.
+   .view.wide and .view.fill clip instead of scrolling and reset it to auto. */
 .view, .rec-main, .rec-index, .rs-body, .rf-body, .mem-list #memList, .mi-body,
 .dom-col-body, .dom-detail-body, .opt-rail, .opt-rows, .mnt-log, .mnt-shelf-body,
 .mnt-panel .panel > .panel-body { scrollbar-gutter: stable; }
@@ -453,7 +454,7 @@ kbd {
 @media (min-width: 1181px) {
   .view.wide {
     padding-bottom: var(--sp-4);
-    overflow: hidden;
+    overflow: hidden; scrollbar-gutter: auto;
     display: flex; flex-direction: column;
   }
   .view.wide > .anim { flex: 1; min-height: 0; display: flex; flex-direction: column; }
@@ -469,7 +470,7 @@ kbd {
    again -- see the squeeze at the end of this file. */
 @media (min-height: 620px) and (min-width: 1024px) {
   .view.fill {
-    overflow: hidden;
+    overflow: hidden; scrollbar-gutter: auto;
     padding-bottom: var(--sp-5);
     display: flex; flex-direction: column;
   }

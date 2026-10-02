@@ -1,10 +1,10 @@
-/* Maintenance: the store's own upkeep, as six workspaces behind one tab
+/* Maintenance: the store's own upkeep, as workspaces behind one tab
    strip -- the backups it has taken, the file they are copies of, the
    bodies it could not read into fields, the memories that say the same
    thing, everything that has happened to it, and the reminders the Stop
    hook sends a session (the warden and the open tasks).
 
-   Only ONE of those is ever on screen. The other five stay built and
+   Only ONE of those is ever on screen. The rest stay built and
    hidden rather than being thrown away, because two of them hold work
    that cannot be re-made for free: a dedup scan is a quadratic sweep over
    the whole store, and a log you have scrolled back through is a place
@@ -164,8 +164,8 @@ export async function renderMaintenance(view, params) {
     view.querySelectorAll('.mnt-panel').forEach(
       p => { p.hidden = p.dataset.panel !== id; });
     /* replaceParams, not go(): a tab is an ADDRESS worth deep-linking, not a
-       step worth pressing Back through. Six of them in the history would
-       put five presses between this view and the one you came from. */
+       step worth pressing Back through. Every tab in the history would
+       put a press between this view and the one you came from. */
     replaceParams('maintenance', { tab: id });
     if (!built.has(id)) { built.add(id); BUILD[id](); }
   }
@@ -174,7 +174,7 @@ export async function renderMaintenance(view, params) {
     b.addEventListener('click', () => show(b.dataset.tab)));
 
   /* Left/Right walk the strip, which is what a tablist owes a keyboard --
-     without it the only way between six workspaces is six Tab presses. */
+     without it the only way between the workspaces is a Tab press each. */
   view.querySelector('.mnt-tabs').addEventListener('keydown', e => {
     const step = e.key === 'ArrowRight' ? 1 : e.key === 'ArrowLeft' ? -1 : 0;
     if (!step) return;

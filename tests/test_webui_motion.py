@@ -199,5 +199,91 @@ def test_the_panes_that_scroll_keep_room_for_their_scrollbar():
     css = _css()
     rule = re.search(r"([^{}]*)\{ scrollbar-gutter: stable; \}", css).group(1)
     selectors = [s.strip() for s in rule.split("*/")[-1].split(",")]
-    for sel in (".view", ".rec-main", ".rs-body"):
-        assert sel in selectors, sel
+    assert selectors == [
+        ".view", ".rec-main", ".rec-index", ".rs-body", ".rf-body", ".mem-list #memList",
+        ".mi-body", ".dom-col-body", ".dom-detail-body", ".opt-rail", ".opt-rows",
+        ".mnt-log", ".mnt-shelf-body", ".mnt-panel .panel > .panel-body"]
+
+
+def test_a_view_that_clips_instead_of_scrolling_reserves_no_strip():
+    css = _css()
+    for sel in (".view.wide", ".view.fill"):
+        body = re.search(rf"^  {re.escape(sel)} \{{([^}}]*)\}}", css, re.M).group(1)
+        assert "overflow: hidden" in body and "scrollbar-gutter: auto" in body, sel
+
+
+# ------------------------------------------------- the shell before the module
+
+INDEX = (WEBUI / "index.html").read_text(encoding="utf-8")
+
+# the inline script is the code under test: run it, then run motion.js, in the
+# same stand-in environment
+SHELL_RUNNER = """
+import { pathToFileURL } from 'node:url';
+import { readFileSync } from 'node:fs';
+const [, motionPath, inlinePath] = process.argv;
+const inline = readFileSync(inlinePath, 'utf8');
+const out = [];
+let n = 0;
+for (const stored of [undefined, 'system', 'always', 'never', 'bogus']) {
+  for (const osReduces of [true, false]) {
+    for (const broken of [false, true]) {
+      const env = () => {
+        const store = new Map(stored === undefined ? [] : [['memai.motion', stored]]);
+        globalThis.localStorage = broken
+          ? { getItem() { throw new Error('blocked'); } }
+          : { getItem: k => store.get(k) ?? null };
+        globalThis.matchMedia = () => ({ matches: osReduces, addEventListener() {} });
+        globalThis.document = { documentElement: { dataset: {} } };
+      };
+      env();
+      new Function(inline)();
+      const shell = document.documentElement.dataset.motion;
+      env();
+      await import(pathToFileURL(motionPath).href + '?n=' + (n++));
+      out.push({ stored: stored ?? null, osReduces, broken, shell, module: document.documentElement.dataset.motion });
+    }
+  }
+}
+console.log(JSON.stringify(out));
+"""
+
+
+def _inline_motion_script() -> str:
+    head = INDEX[:INDEX.index("</head>")]
+    scripts = re.findall(r"<script>(.*?)</script>", head, re.S)
+    found = [s for s in scripts if "memai.motion" in s]
+    assert len(found) == 1, "the shell resolves data-motion in one inline <script> in <head>"
+    return found[0]
+
+
+def test_the_shell_resolves_data_motion_in_the_head_before_any_stylesheet():
+    head = INDEX[:INDEX.index("</head>")]
+    at = head.index("memai.motion")
+    assert head.rfind("<script>", 0, at) != -1
+    assert "<link rel=\"stylesheet\"" not in head[:at]
+    assert "type=\"module\"" not in head
+
+
+def test_the_shell_script_and_the_module_agree_on_every_input(tmp_path):
+    if shutil.which("node") is None:
+        pytest.skip("node not installed")
+    inline = tmp_path / "inline.js"
+    inline.write_text(_inline_motion_script(), encoding="utf-8")
+    out = subprocess.run(
+        ["node", "--input-type=module", "-e", SHELL_RUNNER,
+         str(WEBUI / "core" / "motion.js"), str(inline)],
+        capture_output=True, text=True, encoding="utf-8", timeout=60)
+    assert out.returncode == 0, out.stderr
+    cases = json.loads(out.stdout)
+    assert len(cases) == 20
+    for c in cases:
+        if c["broken"]:
+            assert c["shell"] == c["module"] == ("reduce" if c["osReduces"] else "full"), c
+        else:
+            assert c["shell"] == c["module"], c
+
+
+def test_the_shell_script_names_the_modules_storage_key():
+    key = re.search(r"const STORAGE_KEY = '([^']+)'", (WEBUI / "core" / "motion.js").read_text(encoding="utf-8")).group(1)
+    assert f"localStorage.getItem('{key}')" in _inline_motion_script()
