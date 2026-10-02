@@ -36,7 +36,7 @@ def client(store):
 
 # ------------------------------------------------------- what the tools take
 
-WRITERS = ("note", "checkpoint", "anti_pattern", "reasoning", "handoff", "task")
+WRITERS = ("note", "checkpoint", "anti_pattern", "reasoning", "task")
 
 
 @pytest.mark.parametrize("tool", WRITERS)

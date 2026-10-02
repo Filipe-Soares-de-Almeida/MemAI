@@ -65,7 +65,14 @@ def test_the_published_counts_are_the_ones_documented(monkeypatch):
     """The four counts the wiki's MEMAI_TOOLS table quotes."""
     counts = {setting or "full": len(_published(_load(monkeypatch, setting)))
               for setting in (None, "core,curation", "core,diagrams", "core")}
-    assert counts == {"full": 43, "core,curation": 37, "core,diagrams": 34, "core": 28}
+    assert counts == {"full": 42, "core,curation": 36, "core,diagrams": 33, "core": 27}
+
+
+def test_handoff_is_not_published(monkeypatch):
+    module = _load(monkeypatch, None)
+    assert "handoff" not in module._TOOLS
+    assert "handoff" not in _published(module)
+    assert "handoff" not in module._GROUP_OF
 
 
 def test_core_leaves_out_authoring_and_curation(monkeypatch):

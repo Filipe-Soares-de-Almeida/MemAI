@@ -5,7 +5,7 @@ description: >
   store, BM25 keyword search) — which tool
   family to call when: pulse/search/recall/list_by_domain/list_recent/
   list_domains/get_memory/help to read; note, reasoning, anti_pattern,
-  checkpoint, handoff, diagram to write; diagram_*/get_diagram for flows;
+  checkpoint, task, diagram to write; diagram_*/get_diagram for flows;
   edit_memory/link_memories/set_confidence/also_domain/forget/purge_memory to
   curate — plus the session/domain/tags convention, with domains as nested
   PATHS and cross-listing (also), and review_after/source_ref for a memory
@@ -65,7 +65,7 @@ comes back later ([§3.1](#31-getting-back-what-you-wrote-which-tool-to-call)).
 | **Reasoning/analysis** worth keeping (what was tested → what is known now → what to do next) | **`reasoning`** | A thought process for the next agent, not a fact |
 | **Pitfall** that looks right and is not | **`anti_pattern`** | Comes back when the temptation reappears; surfaced by `pulse` |
 | **Where the work stands** at a pause | **`checkpoint`** | Exactly what `pulse` returns to warm a cold session — read for bearing, not as an archive |
-| **A message to whoever picks this up** | **`handoff`** | Surfaced by `pulse` while it is open |
+| **Work for whoever picks this up** | **`task`** | A goal and a checklist, worked with `task_item` and closed once every item is done or dropped; `pending` lists the open ones |
 | **What a routine does, end to end** (steps, decisions, outputs) | **`diagram`** | A flow as a **graph**, not prose: each step carries its own note and links, which makes it the index of its domain ([§4.1](#41-diagrams-a-flow-as-a-graph)) |
 
 > **checkpoint × note × reasoning** — the boundary most often crossed by
@@ -287,7 +287,8 @@ type**. To bring it back, filter on that `type`.
 | `reasoning` | `reasoning` | `search(…, type='reasoning')` / `list_*` with `type='reasoning'` |
 | `anti_pattern` | `anti_pattern` | comes back in **`pulse`** (open ones for the scope) · or `list_*`/`search` with `type='anti_pattern'` |
 | `checkpoint` | `checkpoint` | comes back in **`pulse`** (the latest by `created_at`) |
-| `handoff` | `handoff` | comes back in **`pulse`** (open ones) · or `list_*`/`search` with `type='handoff'` |
+| `task` | `task` | open ones come back through **`pending`** · or `list_*`/`search` with `type='task'`; worked with `task_item` |
+| `handoff` | — (a type existing memories carry) | open ones come back through **`pending`** · or `list_*`/`search` with `type='handoff'` |
 | `diagram` | `diagram` | **titles** in `pulse` · or `list_*`/`search` with `type='diagram'` (search matches the prose the graph generates) · the graph itself via **`get_diagram(uid)`** |
 
 > **`recall(query, domain)`** is the dedicated recall verb: a search scoped
@@ -297,7 +298,7 @@ type**. To bring it back, filter on that `type`.
 >
 > **Get the `type` string exactly right:** filtering on a wrong string returns
 > empty **silently**. The valid types are exactly `note`, `reasoning`,
-> `anti_pattern`, `checkpoint`, `handoff`, `diagram`.
+> `anti_pattern`, `checkpoint`, `handoff`, `diagram`, `task`.
 >
 > A diagram ranks like any other memory in `search` — nothing lifts a type to
 > the top. When one does come back, open it first: it states a whole routine
@@ -320,8 +321,9 @@ type**. To bring it back, filter on that `type`.
   session, review_after, source_ref)`** — an approach that **looks** right and is a
   trap (restarting the worker to clear a stuck queue instead of draining it).
   Surfaced by `pulse`.
-- **`handoff(title, content, domain, also, tags, session)`** — a message for the next
-  agent or session. Surfaced by `pulse`.
+- **`task(title, goal, items, domain, also, tags, session)`** — work for the next
+  agent or session: a goal and a checklist. Work it with `task_item`; it closes
+  itself once every item is done or dropped.
 - **`diagram(...)`** — a routine as a **flow/graph**
   ([§4.1](#41-diagrams-a-flow-as-a-graph)).
 
@@ -536,7 +538,7 @@ always published, `diagrams` and `curation` only when named (or under the
 | `reasoning(title, hypothesis, reasoning, result, revised_belief, next_time, domain, also, tags, session, review_after, source_ref)` | A reasoning trace → `type='reasoning'` | core |
 | `anti_pattern(title, pattern, why_wrong, instead, domain, also, tags, session, review_after, source_ref)` | A pitfall → `type='anti_pattern'` (surfaced by `pulse`) | core |
 | `checkpoint(title, intent, established, pursuing, open_questions, session, domain, also, tags)` | Where the work stands → `type='checkpoint'` (summary, not an archive) | core |
-| `handoff(title, content, domain, also, tags, session)` | A message for the next session → `type='handoff'` (surfaced by `pulse`) | core |
+| `task(title, goal, items, domain, also, tags, session)` | Work for the next session → `type='task'`, worked with `task_item` | core |
 | `diagram(title, nodes, edges, summary, domain, also, session, tags, kind, review_after, source_ref)` | A routine as a flow/graph → `type='diagram'` | diagrams |
 | `diagram_node` / `diagram_edge` / `diagram_link` / `diagram_jump` / `diagram_relayout` | One step / one arrow / a memory on a step / a jump into another flow / rebuild positions | diagrams |
 

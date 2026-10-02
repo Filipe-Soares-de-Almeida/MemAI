@@ -121,7 +121,9 @@ def test_a_pulse_prices_the_checkpoint_it_hands_over(store):
     server.checkpoint("fixture title", intent=EXPORT, established="the index is rebuilt",
                       pursuing="the batch retry", open_questions="none",
                       domain="acme/x100")
-    server.handoff("fixture title", content=RETRY, domain="acme/x100")
+    with db.connect() as conn:
+        db.insert_memory(conn, type="handoff", content=RETRY,
+                         title="fixture title", domain="acme/x100")
     server.anti_pattern("fixture title", pattern=RETRY, why_wrong="it drops rows",
                         instead="drain the queue first", domain="acme/x100")
     server.note("fixture title", content=MERGE, domain="acme/x100")

@@ -69,6 +69,9 @@ SNIPPET_LIMIT = 280
 DEDUP_SNIPPET = 480
 
 KNOWN_TYPES = db.MEMORY_TYPES
+# What the dashboard's new-memory form writes. A handoff stays a type to read and
+# edit; a diagram is created with its graph.
+CREATABLE_TYPES = tuple(t for t in db.MEMORY_TYPES if t not in ("handoff", "diagram"))
 CONFIDENCES = ("unverified", "confirmed", "contradicted")
 STATUSES = ("active", "archived")
 
@@ -639,14 +642,17 @@ def create_memory(request, payload) -> dict:
     if not title:
         raise ValueError("title is required")
     if type_ not in KNOWN_TYPES:
-        raise ValueError(f"type must be one of {KNOWN_TYPES}")
+        raise ValueError(f"type must be one of {CREATABLE_TYPES}")
     if type_ == db.DIAGRAM_TYPE:
         # a diagram row with no graph behind it is a broken half-state: its
         # content is generated, so there would be nothing to generate from
         raise ValueError("create a diagram through POST /api/diagrams -- it needs a graph")
     if type_ == db.TASK_TYPE:
         # a task row with no tasks row behind it has no checklist to generate from
-        raise ValueError("a task is created through the task tools, not as a plain memory")
+        raise ValueError("a task is created through POST /api/tasks, not as a plain memory")
+    if type_ not in CREATABLE_TYPES:
+        raise ValueError(f"a {type_} is not created from the dashboard; "
+                         f"type must be one of {CREATABLE_TYPES}")
     if sections.is_sectioned(type_):
         # built from the fields rather than typed, so what lands conforms
         given = payload.get("sections")
@@ -729,6 +735,10 @@ def edit_meta(request, payload) -> dict:
         row = db.get_memory(conn, uid)
         if row is None:
             raise ValueError(f"unknown memory: {uid}")
+        if updates.get("type") == "handoff" and row["type"] != "handoff":
+            # a handoff is read and edited where it is; a new one is a task
+            raise ValueError("a memory cannot be retyped to handoff; a task carries "
+                             "work to the next session")
         if "type" in updates and updates["type"] != row["type"] and (
             db.DIAGRAM_TYPE in (updates["type"], row["type"])
         ):

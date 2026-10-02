@@ -961,9 +961,24 @@ def test_dashboard_refuses_to_create_a_task_as_a_plain_memory(client):
     res = client.post("/api/memories", json={
         "title": "a would-be task", "type": "task", "content": "- [ ] step"})
     assert res.status_code == 400
-    assert "task tools" in res.json()["error"]
+    assert "/api/tasks" in res.json()["error"]
     with db.connect() as conn:
         assert conn.execute("SELECT COUNT(*) FROM memories").fetchone()[0] == 0
+
+
+def test_dashboard_does_not_create_or_retype_to_handoff(client):
+    res = client.post("/api/memories", json={
+        "title": "a would-be handoff", "type": "handoff", "content": "pick up here"})
+    assert res.status_code == 400
+    note = _create(client, content="a plain note")
+    assert client.post(f"/api/memories/{note}/meta", json={"type": "handoff"}).status_code == 400
+    assert client.get(f"/api/memories/{note}").json()["type"] == "note"
+    with db.connect() as conn:
+        old = db.insert_memory(conn, type="handoff", title="an existing handoff",
+                               content="the lexer is next")
+    assert client.post(f"/api/memories/{old}/content", json={"content": "the parser is next"}).status_code == 200
+    assert client.post(f"/api/memories/{old}/meta", json={"tags": "parser"}).status_code == 200
+    assert client.get(f"/api/memories/{old}").json()["type"] == "handoff"
 
 
 def test_config_carries_the_task_ask_settings(client):

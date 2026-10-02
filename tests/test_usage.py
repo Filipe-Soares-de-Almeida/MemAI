@@ -78,7 +78,9 @@ def test_listing_counts(store):
 
 def test_a_warm_up_counts_the_checkpoint_and_not_what_it_only_counts(store):
     note = server.note("fixture title", content="the export window is inclusive", domain="acme/x100")["uid"]
-    hand = server.handoff("fixture title", content="pick up at the retry path", domain="acme/x100")["uid"]
+    with db.connect() as conn:
+        hand = db.insert_memory(conn, type="handoff", content="pick up at the retry path",
+                                title="fixture title", domain="acme/x100")
     cp = server.checkpoint("fixture title", intent="i", established="e", pursuing="p",
                            open_questions="q", domain="acme/x100")["uid"]
     server.pulse("acme/x100")

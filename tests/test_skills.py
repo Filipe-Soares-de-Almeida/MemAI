@@ -22,9 +22,8 @@ from memai import db, hook_install, server
 # accent.
 ALLOWED_NON_ASCII = set("—→§…·×∈✓")
 
-# The `type` a memory can carry, taken from the writers' own constants.
-MEMORY_TYPES = {v for k, v in vars(server).items()
-                if k.startswith("TYPE_") and isinstance(v, str)}
+# The `type` a memory can carry: the one vocabulary every read accepts.
+MEMORY_TYPES = set(db.MEMORY_TYPES)
 
 # A backticked call: the one unambiguous way a skill names a tool. A bare
 # backticked word is a field, a group or a value just as often.

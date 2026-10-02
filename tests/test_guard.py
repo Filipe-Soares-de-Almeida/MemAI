@@ -129,6 +129,12 @@ def test_the_matcher_selects_every_guarded_tool_and_nothing_else():
     assert not pattern.fullmatch("mcp__OtherServer__note")
 
 
+def test_guard_matcher_has_no_handoff():
+    assert "handoff" not in guard.matcher()
+    for table in (guard.GUARDED, guard.WATCHED, guard.OPTIONAL):
+        assert "handoff" not in table
+
+
 # ------------------------------------------------------------ what it refuses
 
 def test_a_write_missing_its_required_text_is_refused(monkeypatch, capsys):

@@ -52,6 +52,18 @@ def test_reads_accept_the_new_type(store):
 # ------------------------------------------------------------------ pending
 
 DOMAIN = "acme/x100"
+def test_existing_handoffs_stay_readable(tmp_path, monkeypatch):
+    monkeypatch.setenv("MEMAI_HOME", str(tmp_path))
+    with db.connect() as conn:
+        uid = db.insert_memory(conn, type="handoff", title="Parser handover",
+                               content="The lexer is next.", domain=DOMAIN)
+        assert pending.counts(conn, DOMAIN) == [{"type": "handoff", "count": 1}]
+    assert server.get_memory(uid)["type"] == "handoff"
+    found = server.search("lexer", type="handoff")
+    assert [m["uid"] for m in found["results"]] == [uid]
+    assert [i["uid"] for i in server.pending(domain=DOMAIN, type="handoff")["items"]] == [uid]
+
+
 CATEGORY_LIST = "task, anti_pattern, handoff, note, diagram"
 
 
@@ -85,8 +97,10 @@ def seeded(store):
         why_wrong="It stalls the pipeline.", instead="Flush per line.", domain=DOMAIN)["uid"]
     server.set_confidence(bad, "contradicted")
     uids["ap_bad"] = bad
-    uids["handoff"] = server.handoff(
-        title="Parser handover", content="The lexer is next.", domain=DOMAIN)["uid"]
+    with db.connect() as conn:
+        uids["handoff"] = db.insert_memory(
+            conn, type="handoff", title="Parser handover",
+            content="The lexer is next.", domain=DOMAIN)
     for n in range(3):
         server.note(title=f"Parser fact {n}", content=f"Fact number {n}.", domain=DOMAIN)
     uids["diagram"] = _diagram()

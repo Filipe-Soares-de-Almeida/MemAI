@@ -325,7 +325,9 @@ def test_pulse_counts_a_busy_child_and_keeps_the_parents_note(monkeypatch, tmp_p
     server.note("fixture title", content="parent convention", domain="acme")
     for i in range(12):
         server.note("fixture title", content=f"child detail {i}", domain="acme/x100")
-    server.handoff("fixture title", content="one handoff", domain="acme/x100")
+    with db.connect() as conn:
+        db.insert_memory(conn, type="handoff", content="one handoff",
+                         title="fixture title", domain="acme/x100")
 
     p = server.pulse(domain="acme")
     assert p["pending"] == [{"type": "handoff", "count": 1}, {"type": "note", "count": 13}]

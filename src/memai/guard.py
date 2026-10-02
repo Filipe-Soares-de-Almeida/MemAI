@@ -44,7 +44,6 @@ from memai import sections
 GUARDED: dict[str, tuple[str, ...]] = {
     "note": ("title", "content"),
     "reasoning": ("title", "content"),
-    "handoff": ("title", "content"),
     "task": ("title", "goal", "items"),
     "task_item": ("uid", "item"),
     "task_add": ("uid", "items"),
@@ -59,7 +58,6 @@ GUARDED: dict[str, tuple[str, ...]] = {
 WATCHED: dict[str, tuple[str, ...]] = {
     "note": ("domain", "tags", "source_ref"),
     "reasoning": ("domain", "tags", "source_ref"),
-    "handoff": ("domain", "tags"),
     "checkpoint": ("domain", "tags"),
     "anti_pattern": ("domain", "tags", "source_ref"),
     "task": ("domain", "tags"),
@@ -73,7 +71,6 @@ WATCHED: dict[str, tuple[str, ...]] = {
 OPTIONAL: dict[str, tuple[str, ...]] = {
     "note": ("domain", "also", "tags", "session", "review_after", "source_ref"),
     "reasoning": ("domain", "also", "tags", "session", "review_after", "source_ref"),
-    "handoff": ("domain", "also", "tags", "session"),
     "checkpoint": ("session", "domain", "also", "tags"),
     "anti_pattern": ("domain", "also", "tags", "session", "review_after", "source_ref"),
     "task": ("domain", "also", "tags", "session"),

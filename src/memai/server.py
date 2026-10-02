@@ -1,7 +1,7 @@
 """memai MCP server.
 
 Tools for long-term agent memory: note/checkpoint/anti_pattern/
-reasoning/handoff/diagram to write, search/recall/list_by_domain/
+reasoning/task/diagram to write, search/recall/list_by_domain/
 list_recent/timeline/list_domains/pulse to read, plus edit history, a relations
 graph, a dedup-candidate scanner, confidence/status tracking, and help()
 for self-documentation straight from these docstrings. Retrieval is FTS5
@@ -256,7 +256,6 @@ TYPE_NOTE = "note"                  # note()
 TYPE_CHECKPOINT = "checkpoint"      # checkpoint()
 TYPE_ANTI_PATTERN = "anti_pattern"  # anti_pattern()
 TYPE_REASONING = "reasoning"        # reasoning()
-TYPE_HANDOFF = "handoff"            # handoff()
 TYPE_DIAGRAM = "diagram"            # diagram()
 TYPE_TASK = db.TASK_TYPE            # task()
 
@@ -597,37 +596,6 @@ def reasoning(
                                domain=domain, also=also, session=session or SESSION,
                                tags=tags,
                                review_after=review_after, source_ref=source_ref)
-        return _write_result(conn, uid, warning, also, tags)
-
-
-@tool("core")
-def handoff(title: str, content: str, domain: str = "", also: str = "",
-            tags: str = "", session: str = "") -> dict:
-    """Leave a note for another agent/session picking up this work.
-
-    Stored as type='handoff'; open ones for a domain are surfaced by pulse().
-    `also` cross-lists it into further domain paths -- see note().
-
-    `content` holds the message and what the next agent needs to act on it.
-    Durable knowledge goes to note() and is cited from here -- see note()
-    on when a body is two memories.
-
-    title: one line naming what this memory is about, in the words someone
-    would look for it by. It is what a list shows instead of the opening of
-    the body, and it outweighs every other field in search, so a title that
-    repeats the type ("note about the parser") names nothing. At most 120
-    characters, and a name that needs more than that is summarizing the
-    body instead of naming it.
-
-    `tags` carries the synonyms the body never uses: retrieval is BM25 over
-    content and tags, so a memory with none is reachable only by quoting
-    itself. See note() for what belongs there.
-    """
-    with db.connect() as conn:
-        domain, warning = _coerce_domain(conn, domain)
-        uid = db.insert_memory(conn, type=TYPE_HANDOFF, content=content, title=title,
-                               domain=domain, also=also, session=session or SESSION,
-                               tags=tags)
         return _write_result(conn, uid, warning, also, tags)
 
 
@@ -1085,8 +1053,9 @@ def search(query: str, domain: str = "", type: str = "", limit: int = 10) -> dic
     when one does show up it is worth opening first, because it states a
     whole routine the surrounding notes only annotate.
 
-    type filters (one writer each): 'note', 'reasoning', 'checkpoint',
-    'anti_pattern', 'handoff', 'diagram', 'task'; any other type is an error.
+    type filters: 'note', 'reasoning', 'checkpoint', 'anti_pattern', 'diagram',
+    'task' (one writer each) and 'handoff' (rows already stored; task() carries
+    unfinished work to the next session); any other type is an error.
     Ask for type='diagram' to sweep the documented flows on purpose. To recall note()'d knowledge
     specifically, recall() is the sugar for search(type='note') -- which
     also means recall() never surfaces a diagram; use search() for that.
@@ -2141,7 +2110,6 @@ _TOOLS = {
     "checkpoint": checkpoint,
     "anti_pattern": anti_pattern,
     "reasoning": reasoning,
-    "handoff": handoff,
     "task": task,
     "task_item": task_item,
     "task_add": task_add,
