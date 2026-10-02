@@ -363,12 +363,12 @@ body {
 }
 ::-webkit-scrollbar-thumb:hover { background: rgba(255, 255, 255, .28); }
 
-/* A pane whose content can outgrow it keeps the room for its scrollbar, so
-   opening something in it does not narrow the column and slide what is there.
-   .view.wide and .view.fill clip instead of scrolling and reset it to auto. */
+/* A pane that can outgrow its box keeps the room for its scrollbar, so growing it slides nothing.
+   .view.wide, .view.fill and the graph's view never scroll as a page and reset it to auto. */
 .view, .rec-main, .rec-index, .rs-body, .rf-body, .mem-list #memList, .mi-body,
 .dom-col-body, .dom-detail-body, .opt-rail, .opt-rows, .mnt-log, .mnt-shelf-body,
 .mnt-panel .panel > .panel-body { scrollbar-gutter: stable; }
+.view:has(> .anim > .graph-wrap) { scrollbar-gutter: auto; }
 
 h1, h2, h3 { margin: 0; font-weight: 500; }
 a { color: inherit; text-decoration: none; }

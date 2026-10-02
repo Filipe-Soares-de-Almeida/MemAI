@@ -212,6 +212,13 @@ def test_a_view_that_clips_instead_of_scrolling_reserves_no_strip():
         assert "overflow: hidden" in body and "scrollbar-gutter: auto" in body, sel
 
 
+def test_the_graph_view_reserves_no_strip_because_its_canvas_never_scrolls_the_page():
+    css = _css()
+    assert ".view:has(> .anim > .graph-wrap) { scrollbar-gutter: auto; }" in css
+    src = (WEBUI / "views" / "graph.js").read_text(encoding="utf-8")
+    assert re.search(r'<div class="anim">.*?<div class="graph-wrap" id="gWrap">', src, re.S)
+
+
 # ------------------------------------------------- the shell before the module
 
 INDEX = (WEBUI / "index.html").read_text(encoding="utf-8")
