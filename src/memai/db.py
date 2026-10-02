@@ -4197,9 +4197,9 @@ def _sound_clause(exclude_contradicted: bool) -> str:
 
     Off by default: list_by_domain/list_recent are the fallback for a search
     that came back thin, and a caller asking for everything in a scope means
-    everything. pulse() opts in, because a warm-up presents what it returns
-    as the current state -- a contradicted anti-pattern read there is a
-    pitfall to avoid, not one that turned out not to be.
+    everything. pulse() opts in for the checkpoint it returns, because a
+    warm-up presents that as the current state -- a contradicted checkpoint
+    would hand the next session a bearing already ruled out.
     """
     return f" AND confidence <> '{CONFIDENCE_CONTRADICTED}'" if exclude_contradicted else ""
 
@@ -4379,10 +4379,9 @@ def domain_census(
 ) -> dict:
     """What a domain scope holds, and how it splits one level down.
 
-    pulse() returns the newest few of each type; this is how it can say what
-    it did NOT return. `by_type` counts the whole scope, so a caller can see
-    that 5 of 13 notes came back and reach for search()/list_by_domain()
-    with the domain it already has.
+    pulse() carries this census as its `scope`: `by_type` counts the whole
+    scope, so a caller can see that it holds 13 notes and reach for
+    search()/list_by_domain() with the domain it already has.
 
     `children` stops at the NEXT level rather than walking the subtree: "what
     else is in here" is answered a level at a time, and the child's own

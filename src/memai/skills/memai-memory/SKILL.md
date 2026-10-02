@@ -3,19 +3,20 @@ name: memai-memory
 description: >
   How to use the MemAI MCP server (long-term agent memory: one ACID SQLite
   store, BM25 keyword search) — which tool
-  family to call when: pulse/search/recall/list_by_domain/list_recent/
+  family to call when: pulse/pending/search/recall/list_by_domain/list_recent/
   list_domains/get_memory/help to read; note, reasoning, anti_pattern,
-  checkpoint, task, diagram to write; diagram_*/get_diagram for flows;
+  checkpoint, task, diagram to write; task_item/task_add/task_comment to work a
+  task; diagram_*/get_diagram for flows;
   edit_memory/link_memories/set_confidence/also_domain/forget/purge_memory to
   curate — plus the session/domain/tags convention, with domains as nested
   PATHS and cross-listing (also), and review_after/source_ref for a memory
   that will go stale. Use at the START of a session or when RESUMING work
   (warming a cold session), whenever SAVING or LOOKING UP durable knowledge
   (a fact, a decision, a rule, a pitfall), when DOCUMENTING a routine as a
-  flow, and before PAUSING or ENDING work (checkpoint). Also on "MemAI",
-  "memory", "long-term memory", "warm up the session", "checkpoint", "what
-  did the last session leave", "save this lesson", "anti-pattern", "diagram
-  of the flow".
+  flow, and before PAUSING or ENDING work (checkpoint, open tasks). Also on
+  "MemAI", "memory", "long-term memory", "warm up the session", "checkpoint",
+  "what did the last session leave", "what is pending", "task", "checklist",
+  "save this lesson", "anti-pattern", "diagram of the flow".
 ---
 
 # memai-memory — using the MemAI MCP server
@@ -58,15 +59,18 @@ happened to use.
 
 Six types, one writer each. Choosing the type is choosing how the memory
 comes back later ([§3.1](#31-getting-back-what-you-wrote-which-tool-to-call)).
+A seventh type, `handoff`, is carried by memories stored earlier: they are
+read, searched and counted as pending like any other, and nothing writes a new
+one — a task carries unfinished work to the next session.
 
 | Knowledge | Writer | Why that one |
 |---|---|---|
 | **Timeless fact** — a rule, a long-lived finding, a decision | **`note`** | Worth recovering in **any** future session; not tied to a state of work |
 | **Reasoning/analysis** worth keeping (what was tested → what is known now → what to do next) | **`reasoning`** | A thought process for the next agent, not a fact |
-| **Pitfall** that looks right and is not | **`anti_pattern`** | Comes back when the temptation reappears; surfaced by `pulse` |
-| **Where the work stands** at a pause | **`checkpoint`** | Exactly what `pulse` returns to warm a cold session — read for bearing, not as an archive |
-| **Work for whoever picks this up** | **`task`** | A goal and a checklist, worked with `task_item` and closed once every item is done or dropped; `pending` lists the open ones |
-| **What a routine does, end to end** (steps, decisions, outputs) | **`diagram`** | A flow as a **graph**, not prose: each step carries its own note and links, which makes it the index of its domain ([§4.1](#41-diagrams-a-flow-as-a-graph)) |
+| **Pitfall** that looks right and is not | **`anti_pattern`** | Comes back when the temptation reappears; counted as pending, listed by `pending(type='anti_pattern')` |
+| **Where the work stands** at a pause | **`checkpoint`** | The one body `pulse` returns whole to warm a cold session — read for bearing, not as an archive |
+| **Work for whoever picks this up** | **`task`** | A goal and a checklist, worked with `task_item` and closed once every item is done or dropped; open ones come first in every session start ([§4.1](#41-tasks-a-goal-and-a-checklist)) |
+| **What a routine does, end to end** (steps, decisions, outputs) | **`diagram`** | A flow as a **graph**, not prose: each step carries its own note and links, which makes it the index of its domain ([§4.2](#42-diagrams-a-flow-as-a-graph)) |
 
 > **checkpoint × note × reasoning** — the boundary most often crossed by
 > mistake:
@@ -120,7 +124,7 @@ comes back later ([§3.1](#31-getting-back-what-you-wrote-which-tool-to-call)).
 > carries `tags_indexed`, and `tags_hint` in its place when the count is zero.
 > `review_after`/`source_ref` are on the durable writers —
 > `note`, `reasoning`, `anti_pattern`, `diagram` — and not on `checkpoint` or
-> `handoff` ([§2.4](#24-decay--review_after-and-source_ref)). Signatures are
+> `task` ([§2.4](#24-decay--review_after-and-source_ref)). Signatures are
 > in [§7](#7-tool-reference).
 
 ### 2.1 A domain is a path (a subject inside a subject)
@@ -216,22 +220,36 @@ which is most memories. A date nobody meant is worse than no date.
 
 When the session-start hook fires, or when resuming work:
 
-1. **`pulse(domain)`** — the state inherited by a scope: the latest
-   **checkpoint** (by `created_at DESC`, never by similarity, returned in full
-   with its **relations** attached) + open **handoffs** and **anti-patterns** +
-   the newest **`recent_notes`** as warm-up breadcrumbs + the scope's
-   **`diagrams`** **by title only** (never inlined — open one with
-   `get_diagram(uid)` when the work touches that routine). A pulse is the
-   **state** of a scope, never its contents: read **`scope`** for what was
-   left out — `paths` (which path(s) the name resolved to), `total`,
-   `by_type`, `not_shown` per list, `subdomains` (`own` = filed there,
-   `subtree` = with descendants), plus `also` (how much of the brief arrived by
-   cross-listing) and `stale` — those two present only when non-zero, so a
-   store that never cross-lists never sees the field. That block is the
-   drill-down plan: `search(query, domain=…)`
-   or `list_by_domain(domain, type=…, limit=…)` on the child that was only
-   counted.
-2. **`search(query, domain, type, limit)`** — BM25 over the subject at hand.
+1. **`pulse(domain)`** — the state inherited by a scope, as
+   `{project, latest_checkpoint, pending, read_next, scope}`:
+   - **`latest_checkpoint`** — by `created_at DESC`, never by similarity,
+     returned **in full** with its **relations** attached. It is the only body
+     a pulse carries.
+   - **`pending`** — a **count** per category that has something waiting:
+     `task` (open), `anti_pattern`, `handoff` and `note` (active and not
+     contradicted), `diagram` (active), in that order, empty ones left out. No
+     list of memories comes with it.
+   - **`read_next`** — one instruction naming what to call next: open tasks
+     first, then `pending(domain, type=…)` for each other category, before
+     acting. Empty when nothing is pending.
+   - **`scope`** — what the scope holds: `paths` (which path(s) the name
+     resolved to), `total`, `by_type`, `subdomains` (`own` = filed there,
+     `subtree` = with descendants), plus `also` (how much of the scope arrived
+     by cross-listing) and `stale` — those two present only when non-zero, so a
+     store that never cross-lists never sees the field. It is the drill-down
+     plan: `search(query, domain=…)` or `list_by_domain(domain, type=…,
+     limit=…)` on the child that was only counted.
+2. **`pending(domain, type, limit, offset)`** — the read that lists what a
+   pulse only counts. Without `type` it returns the same per-category counts;
+   with `type` (`task`, `anti_pattern`, `handoff`, `note` or `diagram`) it
+   returns `{type, total, items, next_offset}`: one page of **headers** — `uid`,
+   `title`, `domain`, `est_tokens` — newest first, a task by its latest item
+   update. A task header adds `progress` (`{done, total}`) and `doing`, the keys
+   of its items in progress. Open a header with `get_memory(uid)`;
+   `next_offset` is absent on the last page and `limit` is at most 50.
+   **Work the open tasks first**: `pending(type='task')`, then `get_memory(uid)`
+   for each one the session will touch.
+3. **`search(query, domain, type, limit)`** — BM25 over the subject at hand.
    **Spend terms freely:** every space-separated term is asked for separately
    and a row matching more of them ranks higher, so piling the identifier, the
    routine name and the plain-language phrasing into one query costs one call
@@ -239,9 +257,9 @@ When the session-start hook fires, or when resuming work:
    for the row a pasted identifier names) and `fts_rank` (lower = better).
    Content comes back **truncated** — open the full record with
    `get_memory(uid)`.
-3. **`recall(query, domain)`** — the dedicated verb for long-term knowledge
+4. **`recall(query, domain)`** — the dedicated verb for long-term knowledge
    written with `note` ([§3.1](#31-getting-back-what-you-wrote-which-tool-to-call)).
-4. **`timeline(uid | query, before, after, domain, type)`** — what else was
+5. **`timeline(uid | query, before, after, domain, type)`** — what else was
    being written **around** one memory, in creation order, whether or not it
    shares a word with it. The neighbours of a checkpoint are the notes and
    pitfalls of the same stretch of work. One of `uid` or `query` is required
@@ -249,19 +267,19 @@ When the session-start hook fires, or when resuming work:
    response reports `anchored_by` plus the whole `anchor`, so the record it
    was built around is never a guess. `domain`/`type` narrow the
    **neighbourhood**, not the anchor.
-5. **`list_domains()`** / `list_by_domain(domain)` / `list_recent()` — the
+6. **`list_domains()`** / `list_by_domain(domain)` / `list_recent()` — the
    real domain **tree** ([§2.1](#21-a-domain-is-a-path-a-subject-inside-a-subject)),
    and the recency fallback when search comes back thin.
-6. **`help()`** / `help(command)` — to confirm an exact name or signature, and
+7. **`help()`** / `help(command)` — to confirm an exact name or signature, and
    to see which tools this process did not load.
 
 > **The listing tools return an envelope, not a bare list.** `search`,
 > `recall`, `list_by_domain` and `list_recent` return
 > `{"results": [...], "est_tokens": N}` — index into `results`. Every record
-> anywhere (a listing, a `pulse`, a `timeline`) carries its own `est_tokens`,
-> the estimated cost of its **full** content: on a truncated one that prices
-> the `get_memory(uid)` before making the call, and the top-level number is
-> the sum over the results.
+> anywhere (a listing, a `pending` page, a `pulse`, a `timeline`) carries its
+> own `est_tokens`, the estimated cost of its **full** content: on a truncated
+> one that prices the `get_memory(uid)` before making the call, and the
+> top-level number is the sum over the results.
 
 > Two annotations in search results are worth acting on. **`succeeded_by`**
 > means something in the store supersedes this memory — read that one instead.
@@ -285,20 +303,25 @@ type**. To bring it back, filter on that `type`.
 |---|---|---|
 | `note` | **`note`** | **`recall(query, domain)`** (a `search` scoped to `type='note'`) · or `search(type='note')` · fallback `list_*` with `type='note'` · full body via `get_memory(uid)` |
 | `reasoning` | `reasoning` | `search(…, type='reasoning')` / `list_*` with `type='reasoning'` |
-| `anti_pattern` | `anti_pattern` | comes back in **`pulse`** (open ones for the scope) · or `list_*`/`search` with `type='anti_pattern'` |
-| `checkpoint` | `checkpoint` | comes back in **`pulse`** (the latest by `created_at`) |
-| `task` | `task` | open ones come back through **`pending`** · or `list_*`/`search` with `type='task'`; worked with `task_item` |
-| `handoff` | — (a type existing memories carry) | open ones come back through **`pending`** · or `list_*`/`search` with `type='handoff'` |
-| `diagram` | `diagram` | **titles** in `pulse` · or `list_*`/`search` with `type='diagram'` (search matches the prose the graph generates) · the graph itself via **`get_diagram(uid)`** |
+| `anti_pattern` | `anti_pattern` | counted in **`pulse`**, listed by **`pending(type='anti_pattern')`** · or `list_*`/`search` with `type='anti_pattern'` |
+| `checkpoint` | `checkpoint` | **`pulse`** returns the latest by `created_at`, in full |
+| `task` | `task` | open ones are listed by **`pending(type='task')`** · or `list_*`/`search` with `type='task'` · the checklist itself via `get_memory(uid)`; worked with `task_item` |
+| `handoff` | — (a type existing memories carry) | active ones are listed by **`pending(type='handoff')`** · or `list_*`/`search` with `type='handoff'` |
+| `diagram` | `diagram` | counted in `pulse`, **titles** from `pending(type='diagram')` · or `list_*`/`search` with `type='diagram'` (search matches the prose the graph generates) · the graph itself via **`get_diagram(uid)`** |
 
 > **`recall(query, domain)`** is the dedicated recall verb: a search scoped
 > to `type='note'` and ranked by **relevance**, which is what timeless
 > knowledge wants. It therefore never surfaces a diagram — use `search` for
-> that. `pulse` complements it with the scope's `recent_notes` by **recency**.
+> that. `pending(type='note')` complements it with the scope's notes by
+> **recency**, as headers.
 >
-> **Get the `type` string exactly right:** filtering on a wrong string returns
-> empty **silently**. The valid types are exactly `note`, `reasoning`,
-> `anti_pattern`, `checkpoint`, `handoff`, `diagram`, `task`.
+> **Get the `type` string exactly right:** a read given a type outside the
+> vocabulary (`search`, `list_by_domain`, `list_recent`, `timeline`,
+> `pending`) is an **error** naming what it was given and listing the valid
+> ones, so a typo never reads as an empty scope. The valid types are exactly
+> `note`, `reasoning`, `anti_pattern`, `checkpoint`, `handoff`, `diagram`,
+> `task`; `pending` serves `task`, `anti_pattern`, `handoff`, `note` and
+> `diagram`.
 >
 > A diagram ranks like any other memory in `search` — nothing lifts a type to
 > the top. When one does come back, open it first: it states a whole routine
@@ -320,12 +343,12 @@ type**. To bring it back, filter on that `type`.
 - **`anti_pattern(title, pattern, why_wrong, instead, domain, also, tags,
   session, review_after, source_ref)`** — an approach that **looks** right and is a
   trap (restarting the worker to clear a stuck queue instead of draining it).
-  Surfaced by `pulse`.
+  Counted by `pulse` and listed by `pending(type='anti_pattern')`.
 - **`task(title, goal, items, domain, also, tags, session)`** — work for the next
-  agent or session: a goal and a checklist. Work it with `task_item`; it closes
-  itself once every item is done or dropped.
+  agent or session: a goal and a checklist
+  ([§4.1](#41-tasks-a-goal-and-a-checklist)).
 - **`diagram(...)`** — a routine as a **flow/graph**
-  ([§4.1](#41-diagrams-a-flow-as-a-graph)).
+  ([§4.2](#42-diagrams-a-flow-as-a-graph)).
 
 **A writer answers back.** When something already in the store closely
 resembles what was just written, the result carries **`similar`** plus one
@@ -340,7 +363,8 @@ both if they are genuinely different facts.
 - `edit_memory(uid, new_content, note, mode, source_ref, title)` corrects while keeping
   the previous version; `mode='append'` adds a line instead of replacing the body,
   for a memory that **gains** a fact rather than turning out wrong. It
-  **refuses a diagram's body** — that content is generated from the graph.
+  **refuses a diagram's or a task's body** — that content is generated from
+  the graph or from the goal and the items.
   `source_ref` repoints the memory at its source and takes no `new_content`,
   so a missing or moved reference is a one-argument fix
   ([§2.4](#24-decay--review_after-and-source_ref)); a diagram accepts that one.
@@ -357,13 +381,56 @@ both if they are genuinely different facts.
   contradictory **pairs** to review — it never merges, and it scans the path
   **plus its subtree**.
 - `forget(uid, reason, superseded_by)` archives: reversible, content kept, out
-  of default search and list output.
+  of default search and list output. On an open task it cancels the task.
 - `purge_memory(uid, "DELETE <uid>")` deletes permanently, with the edit
   history and relations. Only when the user explicitly asks and **states the
   uid in their own message** — do not build that phrase from an inferred
   "yes".
 
-## 4.1 Diagrams (a flow as a graph)
+## 4.1 Tasks (a goal and a checklist)
+
+```
+task(title, goal, items, domain, also, tags, session)
+  items: one checklist item per line; blank lines are ignored
+```
+
+A task is a `goal` (what done looks like) and up to 50 items of up to 300
+characters. Each item gets a key in the order it is added — `i1`, `i2`, … —
+and a key is never reused: an item that stops applying is `dropped`, never
+deleted. A tool takes `i3` or `3` for the third item. The task's content is
+generated from the goal and the items (`[ ]` todo, `[~]` doing, `[x]` done,
+`[-]` dropped), and every change to it is one entry in the edit history.
+
+Work it with:
+
+- **`task_item(uid, item, state, comment, related)`** — set an item's `state`
+  (`todo`, `doing`, `done`, `dropped`), comment on it, and link the memories it
+  produced or depends on (`related`: comma-separated uids; an unknown uid
+  refuses the whole call). Give at least one of the three; they apply together
+  or not at all. The result carries `progress` (`{done, dropped, total}`),
+  `task_state` and `archived`.
+- **`task_add(uid, items)`** — append items, one per line.
+- **`task_comment(uid, body, item)`** — a comment on the task, or on one item
+  when `item` names a key. A comment never edits the content, so it carries
+  what a checklist cannot: why an item is blocked, what a review said.
+- **`get_memory(uid)`** returns a `task` block beside the usual record: the
+  goal, the state, every item with its linked memories, and the comments,
+  oldest first.
+
+**Lifecycle.** A task is `open` while any item is `todo` or `doing`. The
+write that leaves every item `done` or `dropped` closes it itself: at least one
+`done` makes it `completed`, all `dropped` makes it `cancelled`, and either
+way it is archived — no `forget()` needed (`archived: true` in the result says
+so). Adding an item to a closed task, or moving one of its items back to
+`todo` or `doing`, reopens it. `forget()` on an open task cancels it.
+A closed task stays reachable through `search(..., status='')` and the
+dashboard's archived filter.
+
+Tasks are left out of duplicate detection and distillation, and a memory is
+never retyped to or from `task`: two tasks with similar items are still two
+pieces of work.
+
+## 4.2 Diagrams (a flow as a graph)
 
 ```
 diagram(title, nodes, edges, summary, domain, also, session, tags,
@@ -425,6 +492,12 @@ Nothing writes a checkpoint but the call, so **a checkpoint exists only if it
 is written while the session is still alive** — the stop hook reminds, it does
 not write.
 
+Open tasks are settled the same way: before pausing, `task_item` each task the
+session worked on — `done` for what finished, `doing` for what is under way,
+`dropped` for what does not apply, a `comment` for what the next session
+needs to know. Work that stays unfinished and has no task yet is a `task`, not
+a line in a checkpoint.
+
 - **`checkpoint(title, intent, established, pursuing, open_questions, session,
   domain, also, tags)`** — where the work stands, so the next session picks up the
   right bearing via `pulse`. Fields are **free-length**, but a checkpoint is
@@ -463,9 +536,9 @@ all exit 0 with no output). **Four events:**
 
 | Event | What it emits |
 |---|---|
-| `session-start` | the store's state as context — counts, active domains, the latest checkpoint, open handoffs, pitfalls, recent notes, documented flows — ending in the instruction to call `pulse(domain)` for the subject **before the session's first tool call**, and what the store's casing policy means for that path |
+| `session-start` | the store's state as context — the memory count, active domains, the latest checkpoint and one line of what is pending (`Pending in …: 2 open tasks, 21 pitfalls, …`, left out when nothing is) — ending in the instruction to call `pending()` and `pulse(domain)` for the subject **before the session's first tool call**, and what the store's casing policy means for that path. When tasks are open the line tells the agent to work through them first |
 | `pre-compact` | a reminder that whatever should outlive the transcript belongs in the store: `checkpoint()` where the work stands, `note()` what was established, `anti_pattern()` what turned out to be a trap |
-| `stop` | a nudge to checkpoint, and **only when nothing was written recently** (`--quiet-minutes`, 45 by default) — a nudge that fires regardless of whether there is anything to record teaches the agent to skip it |
+| `stop` | a nudge to checkpoint, and **only when nothing was written recently** (`--quiet-minutes`, 45 by default) — a nudge that fires regardless of whether there is anything to record teaches the agent to skip it. When the project has **open tasks** it **blocks** the stop once per interval (30 minutes by default, per project and per session) with the count and the request to call `pending(type='task')` and update the ones the session touched with `task_item`, or to say in one line that it touched none; a nudge due at the same time follows it in the same reason. The switch and the interval are the dashboard's Maintenance → Reminders tab, and `memai-hook stop --task-minutes N` overrides the stored interval |
 | `guard` | refuses a memai write whose **required** text never arrived — a parameter tag opened without the `antml:` prefix is dropped before the call leaves the client, so the text it held is gone. It exits 2 with the cause on stderr, the one event that stops the call it reads rather than emitting context. The refusal spells each tool as a signature: those fields are positional, so the retry is the WHOLE call retyped in that order, not the one field the message named. A parameter the tool does not require cannot break the write, so that is a `systemMessage` and the call goes through |
 
 Register all four with `memai-hook install`, which writes them into the user's
@@ -498,7 +571,9 @@ agent having decided to read it. Hosts that surface prompts show it as a
 command; it returns the same brief the session-start hook emits.
 
 **Server instructions.** Sent in the MCP handshake and injected by the hosts
-that support it — a paragraph naming the read tools and the write ones.
+that support it — a paragraph naming the read tools, the write ones, and
+`pending()` with the open tasks it puts first. A host that runs no hooks learns
+from it alone that tasks exist.
 
 **`memai-store`** moves the content as text, which a binary copy of the store
 cannot: `export --format jsonl` is one round-trippable record per line (every
@@ -519,7 +594,8 @@ always published, `diagrams` and `curation` only when named (or under the
 
 | Reading | | group |
 |---|---|---|
-| `pulse(domain)` | Warm-up: latest checkpoint (+ relations), open handoffs/anti-patterns, `recent_notes`, flow titles, and the `scope` census (incl. `stale`) | core |
+| `pulse(domain)` | Warm-up: `{project, latest_checkpoint (+ relations), pending (a count per category), read_next, scope}` — the `scope` census includes `stale` | core |
+| `pending(domain, type, limit, offset)` | Without `type`: the count per category (`task`, `anti_pattern`, `handoff`, `note`, `diagram`). With `type`: one page of headers (`uid`, `title`, `domain`, `est_tokens`; a task adds `progress` and `doing`) and `next_offset`. An unknown `type` is an error | core |
 | `search(query, domain, type, limit)` | BM25, annotated with `match_source`/`fts_rank` | core |
 | `recall(query, domain, limit)` | Relevance-ranked recall of `note()`d knowledge (`search` scoped to `type='note'`) | core |
 | `list_by_domain(domain, type, limit, subtree)` | Recency-ordered, scoped to a path and its subdomains | core |
@@ -527,7 +603,7 @@ always published, `diagrams` and `curation` only when named (or under the
 | | The four above return `{"results": [...], "est_tokens": N}` — index into `results` | |
 | `timeline(uid, query, before, after, domain, type)` | The records created immediately before and after one anchor, oldest first: `{"anchored_by", "anchor", "before", "after"}` | core |
 | `list_domains()` | The domain **tree**: `parent`/`depth`/`count`/`subtree`/`children`/`implicit` + `also`/`subtree_also` and latest activity — how to find the exact string | core |
-| `get_memory(uid)` | Full record + edit history + relations (+ the diagrams whose steps point at it) | core |
+| `get_memory(uid)` | Full record + edit history + relations (+ the diagrams whose steps point at it; a task's goal, items, linked memories and comments) | core |
 | `get_relations(uid)` | A memory's relations, incoming and outgoing | core |
 | `get_diagram(uid, format)` | Read a flow back: `json` · `text` · `svg-interactive` · `svg` · `mermaid` | core |
 | `help(command)` | Every tool with a one-line summary, or one tool's signature + full docs, read live from the code; names what this process did not load | core |
@@ -536,15 +612,18 @@ always published, `diagrams` and `curation` only when named (or under the
 |---|---|---|
 | `note(title, content, domain, also, tags, session, review_after, source_ref)` | Timeless knowledge → `type='note'` | core |
 | `reasoning(title, hypothesis, reasoning, result, revised_belief, next_time, domain, also, tags, session, review_after, source_ref)` | A reasoning trace → `type='reasoning'` | core |
-| `anti_pattern(title, pattern, why_wrong, instead, domain, also, tags, session, review_after, source_ref)` | A pitfall → `type='anti_pattern'` (surfaced by `pulse`) | core |
+| `anti_pattern(title, pattern, why_wrong, instead, domain, also, tags, session, review_after, source_ref)` | A pitfall → `type='anti_pattern'` (counted by `pulse`, listed by `pending`) | core |
 | `checkpoint(title, intent, established, pursuing, open_questions, session, domain, also, tags)` | Where the work stands → `type='checkpoint'` (summary, not an archive) | core |
-| `task(title, goal, items, domain, also, tags, session)` | Work for the next session → `type='task'`, worked with `task_item` | core |
+| `task(title, goal, items, domain, also, tags, session)` | A goal and a checklist, one item per line → `type='task'` | core |
+| `task_item(uid, item, state, comment, related)` | One item's state (`todo` \| `doing` \| `done` \| `dropped`), a comment on it, memories linked to it; the last close archives the task | core |
+| `task_add(uid, items)` | Append items to a task, one per line; a closed task reopens | core |
+| `task_comment(uid, body, item)` | A comment on a task, or on one item | core |
 | `diagram(title, nodes, edges, summary, domain, also, session, tags, kind, review_after, source_ref)` | A routine as a flow/graph → `type='diagram'` | diagrams |
 | `diagram_node` / `diagram_edge` / `diagram_link` / `diagram_jump` / `diagram_relayout` | One step / one arrow / a memory on a step / a jump into another flow / rebuild positions | diagrams |
 
 | Editing and domains | | group |
 |---|---|---|
-| `edit_memory(uid, new_content, note, mode, source_ref, title)` | Correct (or `mode='append'` add to) a memory, keeping the previous version; **refuses a diagram's body**. `source_ref` repoints it at its source and `title` renames it, either alone or with the edit | core |
+| `edit_memory(uid, new_content, note, mode, source_ref, title)` | Correct (or `mode='append'` add to) a memory, keeping the previous version; **refuses a diagram's or a task's body**. `source_ref` repoints it at its source and `title` renames it, either alone or with the edit | core |
 | `link_memories(from_uid, to_uid, relation_type, note)` | A typed edge between two memories | core |
 | `set_confidence(uid, confidence)` | `unverified` \| `confirmed` \| `contradicted` | core |
 | `also_domain(uid, domain)` / `unfile_domain(uid, domain)` | Cross-list / drop one cross-listing — **never** moves the `domain` | core |

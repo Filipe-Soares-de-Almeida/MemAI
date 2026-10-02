@@ -27,8 +27,11 @@ warden subagent that consults it on a session's behalf.
 ## Highlights
 
 - **Types, not one blob.** `note`, `reasoning`, `anti_pattern`, `checkpoint`,
-  `handoff`, `diagram` — a pitfall is read back by the tool that asks for
-  pitfalls, not found by luck among everything else.
+  `task`, `diagram` — a pitfall is read back by the tool that asks for
+  pitfalls, not found by luck among everything else. A `task` is a goal and a
+  checklist: items move through `todo`, `doing`, `done` and `dropped`, each
+  carries its own comments and linked memories, and the task archives itself
+  once every item is closed.
 - **Domains are paths.** A memory filed on `acme/checkout/billing` still answers
   a read of `acme`, and `also` cross-lists it under the subjects that cut across
   that tree.
@@ -65,9 +68,33 @@ Days later a cold session opens on that subject and asks for its bearing:
 pulse("acme/checkout")
 ```
 
-It gets the latest checkpoint in full, the open handoffs and anti-patterns filed
-anywhere under that path, the newest notes — that one among them — and a count
-of what the scope holds that the warm-up did not show.
+It gets the latest checkpoint in full and a count of what is pending anywhere
+under that path: open tasks, pitfalls, handoffs, notes and flows. The session
+asks for the category it needs, and gets headers it can open:
+
+```python
+pending("acme/checkout", type="note")    # titles and uids, that note among them
+get_memory(uid)                          # the one the work touches, in full
+```
+
+A task is how work reaches the next session. The agent files it with a goal and
+one item per line, and works it as it goes:
+
+```python
+task(
+    title="Move billing webhooks to the idempotent handler",
+    goal="Every billing webhook is deduplicated by event id.",
+    items="Key charge.succeeded by event id\nCover refunds and disputes\n"
+          "Remove the charge-id lookup",
+    domain="acme/checkout/billing",
+)
+task_item(uid, "i1", state="done", comment="Handler keys off the event id.")
+```
+
+Open tasks come first in the session-start brief, and at the end of a turn the
+`stop` hook blocks once per interval to ask the agent to update them. The
+dashboard's Maintenance view switches that reminder off and sets its interval;
+a task's checklist, comments and linked memories are worked there as well.
 
 ---
 

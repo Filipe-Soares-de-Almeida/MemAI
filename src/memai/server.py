@@ -398,8 +398,8 @@ def note(title: str, content: str, domain: str = "", also: str = "", tags: str =
     """Save a general long-term memory (fact, decision, finding). Stored as type='note'.
 
     Timeless knowledge -- retrieved by relevance, not recency. Bring it
-    back with recall() (or search(type='note')); pulse() also shows the
-    few most recent ones as warm-up breadcrumbs.
+    back with recall() (or search(type='note')); pending(type='note') lists
+    the most recent ones as headers.
 
     title: one line naming what this memory is about, in the words someone
     would look for it by. It is what a list shows instead of the opening of
@@ -513,7 +513,8 @@ def anti_pattern(
 ) -> dict:
     """Record a mistake/temptation to avoid repeating, and the correct approach.
 
-    Stored as type='anti_pattern'; open ones for a domain are surfaced by pulse().
+    Stored as type='anti_pattern'; pulse() counts the open ones for a domain
+    and pending(type='anti_pattern') lists them.
     `also` cross-lists it into further domain paths, `review_after` dates
     when to recheck it and `source_ref` says what it came from -- see note().
 
@@ -1080,9 +1081,8 @@ def recall(query: str, domain: str = "", limit: int = 10) -> dict:
 
     The dedicated verb for "bring back what I noted": a BM25 search scoped
     to type='note', ranked by relevance -- which is what you want for
-    timeless facts/rules/decisions. note() has no
-    recency warm-up hook the way checkpoints have pulse(); this (or
-    search(type='note')) is how notes come back.
+    timeless facts/rules/decisions. This (or search(type='note')) is how
+    notes come back by relevance; pending(type='note') lists the newest.
 
     Returns {"results": [...], "est_tokens": N}. Content is
     snippet-truncated -- call get_memory(uid) for the full record; a
@@ -1387,9 +1387,9 @@ def pulse(domain: str = "") -> dict:
     get_relations call, and carries `est_tokens`, what this response already
     spent on it.
 
-    `pending` is what pending(domain) returns without a type: a count per
-    category (task, anti_pattern, handoff, note, diagram), leaving out the
-    empty ones. `read_next` is the instruction to follow with it: open tasks
+    `pending` is the list of categories pending(domain) returns without a
+    type: a count per category (task, anti_pattern, handoff, note, diagram),
+    leaving out the empty ones. `read_next` is the instruction to follow with it: open tasks
     first, then pending(domain, type=...) for each other category, before
     acting. It is "" when nothing is pending. A pulse lists no memories
     besides the checkpoint; pending(domain, type=...) lists headers and
