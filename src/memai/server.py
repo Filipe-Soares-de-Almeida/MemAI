@@ -1059,9 +1059,9 @@ def search(query: str, domain: str = "", type: str = "", limit: int = 10) -> dic
     type filters: 'note', 'reasoning', 'checkpoint', 'anti_pattern', 'diagram',
     'task' (one writer each) and 'handoff' (rows already stored; task() carries
     unfinished work to the next session); any other type is an error.
-    Ask for type='diagram' to sweep the documented flows on purpose. To recall note()'d knowledge
-    specifically, recall() is the sugar for search(type='note') -- which
-    also means recall() never surfaces a diagram; use search() for that.
+    Ask for type='diagram' to sweep the documented flows on purpose. To recall
+    note()'d knowledge specifically, recall() is the sugar for search(type='note')
+    -- which also means recall() never surfaces a diagram; use search() for that.
 
     domain scopes to a path AND everything under it: domain='acme/x100'
     searches the module and each of its routines. Give more of the path to
@@ -1142,8 +1142,10 @@ def list_by_domain(
         listing = _listing(rows)
         for result in listing["results"]:
             if result["type"] == db.TASK_TYPE:
-                result["state"] = pending_lists.task_state(conn, result["uid"])
-                result["progress"] = pending_lists.task_progress(conn, result["uid"])
+                state = pending_lists.task_state(conn, result["uid"])
+                if state is not None:
+                    result["state"] = state
+                    result["progress"] = pending_lists.task_progress(conn, result["uid"])
     return listing
 
 
@@ -1370,7 +1372,12 @@ def pending(domain: str = "", type: str = "", limit: int = 10, offset: int = 0) 
     with db.connect() as conn:
         if not type:
             return {"categories": pending_lists.counts(conn, domain)}
-        result = pending_lists.headers(conn, domain, type, limit=limit, offset=offset)
+        try:
+            page = {"limit": int(limit), "offset": int(offset)}
+        except (TypeError, ValueError):
+            return _errors(["limit and offset must be a whole number, "
+                            f"got limit={limit!r} offset={offset!r}"])
+        result = pending_lists.headers(conn, domain, type, **page)
         _read(conn, result["items"])
     return result
 

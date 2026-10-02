@@ -2543,19 +2543,6 @@ def get_relations(conn: sqlite3.Connection, uid: str) -> list[sqlite3.Row]:
 # reason (see is_diagram).
 
 DIAGRAM_TYPE = "diagram"
-TASK_TYPE = "task"
-# types whose content is generated from rows, so no prose scan or merge applies
-GENERATED_TYPES = (DIAGRAM_TYPE, TASK_TYPE)
-# every type a memory can have; the tools and the dashboard read this one list
-MEMORY_TYPES = ("note", "reasoning", "anti_pattern", "checkpoint", "handoff",
-                DIAGRAM_TYPE, TASK_TYPE)
-
-
-def type_error(type_: str, allowed: tuple[str, ...] = MEMORY_TYPES) -> str | None:
-    """The refusal for a type outside `allowed`, or None. An empty type means all."""
-    if not type_ or type_ in allowed:
-        return None
-    return f"unknown type '{type_}'; valid types: {', '.join(allowed)}"
 DIAGRAM_KINDS = ("flowchart",)
 NODE_SHAPES = ("start", "step", "decision", "io", "end")
 
@@ -2592,6 +2579,20 @@ LAYOUT_GAP_X = 130.0
 LAYOUT_GAP_Y = 152.0
 LAYOUT_COL_W = NODE_DEFAULT_W + LAYOUT_GAP_X   # 300, the pitch for default boxes
 LAYOUT_ROW_H = NODE_DEFAULT_H + LAYOUT_GAP_Y   # 200
+
+TASK_TYPE = "task"
+# types whose content is generated from rows, so no prose scan or merge applies
+GENERATED_TYPES = (DIAGRAM_TYPE, TASK_TYPE)
+# every type a memory can have; the tools and the dashboard read this one list
+MEMORY_TYPES = ("note", "reasoning", "anti_pattern", "checkpoint", "handoff",
+                DIAGRAM_TYPE, TASK_TYPE)
+
+
+def type_error(type_: str, allowed: tuple[str, ...] = MEMORY_TYPES) -> str | None:
+    """The refusal for a type outside `allowed`, or None. An empty type means all."""
+    if not type_ or type_ in allowed:
+        return None
+    return f"unknown type '{type_}'; valid types: {', '.join(allowed)}"
 
 
 def node_box(node: dict, font_scale: float = 1.0) -> tuple[float, float]:

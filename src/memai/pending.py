@@ -15,8 +15,12 @@ _SOUND = {"anti_pattern", "handoff", "note"}
 
 
 def _scope(conn: sqlite3.Connection, domain: str) -> tuple[str, list]:
-    """The domain clause on memories `m`, or nothing for the whole project."""
-    if not domain:
+    """The domain clause on memories `m`, or nothing for the whole project.
+
+    A domain that normalizes to nothing ("/") names no path, so it is the
+    whole project too.
+    """
+    if not db.normalize_domain(domain):
         return "", []
     clause, params, _ = db.domain_scope_clause(conn, domain, alias="m")
     return clause, params
@@ -47,12 +51,12 @@ def open_task_uids(conn: sqlite3.Connection, domains: list[str]) -> list[str]:
     """The distinct uids of the open tasks inside any of `domains`.
 
     Each domain is resolved the way `headers` resolves it, subdomains and
-    cross-listings included, and a blank one is skipped: the whole project is
-    not a domain.
+    cross-listings included, and one that normalizes to nothing ("", "/") is
+    skipped: the whole project is not a domain.
     """
     found: dict[str, None] = {}
     for domain in domains:
-        if not str(domain).strip():
+        if not db.normalize_domain(str(domain)):
             continue
         where, params = _from_where(conn, str(domain).strip(), db.TASK_TYPE)
         for row in conn.execute(f"SELECT m.uid {where}", params):
@@ -66,15 +70,21 @@ def _doing(conn: sqlite3.Connection, uid: str) -> list[str]:
         "ORDER BY seq, id", (uid,))]
 
 
-def task_progress(conn: sqlite3.Connection, uid: str) -> dict:
-    """{"done", "total"} for a task: the progress shape listings carry."""
+def task_progress(conn: sqlite3.Connection, uid: str) -> dict | None:
+    """{"done", "total"} for a task: the progress shape listings carry.
+
+    None for a task memory that has no `tasks` row.
+    """
+    if task_state(conn, uid) is None:
+        return None
     progress = tasks.progress(conn, uid)
     return {"done": progress["done"], "total": progress["total"]}
 
 
-def task_state(conn: sqlite3.Connection, uid: str) -> str:
-    """The task's state: open, completed or cancelled."""
-    return conn.execute("SELECT state FROM tasks WHERE memory_uid = ?", (uid,)).fetchone()["state"]
+def task_state(conn: sqlite3.Connection, uid: str) -> str | None:
+    """The task's state (open, completed or cancelled), or None without a `tasks` row."""
+    row = conn.execute("SELECT state FROM tasks WHERE memory_uid = ?", (uid,)).fetchone()
+    return None if row is None else row["state"]
 
 
 def _header(conn: sqlite3.Connection, row: sqlite3.Row) -> dict:

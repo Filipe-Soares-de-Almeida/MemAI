@@ -49,7 +49,7 @@ def test_contradicted_still_comes_back(conn):
 
 def test_pulse_does_not_count_a_contradicted_anti_pattern(store):
     server.anti_pattern("fixture title", pattern="retry without backoff", why_wrong="stampede",
-                               instead="exponential backoff", domain="acme/x100")
+                        instead="exponential backoff", domain="acme/x100")
     stale = server.anti_pattern("fixture title", pattern="batch over 100 rows", why_wrong="times out",
                                 instead="page it", domain="acme/x100")["uid"]
     server.set_confidence(stale, "contradicted")

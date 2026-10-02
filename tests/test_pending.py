@@ -10,8 +10,8 @@ import pytest
 
 from memai import db, pending, server, tasks
 
-UNKNOWN = ("unknown type 'pitfall'; valid types: note, reasoning, anti_pattern, "
-           "checkpoint, handoff, diagram, task")
+VOCABULARY = "note, reasoning, anti_pattern, checkpoint, handoff, diagram, task"
+UNKNOWN = f"unknown type 'pitfall'; valid types: {VOCABULARY}"
 
 
 @pytest.fixture
@@ -28,7 +28,7 @@ def test_type_error_is_none_for_known_and_empty_types():
     assert db.type_error("") is None
     for type_ in db.MEMORY_TYPES:
         assert db.type_error(type_) is None
-    assert db.type_error("Task") is not None
+    assert db.type_error("Task") == f"unknown type 'Task'; valid types: {VOCABULARY}"
 
 
 @pytest.mark.parametrize("call", [
@@ -52,6 +52,8 @@ def test_reads_accept_the_new_type(store):
 # ------------------------------------------------------------------ pending
 
 DOMAIN = "acme/x100"
+
+
 def test_existing_handoffs_stay_readable(tmp_path, monkeypatch):
     monkeypatch.setenv("MEMAI_HOME", str(tmp_path))
     with db.connect() as conn:
@@ -244,23 +246,26 @@ def test_pulse_counts_do_not_include_contradicted_rows(seeded):
 
 
 def test_read_next_puts_tasks_first(seeded):
-    read_next = server.pulse(DOMAIN)["read_next"]
-    assert read_next.startswith("Open tasks first: pending('acme/x100', type='task')")
-    assert "get_memory(uid)" in read_next
-    assert "pending('acme/x100', type=<t>)" in read_next
+    assert server.pulse(DOMAIN)["read_next"] == (
+        "Open tasks first: pending('acme/x100', type='task'), then get_memory(uid) for "
+        "each task you will touch. Then pending('acme/x100', type=<t>) for each other "
+        "category listed in `pending`, before acting.")
 
 
 def test_read_next_without_a_domain_omits_the_argument(seeded):
-    assert server.pulse()["read_next"].startswith("Open tasks first: pending(type='task')")
+    assert server.pulse()["read_next"] == (
+        "Open tasks first: pending(type='task'), then get_memory(uid) for each task "
+        "you will touch. Then pending(type=<t>) for each other category listed in "
+        "`pending`, before acting.")
 
 
 def test_read_next_without_tasks_and_when_empty(store):
     assert server.pulse(DOMAIN)["read_next"] == ""
     assert server.pulse(DOMAIN)["pending"] == []
     server.note(title="Parser fact", content="Fact.", domain=DOMAIN)
-    read_next = server.pulse(DOMAIN)["read_next"]
-    assert read_next.startswith("Then pending('acme/x100', type=<t>)")
-    assert "Open tasks" not in read_next
+    assert server.pulse(DOMAIN)["read_next"] == (
+        "Then pending('acme/x100', type=<t>) for each other category listed in "
+        "`pending`, before acting.")
 
 
 def test_instructions_name_pending_and_tasks():
@@ -320,3 +325,61 @@ def test_a_closed_task_and_a_blank_domain_are_not_counted(store):
         assert pending.open_task_uids(conn, ["acme/harbor"]) == []
         assert pending.open_task_uids(conn, ["", "  "]) == []
         assert pending.open_task_uids(conn, []) == []
+
+
+# ----------------------------------------- scopes, paging and rows without tasks
+
+def test_a_task_cross_listed_into_a_domain_is_counted_there(store):
+    uid = server.task(title="Repair the pier", goal="The pier holds", items="replace the planks",
+                      domain="acme/harbor", also="acme/docks")["uid"]
+    with db.connect() as conn:
+        assert pending.counts(conn, "acme/docks") == [{"type": "task", "count": 1}]
+        assert [i["uid"] for i in pending.headers(conn, "acme/docks", "task")["items"]] == [uid]
+        assert pending.counts(conn, "acme/elsewhere") == []
+
+
+def test_an_archived_diagram_is_not_counted(store):
+    uid = _diagram()
+    with db.connect() as conn:
+        assert pending.counts(conn, DOMAIN) == [{"type": "diagram", "count": 1}]
+        conn.execute("UPDATE memories SET status = 'archived' WHERE uid = ?", (uid,))
+        assert pending.counts(conn, DOMAIN) == []
+        assert pending.headers(conn, DOMAIN, "diagram")["items"] == []
+
+
+@pytest.mark.parametrize("kwargs", [{"limit": "many"}, {"offset": "later"}, {"limit": None}])
+def test_pending_refuses_a_limit_or_offset_that_is_not_a_number(store, kwargs):
+    server.note(title="Parser fact", content="Fact.", domain=DOMAIN)
+    result = server.pending(domain=DOMAIN, type="note", **kwargs)
+    assert result["ok"] is False
+    assert len(result["errors"]) == 1 and "must be a whole number" in result["errors"][0]
+
+
+def test_pending_accepts_a_limit_and_offset_written_as_digits(store):
+    for n in range(3):
+        server.note(title=f"Parser fact {n}", content=f"Fact {n}.", domain=DOMAIN)
+    result = server.pending(domain=DOMAIN, type="note", limit="2", offset="1")
+    assert len(result["items"]) == 2 and result["total"] == 3
+
+
+@pytest.mark.parametrize("domain", ["/", " / ", "//"])
+def test_a_domain_that_normalizes_to_nothing_is_the_whole_project(seeded, domain):
+    assert server.pending(domain=domain) == {"categories": FULL}
+    assert server.pending(domain=domain, type="note")["total"] == 3
+
+
+def test_open_task_uids_skip_a_domain_that_normalizes_to_nothing(store):
+    with db.connect() as conn:
+        _pier(conn, "acme/harbor")
+        assert pending.open_task_uids(conn, ["/", " / "]) == []
+
+
+def test_list_by_domain_lists_a_task_memory_that_has_no_tasks_row(store):
+    with db.connect() as conn:
+        orphan = db.insert_memory(conn, type="task", title="Orphaned task",
+                                  content="GOAL: nothing", domain=DOMAIN)
+    good = _task("Ship the parser")
+    found = {r["uid"]: r for r in server.list_by_domain(DOMAIN, type="task")["results"]}
+    assert set(found) == {orphan, good}
+    assert "state" not in found[orphan] and "progress" not in found[orphan]
+    assert found[good]["state"] == "open" and found[good]["progress"] == {"done": 0, "total": 2}

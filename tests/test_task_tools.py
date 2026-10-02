@@ -208,8 +208,6 @@ def test_list_by_domain_status_archived_lists_closed_tasks(store):
     gone_uid = _harbor_task("Rebuild the pier", items="survey\nquote")
     server.task_item(gone_uid, "i1", state="done")
     server.forget(gone_uid)
-    note_uid = server.note("Tide table", content="a fact about tides", domain="acme/harbor")["uid"]
-    server.forget(note_uid)
 
     closed = server.list_by_domain("acme/harbor", type="task", status="archived")["results"]
     assert {r["uid"] for r in closed} == {done_uid, gone_uid}

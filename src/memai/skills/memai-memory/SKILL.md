@@ -305,7 +305,7 @@ type**. To bring it back, filter on that `type`.
 | `reasoning` | `reasoning` | `search(…, type='reasoning')` / `list_*` with `type='reasoning'` |
 | `anti_pattern` | `anti_pattern` | counted in **`pulse`**, listed by **`pending(type='anti_pattern')`** · or `list_*`/`search` with `type='anti_pattern'` |
 | `checkpoint` | `checkpoint` | **`pulse`** returns the latest by `created_at`, in full |
-| `task` | `task` | open ones are listed by **`pending(type='task')`** · or `list_*`/`search` with `type='task'` · the checklist itself via `get_memory(uid)`; worked with `task_item` |
+| `task` | `task` | open ones are listed by **`pending(type='task')`** · or `list_*`/`search` with `type='task'` · the checklist itself via `get_memory(uid)`; closed ones via `list_by_domain(domain, type='task', status='archived')`; worked with `task_item` |
 | `handoff` | — (a type existing memories carry) | active ones are listed by **`pending(type='handoff')`** · or `list_*`/`search` with `type='handoff'` |
 | `diagram` | `diagram` | counted in `pulse`, **titles** from `pending(type='diagram')` · or `list_*`/`search` with `type='diagram'` (search matches the prose the graph generates) · the graph itself via **`get_diagram(uid)`** |
 
