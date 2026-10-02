@@ -71,7 +71,7 @@ def _call(tool: str, **params) -> dict:
 
 def _full(tool: str) -> dict:
     """Every parameter the guard looks at, filled in."""
-    fields = guard.GUARDED[tool] + guard.WATCHED[tool]
+    fields = guard.GUARDED[tool] + guard.WATCHED.get(tool, ())
     return {name: f"the {name}" for name in fields}
 
 

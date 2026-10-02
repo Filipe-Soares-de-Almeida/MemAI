@@ -270,6 +270,7 @@ TYPE_ANTI_PATTERN = "anti_pattern"  # anti_pattern()
 TYPE_REASONING = "reasoning"        # reasoning()
 TYPE_HANDOFF = "handoff"            # handoff()
 TYPE_DIAGRAM = "diagram"            # diagram()
+TYPE_TASK = db.TASK_TYPE            # task()
 
 
 def _with_est_tokens(d: dict) -> dict:
@@ -660,6 +661,120 @@ def handoff(title: str, content: str, domain: str = "", also: str = "",
 
 def _errors(errors: list[str]) -> dict:
     return {"ok": False, "errors": errors}
+
+
+@tool("core")
+def task(title: str, goal: str, items: str, domain: str = "", also: str = "",
+         tags: str = "", session: str = "") -> dict:
+    """Open a task: a goal and a checklist, kept until its items are closed.
+
+    Stored as type='task'. Work it with task_item(), grow it with task_add()
+    and discuss it with task_comment(); it archives itself once every item is
+    done or dropped, and pulse() lists the open ones.
+
+    title: one line naming what this task delivers, in the words someone
+    would look for it by. At most 120 characters.
+
+    goal: what done looks like, in a sentence or two.
+
+    items: one checklist item per line, blank lines ignored. At most 50
+    items of 300 characters each. Each gets a key (i1, i2, ...) that
+    task_item() takes back.
+
+    also: other domain paths this belongs to, comma-separated -- the
+    cross-cutting subjects beside the one it is filed under. See note().
+
+    `tags` carries the synonyms the body never uses. The type name is not
+    added for you: a word every task carries ranks no task above another.
+    See note() for what belongs there.
+    """
+    try:
+        with db.connect() as conn:
+            domain, warning = _coerce_domain(conn, domain)
+            lines = tasks.split_items(items)
+            uid = tasks.create_task(conn, title=title, goal=goal, items=lines,
+                                    domain=domain, also=also, tags=tags,
+                                    session=session or SESSION)
+            result = _write_result(conn, uid, warning, also, tags)
+    except ValueError as exc:
+        return _errors([str(exc)])
+    result["items"] = [f"i{n}" for n in range(1, len(lines) + 1)]
+    return result
+
+
+@tool("core")
+def task_item(uid: str, item: str, state: str = "", comment: str = "",
+              related: str = "") -> dict:
+    """Update one item of a task: its state, a comment on it, memories linked to it.
+
+    item: the key task() returned, such as i3 or 3.
+
+    state: todo, doing, done or dropped. The write that closes the last open
+    item archives the task (`archived` in the result); one that reopens an
+    item reopens the task.
+
+    comment: a remark on this item -- what blocked it, what was decided.
+
+    related: comma-separated uids of memories this item produced or depends
+    on. An unknown uid refuses the whole call, and nothing is written.
+
+    Give at least one of state, comment and related. They apply together, or
+    not at all.
+    """
+    if not any(str(v).strip() for v in (state, comment, related)):
+        return _errors(["give at least one of state, comment and related"])
+    try:
+        with db.connect() as conn:
+            key = tasks.item_key(item)
+            targets = [t.strip() for t in related.split(",") if t.strip()]
+            if targets:
+                tasks.link_item(conn, uid, key, targets)
+            if comment.strip():
+                tasks.add_comment(conn, uid, comment, item=key, session=SESSION)
+            if state.strip():
+                tasks.set_item_state(conn, uid, key, state.strip(), session=SESSION)
+            head = tasks.get_task(conn, uid)
+            if head is None:
+                raise ValueError(f"no task {uid}")
+            current = next(i["state"] for i in head["items"] if i["key"] == key)
+            result = {
+                "uid": uid, "item": key, "state": current,
+                "progress": tasks.progress(conn, uid), "task_state": head["state"],
+                "archived": db.get_memory(conn, uid)["status"] == "archived",
+            }
+    except ValueError as exc:
+        return _errors([str(exc)])
+    return result
+
+
+@tool("core")
+def task_add(uid: str, items: str) -> dict:
+    """Append items to a task, one per line; a closed task reopens.
+
+    Returns the keys the new items got, and the progress.
+    """
+    try:
+        with db.connect() as conn:
+            added = tasks.add_items(conn, uid, tasks.split_items(items), session=SESSION)
+    except ValueError as exc:
+        return _errors([str(exc)])
+    return {"uid": uid, "items": added["keys"], "progress": added["progress"],
+            "task_state": added["task_state"], "archived": added["archived"]}
+
+
+@tool("core")
+def task_comment(uid: str, body: str, item: str = "") -> dict:
+    """Comment on a task, or on one of its items when `item` names a key.
+
+    A comment never edits the task's content, so it carries what the
+    checklist cannot: why an item is blocked, what a review said.
+    """
+    try:
+        with db.connect() as conn:
+            comment_id = tasks.add_comment(conn, uid, body, item=item, session=SESSION)
+    except ValueError as exc:
+        return _errors([str(exc)])
+    return {"uid": uid, "comment_id": comment_id}
 
 
 def _capped(body: str) -> str:
@@ -1402,6 +1517,8 @@ def get_memory(uid: str) -> dict:
     and its jumps to and from other flows; any other memory comes back
     with `referenced_by_diagrams`, the flows that point a step at it -- so
     a note tells you which processes depend on it without a second lookup.
+    A task also comes back with a `task` block: its goal, state, items (each
+    with the memories linked to it) and comments, oldest first.
     """
     with db.connect() as conn:
         row = db.get_memory(conn, uid)
@@ -1422,6 +1539,8 @@ def get_memory(uid: str) -> dict:
             result["referenced_by_diagrams"] = [
                 _row_to_dict(r) for r in db.diagrams_referencing(conn, uid)
             ]
+        if row["type"] == TYPE_TASK:
+            result["task"] = tasks.get_task(conn, uid)
     result["edit_history"] = [_row_to_dict(e) for e in edits]
     result["relations"] = [_row_to_dict(r) for r in rels]
     return result
@@ -1569,7 +1688,7 @@ def forget(uid: str, reason: str = "", superseded_by: str = "") -> dict:
     """Archive a memory (soft delete -- content is kept, just excluded from default search/list).
 
     A `reason` is recorded as a status-change audit entry, without touching
-    the content.
+    the content. Archiving an open task cancels it; its items keep their states.
     """
     with db.connect() as conn:
         ok = db.set_status(
@@ -2037,6 +2156,10 @@ _TOOLS = {
     "anti_pattern": anti_pattern,
     "reasoning": reasoning,
     "handoff": handoff,
+    "task": task,
+    "task_item": task_item,
+    "task_add": task_add,
+    "task_comment": task_comment,
     "diagram": diagram,
     "diagram_node": diagram_node,
     "diagram_edge": diagram_edge,

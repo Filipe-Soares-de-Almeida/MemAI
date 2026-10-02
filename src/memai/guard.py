@@ -45,6 +45,10 @@ GUARDED: dict[str, tuple[str, ...]] = {
     "note": ("title", "content"),
     "reasoning": ("title", "content"),
     "handoff": ("title", "content"),
+    "task": ("title", "goal", "items"),
+    "task_item": ("uid", "item"),
+    "task_add": ("uid", "items"),
+    "task_comment": ("uid", "body"),
     **{tool: ("title", *(s.key for s in spec))
        for tool, spec in sections.SECTION_SPEC.items()},
 }
@@ -58,6 +62,7 @@ WATCHED: dict[str, tuple[str, ...]] = {
     "handoff": ("domain", "tags"),
     "checkpoint": ("domain", "tags"),
     "anti_pattern": ("domain", "tags", "source_ref"),
+    "task": ("domain", "tags"),
 }
 
 # tool -> the parameters it takes that have a default, in signature order.
@@ -71,6 +76,10 @@ OPTIONAL: dict[str, tuple[str, ...]] = {
     "handoff": ("domain", "also", "tags", "session"),
     "checkpoint": ("session", "domain", "also", "tags"),
     "anti_pattern": ("domain", "also", "tags", "session", "review_after", "source_ref"),
+    "task": ("domain", "also", "tags", "session"),
+    "task_item": ("state", "comment", "related"),
+    "task_add": (),
+    "task_comment": ("item",),
 }
 
 # The frame of a tool call. A closing tag naming one of these, inside the text
