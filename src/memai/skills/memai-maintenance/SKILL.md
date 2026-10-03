@@ -28,9 +28,9 @@ a **single** `optimize_stage` run.
 > (`set_confidence`/`edit_memory`/`link_memories`/`forget`/`also_domain`) only
 > when the user asks for it **without** the dashboard.
 >
-> **`help()` is the source of truth for the tools** — signatures read live from
-> the code. When unsure of a name or an argument, call `help` before trusting
-> this file.
+> **The tool descriptions are the source of truth** — read from the code's
+> docstrings. When this file and a tool's description disagree, trust the
+> description.
 >
 > **Dashboard:** `http://127.0.0.1:8888` (default port). The MCP server can
 > bring it up alongside itself when `MEMAI_ADMIN_AUTOSTART` is set; otherwise

@@ -4,7 +4,7 @@ description: >
   How to use the MemAI MCP server (long-term agent memory: one ACID SQLite
   store, BM25 keyword search) — which tool
   family to call when: pulse/must_read/search/recall/list_by_domain/list_recent/
-  list_domains/get_memory/help to read; note, reasoning, anti_pattern,
+  list_domains/get_memory to read; note, reasoning, anti_pattern,
   checkpoint, task, diagram to write; task_item/task_add/task_comment to work a
   task; diagram_*/get_diagram for flows;
   edit_memory/link_memories/set_confidence/also_domain/forget/purge_memory to
@@ -28,19 +28,15 @@ written** — an exact identifier (`F100_TOTAL`, `USE_NEW_PARSER`, `proj-1042`)
 as readily as a phrase — which is why `tags` carry the synonyms a body never
 happened to use.
 
-> **`help()` is the source of truth for the tools.** `help()` lists every tool
-> with a one-line summary; `help(command='<name>')` returns that tool's
-> **signature and full documentation**, read live from the code, so it cannot
-> drift from behaviour. When unsure of a name or an argument, call `help`
-> instead of trusting this file.
+> **The tool descriptions are the source of truth.** Each tool's schema is
+> read from its docstring, so it cannot drift from behaviour. When this file
+> and a tool's description disagree, trust the description.
 
 > **Not every tool is loaded.** `MEMAI_TOOLS` names the tool groups a process
 > publishes (`core`, `diagrams`, `curation`; `full` is the default), because
 > every published schema is paid for on every request. A tool this file names
-> may therefore be absent from the session. `help()` documents all of them
-> regardless and reports the ones this process did not load, under
-> `not_loaded` — so an unavailable tool is a setting to change, not a missing
-> feature.
+> may therefore be absent from the session — an unavailable tool is a setting
+> to change in the MCP server's environment, not a missing feature.
 
 > **Transport:** a local **stdio** process (`memai-mcp`), no HTTP server. Only
 > the agent talks to it over MCP. The `memai-hook` CLI opens the same SQLite
@@ -71,6 +67,14 @@ one — a task carries unfinished work to the next session.
 | **Where the work stands** at a pause | **`checkpoint`** | The one body `pulse` returns whole to warm a cold session — read for bearing, not as an archive |
 | **Work for whoever picks this up** | **`task`** | A goal and a checklist, worked with `task_item` and closed once every item is done or dropped; open ones come first in every session start ([§4.1](#41-tasks-a-goal-and-a-checklist)) |
 | **What a routine does, end to end** (steps, decisions, outputs) | **`diagram`** | A flow as a **graph**, not prose: each step carries its own note and links, which makes it the index of its domain ([§4.2](#42-diagrams-a-flow-as-a-graph)) |
+
+> **Sectioned bodies × free-text bodies.** `checkpoint`, `anti_pattern` and
+> `reasoning` take their body as named fields, stored as `LABEL: text` lines
+> (`INTENT:`, `TEMPTATION:`, `HYPOTHESIS:` …) that the store and the dashboard
+> read back field by field. **`note` and `task` are free text**: a task's
+> `goal` and a note's `content` are plain prose paragraphs, with **no**
+> `KEYWORD: text` labels (`GOAL:`, `WHY:`, `CONTEXT:` …) — that look marks a
+> sectioned type, and nothing reads it back from a free-text body.
 
 > **checkpoint × note × reasoning** — the boundary most often crossed by
 > mistake:
@@ -281,8 +285,6 @@ When the session-start hook fires, or when resuming work:
 6. **`list_domains()`** / `list_by_domain(domain)` / `list_recent()` — the
    real domain **tree** ([§2.1](#21-a-domain-is-a-path-a-subject-inside-a-subject)),
    and the recency fallback when search comes back thin.
-7. **`help()`** / `help(command)` — to confirm an exact name or signature, and
-   to see which tools this process did not load.
 
 > **The listing tools return an envelope, not a bare list.** `search`,
 > `recall`, `list_by_domain` and `list_recent` return
@@ -405,8 +407,14 @@ task(title, goal, items, domain, also, tags, session)
   items: one checklist item per line; blank lines are ignored
 ```
 
-A task is a `goal` (what done looks like) and up to 50 items of up to 300
-characters. Each item gets a key in the order it is added — `i1`, `i2`, … —
+A task is a `goal` and up to 50 items of up to 300 characters. The `goal` is
+the **brief** an agent with none of the writing session's context works from:
+what the work is and why, where it lives, the decisions and constraints that
+bind it, and what done looks like. Keep it short but complete enough to act on
+— a few compact paragraphs, at most 2000 characters; a one-liner leaves the
+next agent guessing. It is **plain prose**, never `GOAL:` / `WHY:` /
+`CONTEXT:` labelled fields: a task is not a sectioned type like `checkpoint`,
+and copying their `LABEL: text` shape only makes it look like one. Each item gets a key in the order it is added — `i1`, `i2`, … —
 and a key is never reused: an item that stops applying is `dropped`, never
 deleted. A tool takes `i3` or `3` for the third item. The task's content is
 generated from the goal and the items (`[ ]` todo, `[~]` doing, `[x]` done,
@@ -606,7 +614,7 @@ import would do.
 
 The **group** column is the `MEMAI_TOOLS` group a tool belongs to: `core` is
 always published, `diagrams` and `curation` only when named (or under the
-`full` default). `help()` reports what this process actually loaded.
+`full` default).
 
 | Reading | | group |
 |---|---|---|
@@ -622,7 +630,6 @@ always published, `diagrams` and `curation` only when named (or under the
 | `get_memory(uid)` | Full record + edit history + relations (+ the diagrams whose steps point at it; a task's goal, items, linked memories and comments) | core |
 | `get_relations(uid)` | A memory's relations, incoming and outgoing | core |
 | `get_diagram(uid, format)` | Read a flow back: `json` · `text` · `svg-interactive` · `svg` · `mermaid` | core |
-| `help(command)` | Every tool with a one-line summary, or one tool's signature + full docs, read live from the code; names what this process did not load | core |
 
 | Writing | | group |
 |---|---|---|
