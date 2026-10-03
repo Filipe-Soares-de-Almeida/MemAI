@@ -210,10 +210,20 @@ const releaseHTML = release => `<article class="rl-item${release.state === 'inst
   </div>
 </article>`;
 
-const groupHTML = group => `<section class="rl-group">
-  ${group.title ? `<h3 class="rl-group-title">${esc(group.title)}</h3>` : ''}
+/* release-please heads the breaking group with a text-presentation ⚠ that
+   renders as a faint glyph, so the group gets its own callout and emoji. */
+const BREAKING = /breaking/i;
+const WARN_GLYPH = /^\s*⚠️?\s*/;
+
+const groupHTML = group => {
+  const breaking = BREAKING.test(group.title);
+  const title = breaking ? group.title.replace(WARN_GLYPH, '') : group.title;
+  return `<section class="rl-group${breaking ? ' is-breaking' : ''}">
+  ${title ? `<h3 class="rl-group-title">${breaking
+    ? '<span class="rl-warn" aria-hidden="true">⚠️</span>' : ''}${esc(title)}</h3>` : ''}
   <ul class="rl-list">${group.entries.map(entry => `<li>${esc(entry)}</li>`).join('')}</ul>
 </section>`;
+};
 
 /* ─── nothing to show ─────────────────────────────────────────────────────
    Reached by an installation built outside the release process, which
