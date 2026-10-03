@@ -135,8 +135,8 @@ emits and how to turn the warden off.
 
 | host | the file it reads | how to write it |
 |---|---|---|
-| Claude Code — CLI and desktop UI alike | `~/.claude.json`, top-level `mcpServers` | `claude mcp add --scope user memai <command>` |
-| Claude Desktop — the chat app | Windows: `%APPDATA%\Claude\claude_desktop_config.json`<br>macOS: `~/Library/Application Support/Claude/claude_desktop_config.json` | edit the file, or Settings → Developer → Edit configuration |
+| Claude Code CLI — `claude` in a terminal | `~/.claude.json`, top-level `mcpServers` | `claude mcp add --scope user memai <command>` |
+| Claude desktop app — Chat and the Code tab | Windows: `%APPDATA%\Claude\claude_desktop_config.json`<br>macOS: `~/Library/Application Support/Claude/claude_desktop_config.json` | edit the file, or Settings → Developer → Edit configuration |
 
 <details>
 <summary><b>Install details</b> — the config block, the PATH trap, and the Windows batch files</summary>
@@ -169,7 +169,7 @@ there, give the absolute path instead:
 }
 ```
 
-`claude mcp list` reports what Claude Code loaded; the desktop app lists what it
+`claude mcp list` reports what the CLI loaded; the desktop app lists what it
 loaded under Settings → Developer → local MCP servers. A host reads its config
 once, at startup, so restart it after an edit.
 
@@ -296,16 +296,12 @@ anything moves.
 
 How the parts work lives in the [wiki](../../wiki):
 
-| page | what it covers |
+| section | pages |
 |---|---|
-| [Storage](../../wiki/Storage) | the tables, and what each one is the record of |
-| [Retrieval](../../wiki/Retrieval) | BM25 keyword search, and what a result carries |
-| [Domains](../../wiki/Domains) | paths, subtree reads, and belonging to more than one |
-| [Diagrams](../../wiki/Diagrams) | documenting a routine as a graph, and reading it back |
-| [Curation](../../wiki/Curation) | confidence, decay, staged suggestions, dedup |
-| [Tools](../../wiki/Tools) | every MCP tool, and the sets that trim the schema cost |
-| [Hooks and the warden](../../wiki/Hooks-and-the-warden) | the four hook events, the skills, and the subagent that consults the store on a session's behalf |
-| [Dashboard](../../wiki/Dashboard) | every view, and export/import |
+| getting started | [Getting started](../../wiki/Getting-started) · [Updating](../../wiki/Updating) · [Troubleshooting](../../wiki/Troubleshooting) |
+| concepts | [How a session uses memory](../../wiki/How-a-session-uses-memory) · [Memory types](../../wiki/Memory-types) · [Domains](../../wiki/Domains) · [Projects](../../wiki/Projects) |
+| guides | [Tasks](../../wiki/Tasks) · [Diagrams](../../wiki/Diagrams) · [Curation](../../wiki/Curation) · [Dashboard](../../wiki/Dashboard) · [Backups and export](../../wiki/Backups-and-export) |
+| reference | [Tools](../../wiki/Tools) · [Hooks and the warden](../../wiki/Hooks-and-the-warden) · [Configuration](../../wiki/Configuration) · [Storage](../../wiki/Storage) · [Retrieval](../../wiki/Retrieval) |
 
 ## Licence
 
