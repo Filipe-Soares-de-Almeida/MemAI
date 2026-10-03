@@ -863,14 +863,16 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
    `confirmed` stays quiet because a good default should never shout, and
    `unverified` stays neutral because it is a question, not a problem.
 
-   The padding is on the LABELLED pill only: the compact one is already a
-   fixed round box, and adding to it would move the row it sits in. */
-.conf-pill.c-contradicted {
-  color: var(--bad-ink);
-  background: var(--bad-wash);
-  border-radius: var(--r-pill);
+   The fill belongs to the ring: the compact mark is a round box, and a
+   labelled pill washes only its icon, as a shadow that takes no room. */
+.conf-pill.c-contradicted.compact { background: var(--bad-wash); border-radius: 50%; }
+/* In a picker's face the pill is the value: the face's text size and colour,
+   centred on the control, and unclipped so the ring's wash shows whole. */
+.pick-value:has(> .conf-pill) { display: flex; align-items: center; overflow: visible; }
+.pick-value > .conf-pill { font-size: inherit; color: inherit; }
+.conf-pill.c-contradicted:not(.compact) .ico {
+  border-radius: 50%; background: var(--bad-wash); box-shadow: 0 0 0 3px var(--bad-wash);
 }
-.conf-pill.c-contradicted:not(.compact) { padding: var(--sp-0) var(--sp-2); }
 
 /* A seal, so it never shrinks and never wraps -- and never grows either:
    as a flex child with the default `flex: 0 1 auto` it could not shrink
