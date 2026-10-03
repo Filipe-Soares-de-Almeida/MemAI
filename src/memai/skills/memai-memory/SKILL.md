@@ -221,7 +221,7 @@ which is most memories. A date nobody meant is worse than no date.
 When the session-start hook fires, or when resuming work:
 
 1. **`pulse(domain)`** — the state inherited by a scope, as
-   `{project, latest_checkpoint, pending, read_next, scope}`:
+   `{project, latest_checkpoint, pending, pinned, read_next, scope}`:
    - **`latest_checkpoint`** — by `created_at DESC`, never by similarity,
      returned **in full** with its **relations** attached. It is the only body
      a pulse carries.
@@ -229,9 +229,13 @@ When the session-start hook fires, or when resuming work:
      returns, `[{"type", "count"}, ...]`: `task` (open), `anti_pattern`,
      `handoff` and `note` (active and not contradicted), `diagram` (active), in
      that order, empty ones left out. No list of memories comes with it.
-   - **`read_next`** — one instruction naming what to call next: open tasks
-     first, then `pending(domain, type=…)` for each other category, before
-     acting. Empty when nothing is pending.
+   - **`pinned`** — the pins in scope, `[{"type", "count"}, ...]`, in the same
+     shape as `pending`. A person pinned these as mandatory reading: when it is
+     non-empty `read_next` asks for them first. A pinned memory still counts
+     in its category.
+   - **`read_next`** — one instruction naming what to call next: pinned
+     memories first, then open tasks, then `pending(domain, type=…)` for each
+     other category, before acting. Empty when nothing is pending.
    - **`scope`** — what the scope holds: `paths` (which path(s) the name
      resolved to), `total`, `by_type`, `subdomains` (`own` = filed there,
      `subtree` = with descendants), plus `also` (how much of the scope arrived
@@ -239,7 +243,7 @@ When the session-start hook fires, or when resuming work:
      store that never cross-lists never sees the field. It is the drill-down
      plan: `search(query, domain=…)` or `list_by_domain(domain, type=…,
      limit=…)` on the child that was only counted.
-2. **`pending(domain, type, limit, offset)`** — the read that lists what a
+2. **`pending(domain, type, limit, offset, pinned)`** — the read that lists what a
    pulse only counts. Without `type` it returns
    `{"categories": [{"type", "count"}, ...]}`; with `type` (`task`, `anti_pattern`, `handoff`, `note` or `diagram`) it
    returns `{type, total, items, next_offset}`: one page of **headers** — `uid`,
@@ -247,6 +251,12 @@ When the session-start hook fires, or when resuming work:
    update. A task header adds `progress` (`{done, total}`) and `doing`, the keys
    of its items in progress. Open a header with `get_memory(uid)`;
    `next_offset` is absent on the last page and `limit` is at most 50.
+   Without `type` the response adds `pinned` when a pin is in scope.
+   `pending(type, pinned=true)` lists only the pins of that type (it also
+   accepts `checkpoint` and `reasoning`); open **every** one with
+   `get_memory(uid)` before acting. A global pin is in every scope; a domain
+   pin is in scope for its domain, its cross-listed paths and everything
+   under them. Pins are set by a person in the dashboard; no tool writes them.
    **Work the open tasks first**: `pending(type='task')`, then `get_memory(uid)`
    for each one the session will touch.
 3. **`search(query, domain, type, limit)`** — BM25 over the subject at hand.
