@@ -218,6 +218,12 @@ mark in its app bar — where the release history is read.
 
 `memai-admin --status` says where it is, `memai-admin --stop` stops it.
 
+A memory can be pinned from its record: for every domain, or for its own
+domain only (its subdomains and cross-listed paths included). `pending()` and
+`pulse()` count pinned memories beside the categories, the session brief
+counts the global ones, and an agent lists them with
+`pending(type=..., pinned=true)` and reads every one before acting.
+
 A host starts several MCP servers per session, so the dashboard is started once
 and shared: each server asks `/api/ping` whether one already answers before
 trying to bind, and the one that wins keeps the port. It is detached on purpose,

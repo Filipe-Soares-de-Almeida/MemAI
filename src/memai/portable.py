@@ -51,7 +51,7 @@ def _memory_record(conn, row, usage: dict) -> dict:
     out = {"record": "memory"}
     for col in ("uid", "type", "domain", "session", "tags", "title", "content",
                 "status", "confidence", "superseded_by", "created_at", "updated_at",
-                "review_after", "source_ref"):
+                "review_after", "source_ref", "pin"):
         value = row[col]
         if value:
             out[col] = value
@@ -176,7 +176,7 @@ def to_jsonl(records) -> str:
     return "".join(json.dumps(r, ensure_ascii=False) + "\n" for r in records)
 
 
-_MD_FIELDS = ("created_at", "session", "tags", "status", "confidence",
+_MD_FIELDS = ("created_at", "session", "tags", "status", "confidence", "pin",
               "review_after", "source_ref", "superseded_by")
 # Printing these on every memory would be three lines of "nothing unusual
 # here" per record, in a document whose whole job is to be read and diffed.

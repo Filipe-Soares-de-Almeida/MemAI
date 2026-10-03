@@ -134,6 +134,8 @@ CREATE TABLE IF NOT EXISTS memories (
     content         TEXT NOT NULL,
     status          TEXT NOT NULL DEFAULT 'active',
     confidence      TEXT NOT NULL DEFAULT 'unverified',
+    -- '' not pinned, 'global' every scope, 'domain' its domain and also paths
+    pin             TEXT NOT NULL DEFAULT '',
     superseded_by   TEXT,
     created_at      TEXT NOT NULL,
     updated_at      TEXT NOT NULL
@@ -1517,6 +1519,7 @@ _ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
     ("memories", "title", "TEXT NOT NULL DEFAULT ''"),
     ("memories", "source_ref", "TEXT NOT NULL DEFAULT ''"),
     ("memory_usage", "via_fts", "INTEGER NOT NULL DEFAULT 0"),
+    ("memories", "pin", "TEXT NOT NULL DEFAULT ''"),
 )
 
 
@@ -2032,17 +2035,21 @@ def restore_memory(conn: sqlite3.Connection, record: dict) -> str:
     domain = normalize_domain(record.get("domain", ""))
     links = [normalize_domain(p) for p in parse_domains(record.get("also") or [])]
     links = [p for p in links if p and not in_domain(domain, p)]
+    pin = str(record.get("pin") or "")
+    error = pin_error(pin, domain)
+    if error:
+        raise ValueError(error)
     conn.execute(
         """INSERT INTO memories
            (uid, type, domain, also_domains, session, tags, title, content, status,
-            confidence, superseded_by, created_at, updated_at, review_after, source_ref)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            confidence, superseded_by, created_at, updated_at, review_after, source_ref, pin)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (uid, record["type"], domain, ALSO_SEP.join(links),
          record.get("session", ""), record.get("tags", ""),
          record.get("title", ""), record.get("content", ""),
          record.get("status", "active"), record.get("confidence", "unverified"),
          record.get("superseded_by") or None, ts, record.get("updated_at") or ts,
-         record.get("review_after", ""), record.get("source_ref", "")),
+         record.get("review_after", ""), record.get("source_ref", ""), pin),
     )
     if links:
         conn.executemany(
@@ -2225,6 +2232,33 @@ def set_confidence(conn: sqlite3.Connection, uid: str, confidence: str) -> bool:
         "UPDATE memories SET confidence = ?, updated_at = ? WHERE uid = ?",
         (confidence, now_iso(), uid),
     )
+    return True
+
+
+PIN_VALUES = ("", "global", "domain")
+
+
+def pin_error(pin: str, domain: str) -> str | None:
+    """Why `pin` cannot be stored on a memory filed at `domain`, or None."""
+    if pin not in PIN_VALUES:
+        return f"pin must be one of '', 'global', 'domain'; got {pin!r}"
+    if pin == "domain" and not domain:
+        return "a memory without a domain can only be pinned 'global'"
+    return None
+
+
+def set_pin(conn: sqlite3.Connection, uid: str, pin: str) -> bool:
+    """Pin or unpin a memory. False for an unknown uid; ValueError on a bad pin."""
+    if pin not in PIN_VALUES:
+        raise ValueError(pin_error(pin, ""))
+    row = get_memory(conn, uid)
+    if row is None:
+        return False
+    error = pin_error(pin, row["domain"])
+    if error:
+        raise ValueError(error)
+    conn.execute("UPDATE memories SET pin = ?, updated_at = ? WHERE uid = ?",
+                 (pin, now_iso(), uid))
     return True
 
 

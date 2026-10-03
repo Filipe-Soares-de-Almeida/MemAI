@@ -1,8 +1,9 @@
 """The store as a few hundred words, for a reader that has not asked yet.
 
 session_brief renders what the store holds -- its size, active domains, the
-latest checkpoint, one line counting what is pending per category -- and ends
-with the instruction to call pending() and open the subject with pulse(domain)
+latest checkpoint, one line counting what is pending per category, one counting
+what is pinned -- kept with the call to action, so the budget never drops it --
+and ends with the instruction to call pending() and open the subject with pulse(domain)
 before working, spelling out what the store's own casing policy means for the
 path that instruction asks for. The SessionStart hook emits it (memai.hook);
 the warm_up prompt returns it.
@@ -30,6 +31,8 @@ LABELS = {
     "handoff": ("handoff", "handoffs"),
     "note": ("note", "notes"),
     "diagram": ("flow", "flows"),
+    "checkpoint": ("checkpoint", "checkpoints"),
+    "reasoning": ("reasoning", "reasonings"),
 }
 
 # What the casing policy means for a caller writing a path. Under `lower`
@@ -50,6 +53,9 @@ CASING = {
 WORK_TASKS_FIRST = ("Call pending(type='task') first and work through the open tasks, "
                     "then the other categories, before acting.")
 WORK_EACH = "Call pending(type=...) for each category before acting."
+# The pin line: counts only, the headers come from pending(..., pinned=true).
+PIN_LINE = ("Pinned, read every one before acting: {said} -- "
+            "pending({domain}type=..., pinned=true), then get_memory(uid) each.")
 
 # The tail of every brief. _fit reserves its room before dividing what is
 # left between the sections, so it is never the part that gets trimmed.
@@ -79,15 +85,26 @@ def _snip(text: str, limit: int = SNIPPET) -> str:
     return text if len(text) <= limit else text[: limit - 1] + "..."
 
 
+def _said(found: list[dict]) -> str:
+    return ", ".join(
+        f"{c['count']} {LABELS[c['type']][0 if c['count'] == 1 else 1]}" for c in found)
+
+
 def pending_line(conn, domain: str) -> str:
     """The count line for a scope plus what to call next, or "" when nothing is pending."""
     found = pending.counts(conn, domain)
     if not found:
         return ""
-    said = ", ".join(
-        f"{c['count']} {LABELS[c['type']][0 if c['count'] == 1 else 1]}" for c in found)
     ask = WORK_TASKS_FIRST if found[0]["type"] == db.TASK_TYPE else WORK_EACH
-    return f"Pending in {domain or 'this project'}: {said}. {ask}"
+    return f"Pending in {domain or 'this project'}: {_said(found)}. {ask}"
+
+
+def pin_line(conn, domain: str) -> str:
+    """The pins in scope as one counted sentence, or "" when nothing is pinned."""
+    found = pending.pinned_counts(conn, domain)
+    if not found:
+        return ""
+    return PIN_LINE.format(said=_said(found), domain=f"'{domain}', " if domain else "")
 
 
 def session_brief(conn, *, domain: str = "", budget: int = DEFAULT_BUDGET,
@@ -123,7 +140,8 @@ def session_brief(conn, *, domain: str = "", budget: int = DEFAULT_BUDGET,
     if line:
         parts.append(line)
 
-    return _fit(parts, budget, tail=call_to_action(conn))
+    tail = "\n".join(p for p in (pin_line(conn, domain), call_to_action(conn)) if p)
+    return _fit(parts, budget, tail=tail)
 
 
 def _shares(sizes: list[int], room: int) -> list[int]:

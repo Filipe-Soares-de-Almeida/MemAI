@@ -1014,3 +1014,33 @@ def test_config_refuses_a_task_interval_out_of_range(client, minutes):
     assert client.post("/api/config",
                        json={"task_ask_minutes": minutes}).status_code == 400
     assert client.get("/api/config").json()["task_ask_minutes"] == 30
+
+
+# --------------------------------------------------------------------- pins
+
+def test_pin_endpoint_sets_and_clears_a_pin(client):
+    uid = _create(client, domain="acme/x100")
+    assert client.post(f"/api/memories/{uid}/pin", json={"pin": "domain"}).json() == {
+        "ok": True, "pin": "domain"}
+    assert client.get(f"/api/memories/{uid}").json()["pin"] == "domain"
+    assert client.post(f"/api/memories/{uid}/pin", json={"pin": ""}).json()["pin"] == ""
+
+
+def test_pin_endpoint_refuses_bad_input(client):
+    uid = _create(client, domain="")
+    assert client.post(f"/api/memories/{uid}/pin", json={"pin": "always"}).status_code == 400
+    assert client.post(f"/api/memories/{uid}/pin", json={"pin": "domain"}).status_code == 400
+    assert client.post("/api/memories/0000000000000000/pin",
+                       json={"pin": "global"}).status_code == 400
+
+
+def test_memory_list_filters_by_pin(client):
+    pinned = _create(client, domain="acme/x100", title="a pinned fixture")
+    _create(client, domain="acme/x100", title="a plain fixture")
+    client.post(f"/api/memories/{pinned}/pin", json={"pin": "global"})
+    for value, expected in (("any", [pinned]), ("global", [pinned]), ("domain", [])):
+        items = client.get(f"/api/memories?pin={value}").json()["items"]
+        assert [i["uid"] for i in items] == expected
+    found = client.get("/api/memories?pin=any&q=fixture").json()["items"]
+    assert [i["uid"] for i in found] == [pinned]
+    assert client.get("/api/memories?pin=sometimes").status_code == 400

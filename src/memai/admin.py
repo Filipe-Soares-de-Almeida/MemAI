@@ -548,6 +548,11 @@ def _defect_clauses(qp) -> tuple[list[str], list]:
     return clauses, params
 
 
+# The pin filter: any pin, or one kind.
+_PIN_FILTERS = {"any": "AND pin <> ''", "global": "AND pin = 'global'",
+                "domain": "AND pin = 'domain'"}
+
+
 def list_memories(request, payload) -> dict:
     qp = request.query_params
     q = qp.get("q", "").strip()
@@ -571,6 +576,9 @@ def list_memories(request, payload) -> dict:
     task_state = qp.get("task_state", "")   # "" = any
     if task_state and task_state not in tasks.TASK_STATES:
         raise ValueError(f"task_state must be one of {', '.join(tasks.TASK_STATES)}")
+    pin = qp.get("pin", "")                 # "" = no filter, "any" = any pin
+    if pin and pin not in _PIN_FILTERS:
+        raise ValueError(f"pin must be one of {', '.join(_PIN_FILTERS)}")
 
     with db.connect() as conn:
         scope = _scope_echo(conn, domain)
@@ -588,6 +596,10 @@ def list_memories(request, payload) -> dict:
                 hits = [h for h in hits if h["uid"] in keep]
             if task_state:
                 keep = {r[0] for r in conn.execute(_TASK_STATE_UIDS, (task_state,))}
+                hits = [h for h in hits if h["uid"] in keep]
+            if pin:
+                keep = {r[0] for r in conn.execute(
+                    "SELECT uid FROM memories WHERE 1=1 " + _PIN_FILTERS[pin])}
                 hits = [h for h in hits if h["uid"] in keep]
             # A pasted uid names one row, and nothing in the keyword index
             # matches on it: a uid appears in OTHER bodies as [[uid]], so the
@@ -618,6 +630,8 @@ def list_memories(request, payload) -> dict:
         if task_state:
             where.append(f"AND uid IN ({_TASK_STATE_UIDS})")
             params.append(task_state)
+        if pin:
+            where.append(_PIN_FILTERS[pin])
         where.extend(defects)
         params.extend(defect_params)
         clause = " ".join(where)
@@ -927,6 +941,16 @@ def edit_confidence(request, payload) -> dict:
     if not ok:
         raise ValueError(f"unknown memory: {uid}")
     return {"ok": True}
+
+
+def edit_pin(request, payload) -> dict:
+    uid = request.path_params["uid"]
+    pin = payload.get("pin", "")
+    with db.connect() as conn:
+        ok = db.set_pin(conn, uid, pin)
+    if not ok:
+        raise ValueError(f"unknown memory: {uid}")
+    return {"ok": True, "pin": pin}
 
 
 def edit_status(request, payload) -> dict:
@@ -2786,6 +2810,7 @@ routes = [
     Route("/api/memories/{uid}/content", api(edit_content), methods=["POST"]),
     Route("/api/memories/{uid}/meta", api(edit_meta), methods=["POST"]),
     Route("/api/memories/{uid}/confidence", api(edit_confidence), methods=["POST"]),
+    Route("/api/memories/{uid}/pin", api(edit_pin), methods=["POST"]),
     Route("/api/memories/{uid}/status", api(edit_status), methods=["POST"]),
     Route("/api/memories/{uid}/purge", api(purge), methods=["POST"]),
     Route("/api/memories/purge", api(purge_many), methods=["POST"]),
