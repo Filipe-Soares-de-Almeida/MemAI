@@ -271,7 +271,7 @@ def test_the_note_names_both_versions_and_refuses_to_be_run(store):
     assert NEWER in note and "0.1.1" in note
     # The template wraps, so the sentence is read with its line breaks folded.
     assert "do NOT run them yourself" in " ".join(note.split())
-    assert "git -C" in note and "pull --ff-only" in note
+    assert update.commands()[0] in note
     assert "MEMAI_UPDATE_CHECK=0" in note
 
 
@@ -325,7 +325,7 @@ def test_the_note_carries_the_digest_and_the_page_it_came_from(store):
 def test_a_release_with_no_notes_leaves_the_digest_out(store):
     note = update.notice({"latest": NEWER, "url": PAGE, "notes": ""}, local="0.1.1")
     assert "What they change" not in note
-    assert NEWER in note and "pull --ff-only" in note
+    assert NEWER in note and update.commands()[0] in note
 
 
 # --------------------------------------------------------- more than one release
@@ -403,12 +403,12 @@ def test_an_install_with_no_checkout_is_pointed_at_the_release_page(store, monke
 
 
 def test_the_commands_pull_before_they_install(tmp_path):
+    if sys.platform == "win32":
+        assert update.commands(tmp_path) == [f'"{tmp_path / "update.bat"}"']
+        return
     first, second = update.commands(tmp_path)
     assert first.startswith(f'git -C "{tmp_path}"') and first.endswith("pull --ff-only")
-    if sys.platform == "win32":
-        assert "install.bat" in second
-    else:
-        assert "pip install -e" in second and "npm run build" in second
+    assert "pip install -e" in second and "npm run build" in second
 
 
 def test_the_banner_is_one_line_for_the_person(store):

@@ -23,7 +23,7 @@ from pathlib import Path
 import pytest
 from starlette.testclient import TestClient
 
-from memai import admin, autostart
+from memai import admin, autostart, update
 
 
 @pytest.fixture(autouse=True)
@@ -217,6 +217,13 @@ def test_ping_identifies_itself(tmp_path, monkeypatch):
     assert body["app"] == "memai"
     assert isinstance(body["pid"], int)
     assert body["version"]
+
+
+def test_ping_names_the_checkout_it_runs_from(tmp_path, monkeypatch):
+    monkeypatch.setenv("MEMAI_HOME", str(tmp_path))
+    with TestClient(admin.app) as client:
+        body = client.get("/api/ping").json()
+    assert body["root"] == str(update.checkout_root() or "")
 
 
 def test_ping_returns_none_for_a_port_with_nothing_on_it(dead_port):
