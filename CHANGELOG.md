@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.4.0](https://github.com/Filipe-Soares-de-Almeida/MemAI/compare/v0.3.0...v0.4.0) (2026-10-03)
+
+
+### ⚠ BREAKING CHANGES
+
+* **tasks:** pulse() no longer returns handoffs, anti_patterns, recent_notes or diagrams; it returns pending counts and read_next.
+
+### Features
+
+* pin memories so every session in their scope reads them first ([#57](https://github.com/Filipe-Soares-de-Almeida/MemAI/issues/57)) ([6937aa5](https://github.com/Filipe-Soares-de-Almeida/MemAI/commit/6937aa5bbf5167f0ac586ee9f72af7c026620ef9))
+* **tasks:** add task checklists and replace handoff and pulse lists with pending() ([#55](https://github.com/Filipe-Soares-de-Almeida/MemAI/issues/55)) ([0e4a2b9](https://github.com/Filipe-Soares-de-Almeida/MemAI/commit/0e4a2b9d08ddc2d61176cb09867d8cc4b172ab6d))
+
 ## [0.3.0](https://github.com/Filipe-Soares-de-Almeida/MemAI/compare/v0.2.1...v0.3.0) (2026-10-01)
 
 
