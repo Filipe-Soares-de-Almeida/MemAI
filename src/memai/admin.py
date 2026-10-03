@@ -51,7 +51,7 @@ from starlette.responses import FileResponse, JSONResponse, Response
 from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 
-from memai import __version__, autostart, changelog, db, portable, sections, tasks, update
+from memai import __version__, autostart, changelog, db, portable, sections, tasks, update, webui_build
 
 # Windows' registry-derived mimetypes map serves .js as text/plain, which
 # browsers refuse to execute as an ES module. Force the correct types.
@@ -3047,6 +3047,9 @@ def main() -> None:
         print(f"  WARNING: {args.host} is not loopback. This API has NO authentication:"
               f"\n  anyone who can reach {args.host}:{args.port} can read, edit and"
               f"\n  permanently delete every memory in the store.")
+
+    # After the bind, so only the process that won the port runs npm.
+    webui_build.ensure_built()
 
     _write_registry(args.host, args.port)
     try:

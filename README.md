@@ -218,6 +218,10 @@ mark in its app bar — where the release history is read.
 
 `memai-admin --status` says where it is, `memai-admin --stop` stops it.
 
+On start it rebuilds the dashboard when the sources in a checkout are newer than
+the build, running `npm ci` too when the lockfile changed; it serves the build it
+has when npm is missing or fails. `MEMAI_ADMIN_BUILD=0` turns that off.
+
 A memory can be pinned from its record: for every domain, or for its own
 domain only (its subdomains and cross-listed paths included). `pending()` and
 `pulse()` count pinned memories beside the categories, the session brief
