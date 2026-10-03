@@ -244,12 +244,24 @@ const ICONS = {
     viewBox: '0 0 16 16',
     body: `<path d="M2 4.2a1 1 0 011-1h3.2l1.3 1.5H13a1 1 0 011 1v6.1a1 1 0 01-1 1H3a1 1 0 01-1-1z"/>`,
   },
-  /* held back from a sweep: a diamond, filled when it is pinned and an
-     outline when it is not, so the two states differ in weight and not
-     only in colour */
+  /* a pushpin, filled when pinned and an outline when not: a backup held back
+     from a sweep, or a memory pinned for every domain */
   'pin': {
     viewBox: '0 0 16 16',
-    body: `<path d="M8 2.6l5.4 5.4L8 13.4 2.6 8z"/>`,
+    body: `<path d="M6.3 2.6h3.4v3.5l1.9 3H4.4l1.9-3z"/>
+           <path d="M5.2 2.6h5.6M8 9.1v4.5"/>`,
+  },
+  /* a memory pinned to its own domain: the same pushpin, stuck into a base
+     line -- the one place it holds to */
+  'pin-domain': {
+    viewBox: '0 0 16 16',
+    body: `<path d="M6.3 1.8h3.4v3.3l1.9 2.9H4.4l1.9-2.9z"/>
+           <path d="M5.2 1.8h5.6M8 8v4.4M4.2 12.6h7.6"/>`,
+  },
+  /* the filters a list keeps folded away: a funnel */
+  'filter': {
+    viewBox: '0 0 16 16',
+    body: `<path d="M2.6 3.4h10.8L9.2 8.4v3.9l-2.4 1.2V8.4z"/>`,
   },
   /* a zip of backups: the same box the folder is, closed down the middle */
   'archive': {

@@ -863,14 +863,16 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
    `confirmed` stays quiet because a good default should never shout, and
    `unverified` stays neutral because it is a question, not a problem.
 
-   The padding is on the LABELLED pill only: the compact one is already a
-   fixed round box, and adding to it would move the row it sits in. */
-.conf-pill.c-contradicted {
-  color: var(--bad-ink);
-  background: var(--bad-wash);
-  border-radius: var(--r-pill);
+   The fill belongs to the ring: the compact mark is a round box, and a
+   labelled pill washes only its icon, as a shadow that takes no room. */
+.conf-pill.c-contradicted.compact { background: var(--bad-wash); border-radius: 50%; }
+/* In a picker's face the pill is the value: the face's text size and colour,
+   centred on the control, and unclipped so the ring's wash shows whole. */
+.pick-value:has(> .conf-pill) { display: flex; align-items: center; overflow: visible; }
+.pick-value > .conf-pill { font-size: inherit; color: inherit; }
+.conf-pill.c-contradicted:not(.compact) .ico {
+  border-radius: 50%; background: var(--bad-wash); box-shadow: 0 0 0 3px var(--bad-wash);
 }
-.conf-pill.c-contradicted:not(.compact) { padding: var(--sp-0) var(--sp-2); }
 
 /* A seal, so it never shrinks and never wraps -- and never grows either:
    as a flex child with the default `flex: 0 1 auto` it could not shrink
@@ -2051,7 +2053,7 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
    because it teaches something the pointer does not need. */
 .mem-head-keys { color: var(--ink-3); font-family: var(--font-m); }
 .mem-row {
-  display: grid; grid-template-columns: var(--tap) 150px minmax(0, 1fr) auto;
+  display: grid; grid-template-columns: var(--tap) 170px minmax(0, 1fr) auto;
   gap: var(--sp-3); align-items: center;
   /* --sp-2 vertical: dense enough that a page of fifty is a page and
      not six screens */
@@ -2082,6 +2084,42 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
   min-width: 0; overflow: hidden;
 }
 .mem-main { min-width: 0; }
+/* The pin leads the type column in a slot every row keeps, so the
+   confidence rings stay in one column whether a row is pinned or not. */
+.pin-slot { display: inline-flex; width: 12px; flex: none; }
+
+/* The pin, wherever a memory carries one: accent, because a pin is a call to
+   read, and a fixed box, so the two shapes never shift what follows them. */
+.pin-mark { display: inline-flex; flex: none; color: var(--accent); --ico: 12px; }
+.pin-mark .ico { fill: none; }
+.pin-mark.pin-global .ico { fill: currentColor; }
+.pin-pick { display: inline-flex; align-items: center; gap: var(--sp-2); }
+
+/* The folded filter row: one toolbar line until it is asked for, and a
+   count on the button of how many of its filters are in use. */
+.mem-more { color: var(--ink-2); --ico: 13px; }
+.mem-more[aria-expanded="true"] { background: var(--accent-dim); color: var(--accent); }
+.mem-more-n {
+  min-width: 18px; height: 18px; padding: 0 var(--sp-1);
+  border-radius: var(--r-pill); background: var(--accent); color: var(--accent-ink);
+  font-size: var(--fs-label); display: inline-flex; align-items: center; justify-content: center;
+}
+.list-toolbar:has(+ .mem-more-row:not([hidden])) { margin-bottom: var(--sp-2); }
+
+/* A labelled toolbar: each filter under its name, aligned on the controls,
+   and an unlabelled control (a chip, a button) centred on that same line. */
+.tb-labeled { align-items: flex-end; }
+/* below --fs-label on purpose: it only names the control under it, which is
+   what carries the reading */
+.tb-field > .mg-label { font-size: 10px; letter-spacing: .06em; }
+.tb-field { display: flex; flex-direction: column; gap: var(--sp-1); min-width: 0; }
+.tb-field.tb-grow { flex: 1 1 160px; min-width: 160px; }
+.tb-field.tb-grow input[type="search"] { flex: none; width: 100%; min-width: 0; }
+/* one width per picker whatever it holds, so picking a value never moves the
+   line; a longer value ends in an ellipsis and reads whole in its tooltip */
+.tb-field .pick { width: 170px; min-width: 0; max-width: none; }
+.mem-more-row .tb-field .pick { width: 190px; }
+.tb-bare { display: flex; align-items: center; gap: var(--sp-2); height: var(--ctl-h); flex-wrap: wrap; }
 /* The row's primary control: one line of the memory, clipped. It leads the
    row by brightness -- --ink against the --ink-3 around it -- rather than by
    size, which at --fs-body made it dominate instead. The leading and not a
@@ -2535,6 +2573,14 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
 .rs-status { margin-left: auto; font-size: var(--fs-label); color: var(--ink-3); }
 .rs-conf { width: 100%; }
 .rs-conf button { flex: 1; justify-content: center; }
+
+/* The pin setter: the confidence group's shape, under its own label. A
+   choice the memory cannot take (a domain pin without a domain) is disabled. */
+.rs-pin { width: 100%; }
+.rs-pin button { flex: 1; justify-content: center; }
+.rs-pin button:disabled { color: var(--ink-3); opacity: .5; cursor: not-allowed; }
+.rs-pin button:disabled:hover { color: var(--ink-3); }
+.rs-pin .pin-none { color: currentColor; }
 
 .rs-body {
   flex: 1; min-height: 0; overflow-y: auto;
@@ -3421,8 +3467,8 @@ textarea.tk-box {
    own longest label is a ragged edge -- and the width is set by the longest
    TRANSLATED placeholder plus the chevron's reserved 32px, not by the
    shortest. */
-.graph-bar > input, .graph-bar > .pick { font-size: var(--fs-sm); }
-.graph-bar > .pick { flex: none; width: 180px; }
+.graph-bar input, .graph-bar .pick { font-size: var(--fs-sm); }
+.graph-bar .pick { flex: none; width: 180px; }
 
 /* The arrangement, and the only control left standing on the canvas: it says
    what the drawing IS rather than which memories are in it. Wide enough for
@@ -3440,7 +3486,7 @@ textarea.tk-box {
    the match count can sit at the far end without shoving anything when it
    appears. The compound selector is what it takes to reach past
    `.list-toolbar input[type="search"]`, which sets the rest of its flex. */
-.graph-bar .graph-find { max-width: 340px; }
+.graph-bar .graph-find-field { max-width: 340px; }
 /* A reserved slot at the far end of the toolbar, held whether it has text in
    it or not. Sizing it to its content and pushing it right was not enough:
    the leftover it needed existed in English and not in pt-BR, where the
@@ -3450,6 +3496,9 @@ textarea.tk-box {
   margin-left: auto; flex: none;
   width: 96px; text-align: right;
   font-size: var(--fs-label); color: var(--ink-2); white-space: nowrap;
+}
+.tb-labeled .graph-find-count {
+  height: var(--ctl-h); display: flex; align-items: center; justify-content: flex-end;
 }
 
 .graph-legend {
@@ -5395,7 +5444,7 @@ input.pick-q:focus { box-shadow: inset 0 -2px 0 var(--accent); }
   .graph-bar { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; }
   .graph-bar::-webkit-scrollbar { display: none; }
   .graph-bar > * { flex: none; }
-  .graph-bar .graph-find { width: 130px; }
+  .graph-bar .graph-find-field { width: 130px; flex: none; min-width: 0; }
   /* The legend floats over the drawing, and on a phone the drawing is the
      scarce thing: the counts stay, the sentence about the arrangement goes. */
   .graph-legend .legend-note { display: none; }

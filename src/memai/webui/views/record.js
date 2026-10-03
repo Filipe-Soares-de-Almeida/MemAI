@@ -19,7 +19,7 @@ import { icon } from '../core/icons.js';
 import { toast, failed, openModal, closeModal, confirmModal, promptModal,
          openDropMenu, copyCode, copyUid, modalOpen } from '../core/ui.js';
 import { typeTag, uidChip, statusTag, wireCopyChips,
-         CONF, REL_SUGGEST, relLabel, relTypeTitle, peerName, typeItems,
+         CONF, PIN, REL_SUGGEST, relLabel, relTypeTitle, peerName, typeItems,
          sectionLabel, sectionLabelHTML, sectionHue,
          cachedDomains, invalidateDomains, domainDatalist } from '../core/shared.js';
 import { pickerFor, pickerValue, wirePicker, fixedItems } from '../core/pick.js';
@@ -433,6 +433,25 @@ function refsHTML(m) {
 
 /* ─── the side ────────────────────────────────────────────────────────── */
 
+
+/* The three pin choices, each with the mark the list shows for it. A domain
+   pin needs a domain, so on a memory without one that choice is refused. */
+function pinChoices(m) {
+  const pin = m.pin || '';
+  const choices = [
+    { value: '', label: t('dr.pin.none'), mark: `<span class="pin-mark pin-none">${icon('pin')}</span>`,
+      title: t('dr.pin.noneWhy') },
+    { value: 'global', label: t('dr.pin.global'), mark: icon(PIN.global.icon),
+      title: t('dr.pin.globalWhy') },
+    { value: 'domain', label: t('dr.pin.domain'), mark: icon(PIN.domain.icon),
+      title: m.domain ? t('dr.pin.domainWhy', { domain: m.domain }) : t('dr.pin.noDomain'),
+      off: !m.domain },
+  ];
+  return choices.map(c => `<button type="button" data-pin="${c.value}"
+      aria-pressed="${pin === c.value}" title="${esc(c.title)}"${c.off ? ' disabled' : ''}>${
+      c.value ? `<span class="pin-mark pin-${c.value}">${c.mark}</span>` : c.mark}${esc(c.label)}</button>`).join('');
+}
+
 function sideHTML(m, uid) {
   const chip = (value, kind, label) => `<span class="rs-chip">${esc(value)}
     <button type="button" class="rs-chip-x" data-drop="${kind}" data-value="${esc(value)}"
@@ -475,6 +494,13 @@ function sideHTML(m, uid) {
     </div>
 
     <div class="rs-body">
+      <div class="rs-field">
+        <div class="rs-field-head"><span class="mg-label" id="dPinLabel">${t('dr.pin.label')}</span></div>
+        <div class="seg rs-pin" id="dPin" role="group" aria-labelledby="dPinLabel">
+          ${pinChoices(m)}
+        </div>
+      </div>
+
       <div class="rs-field">
         <div class="rs-field-head"><span class="mg-label">${t('dr.meta.domain')}</span>
           <button type="button" class="rs-more" id="dMeta">${t('dr.meta.change')}</button></div>
@@ -766,6 +792,16 @@ function wire(view, m, uid, fields, isDiagram) {
     try {
       await api(`/api/memories/${seg(uid)}/confidence`, { body: { confidence: b.dataset.c } });
       toast(t('dr.confSet', { label: CONF[b.dataset.c].label }), 'ok');
+      save();
+    } catch (err) { failed('err.save', err); }
+  }));
+
+  /* ── pin ── */
+  q('#dPin').querySelectorAll('button').forEach(b => b.addEventListener('click', async () => {
+    if (b.disabled || b.dataset.pin === (m.pin || '')) return;
+    try {
+      await api(`/api/memories/${seg(uid)}/pin`, { body: { pin: b.dataset.pin } });
+      toast(t('dr.pinSet', { label: b.textContent.trim() }), 'ok');
       save();
     } catch (err) { failed('err.save', err); }
   }));
