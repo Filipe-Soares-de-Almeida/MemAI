@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.5.0](https://github.com/Filipe-Soares-de-Almeida/MemAI/compare/v0.4.0...v0.5.0) (2026-10-03)
+
+
+### Features
+
+* rebuild the dashboard on start and guard install and update against a running MemAI ([#58](https://github.com/Filipe-Soares-de-Almeida/MemAI/issues/58)) ([29aa4a5](https://github.com/Filipe-Soares-de-Almeida/MemAI/commit/29aa4a51e7b7722e37a95eeb9d88cd05561882be))
+* **webui:** highlight breaking changes in the changelog and put Maintenance last in the nav ([#60](https://github.com/Filipe-Soares-de-Almeida/MemAI/issues/60)) ([fb4f246](https://github.com/Filipe-Soares-de-Almeida/MemAI/commit/fb4f24602019489806122dcbe5fef484734ad59e))
+
 ## [0.4.0](https://github.com/Filipe-Soares-de-Almeida/MemAI/compare/v0.3.0...v0.4.0) (2026-10-03)
 
 
