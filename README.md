@@ -173,10 +173,13 @@ there, give the absolute path instead:
 loaded under Settings → Developer → local MCP servers. A host reads its config
 once, at startup, so restart it after an edit.
 
-On Windows, `install.bat` does the venv, install and dashboard-build steps, and
-`run-admin.bat` starts the dashboard (both activate `.venv` themselves; extra
-arguments pass through, e.g. `run-admin.bat --port 8890`). `stop-mcp.bat` and
-`stop-admin.bat` stop what is running.
+On Windows, `install.bat` does the venv, install and dashboard-build steps,
+`update.bat` pulls the checkout and then runs `install.bat`, and `run-admin.bat`
+starts the dashboard (it activates `.venv` itself; extra arguments pass
+through, e.g. `run-admin.bat --port 8890`). `stop-mcp.bat` and `stop-admin.bat`
+stop what is running. `install.bat` and `update.bat` refuse to start while an
+MCP server or the dashboard still runs from the checkout, list what is open,
+and offer to close it.
 
 > [!IMPORTANT]
 > Windows locks an .exe while a process is running it, so a `pip install` cannot
@@ -191,7 +194,7 @@ that confirm the result.
 (a day unless chosen otherwise), which releases are published and caches them —
 tag, page and notes, one record per release — in `MEMAI_HOME/update.json`. A session that starts behind is told which version it
 runs, how many releases came after it, what each of them changed (their notes,
-flattened to a few plain lines) and the two commands that update this checkout
+flattened to a few plain lines) and the commands that update this checkout
 — for the person to run once every session and the dashboard are closed, for
 the reason above. The dashboard shows the same thing at leisure: the version
 mark in its app bar carries the count and opens **Releases**, which renders the
@@ -217,6 +220,10 @@ curated by a person, where the diagrams are arranged, and — behind the version
 mark in its app bar — where the release history is read.
 
 `memai-admin --status` says where it is, `memai-admin --stop` stops it.
+
+On start it rebuilds the dashboard when the sources in a checkout are newer than
+the build, running `npm ci` too when the lockfile changed; it serves the build it
+has when npm is missing or fails. `MEMAI_ADMIN_BUILD=0` turns that off.
 
 A memory can be pinned from its record: for every domain, or for its own
 domain only (its subdomains and cross-listed paths included). `pending()` and

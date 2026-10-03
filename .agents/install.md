@@ -57,6 +57,13 @@ npm run build
 `npm run build` writes `src/memai/webui/dist/`, which is what the dashboard
 serves. Without it every page answers 503 naming the command to run.
 
+`memai-admin` checks that build each time it starts, after it has the port:
+when a file under `src/memai/webui/`, `package.json`, `package-lock.json` or
+`vite.config.js` is newer than `dist/index.html`, it runs `npm run build`, and
+`npm ci` first when the lockfile is newer than `node_modules`. Without npm on
+the PATH, or when npm fails, it logs one line and serves the build it has.
+`MEMAI_ADMIN_BUILD=0` turns the check off.
+
 To iterate on the dashboard, `npm run dev` serves it with hot reload and proxies
 `/api` and `/fonts.css` to a `memai-admin` on `MEMAI_ADMIN_PORT` (8888 by
 default), which keeps the browser same-origin with the API.
@@ -111,8 +118,9 @@ PATH, not the shell's.
 **Every environment variable MemAI reads goes in the `env` block of that
 entry.** A server the host launches sees that environment and no other — not
 the shell's, not the user's. The variables are `MEMAI_HOME`,
-`MEMAI_ADMIN_AUTOSTART`, `MEMAI_ADMIN_HOST`, `MEMAI_ADMIN_PORT` and
-`MEMAI_TOOLS`; all have defaults, so set only what the user wants to differ.
+`MEMAI_ADMIN_AUTOSTART`, `MEMAI_ADMIN_BUILD`, `MEMAI_ADMIN_HOST`,
+`MEMAI_ADMIN_PORT` and `MEMAI_TOOLS`; all have defaults, so set only what the
+user wants to differ.
 
 `MEMAI_UPDATE_CHECK` is the one variable that does not belong in that block: it
 gates the release check, which a hook process or the dashboard makes and the
@@ -191,10 +199,17 @@ entry under `[project.scripts]`, or a different Python under the venv. This is
 what `pip install` is for, and the rule at the top of this file applies to it:
 
 1. `stop-mcp.bat` and `stop-admin.bat`; close the hosts
-2. `git pull`
-3. `install.bat` (or the pip line for the platform)
-4. `memai-hook install --check`, and reinstall what it reports as outdated
-5. reopen the hosts
+2. `update.bat`, which pulls and runs `install.bat` (elsewhere: `git pull`,
+   then the pip line for the platform)
+3. `memai-hook install --check`, and reinstall what it reports as outdated
+4. reopen the hosts
+
+`install.bat` and `update.bat` run `tools/install-guard.py` before they touch
+`.venv`. It refuses while a `memai-mcp.exe` runs from this checkout's `.venv`,
+or while a MemAI dashboard serving this checkout answers on `MEMAI_ADMIN_PORT`
+or on the port in `MEMAI_HOME/admin.json`; a server or dashboard of another
+checkout does not count. From a console it lists what is open and offers to
+end those processes.
 
 ## 8. Cutting a release
 
