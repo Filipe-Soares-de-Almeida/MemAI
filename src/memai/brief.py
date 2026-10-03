@@ -61,14 +61,17 @@ PIN_LINE = ("Pinned, read every one before acting: {said} -- "
 # left between the sections, so it is never the part that gets trimmed.
 # {casing} is filled from the store's active policy, never assumed.
 CALL_TO_ACTION = (
-    "Before the first tool call of this session, call pending() for what is "
-    "still open and pulse(domain) for the subject the prompt names -- what "
-    "was decided, what was already tried, where the last session stopped. A "
+    "REQUIRED FIRST STEP, whatever the prompt asks -- a question, a greeting, a "
+    "one-line fix, a git command: before any other tool, call pulse(domain) for "
+    "the subject the prompt names and pending() for what is still open, and "
+    "read what they list -- what was decided, what was already tried, where the "
+    "last session stopped. No task is too small to skip this. Until one of them "
+    "is called, the memai guard refuses every other tool in this session; "
+    "ToolSearch and the memai tools go through, so if they are not loaded yet "
+    "-- an MCP connection comes up asynchronously -- load them first. A "
     "domain is a path, outermost scope first ('acme/x100/p200'). {casing} If the path is not obvious: list_domains() "
     "for the tree, recall(query) or search(query) to find a subject by name, "
-    "get_memory(uid) for one record in full. If the memai tools are not loaded "
-    "yet -- an MCP connection comes up asynchronously -- load them first, then "
-    "call it. Write as you go: note() a durable fact, anti_pattern() a pitfall, "
+    "get_memory(uid) for one record in full. Write as you go: note() a durable fact, anti_pattern() a pitfall, "
     "checkpoint() before a pause, set_confidence(uid, 'confirmed'|'contradicted') "
     "once evidence settles a claim you could not check when you wrote it."
 )

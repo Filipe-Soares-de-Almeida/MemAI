@@ -161,6 +161,25 @@ def began(session_id: str) -> dict:
     return _write(session_id, {"started_at": lite.now_iso()})
 
 
+def briefed(session_id: str) -> dict:
+    """Record that the SessionStart hook handed `session_id` a brief.
+
+    Only a briefed session is held until its warm-up: one that was told
+    nothing has no instruction it could be failing to follow.
+    """
+    return _write(session_id, {"briefed_at": lite.now_iso()})
+
+
+def warm(session_id: str, tool: str) -> dict:
+    """Record that `session_id` read its memory with `tool`, releasing the hold."""
+    return _write(session_id, {"warmed_at": lite.now_iso(), "warmed_by": tool})
+
+
+def refused(session_id: str, count: int) -> dict:
+    """Record how many calls the warm-up hold has refused in `session_id`."""
+    return _write(session_id, {"gate_refusals": count})
+
+
 def loaded(session_id: str, agent: Path) -> bool:
     """Whether `session_id`'s host had `agent` when it read its definitions.
 
