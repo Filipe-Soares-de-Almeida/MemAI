@@ -57,11 +57,11 @@ diagram() a routine start to end. One memory holds ONE fact: when a body
 grows into several subjects, write them as separate memories and
 link_memories() them to each other. A claim you could not check says so in
 its own body; set_confidence(uid, 'confirmed'|'contradicted') closes it
-once the evidence turns up. pending() says which memories wait to be read
+once the evidence turns up. must_read() says which memories wait to be read
 in a scope -- open tasks first (task() files one), then pitfalls, handoffs,
 notes and flows; work an open task with task_item() and it closes itself
-once every item is done or dropped. `pinned` in pending() counts memories a
-person marked as mandatory reading: list them with pending(type=...,
+once every item is done or dropped. `pinned` in must_read() counts memories a
+person marked as mandatory reading: list them with must_read(type=...,
 pinned=true) and open every one before acting.
 
 A domain is a path ('acme/x100/p200') and every read covers its
@@ -402,7 +402,7 @@ def note(title: str, content: str, domain: str = "", also: str = "", tags: str =
     """Save a general long-term memory (fact, decision, finding). Stored as type='note'.
 
     Timeless knowledge -- retrieved by relevance, not recency. Bring it
-    back with recall() (or search(type='note')); pending(type='note') lists
+    back with recall() (or search(type='note')); must_read(type='note') lists
     the most recent ones as headers.
 
     title: one line naming what this memory is about, in the words someone
@@ -518,7 +518,7 @@ def anti_pattern(
     """Record a mistake/temptation to avoid repeating, and the correct approach.
 
     Stored as type='anti_pattern'; pulse() counts the open ones for a domain
-    and pending(type='anti_pattern') lists them.
+    and must_read(type='anti_pattern') lists them.
     `also` cross-lists it into further domain paths, `review_after` dates
     when to recheck it and `source_ref` says what it came from -- see note().
 
@@ -615,7 +615,7 @@ def task(title: str, goal: str, items: str, domain: str = "", also: str = "",
 
     Stored as type='task'. Work it with task_item(), grow it with task_add()
     and discuss it with task_comment(); it archives itself once every item is
-    done or dropped, and pending() lists the open ones.
+    done or dropped, and must_read() lists the open ones.
 
     title: one line naming what this task delivers, in the words someone
     would look for it by. At most 120 characters.
@@ -1086,7 +1086,7 @@ def recall(query: str, domain: str = "", limit: int = 10) -> dict:
     The dedicated verb for "bring back what I noted": a BM25 search scoped
     to type='note', ranked by relevance -- which is what you want for
     timeless facts/rules/decisions. This (or search(type='note')) is how
-    notes come back by relevance; pending(type='note') lists the newest.
+    notes come back by relevance; must_read(type='note') lists the newest.
 
     Returns {"results": [...], "est_tokens": N}. Content is
     snippet-truncated -- call get_memory(uid) for the full record; a
@@ -1352,8 +1352,8 @@ def set_domain_case(mode: str) -> dict:
 
 
 @tool("core")
-def pending(domain: str = "", type: str = "", limit: int = 10, offset: int = 0,
-            pinned: bool = False) -> dict:
+def must_read(domain: str = "", type: str = "", limit: int = 10, offset: int = 0,
+              pinned: bool = False) -> dict:
     """What is still open in a scope: counts per category, or one category's headers.
 
     Without type: {"categories": [{"type", "count"}, ...]} for task,
@@ -1400,32 +1400,40 @@ def pending(domain: str = "", type: str = "", limit: int = 10, offset: int = 0,
     return result
 
 
-READ_NEXT_TASKS = ("Open tasks first: pending({domain}type='task'), then get_memory(uid) "
-                   "for each task you will touch. ")
-READ_NEXT_PINNED = ("Pinned memories are mandatory reading: for each type in `pinned`, "
-                    "pending({domain}type=<t>, pinned=true), then get_memory(uid) on every "
-                    "one, skipping none. ")
-READ_NEXT_OTHERS = ("Then pending({domain}type=<t>) for each other category listed in "
-                    "`pending`, before acting.")
+READ_NEXT_PINNED = ("Read every pinned memory: for each type in `pinned`, call "
+                    "must_read({domain}type=<t>, pinned=true), then get_memory(uid) on each "
+                    "one. Skip none.")
+READ_NEXT_TASKS = ("Work the open tasks: call must_read({domain}type='task'), then "
+                   "get_memory(uid) on each task you will touch.")
+READ_NEXT_OTHERS = ("Scan the rest: for each {other}type in `must_read`, call "
+                    "must_read({domain}type=<t>) and read the titles it lists.")
 
 
 def _read_next(domain: str, categories: list[dict], pinned: list[dict]) -> str:
-    """The reading order for what is pending and pinned, or "" when nothing is."""
-    if not categories and not pinned:
+    """The reading order for what is pending and pinned, or "" when nothing is.
+
+    One step reads as a single sentence; several are numbered in the order to run them.
+    """
+    has_tasks = bool(categories) and categories[0]["type"] == TYPE_TASK
+    steps = [READ_NEXT_PINNED] if pinned else []
+    steps += [READ_NEXT_TASKS] if has_tasks else []
+    if len(categories) > has_tasks:
+        steps.append(READ_NEXT_OTHERS)
+    if not steps:
         return ""
     arg = f"'{domain}', " if domain else ""
-    text = READ_NEXT_PINNED if pinned else ""
-    if categories:
-        text += READ_NEXT_TASKS if categories[0]["type"] == TYPE_TASK else ""
-        text += READ_NEXT_OTHERS
-    return text.format(domain=arg).strip()
+    steps = [s.format(domain=arg, other="other " if has_tasks else "") for s in steps]
+    if len(steps) == 1:
+        return f"Before acting, {steps[0][0].lower()}{steps[0][1:]}"
+    return "Before acting, do these in order: " + " ".join(
+        f"{n}. {s}" for n, s in enumerate(steps, 1))
 
 
 @tool("core")
 def pulse(domain: str = "") -> dict:
     """Session warm-up: the latest checkpoint, what is pending, and what to read next.
 
-    Returns {project, latest_checkpoint, pending, pinned, read_next, scope}.
+    Returns {project, latest_checkpoint, must_read, pinned, read_next, scope}.
 
     latest_checkpoint is picked by created_at DESC, never by similarity --
     a similarity-ranked top-1 can return a stale checkpoint over a
@@ -1435,15 +1443,16 @@ def pulse(domain: str = "") -> dict:
     get_relations call, and carries `est_tokens`, what this response already
     spent on it.
 
-    `pending` is the `categories` list pending(domain) returns without a
+    `must_read` is the `categories` list must_read(domain) returns without a
     type: a count per category (task, anti_pattern, handoff, note, diagram),
     leaving out the empty ones. `read_next` is the instruction to follow with
-    it: open tasks first, then pending(domain, type=...) for each other
-    category, before acting. It is "" when nothing is pending. A pulse lists
-    no memories besides the checkpoint; pending(domain, type=...) lists
+    it, before acting: pinned memories, then open tasks, then
+    must_read(domain, type=...) for each other category, numbered when there
+    is more than one step. It is "" when nothing is pending. A pulse lists
+    no memories besides the checkpoint; must_read(domain, type=...) lists
     headers and get_memory(uid) opens one.
 
-    `pinned` counts the pins in scope the same way (see pending()); when it
+    `pinned` counts the pins in scope the same way (see must_read()); when it
     is non-empty `read_next` asks for them before anything else.
 
     domain warms up a path and everything under it, so pulse('acme/x100')
@@ -1488,7 +1497,7 @@ def pulse(domain: str = "") -> dict:
     return {
         "project": db.active_project(),
         "latest_checkpoint": checkpoint_dict,
-        "pending": categories,
+        "must_read": categories,
         "pinned": pins,
         "read_next": _read_next(domain, categories, pins),
         "scope": {
@@ -2186,7 +2195,7 @@ _TOOLS = {
     "get_domain_case": get_domain_case,
     "set_domain_case": set_domain_case,
     "pulse": pulse,
-    "pending": pending,
+    "must_read": must_read,
     "get_memory": get_memory,
     "edit_memory": edit_memory,
     "link_memories": link_memories,

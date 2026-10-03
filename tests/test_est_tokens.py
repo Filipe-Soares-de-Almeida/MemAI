@@ -130,10 +130,10 @@ def test_a_pulse_prices_the_checkpoint_it_hands_over(store):
 
     p = server.pulse(domain="acme/x100")
     assert p["latest_checkpoint"]["est_tokens"] > 0
-    assert p["pending"] == [{"type": "anti_pattern", "count": 1},
+    assert p["must_read"] == [{"type": "anti_pattern", "count": 1},
                             {"type": "handoff", "count": 1},
                             {"type": "note", "count": 1}]
-    headers = server.pending(domain="acme/x100", type="handoff")["items"]
+    headers = server.must_read(domain="acme/x100", type="handoff")["items"]
     assert headers[0]["est_tokens"] == _full_estimate(RETRY)
 
 

@@ -45,9 +45,9 @@ sub-skill. Read each source once; nothing below is read twice.
 
 1. **`pulse(domain)`** — the state a scope inherits: the latest checkpoint in
    full, plus:
-   - **`pending`** — a count per category (`task`, `anti_pattern`, `handoff`,
+   - **`must_read`** — a count per category (`task`, `anti_pattern`, `handoff`,
      `note`, `diagram`) and **`read_next`**, which says what to open. Nothing
-     is listed: `pending(domain, type=…)` returns one category's headers and
+     is listed: `must_read(domain, type=…)` returns one category's headers and
      `get_memory(uid)` opens one. Open tasks are work in progress: read them to
      know what is live.
    - **`scope`** — what the scope HOLDS: `subdomains` (`own` = filed exactly
@@ -59,8 +59,8 @@ sub-skill. Read each source once; nothing below is read twice.
    - **`scope.stale`** — how many memories in the scope carry a `review_after`
      date that has passed. Present only when non-zero, and the pass's own
      work list (§4, step 3).
-   - The documented flows are counted under `pending.diagram`:
-     `pending(domain, type='diagram')` lists them **by title only**, never
+   - The documented flows are counted under the `diagram` entry of `must_read`:
+     `must_read(domain, type='diagram')` lists them **by title only**, never
      inlined. Open one with `get_diagram(uid, format='json')`.
 2. **`list_domains()`** — the **tree**, not a list: per entry `parent`,
    `depth`, `count` (filed at exactly that path), `subtree` (that plus its

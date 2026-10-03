@@ -210,24 +210,24 @@ def _seed_pins():
 def test_pending_tool_adds_pinned_counts_only_when_pinned(store):
     with db.connect() as conn:
         _note(conn)
-    assert server.pending() == {"categories": [{"type": "note", "count": 1}]}
+    assert server.must_read() == {"categories": [{"type": "note", "count": 1}]}
     _seed_pins()
-    assert server.pending()["pinned"] == [{"type": "note", "count": 1}]
-    assert server.pending("acme/x100")["pinned"] == [{"type": "note", "count": 2}]
+    assert server.must_read()["pinned"] == [{"type": "note", "count": 1}]
+    assert server.must_read("acme/x100")["pinned"] == [{"type": "note", "count": 2}]
 
 
 def test_pending_tool_lists_pinned_headers(store):
     _seed_pins()
-    page = server.pending("acme/x100", type="note", pinned=True)
+    page = server.must_read("acme/x100", type="note", pinned=True)
     assert page["total"] == 2
     assert {i["title"] for i in page["items"]} == {"Global pin", "Domain pin"}
 
 
 def test_pending_tool_accepts_checkpoint_only_with_pinned(store):
-    assert server.pending(type="checkpoint")["errors"] == [
+    assert server.must_read(type="checkpoint")["errors"] == [
         "unknown type 'checkpoint'; valid types: task, anti_pattern, handoff, note, diagram"]
-    assert server.pending(type="checkpoint", pinned=True)["total"] == 0
-    assert "errors" in server.pending(type="optimizer", pinned=True)
+    assert server.must_read(type="checkpoint", pinned=True)["total"] == 0
+    assert "errors" in server.must_read(type="optimizer", pinned=True)
 
 
 def test_pulse_reports_pins_and_reads_them_first(store):
@@ -235,9 +235,10 @@ def test_pulse_reports_pins_and_reads_them_first(store):
     result = server.pulse("acme/x100")
     assert result["pinned"] == [{"type": "note", "count": 2}]
     assert result["read_next"].startswith(
-        "Pinned memories are mandatory reading: for each type in `pinned`, "
-        "pending('acme/x100', type=<t>, pinned=true), then get_memory(uid) on every "
-        "one, skipping none. Then pending(")
+        "Before acting, do these in order: "
+        "1. Read every pinned memory: for each type in `pinned`, call "
+        "must_read('acme/x100', type=<t>, pinned=true), then get_memory(uid) on each "
+        "one. Skip none. 2. Scan the rest: ")
 
 
 def test_pulse_without_pins_reads_as_before(store):
@@ -245,7 +246,7 @@ def test_pulse_without_pins_reads_as_before(store):
         _note(conn)
     result = server.pulse("acme/x100")
     assert result["pinned"] == []
-    assert result["read_next"].startswith("Then pending(")
+    assert result["read_next"].startswith("Before acting, scan the rest: ")
 
 
 def test_instructions_name_the_pins():
@@ -259,10 +260,10 @@ def test_pin_line_counts_global_pins_at_session_start(store):
     with db.connect() as conn:
         assert brief.pin_line(conn, "") == (
             "Pinned, read every one before acting: 1 note -- "
-            "pending(type=..., pinned=true), then get_memory(uid) each.")
+            "must_read(type=..., pinned=true), then get_memory(uid) each.")
         assert brief.pin_line(conn, "acme/x100") == (
             "Pinned, read every one before acting: 2 notes -- "
-            "pending('acme/x100', type=..., pinned=true), then get_memory(uid) each.")
+            "must_read('acme/x100', type=..., pinned=true), then get_memory(uid) each.")
 
 
 def test_pin_line_is_empty_without_pins(store):

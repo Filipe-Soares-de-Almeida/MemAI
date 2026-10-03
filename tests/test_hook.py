@@ -92,7 +92,7 @@ def test_the_brief_names_what_the_store_holds(conn):
     assert ids["cp"] in text
     # the pending line counts; it never lists a memory
     assert ids["hand"] not in text and ids["pitfall"] not in text and ids["note"] not in text
-    assert "pulse(domain)" in text and "pending()" in text  # what to do next
+    assert "pulse(domain)" in text and "must_read()" in text  # what to do next
 
 
 def test_an_empty_store_has_nothing_to_say(conn):
@@ -135,9 +135,9 @@ def test_the_brief_has_no_pending_line_when_nothing_is_pending(conn):
 
 def test_the_brief_puts_tasks_first(conn):
     _seed(conn)
-    assert "pending(type='task') first" not in brief.session_brief(conn)
+    assert "must_read(type='task') first" not in brief.session_brief(conn)
     _seed_task(conn)
-    assert "pending(type='task') first" in brief.session_brief(conn)
+    assert "must_read(type='task') first" in brief.session_brief(conn)
 
 
 def test_a_tight_budget_drops_whole_sections_and_says_so(conn):
@@ -145,7 +145,7 @@ def test_a_tight_budget_drops_whole_sections_and_says_so(conn):
     text = brief.session_brief(conn, budget=200)
     assert "more section(s) omitted" in text
     # the instruction on what to do next survives a squeeze; it is the point
-    assert "pulse(domain)" in text and "pending()" in text
+    assert "pulse(domain)" in text and "must_read()" in text
 
 
 def test_a_long_section_cannot_starve_the_ones_after_it(conn):
@@ -549,7 +549,7 @@ def test_the_warm_up_prompt_returns_the_same_brief(store):
         _seed(conn)
     text = server.warm_up()
     assert "Pending in this project: 1 pitfall, 1 handoff, 1 note." in text
-    assert "pending()" in text
+    assert "must_read()" in text
 
 
 def test_the_warm_up_prompt_says_so_when_there_is_nothing(store):
@@ -651,10 +651,10 @@ def _age_task_ask(session_id: str, minutes: int) -> None:
 
 
 ASK = ("MemAI: {count} in the domains this session worked in ({domains}). Call "
-       "pending(type='task', domain=...) for each of them. A task on the same "
+       "must_read(type='task', domain=...) for each of them. A task on the same "
        "subject can be filed under another path: call list_domains() and check "
        "any similar domain before deciding that none applies -- an empty "
-       "pending() in one domain does not mean the subject has no task. For each "
+       "must_read() in one domain does not mean the subject has no task. For each "
        "task this session worked on, update its items with task_item(uid, item, "
        "state, comment, related) -- a task closes itself once every item is done "
        "or dropped. If none of them is this session's work, say so in one line "

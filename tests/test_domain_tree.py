@@ -192,7 +192,7 @@ def test_mcp_reads_take_the_scope(monkeypatch, tmp_path):
     assert len(server.list_by_domain(domain="acme")["results"]) == 2
     assert len(server.list_by_domain(domain="acme", subtree=False)["results"]) == 0
     assert len(server.list_recent(domain="acme/x100", subtree=False)["results"]) == 1
-    assert server.pulse(domain="acme")["pending"] == [{"type": "note", "count": 2}]
+    assert server.pulse(domain="acme")["must_read"] == [{"type": "note", "count": 2}]
 
 
 # ------------------------------------------------- resolving a bare segment
@@ -261,7 +261,7 @@ def test_pulse_reports_where_it_read(monkeypatch, tmp_path):
     server.note("fixture title", content="routine detail", domain="acme/x100/p200")
     resolved = server.pulse(domain="p200")
     assert resolved["scope"]["paths"] == ["acme/x100/p200"]
-    assert resolved["pending"] == [{"type": "note", "count": 1}]
+    assert resolved["must_read"] == [{"type": "note", "count": 1}]
     assert server.pulse(domain="acme/x100")["scope"]["paths"] == ["acme/x100"]
     assert server.pulse()["scope"]["paths"] == []       # whole store
 
@@ -330,7 +330,7 @@ def test_pulse_counts_a_busy_child_and_keeps_the_parents_note(monkeypatch, tmp_p
                          title="fixture title", domain="acme/x100")
 
     p = server.pulse(domain="acme")
-    assert p["pending"] == [{"type": "handoff", "count": 1}, {"type": "note", "count": 13}]
+    assert p["must_read"] == [{"type": "handoff", "count": 1}, {"type": "note", "count": 13}]
     assert p["scope"]["by_type"]["note"] == 13
     assert "not_shown" not in p["scope"]
     assert p["scope"]["subdomains"] == [{"domain": "acme/x100", "own": 13, "subtree": 13}]
@@ -340,7 +340,7 @@ def test_pulse_scope_has_no_subdomains_when_the_scope_is_flat(monkeypatch, tmp_p
     monkeypatch.setenv("MEMAI_HOME", str(tmp_path))
     server.note("fixture title", content="the only note", domain="acme")
     p = server.pulse(domain="acme")
-    assert p["pending"] == [{"type": "note", "count": 1}]
+    assert p["must_read"] == [{"type": "note", "count": 1}]
     assert p["scope"]["subdomains"] == []
 
 

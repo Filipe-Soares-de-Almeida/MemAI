@@ -73,7 +73,7 @@ under that path: open tasks, pitfalls, handoffs, notes and flows. The session
 asks for the category it needs, and gets headers it can open:
 
 ```python
-pending("acme/checkout", type="note")    # titles and uids, that note among them
+must_read("acme/checkout", type="note")    # titles and uids, that note among them
 get_memory(uid)                          # the one the work touches, in full
 ```
 
@@ -226,10 +226,10 @@ the build, running `npm ci` too when the lockfile changed; it serves the build i
 has when npm is missing or fails. `MEMAI_ADMIN_BUILD=0` turns that off.
 
 A memory can be pinned from its record: for every domain, or for its own
-domain only (its subdomains and cross-listed paths included). `pending()` and
+domain only (its subdomains and cross-listed paths included). `must_read()` and
 `pulse()` count pinned memories beside the categories, the session brief
 counts the global ones, and an agent lists them with
-`pending(type=..., pinned=true)` and reads every one before acting.
+`must_read(type=..., pinned=true)` and reads every one before acting.
 
 A host starts several MCP servers per session, so the dashboard is started once
 and shared: each server asks `/api/ping` whether one already answers before

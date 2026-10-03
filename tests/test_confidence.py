@@ -53,7 +53,7 @@ def test_pulse_does_not_count_a_contradicted_anti_pattern(store):
     stale = server.anti_pattern("fixture title", pattern="batch over 100 rows", why_wrong="times out",
                                 instead="page it", domain="acme/x100")["uid"]
     server.set_confidence(stale, "contradicted")
-    assert server.pulse("acme/x100")["pending"] == [{"type": "anti_pattern", "count": 1}]
+    assert server.pulse("acme/x100")["must_read"] == [{"type": "anti_pattern", "count": 1}]
 
 
 def test_pulse_falls_through_to_a_sound_checkpoint(store):

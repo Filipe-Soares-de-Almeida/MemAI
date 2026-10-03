@@ -3,7 +3,7 @@
 session_brief renders what the store holds -- its size, active domains, the
 latest checkpoint, one line counting what is pending per category, one counting
 what is pinned -- kept with the call to action, so the budget never drops it --
-and ends with the instruction to call pending() and open the subject with pulse(domain)
+and ends with the instruction to call must_read() and open the subject with pulse(domain)
 before working, spelling out what the store's own casing policy means for the
 path that instruction asks for. The SessionStart hook emits it (memai.hook);
 the warm_up prompt returns it.
@@ -50,12 +50,12 @@ CASING = {
 }
 
 # What the pending line asks for, depending on whether a task is open.
-WORK_TASKS_FIRST = ("Call pending(type='task') first and work through the open tasks, "
+WORK_TASKS_FIRST = ("Call must_read(type='task') first and work through the open tasks, "
                     "then the other categories, before acting.")
-WORK_EACH = "Call pending(type=...) for each category before acting."
-# The pin line: counts only, the headers come from pending(..., pinned=true).
+WORK_EACH = "Call must_read(type=...) for each category before acting."
+# The pin line: counts only, the headers come from must_read(..., pinned=true).
 PIN_LINE = ("Pinned, read every one before acting: {said} -- "
-            "pending({domain}type=..., pinned=true), then get_memory(uid) each.")
+            "must_read({domain}type=..., pinned=true), then get_memory(uid) each.")
 
 # The tail of every brief. _fit reserves its room before dividing what is
 # left between the sections, so it is never the part that gets trimmed.
@@ -63,7 +63,7 @@ PIN_LINE = ("Pinned, read every one before acting: {said} -- "
 CALL_TO_ACTION = (
     "REQUIRED FIRST STEP, whatever the prompt asks -- a question, a greeting, a "
     "one-line fix, a git command: before any other tool, call pulse(domain) for "
-    "the subject the prompt names and pending() for what is still open, and "
+    "the subject the prompt names and must_read() for what is still open, and "
     "read what they list -- what was decided, what was already tried, where the "
     "last session stopped. No task is too small to skip this. Until one of them "
     "is called, the memai guard refuses every other tool in this session; "

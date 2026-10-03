@@ -1,6 +1,6 @@
 """Holding a briefed session's tools until it has read the store.
 
-The session-start brief asks for pulse() or pending() before anything else;
+The session-start brief asks for pulse() or must_read() before anything else;
 the guard is what makes that hold. Only a session the hook actually briefed
 is held, the memai tools and ToolSearch go through so the warm-up can
 happen, and the hold gives way after a few refusals so a host without the
@@ -63,7 +63,7 @@ def _guard(tool_name: str, monkeypatch, capsysbinary, session: str | None = SESS
 def test_the_brief_makes_the_warm_up_unconditional(store, capsysbinary):
     _seed()
     context = _start(capsysbinary)["hookSpecificOutput"]["additionalContext"]
-    assert "pulse(domain)" in context and "pending()" in context
+    assert "pulse(domain)" in context and "must_read()" in context
     assert "whatever the prompt asks" in context
     assert "refuses every other tool" in context
 
@@ -94,7 +94,7 @@ def test_a_briefed_session_is_refused_any_tool_before_the_warm_up(
     _start(capsysbinary)
     code, _, err = _guard("Bash", monkeypatch, capsysbinary, command="git status")
     assert code == 2
-    assert "pulse(" in err and "pending(" in err
+    assert "pulse(" in err and "must_read(" in err
 
 
 @pytest.mark.parametrize("tool_name", ["ToolSearch", "mcp__memai__list_domains",
