@@ -278,3 +278,31 @@ def test_the_brief_keeps_the_pin_line_under_a_tight_budget(store):
             _note(conn, title=f"Filler fact {n}", domain=f"acme/filler{n}")
         text = brief.session_brief(conn, budget=200)
     assert "Pinned, read every one before acting: 1 note" in text
+
+
+# ---------------------------------------------------------------- dashboard
+
+from pathlib import Path
+
+WEBUI = Path(db.__file__).parent / "webui"
+
+
+def test_the_record_view_posts_the_pin():
+    source = (WEBUI / "views" / "record.js").read_text(encoding="utf-8")
+    assert "/pin`" in source and 'id="dPin"' in source
+
+
+def test_the_memory_list_filters_by_pin():
+    source = (WEBUI / "views" / "memories.js").read_text(encoding="utf-8")
+    assert "pin: state.pin" in source and "id: 'fPin'" in source
+
+
+@pytest.mark.parametrize("locale", ["en.json", "pt-BR.json"])
+def test_pin_strings_exist_in_every_locale(locale):
+    import json
+    strings = json.loads((WEBUI / "public" / "i18n" / locale).read_text(encoding="utf-8"))["strings"]
+    for key in ("dr.pin.label", "dr.pin.none", "dr.pin.global", "dr.pin.domain",
+                "dr.pin.noneWhy", "dr.pin.globalWhy", "dr.pin.domainWhy", "dr.pin.noDomain",
+                "dr.pinSet", "mem.pin.all", "mem.pin.any", "mem.pin.global",
+                "mem.pin.domain"):
+        assert strings.get(key), key

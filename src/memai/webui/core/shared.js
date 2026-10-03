@@ -30,6 +30,18 @@ export const CONF = {
   contradicted: { icon: 'contradicted', label: t('conf.contradicted') },
 };
 
+/* A pin is a pushpin: filled for every domain, an outline stuck into a base
+   line for one domain, so the two differ in shape and not only in weight. */
+export const PIN = {
+  global: { icon: 'pin', label: t('mem.pin.global') },
+  domain: { icon: 'pin-domain', label: t('mem.pin.domain') },
+};
+
+export const pinMark = pin => PIN[pin]
+  ? `<span class="pin-mark pin-${pin}" role="img" title="${esc(PIN[pin].label)}"
+       aria-label="${esc(PIN[pin].label)}">${icon(PIN[pin].icon)}</span>`
+  : '';
+
 /* Relation vocabularies. Two, because they name different things: a
    relation between memories is not the same statement as the tie from a
    diagram step to the memory that explains it. Both stay OPEN -- the API
@@ -269,6 +281,17 @@ export const typeItems = ({ any = '' } = {}) => [
 export const confItems = ({ any = '' } = {}) => [
   ...(any ? [{ value: '', label: any, html: `<span class="pick-any">${esc(any)}</span>` }] : []),
   ...Object.keys(CONF).map(c => ({ value: c, label: CONF[c].label, html: confPill(c) })),
+];
+
+export const pinItems = ({ any = '' } = {}) => [
+  { value: '', label: any, html: `<span class="pick-any">${esc(any)}</span>` },
+  { value: 'any', label: t('mem.pin.any'),
+    html: `<span class="pin-pick"><span class="pin-mark pin-any">${icon('pin')}</span>${
+      esc(t('mem.pin.any'))}</span>` },
+  ...Object.keys(PIN).map(p => ({
+    value: p, label: PIN[p].label,
+    html: `<span class="pin-pick">${pinMark(p)}${esc(PIN[p].label)}</span>`,
+  })),
 ];
 
 /* ─── a load that failed ──────────────────────────────────────────────────

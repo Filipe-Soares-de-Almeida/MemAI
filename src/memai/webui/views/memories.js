@@ -16,7 +16,7 @@ import { api, query } from '../core/api.js';
 import { icon } from '../core/icons.js';
 import { toast, failed, promptModal, typedConfirmModal } from '../core/ui.js';
 import { typeTag, statusTag, confPill, CONF, getDomains, inDomainPath,
-         typeItems, confItems, invalidateDomains, uidChip, wireCopyChips } from '../core/shared.js';
+         typeItems, confItems, pinItems, pinMark, invalidateDomains, uidChip, wireCopyChips } from '../core/shared.js';
 import { pickerFor, wirePicker, fixedItems } from '../core/pick.js';
 import { domainPickerHTML, wireDomainPicker } from '../core/domain-picker.js';
 import { moveToProjectModal } from '../core/projects.js';
@@ -89,6 +89,8 @@ export async function renderMemories(view, params, ctx) {
     type: params.get('type') || '',
     status: params.has('status') ? params.get('status') : 'active',
     confidence: params.get('confidence') || '',
+    /* '' any memory, 'any' any pin, or one kind of pin */
+    pin: params.get('pin') || '',
     /* open | completed | cancelled, and only meaningful for the task type */
     task_state: params.get('task_state') || '',
     session: params.get('session') || '',
@@ -115,7 +117,8 @@ export async function renderMemories(view, params, ctx) {
   domainTree = domains;
   const filter = {
     q: state.q, domain: state.domain, type: state.type, status: state.status,
-    confidence: state.confidence, session: state.session, sort: state.sort, dir: state.dir,
+    confidence: state.confidence, pin: state.pin, session: state.session,
+    sort: state.sort, dir: state.dir,
     task_state: state.type === 'task' ? state.task_state : '',
     linked: state.linked, due: state.due, stale: state.stale,
     untitled: state.untitled, untagged: state.untagged,
@@ -133,6 +136,7 @@ export async function renderMemories(view, params, ctx) {
   const kids = domains.find(d => d.domain === state.domain)?.children;
   const types = typeItems({ any: t('common.allTypes') });
   const confs = confItems({ any: t('mem.conf.all') });
+  const pins = pinItems({ any: t('mem.pin.all') });
   const sorts = [
     { value: 'created_at:desc', label: t('mem.sort.newest') },
     { value: 'created_at:asc', label: t('mem.sort.oldest') },
@@ -192,6 +196,7 @@ export async function renderMemories(view, params, ctx) {
             <button type="button" data-v="" aria-pressed="${state.status === ''}">${t('common.all')}</button>
           </div>
           ${pickerFor({ id: 'fConf', value: state.confidence, items: confs, ariaLabel: t('mem.conf.all') })}
+          ${pickerFor({ id: 'fPin', value: state.pin, items: pins, ariaLabel: t('mem.pin.all') })}
           ${data.searched ? '' : pickerFor({ id: 'fSort', items: sorts, ariaLabel: t('mem.sort.aria'),
             value: activeSort })}
           ${defects}
@@ -260,6 +265,8 @@ export async function renderMemories(view, params, ctx) {
     navigate({ exact: state.exact ? '' : '1', page: 0 }));
   wirePicker(view, { id: 'fConf', items: fixedItems(confs),
                      onPick: confidence => navigate({ confidence, page: 0 }) });
+  wirePicker(view, { id: 'fPin', items: fixedItems(pins),
+                     onPick: pin => navigate({ pin, page: 0 }) });
   wirePicker(view, { id: 'fSort', items: fixedItems(sorts), onPick: v => {
     const [sort, dir] = v.split(':');
     navigate({ sort, dir, page: 0 });
@@ -464,7 +471,7 @@ function renderRows(items, scope = '') {
            beside it -- in a store whose whole point is that a human vets what
            an agent wrote, the vetting was the faintest thing in the row. -->
       <div class="mem-col-type" role="gridcell">${confPill(m.confidence, true)}${typeTag(m.type)}</div>
-      <div class="mem-main" role="gridcell">
+      <div class="mem-main${m.pin ? ' is-pinned' : ''}" role="gridcell">${pinMark(m.pin)}
         <!-- A titled row shows its title alone, with the body on hover.
              A row with no title is the body: it is what names the memory
              when nothing else does.

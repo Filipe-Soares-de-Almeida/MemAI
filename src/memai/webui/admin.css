@@ -2082,6 +2082,20 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
   min-width: 0; overflow: hidden;
 }
 .mem-main { min-width: 0; }
+/* A pinned row hangs its pin in the gutter before the title, so pinned and
+   unpinned titles share one left edge and the marks form their own column. */
+.mem-main.is-pinned { position: relative; }
+.mem-main.is-pinned > .pin-mark {
+  position: absolute; top: 50%; transform: translateY(-50%);
+  left: calc(-12px - var(--sp-2));
+}
+
+/* The pin, wherever a memory carries one: accent, because a pin is a call to
+   read, and a fixed box, so the two shapes never shift what follows them. */
+.pin-mark { display: inline-flex; flex: none; color: var(--accent); --ico: 12px; }
+.pin-mark .ico { fill: none; }
+.pin-mark.pin-global .ico { fill: currentColor; }
+.pin-pick { display: inline-flex; align-items: center; gap: var(--sp-2); }
 /* The row's primary control: one line of the memory, clipped. It leads the
    row by brightness -- --ink against the --ink-3 around it -- rather than by
    size, which at --fs-body made it dominate instead. The leading and not a
@@ -2535,6 +2549,15 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
 .rs-status { margin-left: auto; font-size: var(--fs-label); color: var(--ink-3); }
 .rs-conf { width: 100%; }
 .rs-conf button { flex: 1; justify-content: center; }
+
+/* The pin setter: the confidence group's shape, under its own label. A
+   domain pin on a memory with no domain cannot be stored, so that choice is
+   shown and refused rather than hidden. */
+.rs-pin { width: 100%; }
+.rs-pin button { flex: 1; justify-content: center; }
+.rs-pin button:disabled { color: var(--ink-3); opacity: .5; cursor: not-allowed; }
+.rs-pin button:disabled:hover { color: var(--ink-3); }
+.rs-pin .pin-none { color: currentColor; }
 
 .rs-body {
   flex: 1; min-height: 0; overflow-y: auto;
@@ -5383,6 +5406,11 @@ input.pick-q:focus { box-shadow: inset 0 -2px 0 var(--accent); }
     word-break: break-word;
   }
   .mem-col-type { grid-column: 2; grid-row: 2; overflow: visible; }
+  /* a stacked row has no title column to keep straight, so the pin sits in
+     line before the title instead of in a gutter the checkbox fills */
+  .mem-main.is-pinned { display: flex; align-items: center; gap: var(--sp-2); }
+  .mem-main.is-pinned > .pin-mark { position: static; transform: none; }
+  .mem-main.is-pinned .mem-snippet { flex: 1; min-width: 0; }
   .mem-right { grid-column: 2; grid-row: 3; flex-wrap: wrap; white-space: normal; }
   .modal-head, .modal-body, .modal-foot {
     padding-left: var(--sp-4); padding-right: var(--sp-4);
