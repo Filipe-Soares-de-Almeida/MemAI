@@ -199,10 +199,17 @@ entry under `[project.scripts]`, or a different Python under the venv. This is
 what `pip install` is for, and the rule at the top of this file applies to it:
 
 1. `stop-mcp.bat` and `stop-admin.bat`; close the hosts
-2. `git pull`
-3. `install.bat` (or the pip line for the platform)
-4. `memai-hook install --check`, and reinstall what it reports as outdated
-5. reopen the hosts
+2. `update.bat`, which pulls and runs `install.bat` (elsewhere: `git pull`,
+   then the pip line for the platform)
+3. `memai-hook install --check`, and reinstall what it reports as outdated
+4. reopen the hosts
+
+`install.bat` and `update.bat` run `tools/install-guard.py` before they touch
+`.venv`. It refuses while a `memai-mcp.exe` runs from this checkout's `.venv`,
+or while a MemAI dashboard serving this checkout answers on `MEMAI_ADMIN_PORT`
+or on the port in `MEMAI_HOME/admin.json`; a server or dashboard of another
+checkout does not count. From a console it lists what is open and offers to
+end those processes.
 
 ## 8. Cutting a release
 

@@ -266,17 +266,17 @@ def checkout_root() -> Path | None:
 def commands(root: Path | None = None) -> list[str]:
     """What updates a checkout, in the order it has to run. [] without one.
 
-    On Windows the second half is install.bat, which does the environment and
-    the dashboard build; elsewhere both are spelled out, against this
+    On Windows that is update.bat alone: it refuses while MemAI still runs
+    from the checkout, pulls, then runs install.bat for the environment and
+    the dashboard build. Elsewhere the steps are spelled out, against this
     interpreter, so the pip that runs is the one memai is installed in.
     """
     root = checkout_root() if root is None else root
     if root is None:
         return []
-    pull = f'git -C "{root}" pull --ff-only'
     if sys.platform == "win32":
-        installer = root / "install.bat"
-        return [pull, f'"{installer}"']
+        return [f'"{root / "update.bat"}"']
+    pull = f'git -C "{root}" pull --ff-only'
     return [pull, f'cd "{root}" && "{sys.executable}" -m pip install -e ".[dev]" '
                   f'&& npm ci && npm run build']
 
