@@ -16,7 +16,7 @@ A fourth reads the call the host is about to make, not the store, and is the
 one exception to everything the last paragraph of this docstring says:
 
   guard           holds a briefed session's tools until it calls pulse() or
-                  pending(), records the domain a memai call names in the
+                  must_read(), records the domain a memai call names in the
                   session's state file, and refuses a memai write whose
                   required text never arrived
 
@@ -137,7 +137,7 @@ def _session_start(args, payload) -> None:
     system = []
     if text:
         system.append(f"MemAI: brief loaded ({total} memories in "
-                      f"{args.domain or f'project {project!r}'}); pulse() or pending() "
+                      f"{args.domain or f'project {project!r}'}); pulse() or must_read() "
                       "comes before any other tool.")
         try:
             warden.briefed(payload.get("session_id", ""))
@@ -273,10 +273,10 @@ def _task_ask(args, payload) -> str:
         return ""
     count = f"{open_tasks} open task" + ("" if open_tasks == 1 else "s")
     return (f"MemAI: {count} in the domains this session worked in "
-            f"({', '.join(holding)}). Call pending(type='task', domain=...) for "
+            f"({', '.join(holding)}). Call must_read(type='task', domain=...) for "
             "each of them. A task on the same subject can be filed under another "
             "path: call list_domains() and check any similar domain before "
-            "deciding that none applies -- an empty pending() in one domain does "
+            "deciding that none applies -- an empty must_read() in one domain does "
             "not mean the subject has no task. For each task this session worked "
             "on, update its items with task_item(uid, item, state, comment, "
             "related) -- a task closes itself once every item is done or "

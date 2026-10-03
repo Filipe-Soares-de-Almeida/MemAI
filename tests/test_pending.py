@@ -63,7 +63,7 @@ def test_existing_handoffs_stay_readable(tmp_path, monkeypatch):
     assert server.get_memory(uid)["type"] == "handoff"
     found = server.search("lexer", type="handoff")
     assert [m["uid"] for m in found["results"]] == [uid]
-    assert [i["uid"] for i in server.pending(domain=DOMAIN, type="handoff")["items"]] == [uid]
+    assert [i["uid"] for i in server.must_read(domain=DOMAIN, type="handoff")["items"]] == [uid]
 
 
 CATEGORY_LIST = "task, anti_pattern, handoff, note, diagram"
@@ -187,17 +187,17 @@ def test_headers_have_no_bodies(seeded):
 
 
 def test_pending_tool_without_a_type_lists_the_counts(seeded):
-    assert server.pending() == {"categories": FULL}
-    assert server.pending(domain="acme/x100") == {"categories": FULL}
+    assert server.must_read() == {"categories": FULL}
+    assert server.must_read(domain="acme/x100") == {"categories": FULL}
 
 
 def test_pending_tool_with_a_type_lists_headers(seeded):
-    result = server.pending(domain="acme", type="note")
+    result = server.must_read(domain="acme", type="note")
     assert result["type"] == "note" and result["total"] == 3 and len(result["items"]) == 3
 
 
 def test_pending_tool_counts_what_it_returns_as_read(seeded):
-    server.pending(type="handoff")
+    server.must_read(type="handoff")
     with db.connect() as conn:
         usage = db.usage_for(conn, [seeded["handoff"], seeded["ap_good"]])
     assert usage[seeded["handoff"]]["recalls"] == 1
@@ -205,13 +205,13 @@ def test_pending_tool_counts_what_it_returns_as_read(seeded):
 
 
 def test_pending_tool_refuses_a_type_it_does_not_serve(store):
-    result = server.pending(type="checkpoint")
+    result = server.must_read(type="checkpoint")
     assert result["errors"] == [
         f"unknown type 'checkpoint'; valid types: {CATEGORY_LIST}"]
 
 
 def test_pending_on_an_unknown_domain_is_empty_not_an_error(seeded):
-    assert server.pending(domain="nowhere/at/all") == {"categories": []}
+    assert server.must_read(domain="nowhere/at/all") == {"categories": []}
 
 
 # -------------------------------------------------------------------- pulse
@@ -219,10 +219,10 @@ def test_pending_on_an_unknown_domain_is_empty_not_an_error(seeded):
 
 def test_pulse_returns_counts_not_lists(seeded):
     result = server.pulse(DOMAIN)
-    assert set(result) == {"project", "latest_checkpoint", "pending", "pinned", "read_next", "scope"}
+    assert set(result) == {"project", "latest_checkpoint", "must_read", "pinned", "read_next", "scope"}
     for gone in ("handoffs", "anti_patterns", "recent_notes", "diagrams"):
         assert gone not in result
-    assert result["pending"] == FULL
+    assert result["must_read"] == FULL
     assert "not_shown" not in result["scope"]
 
 
@@ -241,35 +241,46 @@ def test_pulse_still_returns_the_checkpoint_in_full(store):
 
 
 def test_pulse_counts_do_not_include_contradicted_rows(seeded):
-    by_type = {c["type"]: c["count"] for c in server.pulse(DOMAIN)["pending"]}
+    by_type = {c["type"]: c["count"] for c in server.pulse(DOMAIN)["must_read"]}
     assert by_type["anti_pattern"] == 1
 
 
 def test_read_next_puts_tasks_first(seeded):
     assert server.pulse(DOMAIN)["read_next"] == (
-        "Open tasks first: pending('acme/x100', type='task'), then get_memory(uid) for "
-        "each task you will touch. Then pending('acme/x100', type=<t>) for each other "
-        "category listed in `pending`, before acting.")
+        "Before acting, do these in order: "
+        "1. Work the open tasks: call must_read('acme/x100', type='task'), then "
+        "get_memory(uid) on each task you will touch. "
+        "2. Scan the rest: for each other type in `must_read`, call "
+        "must_read('acme/x100', type=<t>) and read the titles it lists.")
 
 
 def test_read_next_without_a_domain_omits_the_argument(seeded):
     assert server.pulse()["read_next"] == (
-        "Open tasks first: pending(type='task'), then get_memory(uid) for each task "
-        "you will touch. Then pending(type=<t>) for each other category listed in "
-        "`pending`, before acting.")
+        "Before acting, do these in order: "
+        "1. Work the open tasks: call must_read(type='task'), then get_memory(uid) on "
+        "each task you will touch. "
+        "2. Scan the rest: for each other type in `must_read`, call must_read(type=<t>) "
+        "and read the titles it lists.")
 
 
 def test_read_next_without_tasks_and_when_empty(store):
     assert server.pulse(DOMAIN)["read_next"] == ""
-    assert server.pulse(DOMAIN)["pending"] == []
+    assert server.pulse(DOMAIN)["must_read"] == []
     server.note(title="Parser fact", content="Fact.", domain=DOMAIN)
     assert server.pulse(DOMAIN)["read_next"] == (
-        "Then pending('acme/x100', type=<t>) for each other category listed in "
-        "`pending`, before acting.")
+        "Before acting, scan the rest: for each type in `must_read`, call "
+        "must_read('acme/x100', type=<t>) and read the titles it lists.")
+
+def test_read_next_with_only_tasks_has_no_other_step(store):
+    server.task(title="Ship the parser", goal="A parser that runs", items="Write the lexer",
+                domain=DOMAIN)
+    assert server.pulse(DOMAIN)["read_next"] == (
+        "Before acting, work the open tasks: call must_read('acme/x100', type='task'), "
+        "then get_memory(uid) on each task you will touch.")
 
 
 def test_instructions_name_pending_and_tasks():
-    assert "pending(" in server.INSTRUCTIONS
+    assert "must_read(" in server.INSTRUCTIONS
     assert "task(" in server.INSTRUCTIONS
     assert "pulse(domain)" in server.INSTRUCTIONS
 
@@ -350,7 +361,7 @@ def test_an_archived_diagram_is_not_counted(store):
 @pytest.mark.parametrize("kwargs", [{"limit": "many"}, {"offset": "later"}, {"limit": None}])
 def test_pending_refuses_a_limit_or_offset_that_is_not_a_number(store, kwargs):
     server.note(title="Parser fact", content="Fact.", domain=DOMAIN)
-    result = server.pending(domain=DOMAIN, type="note", **kwargs)
+    result = server.must_read(domain=DOMAIN, type="note", **kwargs)
     assert result["ok"] is False
     assert len(result["errors"]) == 1 and "must be a whole number" in result["errors"][0]
 
@@ -358,14 +369,14 @@ def test_pending_refuses_a_limit_or_offset_that_is_not_a_number(store, kwargs):
 def test_pending_accepts_a_limit_and_offset_written_as_digits(store):
     for n in range(3):
         server.note(title=f"Parser fact {n}", content=f"Fact {n}.", domain=DOMAIN)
-    result = server.pending(domain=DOMAIN, type="note", limit="2", offset="1")
+    result = server.must_read(domain=DOMAIN, type="note", limit="2", offset="1")
     assert len(result["items"]) == 2 and result["total"] == 3
 
 
 @pytest.mark.parametrize("domain", ["/", " / ", "//"])
 def test_a_domain_that_normalizes_to_nothing_is_the_whole_project(seeded, domain):
-    assert server.pending(domain=domain) == {"categories": FULL}
-    assert server.pending(domain=domain, type="note")["total"] == 3
+    assert server.must_read(domain=domain) == {"categories": FULL}
+    assert server.must_read(domain=domain, type="note")["total"] == 3
 
 
 def test_open_task_uids_skip_a_domain_that_normalizes_to_nothing(store):

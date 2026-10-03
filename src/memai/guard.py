@@ -92,7 +92,7 @@ DEBRIS = ("parameter name=", "</", "<parameter")
 
 # The memai reads that count as a session's warm-up. A session the
 # SessionStart hook briefed has every other tool refused until it calls one.
-WARM_UP: tuple[str, ...] = ("pulse", "pending")
+WARM_UP: tuple[str, ...] = ("pulse", "must_read")
 
 # Tools that are not memai's and still go through before the warm-up: the
 # host's loader for deferred tools, without which the memai tools cannot be
@@ -335,7 +335,7 @@ def gate_refusal(call: str, left: int) -> str:
     """
     return (
         f"BLOCKED ({call}): this session has not read its memory yet. Call "
-        f"pulse(domain) for the subject the prompt names, or pending() for what "
+        f"pulse(domain) for the subject the prompt names, or must_read() for what "
         f"is still open, BEFORE any other tool -- whatever the task is, however "
         f"small. If the memai tools are not loaded, load them with ToolSearch "
         f"first: ToolSearch and every memai tool go through. Then redo this call. "

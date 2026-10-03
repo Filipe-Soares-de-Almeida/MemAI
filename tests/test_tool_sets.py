@@ -79,7 +79,7 @@ def test_core_leaves_out_authoring_and_curation(monkeypatch):
     module = _load(monkeypatch, "core")
     names = _published(module)
     assert {"note", "pulse", "search", "timeline", "get_memory", "get_diagram",
-            "help", "task", "task_item", "task_add", "task_comment", "pending"} <= names
+            "help", "task", "task_item", "task_add", "task_comment", "must_read"} <= names
     assert not names & {"diagram", "diagram_node", "optimize_scan", "purge_memory"}
 
 
