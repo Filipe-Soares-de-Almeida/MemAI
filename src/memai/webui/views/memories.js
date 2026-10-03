@@ -16,7 +16,7 @@ import { api, query } from '../core/api.js';
 import { icon } from '../core/icons.js';
 import { toast, failed, promptModal, typedConfirmModal } from '../core/ui.js';
 import { typeTag, statusTag, confPill, CONF, getDomains, inDomainPath,
-         typeItems, confItems, pinItems, pinMark, invalidateDomains, uidChip, wireCopyChips } from '../core/shared.js';
+         typeItems, confItems, pinItems, pinMark, tbField as field, tbBare as bare, invalidateDomains, uidChip, wireCopyChips } from '../core/shared.js';
 import { pickerFor, wirePicker, fixedItems } from '../core/pick.js';
 import { domainPickerHTML, wireDomainPicker } from '../core/domain-picker.js';
 import { moveToProjectModal } from '../core/projects.js';
@@ -82,6 +82,15 @@ function syncSelectAll() {
   box.indeterminate = Boolean(n) && n < rows.length;
 }
 
+/* Whether the folded filter row is open: the reader's setting, per browser. */
+const MORE_PREF = 'memai.memories.more';
+const readMoreOpen = () => {
+  try { return localStorage.getItem(MORE_PREF) === '1'; } catch { return false; }
+};
+const writeMoreOpen = open => {
+  try { localStorage.setItem(MORE_PREF, open ? '1' : '0'); } catch { /* not kept */ }
+};
+
 export async function renderMemories(view, params, ctx) {
   const state = {
     q: params.get('q') || '',
@@ -94,9 +103,6 @@ export async function renderMemories(view, params, ctx) {
     /* open | completed | cancelled, and only meaningful for the task type */
     task_state: params.get('task_state') || '',
     session: params.get('session') || '',
-    /* a domain filter covers its subdomains; 'exact' is the opt-out, and it
-       lives in the URL so the narrowed list is a linkable state */
-    exact: params.get('exact') || '',
     /* the defect filters a Health symptom hands over -- see _defect_clauses
        in admin.py. They are carried, not offered: the button that sets one
        is on Health, and the chip below is how you take it off again. */
@@ -122,7 +128,6 @@ export async function renderMemories(view, params, ctx) {
     task_state: state.type === 'task' ? state.task_state : '',
     linked: state.linked, due: state.due, stale: state.stale,
     untitled: state.untitled, untagged: state.untagged,
-    subtree: state.exact ? '0' : '',
   };
   const data = await api(`/api/memories?${query({ ...filter, limit: PAGE, offset: state.page * PAGE })}`);
   if (ctx.stale()) return;
@@ -133,10 +138,14 @@ export async function renderMemories(view, params, ctx) {
   matchQs = query({ ...filter, limit: BULK_MAX, offset: 0 });
   matchingUids = new Set();
 
-  const kids = domains.find(d => d.domain === state.domain)?.children;
-  const types = typeItems({ any: t('common.allTypes') });
-  const confs = confItems({ any: t('mem.conf.all') });
-  const pins = pinItems({ any: t('mem.pin.all') });
+  const types = typeItems({ any: t('mem.f.allM') });
+  const confs = confItems({ any: t('mem.f.allF') });
+  const pins = pinItems({ any: t('mem.f.allF') });
+  /* the folded row: how many of its filters are in use, which also opens it */
+  const moreActive = (state.pin ? 1 : 0) + (state.sort !== 'created_at' || state.dir !== 'desc' ? 1 : 0)
+    + ['linked', 'due', 'stale', 'untitled', 'untagged'].filter(k => state[k]).length
+    + (state.session ? 1 : 0);
+  const moreOpen = moreActive > 0 || readMoreOpen();
   const sorts = [
     { value: 'created_at:desc', label: t('mem.sort.newest') },
     { value: 'created_at:asc', label: t('mem.sort.oldest') },
@@ -165,42 +174,44 @@ export async function renderMemories(view, params, ctx) {
 
     <div class="mem-work">
       <div class="mem-pane">
-        <div class="list-toolbar">
-          <!-- how the search behaves, on the field it behaves on. It was a
-               line of prose under the view's title, three inches away. -->
-          <input id="fQ" type="search" placeholder="${t('mem.search.placeholder')}"
+        <!-- Every filter carries its name above it, so each one's "no filter"
+             choice can be a bare All instead of restating the field. -->
+        <div class="list-toolbar tb-labeled">
+          ${field(t('mem.f.search'), `<input id="fQ" type="search" placeholder="${t('mem.search.placeholder')}"
                  aria-label="${esc(t('mem.search.placeholder'))}"
-                 title="${esc(t('mem.sub'))}" value="${esc(state.q)}" spellcheck="false">
+                 title="${esc(t('mem.sub'))}" value="${esc(state.q)}" spellcheck="false">`, 'tb-grow')}
           <!-- Pickers, not selects (core/pick.js): a type keeps its colour and a
                confidence its ring in the list where you choose one, and a domain
                keeps the tree it is. -->
-          ${pickerFor({ id: 'fType', value: state.type, items: types, ariaLabel: t('common.allTypes') })}
-          ${state.type === 'task' ? `<div class="seg" id="fTask" role="group" aria-label="${t('mem.task.aria')}">
+          ${field(t('mem.f.type'), pickerFor({ id: 'fType', value: state.type, items: types, ariaLabel: t('common.allTypes') }))}
+          ${state.type === 'task' ? bare(`<div class="seg" id="fTask" role="group" aria-label="${t('mem.task.aria')}">
             ${[['open', 'task.state.open'], ['completed', 'task.state.completed'],
                ['cancelled', 'task.state.cancelled'], ['', 'common.all']].map(([v, key]) =>
               `<button type="button" data-v="${v}" aria-pressed="${state.task_state === v}">${t(key)}</button>`).join('')}
-          </div>` : ''}
-          ${domainPickerHTML({ id: 'fDomain', value: state.domain, ariaLabel: t('common.allDomains') })}
-          <!-- only where the choice exists: a domain with no subdomains reads
-               the same either way, and an inert toggle is noise -->
-          ${kids ? `<button type="button" class="chip clickable" id="fExact" aria-pressed="${Boolean(state.exact)}"
-               title="${esc(t('mem.subtree.title'))}">${t(state.exact ? 'mem.subtree.exact' : 'mem.subtree.incl')}</button>` : ''}
+          </div>`) : ''}
+          ${field(t('mem.f.domain'), domainPickerHTML({ id: 'fDomain', value: state.domain,
+            ariaLabel: t('common.allDomains'), anyLabel: t('mem.f.allM') }))}
           <!-- the filter resolved a name that was only the deep end of a path;
                showing the rows without saying so would claim a filter that was
                never run -->
-          ${data.domain_scope ? `<span class="chip" title="${esc(t('mem.scope.title'))}">${
-            esc(t('mem.scope.resolved', { list: data.domain_scope.join(', ') }))}</span>` : ''}
-          <div class="seg" id="fStatus" role="group" aria-label="${t('mem.status.aria')}">
+          ${data.domain_scope ? bare(`<span class="chip" title="${esc(t('mem.scope.title'))}">${
+            esc(t('mem.scope.resolved', { list: data.domain_scope.join(', ') }))}</span>`) : ''}
+          ${field(t('mem.f.status'), `<div class="seg" id="fStatus" role="group" aria-label="${t('mem.status.aria')}">
             <button type="button" data-v="active" aria-pressed="${state.status === 'active'}">${t('common.active')}</button>
             <button type="button" data-v="archived" aria-pressed="${state.status === 'archived'}">${t('common.archived')}</button>
             <button type="button" data-v="" aria-pressed="${state.status === ''}">${t('common.all')}</button>
-          </div>
-          ${pickerFor({ id: 'fConf', value: state.confidence, items: confs, ariaLabel: t('mem.conf.all') })}
-          ${pickerFor({ id: 'fPin', value: state.pin, items: pins, ariaLabel: t('mem.pin.all') })}
-          ${data.searched ? '' : pickerFor({ id: 'fSort', items: sorts, ariaLabel: t('mem.sort.aria'),
-            value: activeSort })}
-          ${defects}
-          ${state.session ? `<button type="button" class="chip clickable" id="fSession" title="${t('mem.session.title')}">${t('mem.session.chip', { s: esc(state.session.slice(0, 18)) })}${icon('close')}</button>` : ''}
+          </div>`)}
+          ${field(t('mem.f.conf'), pickerFor({ id: 'fConf', value: state.confidence, items: confs, ariaLabel: t('mem.conf.all') }))}
+          ${bare(`<button type="button" class="btn mem-more" id="fMore" aria-expanded="${moreOpen}"
+                  aria-controls="memMore">${icon('filter')}${t('mem.more')}${
+            moreActive ? `<span class="mem-more-n">${moreActive}</span>` : ''}</button>`)}
+        </div>
+        <div class="list-toolbar tb-labeled mem-more-row" id="memMore"${moreOpen ? '' : ' hidden'}>
+          ${field(t('mem.f.pin'), pickerFor({ id: 'fPin', value: state.pin, items: pins, ariaLabel: t('mem.pin.aria') }))}
+          ${data.searched ? '' : field(t('mem.f.sort'), pickerFor({ id: 'fSort', items: sorts, ariaLabel: t('mem.sort.aria'),
+            value: activeSort }))}
+          ${defects ? bare(defects) : ''}
+          ${state.session ? bare(`<button type="button" class="chip clickable" id="fSession" title="${t('mem.session.title')}">${t('mem.session.chip', { s: esc(state.session.slice(0, 18)) })}${icon('close')}</button>`) : ''}
         </div>
 
         <!-- The header strip is a sibling of the rows and not the first of them:
@@ -255,18 +266,20 @@ export async function renderMemories(view, params, ctx) {
   }, 500));
   wirePicker(view, { id: 'fType', items: fixedItems(types),
                      onPick: type => navigate({ type, task_state: '', page: 0 }) });
-  /* a new scope starts inclusive: 'exact' was about the domain just left */
   wireDomainPicker(view, {
-    id: 'fDomain', domains,
-    onPick: domain => navigate({ domain, exact: '', page: 0 }),
+    id: 'fDomain', domains, anyLabel: t('mem.f.allM'),
+    onPick: domain => navigate({ domain, page: 0 }),
   });
-  const fExact = $('#fExact');
-  if (fExact) fExact.addEventListener('click', () =>
-    navigate({ exact: state.exact ? '' : '1', page: 0 }));
   wirePicker(view, { id: 'fConf', items: fixedItems(confs),
                      onPick: confidence => navigate({ confidence, page: 0 }) });
   wirePicker(view, { id: 'fPin', items: fixedItems(pins),
                      onPick: pin => navigate({ pin, page: 0 }) });
+  $('#fMore').addEventListener('click', e => {
+    const open = e.currentTarget.getAttribute('aria-expanded') !== 'true';
+    e.currentTarget.setAttribute('aria-expanded', String(open));
+    $('#memMore').hidden = !open;
+    writeMoreOpen(open);
+  });
   wirePicker(view, { id: 'fSort', items: fixedItems(sorts), onPick: v => {
     const [sort, dir] = v.split(':');
     navigate({ sort, dir, page: 0 });
@@ -470,8 +483,9 @@ function renderRows(items, scope = '') {
            whispers stacked on the right, at 60% white, quieter than the uid
            beside it -- in a store whose whole point is that a human vets what
            an agent wrote, the vetting was the faintest thing in the row. -->
-      <div class="mem-col-type" role="gridcell">${confPill(m.confidence, true)}${typeTag(m.type)}</div>
-      <div class="mem-main${m.pin ? ' is-pinned' : ''}" role="gridcell">${pinMark(m.pin)}
+      <div class="mem-col-type" role="gridcell"><span class="pin-slot">${pinMark(m.pin)}</span>${
+        confPill(m.confidence, true)}${typeTag(m.type)}</div>
+      <div class="mem-main" role="gridcell">
         <!-- A titled row shows its title alone, with the body on hover.
              A row with no title is the body: it is what names the memory
              when nothing else does.

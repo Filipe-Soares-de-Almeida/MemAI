@@ -303,8 +303,8 @@ def test_pin_strings_exist_in_every_locale(locale):
     strings = json.loads((WEBUI / "public" / "i18n" / locale).read_text(encoding="utf-8"))["strings"]
     for key in ("dr.pin.label", "dr.pin.none", "dr.pin.global", "dr.pin.domain",
                 "dr.pin.noneWhy", "dr.pin.globalWhy", "dr.pin.domainWhy", "dr.pin.noDomain",
-                "dr.pinSet", "mem.pin.all", "mem.pin.any", "mem.pin.global",
-                "mem.pin.domain"):
+                "dr.pinSet", "mem.pin.any", "mem.pin.global", "mem.pin.domain",
+                "mem.pin.aria", "mem.more", "mem.f.pin", "mem.f.allF"):
         assert strings.get(key), key
 
 
@@ -327,3 +327,22 @@ def test_an_unpinned_memory_payload_carries_no_pin_field(store):
         pinned = _pinned(conn, "global")
     assert "pin" not in server.get_memory(plain)
     assert server.get_memory(pinned)["pin"] == "global"
+
+
+def test_the_memory_list_folds_its_extra_filters_behind_one_button():
+    source = (WEBUI / "views" / "memories.js").read_text(encoding="utf-8")
+    assert 'id="fMore"' in source and 'id="memMore"' in source
+    assert source.index("id: 'fConf'") < source.index('id="fMore"') < source.index("id: 'fPin'")
+
+
+def test_every_list_filter_carries_its_label():
+    source = (WEBUI / "views" / "memories.js").read_text(encoding="utf-8")
+    for key in ("mem.f.search", "mem.f.type", "mem.f.domain", "mem.f.status",
+                "mem.f.conf", "mem.f.pin", "mem.f.sort"):
+        assert f"field(t('{key}')" in source, key
+
+
+def test_the_graph_toolbar_labels_its_filters_like_the_list():
+    source = (WEBUI / "views" / "graph.js").read_text(encoding="utf-8")
+    for key in ("g.f.find", "mem.f.domain", "mem.f.type", "mem.f.status", "g.f.show"):
+        assert f"field(t('{key}')" in source, key

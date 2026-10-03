@@ -18,6 +18,7 @@ import { api, query } from '../core/api.js';
 import { icon } from '../core/icons.js';
 import { toast, failed, tipShow, tipHide, openModal, closeModal, setPressed } from '../core/ui.js';
 import { typeTag, typeColor, uidChip, statusTag, confPill, wireCopyChips,
+         tbField as field, tbBare as bare,
          getDomains, TYPE_ORDER, TYPE_LABEL, typeItems, REL_SUGGEST, relTypeField,
          wireRelTypeField } from '../core/shared.js';
 import { pickerFor, wirePicker, fixedItems } from '../core/pick.js';
@@ -89,7 +90,7 @@ export async function renderGraph(view, params, ctx) {
 
   const counts = {};
   data.nodes.forEach(n => { counts[n.type] = (counts[n.type] || 0) + 1; });
-  const types = typeItems({ any: t('common.allTypes') });
+  const types = typeItems({ any: t('mem.f.allM') });
 
   /* A cut that says nothing is a cut that reads as "this is everything".
      The endpoint caps only when a `limit` asks it to, so this is the note
@@ -105,7 +106,7 @@ export async function renderGraph(view, params, ctx) {
          for is reading the canvas, and each one floating over it was that much
          of the store hidden behind its own toolbar. The one that stays on the
          canvas is the arrangement, which is a property of the drawing. -->
-    <div class="list-toolbar toolbar-sm graph-bar">
+    <div class="list-toolbar toolbar-sm tb-labeled graph-bar">
       <!-- The spotlight, and it leads the row because it is the filter that
            answers the most questions. This view exists for the macro read --
            the shape of the store, where the clusters and the loose ends are --
@@ -113,26 +114,27 @@ export async function renderGraph(view, params, ctx) {
            keep their colour and size and everything else fades. Nothing is
            removed, no request is made, the arrangement never moves. Enter
            travels to the best match. -->
-      <input type="search" id="gFind" class="graph-find" spellcheck="false" autocomplete="off"
-             placeholder="${t('g.find')}" aria-label="${t('g.find')}">
-      ${domainPickerHTML({ id: 'gDomain', value: state.domain, ariaLabel: t('common.allDomains') })}
-      ${pickerFor({ id: 'gType', value: state.type, items: types, ariaLabel: t('common.allTypes') })}
-      <div class="seg" role="group" aria-label="${t('mem.status.aria')}">
+      ${field(t('g.f.find'), `<input type="search" id="gFind" class="graph-find" spellcheck="false" autocomplete="off"
+             placeholder="${t('g.find')}" aria-label="${t('g.find')}">`, 'tb-grow graph-find-field')}
+      ${field(t('mem.f.domain'), domainPickerHTML({ id: 'gDomain', value: state.domain,
+        ariaLabel: t('common.allDomains'), anyLabel: t('mem.f.allM') }))}
+      ${field(t('mem.f.type'), pickerFor({ id: 'gType', value: state.type, items: types, ariaLabel: t('common.allTypes') }))}
+      ${field(t('mem.f.status'), `<div class="seg" role="group" aria-label="${t('mem.status.aria')}">
         <button type="button" data-v="active" aria-pressed="${state.status === 'active'}">${t('common.active')}</button>
         <button type="button" data-v="" aria-pressed="${state.status === ''}">${t('common.all')}</button>
-      </div>
+      </div>`)}
       <!-- What the drawing carries. The three are independent of each
            other, so a button each rather than a choice between them. -->
-      <div class="seg" role="group" aria-label="${t('g.show')}">
+      ${field(t('g.f.show'), `<div class="seg" role="group" aria-label="${t('g.show')}">
         <button type="button" id="gShowLinks" aria-pressed="${show.links}"
                 title="${esc(t('g.show.links.hint'))}">${icon('relation')}${t('g.show.links')}</button>
         <button type="button" id="gShowDomains" aria-pressed="${show.domains}"
                 title="${esc(t('g.show.domains.hint'))}">${icon('folder')}${t('g.show.domains')}</button>
         <button type="button" id="gShowNames" aria-pressed="${show.names}"
                 title="${esc(t('g.show.names.hint'))}">${icon('label')}${t('g.show.names')}</button>
-      </div>
-      <button type="button" class="btn btn-sm" id="gLink" aria-pressed="false">${icon('pencil')}${t('g.linkMode')}</button>
-      <button type="button" class="btn btn-sm" id="gFit">${t('g.center')}</button>
+      </div>`)}
+      ${bare(`<button type="button" class="btn btn-sm" id="gLink" aria-pressed="false">${icon('pencil')}${t('g.linkMode')}</button>
+      <button type="button" class="btn btn-sm" id="gFit">${t('g.center')}</button>`)}
       <!-- last, and pushed to the far end: a count that appeared between two
            controls would shove the whole row sideways on the first keystroke -->
       <span id="gFindCount" class="graph-find-count" aria-live="polite"></span>
@@ -177,7 +179,8 @@ export async function renderGraph(view, params, ctx) {
     if (p.mode === DEFAULT_MODE) delete out.mode;
     go('graph', out);
   };
-  wireDomainPicker(view, { id: 'gDomain', domains, onPick: domain => nav({ domain }) });
+  wireDomainPicker(view, { id: 'gDomain', domains, anyLabel: t('mem.f.allM'),
+                           onPick: domain => nav({ domain }) });
   wirePicker(view, { id: 'gType', items: fixedItems(types), onPick: type => nav({ type }) });
   view.querySelectorAll('.graph-bar .seg button[data-v]').forEach(b =>
     b.addEventListener('click', () => nav({ status: b.dataset.v })));

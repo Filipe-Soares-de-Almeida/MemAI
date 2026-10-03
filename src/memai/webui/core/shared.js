@@ -283,6 +283,13 @@ export const confItems = ({ any = '' } = {}) => [
   ...Object.keys(CONF).map(c => ({ value: c, label: CONF[c].label, html: confPill(c) })),
 ];
 
+/* A toolbar filter under its label (see .tb-labeled), and a control with no
+   label kept level with the labelled ones. */
+export const tbField = (label, control, cls = '') =>
+  `<div class="tb-field${cls ? ` ${cls}` : ''}"><span class="mg-label" aria-hidden="true">${
+    esc(label)}</span>${control}</div>`;
+export const tbBare = control => `<div class="tb-bare">${control}</div>`;
+
 export const pinItems = ({ any = '' } = {}) => [
   { value: '', label: any, html: `<span class="pick-any">${esc(any)}</span>` },
   { value: 'any', label: t('mem.pin.any'),
