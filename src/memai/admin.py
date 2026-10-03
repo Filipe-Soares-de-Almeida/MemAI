@@ -2690,6 +2690,8 @@ async def ping(request):
         "pid": os.getpid(),
         "project": db.active_project(),
         "db": str(db.default_db_path()),
+        # install-guard.py compares it with its own checkout before refusing
+        "root": str(update.checkout_root() or ""),
     })
 
 

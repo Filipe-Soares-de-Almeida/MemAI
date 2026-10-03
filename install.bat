@@ -17,6 +17,9 @@ if errorlevel 1 (
     exit /b 1
 )
 
+.venv\Scripts\python.exe tools\install-guard.py
+if errorlevel 1 exit /b 1
+
 call .venv\Scripts\activate.bat
 python -m pip install --upgrade pip
 pip install -e ".[dev]"
