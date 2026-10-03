@@ -5269,6 +5269,22 @@ input.pick-q:focus { box-shadow: inset 0 -2px 0 var(--accent); }
 .rl-list li { font: 400 var(--fs-read)/1.6 var(--font-ui); color: var(--ink); }
 .rl-list li::marker { color: var(--ink-3); }
 
+/* A breaking group is the one an upgrade has to read before it runs. */
+.rl-group.is-breaking {
+  max-width: calc(72ch + var(--sp-4) * 2);
+  padding: var(--sp-3) var(--sp-4);
+  background: var(--warn-tint);
+  border: 1px solid rgba(255, 213, 79, .35);
+  border-left: 3px solid var(--warn);
+  border-radius: var(--r-sm);
+}
+.rl-group.is-breaking .rl-group-title {
+  display: flex; align-items: center; gap: var(--sp-2);
+  color: var(--warn); font-weight: 600;
+}
+.rl-group.is-breaking .rl-list li::marker { color: var(--warn); }
+.rl-warn { font-size: var(--fs-md); letter-spacing: 0; line-height: 1; }
+
 .rl-quiet { font-size: var(--fs-body); color: var(--ink-3); }
 .rl-src {
   display: inline-block; margin-top: var(--sp-3);
