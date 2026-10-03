@@ -616,7 +616,12 @@ def task(title: str, goal: str, items: str, domain: str = "", also: str = "",
     title: one line naming what this task delivers, in the words someone
     would look for it by. At most 120 characters.
 
-    goal: what done looks like, in a sentence or two.
+    goal: the brief an agent with none of this session's context works from:
+    what the work is and why, where it lives, the decisions and constraints
+    that bind it, and what done looks like. Short, but complete enough to act
+    on -- a few compact paragraphs, at most 2000 characters. Plain prose: a
+    task is not a sectioned type, so no `INTENT:` / `GOAL:` / `WHY:` labels --
+    those are how checkpoint, anti_pattern and reasoning bodies are read back.
 
     items: one checklist item per line, blank lines ignored. At most 50
     items of 300 characters each. Each gets a key (i1, i2, ...) that

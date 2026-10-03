@@ -68,6 +68,14 @@ one — a task carries unfinished work to the next session.
 | **Work for whoever picks this up** | **`task`** | A goal and a checklist, worked with `task_item` and closed once every item is done or dropped; open ones come first in every session start ([§4.1](#41-tasks-a-goal-and-a-checklist)) |
 | **What a routine does, end to end** (steps, decisions, outputs) | **`diagram`** | A flow as a **graph**, not prose: each step carries its own note and links, which makes it the index of its domain ([§4.2](#42-diagrams-a-flow-as-a-graph)) |
 
+> **Sectioned bodies × free-text bodies.** `checkpoint`, `anti_pattern` and
+> `reasoning` take their body as named fields, stored as `LABEL: text` lines
+> (`INTENT:`, `TEMPTATION:`, `HYPOTHESIS:` …) that the store and the dashboard
+> read back field by field. **`note` and `task` are free text**: a task's
+> `goal` and a note's `content` are plain prose paragraphs, with **no**
+> `KEYWORD: text` labels (`GOAL:`, `WHY:`, `CONTEXT:` …) — that look marks a
+> sectioned type, and nothing reads it back from a free-text body.
+
 > **checkpoint × note × reasoning** — the boundary most often crossed by
 > mistake:
 > - **`checkpoint`** = *where the work stands* right now, so the next session
@@ -399,8 +407,14 @@ task(title, goal, items, domain, also, tags, session)
   items: one checklist item per line; blank lines are ignored
 ```
 
-A task is a `goal` (what done looks like) and up to 50 items of up to 300
-characters. Each item gets a key in the order it is added — `i1`, `i2`, … —
+A task is a `goal` and up to 50 items of up to 300 characters. The `goal` is
+the **brief** an agent with none of the writing session's context works from:
+what the work is and why, where it lives, the decisions and constraints that
+bind it, and what done looks like. Keep it short but complete enough to act on
+— a few compact paragraphs, at most 2000 characters; a one-liner leaves the
+next agent guessing. It is **plain prose**, never `GOAL:` / `WHY:` /
+`CONTEXT:` labelled fields: a task is not a sectioned type like `checkpoint`,
+and copying their `LABEL: text` shape only makes it look like one. Each item gets a key in the order it is added — `i1`, `i2`, … —
 and a key is never reused: an item that stops applying is `dropped`, never
 deleted. A tool takes `i3` or `3` for the third item. The task's content is
 generated from the goal and the items (`[ ]` todo, `[~]` doing, `[x]` done,
