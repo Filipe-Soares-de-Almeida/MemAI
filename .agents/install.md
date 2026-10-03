@@ -83,15 +83,16 @@ host. A failure here is an install problem, not a configuration problem.
 
 ## 4. Register the MCP server — two hosts, two different files
 
-Claude Code and the Claude Desktop chat app read **different files**. Neither
-reads the other's. A server registered in one does not appear in the other, and
-the desktop app showing "no servers added" says nothing about whether Claude
-Code has one.
+The Claude Code CLI and the Claude desktop app read **different files**. The
+desktop app's Code tab runs Claude Code, and still reads the desktop app's
+file, not `~/.claude.json`. Neither host reads the other's: a server registered
+in one does not appear in the other, and an empty list in one says nothing
+about the other.
 
 | host | the file it reads |
 |---|---|
-| Claude Code — CLI and desktop UI alike | `~/.claude.json`, top-level `mcpServers` |
-| Claude Desktop — the chat app | Windows: `%APPDATA%\Claude\claude_desktop_config.json`<br>macOS: `~/Library/Application Support/Claude/claude_desktop_config.json` |
+| Claude Code CLI — `claude` in a terminal | `~/.claude.json`, top-level `mcpServers` |
+| Claude desktop app — Chat and the Code tab | Windows: `%APPDATA%\Claude\claude_desktop_config.json`<br>macOS: `~/Library/Application Support/Claude/claude_desktop_config.json` |
 
 Register in whichever the user actually uses; register in both if they use
 both. Do not report the install as done after writing only one, and do not
@@ -102,7 +103,7 @@ infer from one file's contents what the other holds — open the file.
 literally, so a server registered under another name leaves the warden running
 with no store to search.
 
-For Claude Code, the CLI writes the entry:
+For the Claude Code CLI, `claude mcp add` writes the entry:
 
 ```sh
 claude mcp add --scope user memai "<absolute path to memai-mcp>"
