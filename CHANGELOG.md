@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.6.0](https://github.com/Filipe-Soares-de-Almeida/MemAI/compare/v0.5.0...v0.6.0) (2026-10-03)
+
+
+### Features
+
+* **hooks:** hold a briefed session's tools until it reads its memory ([#61](https://github.com/Filipe-Soares-de-Almeida/MemAI/issues/61)) ([fd611a3](https://github.com/Filipe-Soares-de-Almeida/MemAI/commit/fd611a30570f2686a9f54c5f09d4b44644b2ffc2))
+
+
+### Documentation
+
+* the host table names the file each Claude host reads, and the README lists every wiki page ([#63](https://github.com/Filipe-Soares-de-Almeida/MemAI/issues/63)) ([0292cc5](https://github.com/Filipe-Soares-de-Almeida/MemAI/commit/0292cc5ae1b35350a35525f980aef2e2856cb765))
+
 ## [0.5.0](https://github.com/Filipe-Soares-de-Almeida/MemAI/compare/v0.4.0...v0.5.0) (2026-10-03)
 
 
