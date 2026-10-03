@@ -306,3 +306,24 @@ def test_pin_strings_exist_in_every_locale(locale):
                 "dr.pinSet", "mem.pin.all", "mem.pin.any", "mem.pin.global",
                 "mem.pin.domain"):
         assert strings.get(key), key
+
+
+# ------------------------------------------------------------ review fixes
+
+@pytest.mark.parametrize("pinned_at, asked", [
+    ("acme/x100", "ACME/X100/new"),
+    ("acme/x100", "Acme/x100/p200"),
+    ("Acme/X100", "acme/x100/deeper"),
+])
+def test_a_domain_pin_ignores_the_casing_of_the_asked_path(store, pinned_at, asked):
+    with db.connect() as conn:
+        _pinned(conn, "domain", domain=pinned_at)
+        assert _types(pending.pinned_counts(conn, asked)) == {"note": 1}
+
+
+def test_an_unpinned_memory_payload_carries_no_pin_field(store):
+    with db.connect() as conn:
+        plain = _note(conn, title="Plain fact")
+        pinned = _pinned(conn, "global")
+    assert "pin" not in server.get_memory(plain)
+    assert server.get_memory(pinned)["pin"] == "global"

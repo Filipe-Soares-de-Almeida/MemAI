@@ -241,10 +241,9 @@ def _row_to_dict(row) -> dict:
     blob = d.pop("also_domains", "")
     if blob:
         d["also"] = db.parse_domains(blob)
-    # Blank on most rows, since most memories are not about anything that
-    # goes stale -- and a field that is empty nine times out of ten still
-    # costs its name in every result of every search.
-    for optional in ("review_after", "source_ref"):
+    # Blank on most rows -- and a field that is empty nine times out of ten
+    # still costs its name in every result of every search.
+    for optional in ("review_after", "source_ref", "pin"):
         if not d.get(optional):
             d.pop(optional, None)
     return d

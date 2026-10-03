@@ -15,8 +15,10 @@ PINNED_TYPES = CATEGORIES + ("checkpoint", "reasoning")
 LIMIT_MAX = 50
 _SOUND = {"anti_pattern", "handoff", "note", "checkpoint", "reasoning"}
 
-# A path `col` that is the asked scope or one of its ancestors.
-_ANCHOR = "({col} <> '' AND (? = {col} OR substr(?, 1, length({col}) + 1) = {col} || '/'))"
+# A path `col` that is the asked scope or one of its ancestors, compared folded
+# because a path's casing is not part of its name.
+_ANCHOR = ("({col} <> '' AND (lower(?) = lower({col}) "
+           "OR substr(lower(?), 1, length({col}) + 1) = lower({col}) || '/'))")
 
 
 def _scope(conn: sqlite3.Connection, domain: str) -> tuple[str, list]:
