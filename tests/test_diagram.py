@@ -908,7 +908,7 @@ def test_mcp_pulse_counts_diagrams_without_listing_them(mcp):
         title="Nightly export routine", nodes=NODES, edges=EDGES, domain="proj-1042",
     )
     p = mcp.pulse(domain="proj-1042")
-    assert p["pending"] == [{"type": "diagram", "count": 1}]
+    assert p["must_read"] == [{"type": "diagram", "count": 1}]
     assert "diagrams" not in p  # a whole graph would swamp a warm-up
 
 

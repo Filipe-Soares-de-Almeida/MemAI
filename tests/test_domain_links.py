@@ -215,7 +215,7 @@ def test_pulse_warms_up_a_flow_that_owns_nothing(conn, monkeypatch, tmp_path):
     _crossing(conn)
     conn.commit()
     p = server.pulse(domain="omni/x900")
-    assert p["pending"] == [{"type": "note", "count": 2}]
+    assert p["must_read"] == [{"type": "note", "count": 2}]
     assert p["scope"]["also"] == 2
 
 
