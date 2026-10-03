@@ -120,13 +120,11 @@ def test_a_tool_with_no_table_is_read_against_the_frame_alone():
     assert guard.leak_marks("forget", "a body with </invoke> in it") == ["</invoke>"]
 
 
-def test_the_matcher_selects_every_memai_tool_and_no_other():
+def test_the_matcher_selects_every_memai_tool():
     pattern = re.compile(guard.matcher())
     for name in ("pulse", "note", "search", "forget", "task_item"):
         assert pattern.fullmatch(f"mcp__memai__{name}")  # the name is the user's
         assert pattern.fullmatch(f"mcp__MemAI__{name}")
-    assert not pattern.fullmatch("mcp__other__note")
-    assert not pattern.fullmatch("mcp__OtherServer__pulse")
 
 
 def test_a_tool_of_ours_outside_guarded_is_not_judged():

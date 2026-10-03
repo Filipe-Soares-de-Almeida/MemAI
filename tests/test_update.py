@@ -445,7 +445,7 @@ def test_the_session_start_hook_appends_the_note(store, monkeypatch, capsysbinar
     context = result["hookSpecificOutput"]["additionalContext"]
     assert "pulse(domain)" in context
     assert f"memai {NEWER} has been released" in context
-    assert result["systemMessage"].startswith(f"MemAI {NEWER}")
+    assert result["systemMessage"].endswith(update.banner())
 
 
 def test_the_session_start_hook_says_nothing_about_a_version_that_is_current(
@@ -456,7 +456,7 @@ def test_the_session_start_hook_says_nothing_about_a_version_that_is_current(
     monkeypatch.setattr(update, "_fetch", _answers(f"v{memai.__version__}"))
     result = _session_start({"session_id": "s1"}, capsysbinary)
     assert "has been released" not in result["hookSpecificOutput"]["additionalContext"]
-    assert "systemMessage" not in result
+    assert "has been released" not in result["systemMessage"]
 
 
 def test_the_stop_hook_fills_the_cache_the_next_session_reads(store, monkeypatch):
