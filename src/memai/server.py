@@ -3,8 +3,8 @@
 Tools for long-term agent memory: note/checkpoint/anti_pattern/
 reasoning/task/diagram to write, search/recall/list_by_domain/
 list_recent/timeline/list_domains/pulse to read, plus edit history, a relations
-graph, a dedup-candidate scanner, confidence/status tracking, and help()
-for self-documentation straight from these docstrings. Retrieval is FTS5
+graph, a dedup-candidate scanner and confidence/status tracking.
+Retrieval is FTS5
 (BM25) keyword search over one ACID SQLite file -- it only narrows
 candidates, the calling agent judges relevance.
 
@@ -33,7 +33,6 @@ carry a per-process `session` stamp unless one is passed.
 
 from __future__ import annotations
 
-import inspect
 import json
 import os
 
@@ -46,7 +45,7 @@ from memai import (autostart, brief, db, diagram_svg, hook_install, pending as p
 # model's context by the hosts that support it. Kept to a paragraph on
 # purpose: it is paid on every request, exactly like a tool schema, and
 # what it has to buy is the first call -- an agent that never calls pulse()
-# has a memory server and no memory. The rest is in help().
+# has a memory server and no memory. The rest is in the tool descriptions.
 INSTRUCTIONS = """\
 Long-term memory that survives between sessions. Read before working:
 pulse(domain) for the state of a subject, recall(query) or search(query)
@@ -66,8 +65,7 @@ pinned=true) and open every one before acting.
 
 A domain is a path ('acme/x100/p200') and every read covers its
 subdomains, so the same call asks about a product or one routine depending
-on how much of the path it gives. help() documents every tool from its own
-source."""
+on how much of the path it gives."""
 
 # Appended to INSTRUCTIONS while the user's settings register no memai hook.
 # `{command}` is filled with the absolute path to this environment's
@@ -200,9 +198,7 @@ SESSION = _new_session_id()
 # session pay for what it uses.
 #
 # 'full' stays the default: dropping a tool an existing setup calls is not
-# something to do to somebody quietly. help() still lists every tool in
-# either case, and says which ones this process did not load, so an agent
-# that needs one can be told rather than left guessing why it is missing.
+# something to do to somebody quietly.
 TOOL_SETS = ("core", "diagrams", "curation")
 _ACTIVE_SETS = frozenset(
     TOOL_SETS if (raw := os.environ.get("MEMAI_TOOLS", "full").strip().lower()) in ("", "full")
@@ -216,9 +212,9 @@ _GROUP_OF: dict[str, str] = {}
 def tool(group: str):
     """Register a tool with FastMCP when its group is active.
 
-    Always returns the plain function: the module-level name has to stay
-    callable either way, because help() reads its signature and docstring
-    out of the code whether or not the schema was published.
+    Always returns the plain function, so the module-level name stays
+    callable from the admin surface and the tests whether or not the schema
+    was published.
     """
     def wrap(fn):
         _GROUP_OF[fn.__name__] = group
@@ -922,7 +918,8 @@ def get_diagram(uid: str, format: str = "mermaid") -> dict:
     Both SVG formats write the markup to a file and return its path plus a
     thin index of the steps; the payload is deliberately too small to draw
     from. The returned `next_step` says what to do with the path, at the
-    point where it matters. help(command='get_diagram') has the rest.
+    point where it matters: when the user asked to SEE the flow, reading the
+    file and emitting it inline is the work, not a cost to avoid.
     """
     if format not in _DIAGRAM_FORMATS:
         return _errors([f"unknown format {format!r}; use "
@@ -1817,9 +1814,8 @@ def optimize_scan(
 
     BEFORE PROPOSING ANY CHANGE, CHECK IT AGAINST LIVE FACTS, and record what
     you checked in each suggestion's `verified`. Destructive kinds are
-    rejected without it. help(command='optimize_scan') has the rest: what
-    every hint means, how `since` stays cross-window, and what "live facts"
-    covers per memory type.
+    rejected without it: cross-check newer memories in the corpus, verify
+    code anchors against the live repo, web-check world facts.
     """
     with db.connect() as conn:
         corpus = db.optimization_corpus(
@@ -1844,12 +1840,14 @@ def optimize_stage(suggestions: list[dict], note: str = "") -> dict:
 
     Each suggestion is {"kind", "target_uid", "payload", "rationale",
     "verified"}. Kinds: compact/reword {"new_content"}, retag {"tags"},
-    redomain {"domain"}, crosslist {"also": [...]}, set_confidence
-    {"confidence"}, review {"review_after"} (a date or a span like '180d';
-    '' clears it), archive {"reason"}, link {"from_uid","to_uid",
-    "relation_type"}, merge {"keep_uid","drop_uid"}, distill
-    {"source_uids","new_type","new_content","title"}. link/merge derive target_uid
-    from the payload and distill creates its target -- omit it for those.
+    retitle {"title"}, redomain {"domain"}, crosslist {"also": [...]}
+    (replaces the whole set), set_confidence {"confidence"}, review
+    {"review_after"} (a date or a span like '180d'; '' clears it), archive
+    {"reason"}, link {"from_uid","to_uid","relation_type"}, merge
+    {"keep_uid","drop_uid"}, distill {"source_uids","new_type","new_content",
+    "title"}, unleak {"field": "content|tags|source_ref"} (the repair is
+    computed at staging). link/merge derive target_uid from the payload and
+    distill creates its target -- omit it for those.
 
     Destructive kinds (archive, set_confidence=contradicted, merge,
     distill) require a non-empty `verified` describing the live-facts
@@ -1860,7 +1858,6 @@ def optimize_stage(suggestions: list[dict], note: str = "") -> dict:
     longer one raises and stages nothing. What a single suggestion needs
     said belongs in its own `rationale` and `verified`, which are not
     capped.
-    help(command='optimize_stage') explains each kind in full.
     """
     with db.connect() as conn:
         result = db.stage_optimization(conn, note, suggestions)
@@ -1907,266 +1904,8 @@ def optimize_status(run_id: int) -> dict:
     }
 
 
-@tool("core")
-def help(command: str = "") -> dict:
-    """Explain the memai tools, read directly from their code docstrings.
-
-    Without arguments: every tool with its one-line summary, and which of
-    them this process did not load (MEMAI_TOOLS). With command='<name>':
-    that tool's signature and its FULL documentation -- longer than the
-    schema description, because the schema is paid for on every request
-    and this is paid for when someone reads it.
-    """
-    if not command:
-        result = {
-            "tools": {
-                name: (inspect.getdoc(fn) or "").split("\n", 1)[0]
-                for name, fn in _TOOLS.items()
-            },
-            "hint": "call help(command='<name>') for a tool's full signature and documentation",
-        }
-        # Named, not hidden: a tool left out of this process still exists,
-        # and an agent that needs one is better told how to turn it on than
-        # left to infer that memai cannot do the thing at all.
-        missing = sorted(set(_TOOLS) - _published())
-        if missing:
-            result["not_loaded"] = missing
-            result["not_loaded_hint"] = (
-                "these are documented but not offered as tools in this process; set "
-                f"MEMAI_TOOLS=full (or add a group: {', '.join(TOOL_SETS)}) in the "
-                "MCP server's environment to publish them")
-        return result
-    fn = _TOOLS.get(command)
-    if fn is None:
-        return {"error": f"unknown command: {command}", "available": sorted(_TOOLS)}
-    doc = (inspect.getdoc(fn) or "") + _LONG_DOC.get(command, "")
-    return {
-        "command": command,
-        "signature": f"{command}{inspect.signature(fn)}",
-        "doc": doc,
-        **({"loaded": False} if command not in _published() else {}),
-    }
-
-
-def _published() -> set[str]:
-    """The tool names FastMCP is actually offering this session."""
-    return {name for name, group in _GROUP_OF.items() if group in _ACTIVE_SETS}
-
-
-# The half of a tool's documentation that does not belong in its schema.
-#
-# A description is sent with every request for the whole session; this is
-# sent when help() is called, which is when somebody is actually reading
-# it. What stays in the docstring is what a caller needs to pick the tool
-# and its arguments correctly; what moves here is the reasoning, the
-# failure modes and the worked detail -- true, worth having, and not worth
-# a thousand characters of every context window in every session that never
-# calls the tool.
-_LONG_DOC = {
-    "optimize_scan": """
-Dump the memory corpus compactly so you can plan a curation pass.
-
-Step 1 of the "optimize my memories" workflow. Returns every memory's
-curation-relevant fields, the relation edges among them, and
-dedup-candidate pairs as a starting hint. Read this, then decide what
-to compact/reword/retag/redomain/set_confidence/archive/link/merge/
-distill/unleak and stage it with optimize_stage.
-
-The listing is slim on purpose so a few-hundred-memory store fits one
-response: content is a ~120-char snippet plus `content_len` (tags cut
-at ~100 with `tags_len`); empty/default fields are omitted (incl.
-confidence 'unverified' -- stats keeps the aggregate); created_at
-drops sub-second precision. Pass full=True for whole
-bodies, or fetch one with get_memory(uid) when a snippet is not
-enough. A page also ends early if its serialized size hits an
-internal budget, so one response ALWAYS fits the host's output cap.
-`truncated: true` means the listing stopped before the corpus ended
--- page onward with offset = offset + count (stats.total is the
-whole corpus).
-
-On a grown store, prefer INCREMENTAL curation over full-corpus
-passes: `since` limits the scan to memories created or updated
-at/after an ISO timestamp or date ('2026-07-01'), so a recurring
-"optimize my memories" only reviews the delta since the last run
-(optimize_runs shows when that was). Cross-window collisions are
-still caught: dedup_hints probe FROM the new memories against the
-whole store (a new memory duplicating an old one outside the window
-surfaces; old x old pairs are skipped), and domain_hints report any
-store-wide domain cluster the delta touches. Combine with
-domain/type to curate one slice at a time. Also included:
-  - stats: totals for the whole filtered corpus (by_type,
-    by_confidence, by_domain, empty_domain, untagged) -- computed
-    regardless of `limit`. `untagged` counts the memories whose tags
-    are empty or are nothing but their own type: BM25 reads content,
-    tags and domain, so those answer only a query that quotes their
-    own wording. They are the retag work list,
-  - domain_hints: clusters of domain-string variants that likely mean
-    the same thing (case/separator drift, ticket-id spellings), with
-    a suggested canonical -- ready-made redomain candidates,
-  - domain_nesting: flat domains that already spell a hierarchy out
-    ('acme-x100-p200-cache-warmup'), each with the path it could
-    become ('acme/x100/p200/cache-warmup'). Domains nest, and a
-    scope only groups what is filed under it, so these are the
-    redomain candidates that turn one string per subject into a tree.
-    Read them as a proposal, not a verdict: the split cannot tell a
-    real level from a hyphen inside a name, so check each one and
-    stage only the splits that hold,
-  - per memory, `also`: the domains it belongs to beside its own path.
-    There is deliberately no hint listing cross-listing CANDIDATES --
-    which subjects cut across the tree is a judgement about what the
-    memories say, not something a string split can propose. Read the
-    corpus, decide, and stage `crosslist` suggestions; `also` is there
-    so you can tell a new membership from one that already holds,
-  - anchors: per memory, the verifiable references found in its FULL
-    content (URLs, file paths, table/field identifiers, constants),
-    space-joined -- the things to go check against live facts,
-  - leaked_calls: rows whose text carries a tool call's OWN SOURCE. A
-    parameter tag typed without the antml: prefix stays in the text of
-    the parameter before it, so the fields it opened -- the domain, the
-    tags, the source_ref -- were written into the body and their own
-    columns are empty. Per finding: which `fields` carry a mark and
-    what a repair `removes` from each; `clean: false` when the marks
-    sit inside the prose, which `unleak` refuses and a `reword` has to
-    rewrite by hand; and `declares`, what the debris was trying to
-    write, reported only for the columns that are still empty. So one
-    finding is usually an `unleak` per dirty field PLUS the redomain /
-    crosslist / retag that finishes it. stats.leaked_calls counts every
-    one in the window; the list stops at a cap.
-
-Before proposing any change, CHECK IT AGAINST LIVE FACTS -- do not
-rewrite or archive something that was true then but stale now, and do
-not "correct" something that is still true:
-  - cross-check newer memories already in this corpus (supersession /
-    contradiction),
-  - for code/config memories, verify the anchors against the live repo,
-  - for world-facts, web-check current truth.
-Record what you verified in each suggestion's `verified` field --
-destructive suggestions (archive, set_confidence=contradicted) are
-rejected without it.
-""",
-    "optimize_stage": """
-Stage a batch of curation suggestions for human review in the dashboard.
-
-Step 2 of the "optimize my memories" workflow. Writes the suggestions
-to a new optimization run; they are NOT applied here -- the user
-reviews and applies/rejects each one in the admin dashboard's
-Optimization tab, where a backup is taken before the first apply and
-every applied change can be undone.
-
-Each suggestion is an object:
-  {"kind": ..., "target_uid": ..., "payload": {...},
-   "rationale": "why", "verified": "what live-facts check you did"}
-
-Kinds and their payload:
-  compact / reword   {"new_content": str}
-  retag              {"tags": str}                 comma-separated
-  retitle            {"title": str}                one line naming the memory, max 120 chars
-  redomain           {"domain": str}
-  crosslist          {"also": [path, ...]}         replaces the whole set
-  set_confidence     {"confidence": "unverified|confirmed|contradicted"}
-  review             {"review_after": str}         a date or a span ('180d'); '' clears it
-  archive            {"reason": str}               soft/reversible; never hard-deletes
-  link               {"from_uid", "to_uid", "relation_type", "note"?}
-  merge              {"keep_uid", "drop_uid", "note"?}   links supersedes + archives drop
-  distill            {"source_uids": [uid, ...], "new_type": "note|reasoning|anti_pattern",
-                      "new_content": str, "title": str, "tags"?, "domain"?}
-  unleak             {"field": "content|tags|source_ref"}   the repair is computed here
-
-unleak takes a leaked tool call OUT of one field. Its payload names the
-field and nothing else: staging reads the row, removes what is the call's
-own source -- a line that is nothing but a tag, and a closing mark at the
-end of a line of text -- and writes the result into the payload as
-`new_text`, so the panel shows what will hold and no caller retypes a body
-it would have to copy faithfully. One field per suggestion, so a body and a
-tag list are two of them and either can be undone alone. Refused when the
-field carries no mark, and when the marks sit inside its prose: that is a
-`reword`, written by hand. What the debris DECLARED -- the domain, the tags
-the call meant to write -- comes back from the scan as `leaked_calls[].
-declares`, and is staged beside the unleak as a `redomain`, `crosslist` or
-`retag`.
-
-redomain moves where a memory is FILED -- one path, one parent chain.
-crosslist sets what it also BELONGS to: the subjects that cut across
-that tree, where several routines are each a step of one end-to-end
-process without any of them being the parent of the others. It replaces
-the whole set rather than adding to it, so include the memberships that
-should survive; `also: []` drops them all. The corpus lists each
-memory's current `also`, so read that before proposing. A path the
-memory's own domain already sits under is redundant and is dropped --
-if that leaves nothing, the suggestion is rejected rather than silently
-staged as a clear.
-
-distill extracts the durable knowledge out of one or MORE source
-memories into a newly authored one: creates it, links it `supersedes`
-each source and archives the sources (all reversible). Use it to
-retire closed-ticket checkpoints without losing what they taught, or
-as an n-ary merge when the survivor needs synthesized content. It is the
-only kind that authors a memory, so it takes that memory's `title` the way
-a writing tool does: no later step names it. Those payload keys are the
-whole set it applies -- any other key is reported in `errors`. A diagram cannot be a source: its content is generated
-from its graph, so retire a flow with archive instead.
-
-link/merge derive target_uid from the payload (from_uid / drop_uid)
-and distill creates its target -- omit target_uid for those kinds.
-Destructive suggestions (archive, set_confidence=contradicted, merge,
-distill) require a non-empty `verified` describing the live-facts
-check that justifies them.
-
-Invalid suggestions are skipped and reported in `errors`; the rest are
-staged. Returns {run_id, staged, errors}.
-
-`note` describes the whole run in at most 250 characters -- one or two
-sentences, the shape of "what this pass did and why now". A longer note
-raises and stages nothing. Per-suggestion detail goes in `rationale`
-and `verified`, which have no limit; findings worth keeping go in a
-memory, not in the run note.
-""",
-    "get_diagram": """
-TO SHOW THE DIAGRAM TO A USER, pick by what you can actually do with it:
-
-  * you can render inline HTML/SVG in your reply (a widget, an artifact, an
-    inline preview) -> format='svg-interactive', then READ THE FILE at the
-    returned `inline_path` and emit its contents inline. That file is the
-    whole answer: a self-contained fragment with pan and zoom, no doctype,
-    no <body>, no network, no external CSS, nothing that reaches the host
-    page. (`path` is the same drawing as a standalone document, for opening
-    in a browser or sending as a file -- do not paste that one inline, most
-    renderers reject a full document.) Do NOT reach for mermaid here.
-  * you can only attach or link a file -> format='svg'. Same drawing, no
-    shell, openable in any browser or image viewer.
-  * you can render neither, but your client draws mermaid natively ->
-    format='mermaid'.
-
-The file/payload split exists for the calls that do NOT display -- reasoning
-over a flow, checking what a step says, handing a path to something else,
-which is most of them. IT IS NOT A REASON TO AVOID EMITTING THE MARKUP WHEN
-THE USER ASKED TO SEE THE DIAGRAM. In that case, reading the file and
-putting its contents in your reply IS the deliverable, and the tokens it
-costs are the cost of doing the work, not an overrun to economise on.
-
-Attaching or linking the file is NOT showing it: that hands the user
-something to open later. If your only display mechanism is a file send, at
-least mark it to render rather than to download.
-
-Fidelity, which is the reason the SVG formats exist: they reproduce the
-admin canvas exactly -- the arrangement the user made, the same edge routing
-around it, the same wrapped labels, node notes as <title> tooltips. MERMAID
-DOES NOT. Mermaid always applies its own layout, so it discards the stored
-positions and shows a flow the user never arranged. Prefer it only when
-nothing else can be displayed.
-
-'svg-interactive' over 'svg' for anything long: a 34-step routine is
-~3000x6300 units, and scaled to fit a chat column that puts its labels under
-3px. The interactive shell opens at a readable scale near the start step.
-
-Each call also prunes older renders per the retention setting (see the
-dashboard's maintenance view) and reports how many it removed.
-""",
-}
-
-
-# Registry for help(): the decorated functions themselves, so signatures
-# and docstrings are read from the exact code that runs.
+# Every tool this module defines, by name, whether or not its group is
+# published in this process.
 _TOOLS = {
     "note": note,
     "checkpoint": checkpoint,
@@ -2209,16 +1948,13 @@ _TOOLS = {
     "optimize_stage": optimize_stage,
     "optimize_runs": optimize_runs,
     "optimize_status": optimize_status,
-    "help": help,
 }
 
-# _TOOLS is written by hand and _GROUP_OF by the decorator, so they can drift
-# -- and a tool missing from _TOOLS is a tool help() cannot document and
-# _published() cannot report as absent. Cheap to check, once, at import.
+# _TOOLS is written by hand and _GROUP_OF by the decorator, so they can drift.
+# Cheap to check, once, at import.
 assert set(_TOOLS) == set(_GROUP_OF), (
     f"_TOOLS is out of step with the decorated tools: "
     f"{set(_TOOLS) ^ set(_GROUP_OF)}")
-assert set(_LONG_DOC) <= set(_TOOLS), f"_LONG_DOC names no such tool: {set(_LONG_DOC) - set(_TOOLS)}"
 
 
 def main() -> None:

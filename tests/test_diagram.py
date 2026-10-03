@@ -925,15 +925,14 @@ def test_capped_body_points_at_the_dashboard(mcp):
     assert "admin dashboard" in long
 
 
-def test_every_registered_tool_is_documented_by_help(mcp):
-    """help() reads _TOOLS, so a tool missing from it is invisible to agents."""
+def test_every_registered_tool_has_a_summary_line(mcp):
+    """A listing shows the first line of each docstring; it has to stand alone."""
     registered = set(mcp.mcp._tool_manager._tools)
     assert registered - set(mcp._TOOLS) == set()
     assert {"diagram", "diagram_node", "diagram_edge",
-            "diagram_link", "diagram_relayout", "get_diagram"} <= set(mcp.help()["tools"])
-    # help() splits the summary on the first newline; it has to stand alone
-    for name in mcp._TOOLS:
-        assert mcp.help(command=name)["doc"].split("\n", 1)[0].strip()
+            "diagram_link", "diagram_relayout", "get_diagram"} <= set(mcp._TOOLS)
+    for fn in mcp._TOOLS.values():
+        assert (fn.__doc__ or "").strip().split("\n", 1)[0].strip()
 
 
 # ------------------------------------------------------------------ admin api
