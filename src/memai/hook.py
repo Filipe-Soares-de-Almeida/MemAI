@@ -15,9 +15,10 @@ JSON object on stdout:
 A fourth reads the call the host is about to make, not the store, and is the
 one exception to everything the last paragraph of this docstring says:
 
-  guard           records the domain a memai call names in the session's
-                  state file, and refuses a memai write whose required text
-                  never arrived
+  guard           holds a briefed session's tools until it calls pulse() or
+                  pending(), records the domain a memai call names in the
+                  session's state file, and refuses a memai write whose
+                  required text never arrived
 
 One more subcommand reads the store the same way and writes plain text
 instead:
@@ -50,7 +51,7 @@ import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-# `guard` runs in front of every memai tool call, so the module loads only what it
+# `guard` runs in front of every tool call, so the module loads only what it
 # needs: the store, the brief, the release check and the installer load per event.
 from memai import guard, warden
 
@@ -128,11 +129,24 @@ def _session_start(args, payload) -> None:
     # nobody is waiting on it.
     known = update.refresh(unseen_only=True)
     release = update.notice(known)
+    project = db.active_project()
     with db.connect() as conn:
-        text = brief.session_brief(
-            conn, domain=args.domain, budget=args.budget, project=db.active_project())
+        text = brief.session_brief(conn, domain=args.domain, budget=args.budget,
+                                   project=project)
+        total = db.domain_census(conn, args.domain)["total"]
+    system = []
+    if text:
+        system.append(f"MemAI: brief loaded ({total} memories in "
+                      f"{args.domain or f'project {project!r}'}); pulse() or pending() "
+                      "comes before any other tool.")
+        try:
+            warden.briefed(payload.get("session_id", ""))
+        except Exception:
+            pass
+    if release:
+        system.append(update.banner(known))
     _emit("SessionStart", "\n\n".join(part for part in (text, release) if part),
-          system=update.banner(known) if release else "")
+          system=" ".join(system))
 
 
 def _pre_compact(args, payload) -> None:
@@ -420,12 +434,44 @@ def _domain_of(uid: str) -> str:
     return row[0] if row and row[0] else ""
 
 
-def _guard(payload: dict) -> int:
-    """Record the domain a memai call names, then read the call; 2 to refuse
-    it, 0 to allow.
+def _hold(payload: dict) -> tuple[str, str]:
+    """The warm-up hold: (refusal, "") to stop the call, ("", message) when it
+    is the call that warms the session up, ("", "") to let it through.
 
-    Recording comes first and never changes the result: a failure there is
-    swallowed, and a call that is refused has recorded its domain all the same.
+    Only a session the SessionStart hook briefed is held, and only until it
+    calls one of `guard.WARM_UP`. Memai tools and `guard.BEFORE_WARM_UP` go
+    through; anything else is refused at most `guard.GATE_LIMIT` times.
+    """
+    session_id = warden.safe_id(payload.get("session_id", ""))
+    if not session_id:
+        return "", ""
+    state = warden.read(session_id)
+    if not state.get("briefed_at") or state.get("warmed_at"):
+        return "", ""
+    call = str(payload.get("tool_name", ""))
+    tool = guard.memai_tool(call)
+    if tool in guard.WARM_UP:
+        params = payload.get("tool_input")
+        domain = params.get("domain", "") if isinstance(params, dict) else ""
+        warden.warm(session_id, tool)
+        return "", guard.warmed(tool, domain if isinstance(domain, str) else "")
+    if tool or call in guard.BEFORE_WARM_UP:
+        return "", ""
+    count = state.get("gate_refusals", 0)
+    count = count if isinstance(count, int) else 0
+    if count >= guard.GATE_LIMIT:
+        return "", ""
+    warden.refused(session_id, count + 1)
+    return guard.gate_refusal(call, guard.GATE_LIMIT - count - 1), ""
+
+
+def _guard(payload: dict) -> int:
+    """Hold a briefed session until its warm-up, record the domain a memai
+    call names, then read the call; 2 to refuse it, 0 to allow.
+
+    The hold and the recording never fail a call: anything either raises is
+    swallowed and the call goes on. Recording never changes the result, and a
+    call that is refused has recorded its domain all the same.
 
     Refusing writes the reason on stderr, which is where a host shows the
     model what it did wrong. Two things earn one: required text that never
@@ -442,6 +488,13 @@ def _guard(payload: dict) -> int:
     through.
     """
     try:
+        refusal, said = _hold(payload)
+    except Exception:
+        refusal, said = "", ""
+    if refusal:
+        sys.stderr.write(refusal + "\n")
+        return 2
+    try:
         _record_domains(payload)
     except Exception:
         pass
@@ -449,22 +502,20 @@ def _guard(payload: dict) -> int:
         call = str(payload.get("tool_name", ""))
         tool = guard.tool_of(call)
         params = payload.get("tool_input")
-        if not tool or not isinstance(params, dict):
-            return 0
-
-        missing, warn, debris = guard.check(tool, params)
-        if missing:
-            sys.stderr.write(guard.refusal(tool, missing, call) + "\n")
-            return 2
-        leaks = guard.leaked(tool, params)
-        if leaks:
-            sys.stderr.write(guard.leak_refusal(tool, leaks, call) + "\n")
-            return 2
-        text = guard.warning(tool, warn, debris, call)
-        if text:
-            sys.stdout.write(json.dumps({"systemMessage": text}, ensure_ascii=True))
+        if tool and isinstance(params, dict):
+            missing, warn, debris = guard.check(tool, params)
+            if missing:
+                sys.stderr.write(guard.refusal(tool, missing, call) + "\n")
+                return 2
+            leaks = guard.leaked(tool, params)
+            if leaks:
+                sys.stderr.write(guard.leak_refusal(tool, leaks, call) + "\n")
+                return 2
+            said = " ".join(p for p in (said, guard.warning(tool, warn, debris, call)) if p)
     except Exception:
-        return 0
+        pass
+    if said:
+        sys.stdout.write(json.dumps({"systemMessage": said}, ensure_ascii=True))
     return 0
 
 

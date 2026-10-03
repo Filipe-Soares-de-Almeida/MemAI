@@ -90,15 +90,27 @@ FRAME: tuple[str, ...] = ("invoke", "parameter", "function_calls")
 DEBRIS = ("parameter name=", "</", "<parameter")
 
 
+# The memai reads that count as a session's warm-up. A session the
+# SessionStart hook briefed has every other tool refused until it calls one.
+WARM_UP: tuple[str, ...] = ("pulse", "pending")
+
+# Tools that are not memai's and still go through before the warm-up: the
+# host's loader for deferred tools, without which the memai tools cannot be
+# called at all.
+BEFORE_WARM_UP: tuple[str, ...] = ("ToolSearch",)
+
+# Refusals a session takes before the hold gives way. A host without the memai
+# server can never warm up, and a hold that never ended would cost it every tool.
+GATE_LIMIT = 3
+
+
 def matcher() -> str:
     """The tool names the guard's registration fires for, as a regex.
 
-    Every memai tool: the hook records the domains a session names for any of
-    them, and checks the writers in `GUARDED` only. The server's name in a
-    host config is the user's to choose, so the middle segment is matched
-    rather than spelled.
+    Every tool: the warm-up hold reads any call, the domains are recorded for
+    the memai tools, and only the writers in `GUARDED` are checked.
     """
-    return "mcp__[Mm]em[Aa][Ii]__.*"
+    return ".*"
 
 
 def memai_tool(name: str) -> str:
@@ -314,6 +326,27 @@ def leak_refusal(tool: str, leaks: dict[str, list[str]], call: str = "") -> str:
         f"takes them, and every one of them has to be in the retry under its "
         f"own name=. Signatures: {_table()}."
     )
+
+
+def gate_refusal(call: str, left: int) -> str:
+    """What to tell a briefed session that reached for `call` before its warm-up.
+
+    `left` is how many more refusals the hold has in it before it gives way.
+    """
+    return (
+        f"BLOCKED ({call}): this session has not read its memory yet. Call "
+        f"pulse(domain) for the subject the prompt names, or pending() for what "
+        f"is still open, BEFORE any other tool -- whatever the task is, however "
+        f"small. If the memai tools are not loaded, load them with ToolSearch "
+        f"first: ToolSearch and every memai tool go through. Then redo this call. "
+        f"({left} more refusal(s) before this hold gives way.)"
+    )
+
+
+def warmed(tool: str, domain: str = "") -> str:
+    """The line a person sees once a briefed session has read its memory."""
+    scope = f"('{domain}')" if domain else "()"
+    return f"MemAI: session warmed up with {tool}{scope}."
 
 
 def warning(tool: str, warn: list[str], debris: list[str], call: str = "") -> str:
