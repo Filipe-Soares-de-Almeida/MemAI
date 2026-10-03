@@ -183,7 +183,7 @@ Runs **fully on its own** — its natural target is self-discovered.
   rows** — they are absent from the default `list`/`search` output anyway. And
   it only ever proposes: the dashboard applies.
 
-> `optimize_stage` accepts **11** kinds. This skill stages `set_confidence`,
+> `optimize_stage` accepts **13** kinds. This skill stages `set_confidence`,
 > `reword` and `review`, plus `archive` when a contradicted claim has nothing
-> left worth keeping. The full list is in [[memai-memory]], and
-> `help(command='optimize_stage')` is read live from the code.
+> left worth keeping. The full table, with each payload, is §1 of
+> [[memai-maintenance]].
