@@ -32,9 +32,10 @@ the hosts.
 
 - Python 3.12 to 3.14 on PATH (`py -3 --version` on Windows, `python3 --version`
   elsewhere)
-- Node 22.18 or newer on PATH (`node --version`) — the admin dashboard is a
-  Vite build, and `memai.admin` serves that build. `.npmrc` sets
-  `engine-strict`, so `npm ci` refuses an older one by name
+- Node 22.18 or newer on PATH (`node --version`) to build the admin dashboard,
+  a Vite build that `memai.admin` serves. `.npmrc` sets `engine-strict`, so
+  `npm ci` refuses an older one by name. Optional: without it the install
+  uses the prebuilt dashboard (see below)
 - git
 
 ## 2. Clone and install
@@ -45,19 +46,36 @@ cd MemAI
 ```
 
 On Windows, `install.bat` creates `.venv`, installs every dependency from
-`requirements-dev.txt`, installs the package editable on top, and builds the
+`requirements-dev.txt`, installs the package editable on top, and installs the
 dashboard. Everywhere else:
 
 ```sh
 python -m venv .venv
 .venv/bin/pip install --require-hashes -r requirements-dev.txt
 .venv/bin/pip install --no-deps -e .
-npm ci
-npm run build
+.venv/bin/python tools/install-webui.py
 ```
 
-`npm run build` writes `src/memai/webui/dist/`, which is what the dashboard
-serves. Without it every page answers 503 naming the command to run.
+The dashboard is `src/memai/webui/dist/`; without it every page answers 503
+naming the command to run. `tools/install-webui.py` fills it the first way
+that works:
+
+1. `npm ci` and `npm run build`, when Node 22.18+ and the npm registry are
+   usable. npm reads the user's `.npmrc`, so a corporate registry, proxy or CA
+   file (`registry=`, `https-proxy=`, `cafile=`) set there applies.
+2. `memai-webui-<version>.zip` from this version's GitHub Release, checked
+   against its `.sha256` and swapped into `dist/`.
+3. The build already in `dist/`, kept as it is.
+
+### The dashboard without Node
+
+A machine with neither Node nor access to GitHub gets the zip by hand: download
+`memai-webui-<version>.zip` and `memai-webui-<version>.zip.sha256` from the
+release whose version `src/memai/__init__.py` names, put both in one folder,
+and run `install.bat --webui-zip C:\path\to\memai-webui-<version>.zip`
+(elsewhere `.venv/bin/python tools/install-webui.py --zip <path>`). A zip
+whose checksum does not match is refused. A checkout ahead of its last release
+has no asset; it keeps whatever `dist/` holds.
 
 `memai-admin` checks that build each time it starts, after it has the port:
 when a file under `src/memai/webui/`, `package.json`, `package-lock.json` or

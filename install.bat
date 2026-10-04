@@ -11,10 +11,14 @@ if not exist .venv\Scripts\activate.bat (
     exit /b 1
 )
 
-where node >nul 2>nul
-if errorlevel 1 (
-    echo Failed to find node -- is Node 22.18+ on PATH?
-    exit /b 1
+rem install.bat --webui-zip <path> installs a memai-webui-<version>.zip fetched by hand.
+set "WEBUI_ARGS="
+if /i "%~1"=="--webui-zip" (
+    if "%~2"=="" (
+        echo --webui-zip needs the path to memai-webui-^<version^>.zip
+        exit /b 1
+    )
+    set WEBUI_ARGS=--zip "%~f2"
 )
 
 .venv\Scripts\python.exe tools\install-guard.py
@@ -37,18 +41,13 @@ if errorlevel 1 (
 )
 
 echo.
-echo Building the admin dashboard...
-call npm ci
-if errorlevel 1 (
+echo Installing the admin dashboard...
+rem Builds with Node 22.18+ when it can, else installs this version's prebuilt release asset.
+python tools\install-webui.py %WEBUI_ARGS%
+if errorlevel 2 (
     echo.
-    echo npm ci failed.
-    exit /b 1
-)
-call npm run build
-if errorlevel 1 (
-    echo.
-    echo Dashboard build failed.
-    exit /b 1
+    echo Done, without a dashboard: the MCP server works, the dashboard does not.
+    exit /b 0
 )
 
 echo.
