@@ -408,7 +408,8 @@ def test_the_commands_pull_before_they_install(tmp_path):
         return
     first, second = update.commands(tmp_path)
     assert first.startswith(f'git -C "{tmp_path}"') and first.endswith("pull --ff-only")
-    assert "pip install -e" in second and "npm run build" in second
+    assert "--require-hashes -r requirements-dev.txt" in second
+    assert "--no-deps -e ." in second and "tools/install-webui.py" in second
 
 
 def test_the_banner_is_one_line_for_the_person(store):

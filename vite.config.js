@@ -1,6 +1,7 @@
 import { readdir, readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'vite';
+import { packageVersion, sourceHash } from './tools/build-stamp.mjs';
 
 /* The dashboard's sources sit inside the Python package. memai.admin serves
    the build output, webui/dist, under /static -- hence root and base. */
@@ -53,8 +54,23 @@ function thirdPartyNotices() {
   };
 }
 
+/* Writes dist/build.json, the stamp memai.webui_build compares to decide
+   whether the build still matches its sources. */
+function buildStamp() {
+  return {
+    name: 'memai:build-stamp',
+    apply: 'build',
+    async generateBundle() {
+      const root = fileURLToPath(new URL('./', import.meta.url));
+      const stamp = { version: await packageVersion(root), sources: await sourceHash(root) };
+      this.emitFile({ type: 'asset', fileName: 'build.json', source: `${JSON.stringify(stamp, null, 2)}
+` });
+    },
+  };
+}
+
 export default defineConfig({
-  plugins: [thirdPartyNotices()],
+  plugins: [thirdPartyNotices(), buildStamp()],
   root: webui,
   base: '/static/',
   /* Copied verbatim, never hashed: the fonts and the locale catalogs are both

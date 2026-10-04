@@ -7,8 +7,8 @@
 
 <p align="center">
   <a href="LICENSE"><img alt="Licence: MIT" src="https://img.shields.io/badge/licence-MIT-blue.svg"></a>
-  <img alt="Python 3.12+" src="https://img.shields.io/badge/python-3.12%2B-blue.svg">
-  <img alt="Node 20.19+" src="https://img.shields.io/badge/node-20.19%2B-5fa04e.svg">
+  <img alt="Python 3.12-3.14" src="https://img.shields.io/badge/python-3.12--3.14-blue.svg">
+  <img alt="Node 22.18+" src="https://img.shields.io/badge/node-22.18%2B-5fa04e.svg">
   <img alt="MCP server" src="https://img.shields.io/badge/MCP-server-6f4ff2.svg">
   <img alt="Storage: SQLite + FTS5" src="https://img.shields.io/badge/storage-SQLite%20%2B%20FTS5-003b57.svg">
 </p>
@@ -107,7 +107,8 @@ status="archived")` lists the completed and cancelled ones.
 
 ```sh
 python -m venv .venv
-.venv/Scripts/pip install -e ".[dev]"   # .venv/bin/pip off Windows
+.venv/Scripts/pip install --require-hashes -r requirements-dev.txt   # .venv/bin/pip off Windows
+.venv/Scripts/pip install --no-deps -e .
 npm ci && npm run build                 # the admin dashboard
 .venv/Scripts/python -m pytest
 ```

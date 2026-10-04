@@ -3,6 +3,12 @@ name: Release
 on:
   push:
     branches: [dev]
+  # Attaches the dashboard asset to an existing release, e.g. after a failed run.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to attach the dashboard to (vX.Y.Z)
+        required: true
 
 permissions:
   contents: write
@@ -14,7 +20,11 @@ concurrency:
 
 jobs:
   release:
+    if: ${{ github.event_name == 'push' }}
     runs-on: ubuntu-latest
+    outputs:
+      release_created: ${{ steps.release.outputs.release_created }}
+      tag_name: ${{ steps.release.outputs.tag_name }}
     steps:
       - uses: googleapis/release-please-action@v4
         id: release
@@ -36,3 +46,35 @@ jobs:
       - name: Fast-forward main to the released commit
         if: ${{ steps.release.outputs.release_created }}
         run: git push origin HEAD:main
+
+  webui-asset:
+    name: attach the prebuilt dashboard
+    needs: release
+    if: ${{ always() && (needs.release.outputs.release_created == 'true' || github.event_name == 'workflow_dispatch') }}
+    runs-on: ubuntu-latest
+    env:
+      TAG: ${{ needs.release.outputs.tag_name || inputs.tag }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      # Built from the tagged commit, so the asset matches the release's sources.
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Build the dashboard
+        run: |
+          npm ci
+          npm run build
+
+      - name: Pack and verify memai-webui-<version>.zip
+        run: |
+          python3 tools/package-webui.py --version "${TAG#v}" --out build
+          cd build && sha256sum -c ./*.sha256
+
+      - name: Upload to the release
+        run: gh release upload "$TAG" build/memai-webui-* --clobber
