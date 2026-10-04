@@ -30,6 +30,7 @@ def dist(tmp_path):
     (root / "assets").mkdir(parents=True)
     (root / "index.html").write_text("<!doctype html><title>demo</title>", encoding="utf-8")
     (root / "THIRD-PARTY-NOTICES.txt").write_text("example-lib 1.0.0 -- MIT\n", encoding="utf-8")
+    (root / "build.json").write_text('{"version": "9.8.7", "sources": "abc"}', encoding="utf-8")
     (root / "assets" / "index-abc123.js").write_text("console.log(1)", encoding="utf-8")
     return root
 
@@ -39,7 +40,7 @@ def test_the_zip_holds_the_build_at_its_root(tool, dist, tmp_path):
     assert archive.name == "memai-webui-9.8.7.zip"
     with zipfile.ZipFile(archive) as zf:
         assert sorted(zf.namelist()) == [
-            "THIRD-PARTY-NOTICES.txt", "assets/index-abc123.js", "index.html"]
+            "THIRD-PARTY-NOTICES.txt", "assets/index-abc123.js", "build.json", "index.html"]
         assert zf.read("index.html").startswith(b"<!doctype html>")
 
 
@@ -57,7 +58,7 @@ def test_the_same_build_packs_to_the_same_bytes(tool, dist, tmp_path):
     assert first.read_bytes() == second.read_bytes()
 
 
-@pytest.mark.parametrize("missing", ["index.html", "THIRD-PARTY-NOTICES.txt"])
+@pytest.mark.parametrize("missing", ["index.html", "THIRD-PARTY-NOTICES.txt", "build.json"])
 def test_a_build_without_its_page_or_notices_is_refused(tool, dist, tmp_path, missing):
     (dist / missing).unlink()
     with pytest.raises(SystemExit, match=missing):

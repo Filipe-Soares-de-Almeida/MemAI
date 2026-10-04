@@ -77,12 +77,16 @@ and run `install.bat --webui-zip C:\path\to\memai-webui-<version>.zip`
 whose checksum does not match is refused. A checkout ahead of its last release
 has no asset; it keeps whatever `dist/` holds.
 
-`memai-admin` checks that build each time it starts, after it has the port:
-when a file under `src/memai/webui/`, `package.json`, `package-lock.json` or
-`vite.config.js` is newer than `dist/index.html`, it runs `npm run build`, and
-`npm ci` first when the lockfile is newer than `node_modules`. Without npm on
-the PATH, or when npm fails, it logs one line and serves the build it has.
-`MEMAI_ADMIN_BUILD=0` turns the check off.
+`memai-admin` checks that build each time it starts, after it has the port.
+Every build carries `dist/build.json`: the version and a sha256 of the files
+under `src/memai/webui/` plus `package.json`, `package-lock.json`,
+`vite.config.js` and `tsconfig.json`. When the stamp is missing or its hash no
+longer matches those files, it runs `npm run build`, and `npm ci` first when
+the lockfile is newer than `node_modules`; a file touched but unchanged
+triggers nothing. Without npm on the PATH, a build stamped with another version
+is replaced by this version's release asset; otherwise, or when npm fails, it
+logs one line and serves the build it has. `MEMAI_ADMIN_BUILD=0` turns the
+check off.
 
 To iterate on the dashboard, `npm run dev` serves it with hot reload and proxies
 `/api` and `/fonts.css` to a `memai-admin` on `MEMAI_ADMIN_PORT` (8888 by

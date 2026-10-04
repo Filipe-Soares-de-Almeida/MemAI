@@ -24,7 +24,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 DIST = ROOT / "src" / "memai" / "webui" / "dist"
 VERSION_FILE = ROOT / "src" / "memai" / "__init__.py"
-REQUIRED = ("index.html", "THIRD-PARTY-NOTICES.txt")
+REQUIRED = ("index.html", "THIRD-PARTY-NOTICES.txt", "build.json")
 EPOCH = (1980, 1, 1, 0, 0, 0)
 
 
