@@ -9,7 +9,7 @@ description = "Long-term memory MCP server for agentic coding with Claude (SQLit
 license = "MIT"
 requires-python = ">=3.12,<3.15"
 dependencies = [
-    "mcp>=1.29,<1.30",
+    "mcp>=1.29,<2.3",
     "starlette>=1.3,<2",
     "uvicorn>=0.54,<0.55",
 ]
