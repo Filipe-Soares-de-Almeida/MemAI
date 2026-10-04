@@ -21,8 +21,15 @@ if errorlevel 1 (
 if errorlevel 1 exit /b 1
 
 call .venv\Scripts\activate.bat
-python -m pip install --upgrade pip
-pip install -e ".[dev]"
+rem The lock pins every package CI tested, by hash. pip refuses an editable
+rem project under --require-hashes, so the checkout goes in on its own after it.
+python -m pip install --require-hashes -r requirements-dev.lock
+if errorlevel 1 (
+    echo.
+    echo Install failed.
+    exit /b 1
+)
+pip install --no-deps -e .
 if errorlevel 1 (
     echo.
     echo Install failed.

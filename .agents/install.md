@@ -44,12 +44,14 @@ git clone https://github.com/Filipe-Soares-de-Almeida/MemAI.git
 cd MemAI
 ```
 
-On Windows, `install.bat` creates `.venv`, installs the package editable with
-its dev extras, and builds the dashboard. Everywhere else:
+On Windows, `install.bat` creates `.venv`, installs every dependency from
+`requirements-dev.lock`, installs the package editable on top, and builds the
+dashboard. Everywhere else:
 
 ```sh
 python -m venv .venv
-.venv/bin/pip install -e ".[dev]"
+.venv/bin/pip install --require-hashes -r requirements-dev.lock
+.venv/bin/pip install --no-deps -e .
 npm ci
 npm run build
 ```
@@ -67,6 +69,19 @@ the PATH, or when npm fails, it logs one line and serves the build it has.
 To iterate on the dashboard, `npm run dev` serves it with hot reload and proxies
 `/api` and `/fonts.css` to a `memai-admin` on `MEMAI_ADMIN_PORT` (8888 by
 default), which keeps the browser same-origin with the API.
+
+`requirements.lock` (runtime) and `requirements-dev.lock` (runtime and the
+`dev` extra) pin every package, direct and transitive, with hashes, for Windows
+and Linux alike, so a fresh install resolves the set CI tested. After changing
+a dependency in `pyproject.toml`, regenerate both with uv (a maintainer tool;
+installing MemAI never needs it) and commit them with the change:
+
+```sh
+uv pip compile pyproject.toml --universal --python-version 3.12 --generate-hashes --annotation-style line -o requirements.lock
+uv pip compile pyproject.toml --extra dev --universal --python-version 3.12 --generate-hashes --annotation-style line -o requirements-dev.lock
+```
+
+`tests/test_lock.py` fails while a lock disagrees with `pyproject.toml`.
 
 The checkout is the install. Do not also install MemAI into the system or user
 site-packages: two copies of the same package on one machine make it impossible
@@ -180,7 +195,7 @@ changes what the next server process imports. Which of the two updates below
 it is depends on whether the environment moved with it.
 
 **Source only** — the common case, and no `pip install` in it. A pull that
-leaves `pyproject.toml` alone is this one:
+leaves `pyproject.toml` and the two lock files alone is this one:
 
 1. `git pull`
 2. `memai-hook install --check`, and reinstall the skills or agents it reports
