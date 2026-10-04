@@ -91,6 +91,23 @@ def test_ci_runs_a_node_the_package_allows():
     assert min(pinned) >= _node_floor()[0]
 
 
+def test_ci_runs_the_exact_node_floor():
+    """One CI leg runs the very version engines.node declares."""
+    major, minor = _node_floor()
+    workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+    pinned = re.findall(r"""node-version:\s*["']([\d.]+)""", workflow)
+    assert f"{major}.{minor}.0" in pinned, f"no CI leg on Node {major}.{minor}.0: {pinned}"
+
+
+def test_direct_npm_dependencies_are_pinned_to_the_locked_version():
+    """package.json names exact versions, the ones package-lock.json installs."""
+    lock = json.loads((ROOT / "package-lock.json").read_text(encoding="utf-8"))["packages"]
+    direct = {**PACKAGE_JSON.get("dependencies", {}), **PACKAGE_JSON.get("devDependencies", {})}
+    for name, spec in direct.items():
+        assert re.fullmatch(r"\d+\.\d+\.\d+", spec), f"{name} is a range: {spec!r}"
+        assert lock[f"node_modules/{name}"]["version"] == spec, f"{name} differs from the lock"
+
+
 def test_the_lock_can_install_without_the_registry_deciding_anything():
     """`npm ci` installs from the lock alone, so every package it names is
     pinned to one version and carries a hash to check the download against."""

@@ -13,7 +13,7 @@ if not exist .venv\Scripts\activate.bat (
 
 where node >nul 2>nul
 if errorlevel 1 (
-    echo Failed to find node -- is Node 20.19+ on PATH?
+    echo Failed to find node -- is Node 22.18+ on PATH?
     exit /b 1
 )
 

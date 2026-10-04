@@ -8,7 +8,7 @@
 <p align="center">
   <a href="LICENSE"><img alt="Licence: MIT" src="https://img.shields.io/badge/licence-MIT-blue.svg"></a>
   <img alt="Python 3.12-3.14" src="https://img.shields.io/badge/python-3.12--3.14-blue.svg">
-  <img alt="Node 20.19+" src="https://img.shields.io/badge/node-20.19%2B-5fa04e.svg">
+  <img alt="Node 22.18+" src="https://img.shields.io/badge/node-22.18%2B-5fa04e.svg">
   <img alt="MCP server" src="https://img.shields.io/badge/MCP-server-6f4ff2.svg">
   <img alt="Storage: SQLite + FTS5" src="https://img.shields.io/badge/storage-SQLite%20%2B%20FTS5-003b57.svg">
 </p>

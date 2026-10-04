@@ -32,7 +32,7 @@ the hosts.
 
 - Python 3.12 to 3.14 on PATH (`py -3 --version` on Windows, `python3 --version`
   elsewhere)
-- Node 20.19 or newer on PATH (`node --version`) — the admin dashboard is a
+- Node 22.18 or newer on PATH (`node --version`) — the admin dashboard is a
   Vite build, and `memai.admin` serves that build. `.npmrc` sets
   `engine-strict`, so `npm ci` refuses an older one by name
 - git

@@ -47,6 +47,25 @@ jobs:
       - name: Test
         run: python -m pytest
 
+  node-floor:
+    name: dashboard build on the Node floor (22.18)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # The exact version engines.node declares, so the floor is one CI runs.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22.18.0"
+
+      - name: Build the dashboard
+        run: |
+          npm ci
+          npm run build
+
+      - name: Check the routing golden still matches the canvas
+        run: node tools/route-parity.mjs
+
   route-parity:
     name: diagram route parity (canvas vs SVG)
     runs-on: ubuntu-latest
