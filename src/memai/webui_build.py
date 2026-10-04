@@ -1,19 +1,25 @@
-"""Rebuild the dashboard when its sources are newer than the build.
+"""Rebuild the dashboard when its build no longer matches its sources.
 
 memai.admin serves webui/dist, which `npm run build` writes from the sources
-in webui/. ensure_built() compares modification times: when any source or
-build config is newer than dist/index.html it runs `npm run build`, preceded
-by `npm ci` when package-lock.json is newer than node_modules. `git pull` and
-`git checkout` stamp the files they write with the current time, so a pulled
-change counts as newer.
+in webui/. The build carries dist/build.json, the version and a hash of the
+sources that made it (tools/build-stamp.mjs writes it). ensure_built()
+recomputes that hash with source_hash(); when the stamp is missing or differs
+it runs `npm run build`, preceded by `npm ci` when package-lock.json is newer
+than node_modules. A file touched but unchanged does not count; a checkout
+that rewinds a file does.
 
-Nothing here raises. Without a checkout (an installed wheel), without npm on
-PATH, or when npm fails, it logs one line and the existing build is served.
+Nothing here raises. Without a checkout (an installed wheel) it does nothing.
+Without npm on PATH, a build stamped with another version is replaced by this
+version's prebuilt release asset (tools/install-webui.py); otherwise, or when
+npm fails, it logs one line and the existing build is served.
 MEMAI_ADMIN_BUILD=0 switches the check off.
 """
 
 from __future__ import annotations
 
+import hashlib
+import importlib.util
+import json
 import os
 import shutil
 import subprocess
@@ -21,9 +27,13 @@ import sys
 from collections.abc import Callable
 from pathlib import Path
 
+from memai import __version__
+
 CREATE_NO_WINDOW = 0x08000000
 OFF_VALUES = {"0", "false", "no", "off"}
-BUILD_CONFIG = ("package.json", "package-lock.json", "vite.config.js")
+# Mirrors BUILD_CONFIG in tools/build-stamp.mjs.
+BUILD_CONFIG = ("package.json", "package-lock.json", "vite.config.js", "tsconfig.json")
+STAMP = "build.json"
 NPM_TIMEOUT = 600
 
 
@@ -37,29 +47,64 @@ def _say(message: str) -> None:
     print(message, flush=True)
 
 
-def _newest(paths) -> float:
-    return max((p.stat().st_mtime for p in paths if p.is_file()), default=0.0)
+def _dist(root: Path) -> Path:
+    return root / "src" / "memai" / "webui" / "dist"
 
 
-def _sources(root: Path):
+def _inputs(root: Path) -> list[tuple[str, Path]]:
     webui = root / "src" / "memai" / "webui"
     dist = webui / "dist"
-    for path in webui.rglob("*"):
-        if dist not in path.parents:
-            yield path
-    for name in BUILD_CONFIG:
-        yield root / name
+    files = [p for p in webui.rglob("*") if p.is_file() and dist not in p.parents]
+    files += [root / name for name in BUILD_CONFIG if (root / name).is_file()]
+    return sorted((p.relative_to(root).as_posix(), p) for p in files)
+
+
+def source_hash(root: Path) -> str:
+    """sha256 over each input's relative path and contents, CRLF read as LF.
+
+    Mirrors sourceHash() in tools/build-stamp.mjs byte for byte.
+    """
+    digest = hashlib.sha256()
+    for name, path in _inputs(root):
+        digest.update(name.encode("utf-8") + b"\0")
+        digest.update(path.read_bytes().replace(b"\r\n", b"\n") + b"\0")
+    return digest.hexdigest()
+
+
+def read_stamp(root: Path) -> dict:
+    """dist/build.json, or {} when it is missing or unreadable."""
+    try:
+        stamp = json.loads((_dist(root) / STAMP).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return stamp if isinstance(stamp, dict) else {}
 
 
 def _mtime(path: Path) -> float:
     return path.stat().st_mtime if path.is_file() else 0.0
 
 
+def _fetch_prebuilt(root: Path, version: str) -> str | None:
+    """Install this version's release asset; None on success, else why not."""
+    script = root / "tools" / "install-webui.py"
+    if not script.is_file():
+        return "tools/install-webui.py is missing"
+    try:
+        spec = importlib.util.spec_from_file_location("memai_install_webui", script)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module.download(version, _dist(root))
+    except Exception as exc:  # the dashboard must start whatever the fetch does
+        return f"the prebuilt fetch failed: {exc}"
+
+
 def ensure_built(root: Path | None = None, *,
                  run: Callable = subprocess.run,
                  which: Callable = shutil.which,
-                 log: Callable[[str], None] = _say) -> bool:
-    """Build the dashboard if it is missing or older than its sources.
+                 log: Callable[[str], None] = _say,
+                 fetch: Callable[[Path, str], str | None] = _fetch_prebuilt,
+                 version: str = __version__) -> bool:
+    """Build the dashboard if its stamp is missing or does not match the sources.
 
     Returns True when the build in dist/ is current, False when it was left
     as it was: the check is off, there is no checkout, or npm failed.
@@ -70,14 +115,21 @@ def ensure_built(root: Path | None = None, *,
     if not all((root / name).is_file() for name in ("package.json", "vite.config.js")):
         return False
 
-    built = _mtime(root / "src" / "memai" / "webui" / "dist" / "index.html")
-    if _newest(_sources(root)) <= built:
+    stamp = read_stamp(root)
+    if stamp.get("sources") == source_hash(root):
         return True
 
     npm = which("npm")
     if not npm:
+        if stamp.get("version") != version:
+            why = fetch(root, version)
+            if why is None:
+                log(f"memai admin: installed the prebuilt dashboard of v{version}")
+                return True
+            log(f"memai admin: npm is not on PATH and {why}; serving the existing build")
+            return False
         log("memai admin: the dashboard sources changed, but npm is not on PATH; "
-            "serving the existing build")
+            "serving the existing build, which may not match this server")
         return False
 
     steps = [["run", "build"]]

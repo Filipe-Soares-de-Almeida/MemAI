@@ -268,7 +268,7 @@ def commands(root: Path | None = None) -> list[str]:
 
     On Windows that is update.bat alone: it refuses while MemAI still runs
     from the checkout, pulls, then runs install.bat for the environment and
-    the dashboard build. Elsewhere the steps are spelled out, against this
+    the dashboard. Elsewhere the steps are spelled out, against this
     interpreter, so the pip that runs is the one memai is installed in.
     """
     root = checkout_root() if root is None else root
@@ -277,8 +277,9 @@ def commands(root: Path | None = None) -> list[str]:
     if sys.platform == "win32":
         return [f'"{root / "update.bat"}"']
     pull = f'git -C "{root}" pull --ff-only'
-    return [pull, f'cd "{root}" && "{sys.executable}" -m pip install -e ".[dev]" '
-                  f'&& npm ci && npm run build']
+    pip = f'"{sys.executable}" -m pip install'
+    return [pull, f'cd "{root}" && {pip} --require-hashes -r requirements-dev.txt '
+                  f'&& {pip} --no-deps -e . && "{sys.executable}" tools/install-webui.py']
 
 
 def _lines(notes: object) -> list[str]:

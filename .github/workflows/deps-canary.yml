@@ -1,0 +1,47 @@
+name: Dependency canary
+
+# Tests the newest releases inside the pyproject/package.json ranges, ignoring
+# the locks; never gates a PR. A push that edits this file runs it.
+on:
+  schedule:
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
+  push:
+    paths: [".github/workflows/deps-canary.yml"]
+
+permissions:
+  contents: read
+
+jobs:
+  canary:
+    name: latest deps (${{ matrix.os }}, py${{ matrix.python }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python: ["3.12", "3.14"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Build the dashboard from the newest npm releases
+        run: |
+          npm install --no-package-lock
+          npm run build
+
+      - name: Install the newest Python releases
+        run: python -m pip install --upgrade -e ".[dev]"
+
+      - name: Show what resolved
+        run: python -m pip freeze
+
+      - name: Test
+        run: python -m pytest

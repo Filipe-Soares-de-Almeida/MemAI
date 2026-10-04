@@ -30,11 +30,12 @@ the hosts.
 
 ## 1. Requirements
 
-- Python 3.12 or newer on PATH (`py -3 --version` on Windows, `python3 --version`
+- Python 3.12 to 3.14 on PATH (`py -3 --version` on Windows, `python3 --version`
   elsewhere)
-- Node 20.19 or newer on PATH (`node --version`) — the admin dashboard is a
-  Vite build, and `memai.admin` serves that build. `.npmrc` sets
-  `engine-strict`, so `npm ci` refuses an older one by name
+- Node 22.18 or newer on PATH (`node --version`) to build the admin dashboard,
+  a Vite build that `memai.admin` serves. `.npmrc` sets `engine-strict`, so
+  `npm ci` refuses an older one by name. Optional: without it the install
+  uses the prebuilt dashboard (see below)
 - git
 
 ## 2. Clone and install
@@ -44,29 +45,75 @@ git clone https://github.com/Filipe-Soares-de-Almeida/MemAI.git
 cd MemAI
 ```
 
-On Windows, `install.bat` creates `.venv`, installs the package editable with
-its dev extras, and builds the dashboard. Everywhere else:
+On Windows, `install.bat` creates `.venv`, installs every dependency from
+`requirements-dev.txt`, installs the package editable on top, and installs the
+dashboard. Everywhere else:
 
 ```sh
 python -m venv .venv
-.venv/bin/pip install -e ".[dev]"
-npm ci
-npm run build
+.venv/bin/pip install --require-hashes -r requirements-dev.txt
+.venv/bin/pip install --no-deps -e .
+.venv/bin/python tools/install-webui.py
 ```
 
-`npm run build` writes `src/memai/webui/dist/`, which is what the dashboard
-serves. Without it every page answers 503 naming the command to run.
+The dashboard is `src/memai/webui/dist/`; without it every page answers 503
+naming the command to run. `tools/install-webui.py` fills it the first way
+that works:
 
-`memai-admin` checks that build each time it starts, after it has the port:
-when a file under `src/memai/webui/`, `package.json`, `package-lock.json` or
-`vite.config.js` is newer than `dist/index.html`, it runs `npm run build`, and
-`npm ci` first when the lockfile is newer than `node_modules`. Without npm on
-the PATH, or when npm fails, it logs one line and serves the build it has.
-`MEMAI_ADMIN_BUILD=0` turns the check off.
+1. `npm ci` and `npm run build`, when Node 22.18+ and the npm registry are
+   usable. npm reads the user's `.npmrc`, so a corporate registry, proxy or CA
+   file (`registry=`, `https-proxy=`, `cafile=`) set there applies.
+2. `memai-webui-<version>.zip` from this version's GitHub Release, checked
+   against its `.sha256` and swapped into `dist/`.
+3. The build already in `dist/`, kept as it is.
+
+### The dashboard without Node
+
+A machine with neither Node nor access to GitHub gets the zip by hand: download
+`memai-webui-<version>.zip` and `memai-webui-<version>.zip.sha256` from the
+release whose version `src/memai/__init__.py` names, put both in one folder,
+and run `install.bat --webui-zip C:\path\to\memai-webui-<version>.zip`
+(elsewhere `.venv/bin/python tools/install-webui.py --zip <path>`). A zip
+whose checksum does not match is refused. A checkout ahead of its last release
+has no asset; it keeps whatever `dist/` holds.
+
+`memai-admin` checks that build each time it starts, after it has the port.
+Every build carries `dist/build.json`: the version and a sha256 of the files
+under `src/memai/webui/` plus `package.json`, `package-lock.json`,
+`vite.config.js` and `tsconfig.json`. When the stamp is missing or its hash no
+longer matches those files, it runs `npm run build`, and `npm ci` first when
+the lockfile is newer than `node_modules`; a file touched but unchanged
+triggers nothing. Without npm on the PATH, a build stamped with another version
+is replaced by this version's release asset; otherwise, or when npm fails, it
+logs one line and serves the build it has. `MEMAI_ADMIN_BUILD=0` turns the
+check off.
 
 To iterate on the dashboard, `npm run dev` serves it with hot reload and proxies
 `/api` and `/fonts.css` to a `memai-admin` on `MEMAI_ADMIN_PORT` (8888 by
 default), which keeps the browser same-origin with the API.
+
+`requirements.txt` (runtime) and `requirements-dev.txt` (runtime and the
+`dev` extra) pin every package, direct and transitive, with hashes, for Windows
+and Linux alike, so a fresh install resolves the set CI tested. After changing
+a dependency in `pyproject.toml`, regenerate both with uv (a maintainer tool;
+installing MemAI never needs it) and commit them with the change:
+
+```sh
+uv pip compile pyproject.toml --universal --python-version 3.12 --generate-hashes --annotation-style line -o requirements.txt
+uv pip compile pyproject.toml --extra dev --universal --python-version 3.12 --generate-hashes --annotation-style line -o requirements-dev.txt
+```
+
+`tests/test_lock.py` fails while a lock disagrees with `pyproject.toml`.
+
+Dependabot (`.github/dependabot.yml`) opens weekly pull requests into `dev`
+that refresh the locks, `package-lock.json` and the workflow actions. The
+`Dependency canary` workflow runs every Monday, and on demand, against the
+newest releases inside the ranges, ignoring both locks: a red canary names an
+upstream release that would break the next lock refresh.
+
+`requires-python` carries a ceiling one minor above the newest Python CI
+tests; `tests/test_ci.py` fails when the two disagree, so adding a Python to
+the CI matrix and raising the ceiling go together.
 
 The checkout is the install. Do not also install MemAI into the system or user
 site-packages: two copies of the same package on one machine make it impossible
@@ -180,7 +227,7 @@ changes what the next server process imports. Which of the two updates below
 it is depends on whether the environment moved with it.
 
 **Source only** — the common case, and no `pip install` in it. A pull that
-leaves `pyproject.toml` alone is this one:
+leaves `pyproject.toml` and the two lock files alone is this one:
 
 1. `git pull`
 2. `memai-hook install --check`, and reinstall the skills or agents it reports
@@ -228,6 +275,14 @@ the built-in token triggers no further workflow runs, so the release pull
 request would never get a CI run — a branch rule on `dev` that requires one
 would leave it permanently unmergeable. Keep the PAT even while debugging a
 failing run; swapping in `github.token` reintroduces exactly that deadlock.
+
+Every release carries the dashboard built from its tag as two assets:
+`memai-webui-<version>.zip`, the contents of `src/memai/webui/dist/` at the
+zip's root, and `memai-webui-<version>.zip.sha256`, one `<hex>  <name>` line
+that `sha256sum -c` checks. `tools/package-webui.py` packs them, and CI packs
+and verifies them on every push. When the upload step fails, run the Release
+workflow by hand with the tag (`gh workflow run release-please.yml -f
+tag=vX.Y.Z`); it rebuilds that tag and replaces the assets.
 
 ## Failure modes
 
