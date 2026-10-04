@@ -30,7 +30,7 @@ the hosts.
 
 ## 1. Requirements
 
-- Python 3.12 or newer on PATH (`py -3 --version` on Windows, `python3 --version`
+- Python 3.12 to 3.14 on PATH (`py -3 --version` on Windows, `python3 --version`
   elsewhere)
 - Node 20.19 or newer on PATH (`node --version`) — the admin dashboard is a
   Vite build, and `memai.admin` serves that build. `.npmrc` sets
@@ -45,12 +45,12 @@ cd MemAI
 ```
 
 On Windows, `install.bat` creates `.venv`, installs every dependency from
-`requirements-dev.lock`, installs the package editable on top, and builds the
+`requirements-dev.txt`, installs the package editable on top, and builds the
 dashboard. Everywhere else:
 
 ```sh
 python -m venv .venv
-.venv/bin/pip install --require-hashes -r requirements-dev.lock
+.venv/bin/pip install --require-hashes -r requirements-dev.txt
 .venv/bin/pip install --no-deps -e .
 npm ci
 npm run build
@@ -70,18 +70,28 @@ To iterate on the dashboard, `npm run dev` serves it with hot reload and proxies
 `/api` and `/fonts.css` to a `memai-admin` on `MEMAI_ADMIN_PORT` (8888 by
 default), which keeps the browser same-origin with the API.
 
-`requirements.lock` (runtime) and `requirements-dev.lock` (runtime and the
+`requirements.txt` (runtime) and `requirements-dev.txt` (runtime and the
 `dev` extra) pin every package, direct and transitive, with hashes, for Windows
 and Linux alike, so a fresh install resolves the set CI tested. After changing
 a dependency in `pyproject.toml`, regenerate both with uv (a maintainer tool;
 installing MemAI never needs it) and commit them with the change:
 
 ```sh
-uv pip compile pyproject.toml --universal --python-version 3.12 --generate-hashes --annotation-style line -o requirements.lock
-uv pip compile pyproject.toml --extra dev --universal --python-version 3.12 --generate-hashes --annotation-style line -o requirements-dev.lock
+uv pip compile pyproject.toml --universal --python-version 3.12 --generate-hashes --annotation-style line -o requirements.txt
+uv pip compile pyproject.toml --extra dev --universal --python-version 3.12 --generate-hashes --annotation-style line -o requirements-dev.txt
 ```
 
 `tests/test_lock.py` fails while a lock disagrees with `pyproject.toml`.
+
+Dependabot (`.github/dependabot.yml`) opens weekly pull requests into `dev`
+that refresh the locks, `package-lock.json` and the workflow actions. The
+`Dependency canary` workflow runs every Monday, and on demand, against the
+newest releases inside the ranges, ignoring both locks: a red canary names an
+upstream release that would break the next lock refresh.
+
+`requires-python` carries a ceiling one minor above the newest Python CI
+tests; `tests/test_ci.py` fails when the two disagree, so adding a Python to
+the CI matrix and raising the ceiling go together.
 
 The checkout is the install. Do not also install MemAI into the system or user
 site-packages: two copies of the same package on one machine make it impossible

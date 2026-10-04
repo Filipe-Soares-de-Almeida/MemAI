@@ -1,0 +1,32 @@
+version: 2
+
+# Weekly update pull requests into dev, minor and patch grouped into one per
+# ecosystem. The uv ecosystem re-runs the `uv pip compile` command written in
+# each lock's header, so the hashes and the universal markers survive.
+updates:
+  - package-ecosystem: uv
+    directory: "/"
+    target-branch: dev
+    schedule:
+      interval: weekly
+    groups:
+      python-minor-patch:
+        update-types: [minor, patch]
+
+  - package-ecosystem: npm
+    directory: "/"
+    target-branch: dev
+    schedule:
+      interval: weekly
+    groups:
+      npm-minor-patch:
+        update-types: [minor, patch]
+
+  - package-ecosystem: github-actions
+    directory: "/"
+    target-branch: dev
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]

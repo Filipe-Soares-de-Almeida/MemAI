@@ -35,8 +35,8 @@ def _direct(extras: bool) -> list[Requirement]:
     return [Requirement(r) for r in reqs]
 
 
-@pytest.mark.parametrize("lock, extras", [("requirements.lock", False),
-                                          ("requirements-dev.lock", True)])
+@pytest.mark.parametrize("lock, extras", [("requirements.txt", False),
+                                          ("requirements-dev.txt", True)])
 def test_every_direct_dependency_is_locked_inside_its_range(lock, extras):
     pins = _pins(lock)
     for req in _direct(extras):
@@ -47,12 +47,12 @@ def test_every_direct_dependency_is_locked_inside_its_range(lock, extras):
 
 
 def test_every_line_of_a_lock_carries_a_hash():
-    for lock in ("requirements.lock", "requirements-dev.lock"):
+    for lock in ("requirements.txt", "requirements-dev.txt"):
         text = (ROOT / lock).read_text(encoding="utf-8")
         assert text.count("--hash=sha256:") >= len(_pins(lock)), lock
 
 
 def test_the_dev_lock_pins_the_runtime_set_at_the_same_versions():
-    runtime, dev = _pins("requirements.lock"), _pins("requirements-dev.lock")
+    runtime, dev = _pins("requirements.txt"), _pins("requirements-dev.txt")
     drift = {n: (v, dev.get(n)) for n, v in runtime.items() if dev.get(n) != v}
     assert not drift, f"runtime vs dev lock: {drift}"

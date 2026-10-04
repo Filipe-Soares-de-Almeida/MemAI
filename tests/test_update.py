@@ -408,7 +408,7 @@ def test_the_commands_pull_before_they_install(tmp_path):
         return
     first, second = update.commands(tmp_path)
     assert first.startswith(f'git -C "{tmp_path}"') and first.endswith("pull --ff-only")
-    assert "--require-hashes -r requirements-dev.lock" in second
+    assert "--require-hashes -r requirements-dev.txt" in second
     assert "--no-deps -e ." in second and "npm run build" in second
 
 

@@ -278,7 +278,7 @@ def commands(root: Path | None = None) -> list[str]:
         return [f'"{root / "update.bat"}"']
     pull = f'git -C "{root}" pull --ff-only'
     pip = f'"{sys.executable}" -m pip install'
-    return [pull, f'cd "{root}" && {pip} --require-hashes -r requirements-dev.lock '
+    return [pull, f'cd "{root}" && {pip} --require-hashes -r requirements-dev.txt '
                   f'&& {pip} --no-deps -e . && npm ci && npm run build']
 
 

@@ -23,7 +23,7 @@ if errorlevel 1 exit /b 1
 call .venv\Scripts\activate.bat
 rem The lock pins every package CI tested, by hash. pip refuses an editable
 rem project under --require-hashes, so the checkout goes in on its own after it.
-python -m pip install --require-hashes -r requirements-dev.lock
+python -m pip install --require-hashes -r requirements-dev.txt
 if errorlevel 1 (
     echo.
     echo Install failed.
