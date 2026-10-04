@@ -1,8 +1,7 @@
 version: 2
 
-# Weekly update pull requests into dev, minor and patch grouped into one per
-# ecosystem. The uv ecosystem re-runs the `uv pip compile` command written in
-# each lock's header, so the hashes and the universal markers survive.
+# Weekly grouped updates into dev. The uv ecosystem re-runs each lock's header
+# command, keeping its hashes and universal markers.
 updates:
   - package-ecosystem: uv
     directory: "/"

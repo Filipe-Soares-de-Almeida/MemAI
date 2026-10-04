@@ -1,9 +1,7 @@
 name: Dependency canary
 
-# Installs the newest releases inside pyproject.toml's and package.json's
-# ranges, ignoring both locks, so an upstream release that breaks MemAI fails
-# here before a lock refresh or a fresh install picks it up. Never gates a PR;
-# a push that edits this file runs it, so a change to the canary is tested.
+# Tests the newest releases inside the pyproject/package.json ranges, ignoring
+# the locks; never gates a PR. A push that edits this file runs it.
 on:
   schedule:
     - cron: "17 6 * * 1"
