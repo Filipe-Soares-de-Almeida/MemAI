@@ -254,6 +254,14 @@ request would never get a CI run — a branch rule on `dev` that requires one
 would leave it permanently unmergeable. Keep the PAT even while debugging a
 failing run; swapping in `github.token` reintroduces exactly that deadlock.
 
+Every release carries the dashboard built from its tag as two assets:
+`memai-webui-<version>.zip`, the contents of `src/memai/webui/dist/` at the
+zip's root, and `memai-webui-<version>.zip.sha256`, one `<hex>  <name>` line
+that `sha256sum -c` checks. `tools/package-webui.py` packs them, and CI packs
+and verifies them on every push. When the upload step fails, run the Release
+workflow by hand with the tag (`gh workflow run release-please.yml -f
+tag=vX.Y.Z`); it rebuilds that tag and replaces the assets.
+
 ## Failure modes
 
 | symptom | cause | fix |

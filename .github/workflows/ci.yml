@@ -66,6 +66,11 @@ jobs:
       - name: Check the routing golden still matches the canvas
         run: node tools/route-parity.mjs
 
+      - name: Pack the release asset and verify its checksum
+        run: |
+          python3 tools/package-webui.py --out build
+          cd build && sha256sum -c ./*.sha256
+
   route-parity:
     name: diagram route parity (canvas vs SVG)
     runs-on: ubuntu-latest
