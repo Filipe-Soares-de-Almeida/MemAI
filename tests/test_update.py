@@ -11,7 +11,7 @@ from __future__ import annotations
 import io
 import json
 import sys
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from starlette.testclient import TestClient
@@ -99,7 +99,7 @@ def _github(monkeypatch, payload) -> None:
 
 
 def _hours_ago(hours: int) -> datetime:
-    return datetime.now(timezone.utc) - timedelta(hours=hours)
+    return datetime.now(UTC) - timedelta(hours=hours)
 
 
 # ------------------------------------------------------------ what is newer

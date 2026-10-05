@@ -56,28 +56,23 @@ EVENTS = {
     "guard": "PreToolUse",
 }
 
-# Host event -> the tools its entry fires for. A PreToolUse entry without a
-# matcher runs on every tool call in the session, so the one event that reads
-# a call rather than the store names what it wants to see.
+# Host event -> the tools its entry fires for. A PreToolUse entry with no matcher runs on every
+# tool call, so the guard names the tools it wants to see.
 MATCHERS = {"PreToolUse": guard.matcher()}
 
-# Written into a skills directory by an install, and read back to tell an
-# update waiting to be copied from a copy somebody edited. A leading dot keeps
-# it out of the skills a host reads from that directory.
+# Written into a skills directory by an install, to tell an update waiting to be copied from a
+# hand-edited copy. The leading dot keeps hosts from reading it as a skill.
 RECEIPT = ".memai-skills.json"
 
-# The same, for the agents directory. One hash per file rather than per
-# directory, because an agent IS one file. A leading dot keeps it out of the
-# definitions a host reads from there.
+# The same for the agents directory, one hash per file since an agent is one file.
 AGENT_RECEIPT = ".memai-agents.json"
 
 # Seconds. A cold first run pays for the interpreter and for opening the
 # store.
 TIMEOUT = 15
 
-# The guard reads one payload and opens the store only to resolve a uid, and it
-# runs in front of a call the session is waiting on -- so it is held to a
-# shorter leash than the events that have the store to load.
+# The guard runs ahead of a call the session is waiting on and opens the store only to resolve
+# a uid, so it gets a shorter leash.
 TIMEOUTS = {"guard": 10}
 
 
@@ -528,8 +523,8 @@ def agent_behind(target: Path) -> set[str]:
 
 
 def retired_agents(target: Path) -> dict[str, bool]:
-    """Definitions `target`'s receipt records that this version no longer
-    ships, mapped to whether they still hold the bytes that were installed.
+    """Definitions `target`'s receipt records that this version does not
+    ship, mapped to whether they still hold the bytes that were installed.
 
     A host loads every definition in the directory, so one memai stopped
     shipping -- renamed, dropped -- keeps being loaded with nothing left to
@@ -552,7 +547,7 @@ def install_agents(target: Path, *, write: bool = True) -> str:
     would write. A destination already holding the bundled bytes is left
     alone; any other file in the way is backed up before it is replaced.
 
-    A definition this version no longer ships is removed when it still holds
+    A definition this version does not ship is removed when it still holds
     the bytes the receipt recorded, and reported when it does not.
     """
     agents = bundled_agents()
@@ -571,9 +566,8 @@ def install_agents(target: Path, *, write: bool = True) -> str:
         if out.is_file():
             lines.append(f"backed up {backup(out)}")
         shutil.copy2(agent, out)
-        # copy2 carries the bundle's mtime across, and this file's mtime is
-        # read as WHEN THE HOST COULD FIRST SEE IT -- a definition shipped
-        # last month would otherwise look like it predates every session.
+        # copy2 keeps the bundle's mtime, but this mtime means when the host could first see the
+        # file; an old one would look like it predates every session.
         os.utime(out, None)
         installed.append(agent.name)
 
@@ -591,9 +585,8 @@ def install_agents(target: Path, *, write: bool = True) -> str:
     if removed:
         lines.append(f"removed {', '.join(removed)} -- no longer shipped")
 
-    # A run that copies nothing still refreshes the receipt, so a directory
-    # holding the bundled bytes without one gets its hashes recorded with no
-    # file touched. After the removals, so a retired name leaves the receipt too.
+    # Refreshed even when nothing was copied, so untouched bundled bytes get hashes recorded;
+    # after the removals, so a retired name leaves the receipt too.
     write_agent_receipt(target)
     if not installed and not removed:
         names = ", ".join(a.name for a in agents)
@@ -621,7 +614,7 @@ def event_state(path: Path, *, command: str | None = None) -> dict[str, str]:
     `current` for the entry an install would write; `outdated` when it fires
     that same command through an entry an install would rewrite -- another
     timeout, another type; `elsewhere` for another memai-hook that is still
-    on disk; `broken` when the command it fires is not there any more;
+    on disk; `broken` when the command it fires does not exist;
     `missing` when nothing in the file fires memai for that event.
     """
     command = command or hook_command()

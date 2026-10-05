@@ -1,22 +1,5 @@
-/* MemAI admin SPA — boot.
-
-   This file owns the view table, the global keyboard shortcuts and
-   nothing else. Everything it wires together lives in:
-
-     core/motion.js     the animation setting and the root's data-motion
-     core/dom.js        formatting and DOM helpers
-     core/api.js        the one door to the JSON API in memai/admin.py
-     core/ui.js         toasts, hover tip, modals, context menu
-     core/icons.js      every icon in the UI
-     core/shared.js     types, confidence scale, shared fragments, domains
-     core/lifecycle.js  per-view teardown
-     core/router.js     hash routing, generation-counted renders
-     views/*.js         one module per section
-     diagram-engine.js  the diagram canvas (no DOM outside its canvas)
-
-   The view table is registered from HERE rather than declared in the
-   router so that no view has to import the router's importer: views
-   import { go, refreshBehind } and the cycle stays broken. */
+/* Dashboard boot: the view table, registered with the router here so no view imports the
+   router's importer, and the global keyboard shortcuts. */
 
 /* first, so the root carries data-motion before anything is drawn */
 import './core/motion.js';

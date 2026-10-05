@@ -1,10 +1,5 @@
-/* Vocabulary every view shares: the memory types, the confidence scale,
-   the small render fragments built from them, and the domains cache.
-
-   Type colors live in admin.css (--t-*) and are read from there, so the
-   canvas engines, the legends and the CSS classes cannot drift apart.
-   Display labels bake once per page load -- t() is resolved at import
-   time, which is safe because a language switch reloads the page. */
+/* Vocabulary every view shares: memory types, the confidence scale, fragments built from them,
+   and the domains cache. Labels resolve t() at import; a language switch reloads the page. */
 
 import { $, esc, cssVar } from './dom.js';
 import { api } from './api.js';
@@ -12,8 +7,9 @@ import { icon } from './icons.js';
 import { fixedItems, pickerFor, wirePicker } from './pick.js';
 import { t } from '../i18n.js';
 import { copyUid } from './ui.js';
+import { TYPE_ORDER } from './vocab.js';
 
-export const TYPE_ORDER = ['note', 'checkpoint', 'anti_pattern', 'reasoning', 'handoff', 'diagram', 'task'];
+export { TYPE_ORDER, REL_SUGGEST, DG_REL_SUGGEST } from './vocab.js';
 
 export const TYPES = Object.fromEntries(
   TYPE_ORDER.map(tp => [tp, { color: cssVar(`--t-${tp}`) || '#9e9e9e' }]));
@@ -42,27 +38,11 @@ export const pinMark = pin => PIN[pin]
        aria-label="${esc(PIN[pin].label)}">${icon(PIN[pin].icon)}</span>`
   : '';
 
-/* Relation vocabularies. Two, because they name different things: a
-   relation between memories is not the same statement as the tie from a
-   diagram step to the memory that explains it. Both stay OPEN -- the API
-   accepts any string, and relations predating either list have to remain
-   editable -- which is what the "other…" escape below is for. */
-export const REL_SUGGEST = ['relates_to', 'supersedes', 'contradicts', 'duplicates', 'links_to'];
-export const DG_REL_SUGGEST = ['explains', 'contradicts', 'relates_to'];
-
+/* the relation picker's entry for a type outside the suggestions: it opens a text field */
 const REL_OTHER = '__other';
 
-/* What a relation type is CALLED, wherever one is shown.
-
-   The picker has translated its options since it was built; every place that
-   READ a relation back printed the stored string instead, so the same edge
-   was "Substitui" while you were choosing it and `supersedes` once it
-   existed. The stored value is what queries and the MCP tools use, so it is
-   not replaced -- it moves to the title (see relTypeTitle).
-
-   The set is open: db accepts any string and relations predating either
-   suggestion list are still editable, so a type with no entry falls back to
-   itself rather than to the key. */
+/* A relation type's display label; the stored string moves to the title (relTypeTitle). The set
+   is open, so an unknown type falls back to itself rather than to the key. */
 export function relLabel(type) {
   const raw = String(type || '').trim();
   if (!raw) return '';
@@ -78,16 +58,8 @@ export const relTypeTitle = type => {
   return relLabel(raw) === raw ? '' : t('rel.raw', { type: raw });
 };
 
-/* What a curation KIND is called on screen.
-
-   Same arrangement as relLabel above, and for the same reason: `retag` and
-   `set_confidence` are the identifiers the MCP tool takes and the database
-   stores, and a reader deciding whether to apply one should not have to
-   read them as English. The stored spelling moves to the title.
-
-   The set is open -- db.SUGGESTION_KINDS grows, and a run staged by an
-   older build can carry a kind this catalog has never heard of -- so a kind
-   with no entry falls back to itself rather than to the key. */
+/* A curation kind's display label, arranged as relLabel: the stored spelling moves to the title,
+   and an unknown kind falls back to itself. */
 export function kindLabel(kind) {
   const raw = String(kind || '').trim();
   if (!raw) return '';
@@ -102,31 +74,16 @@ export const kindTitle = kind => {
   return kindLabel(raw) === raw ? '' : t('kind.raw', { kind: raw });
 };
 
-/* How a peer memory is NAMED wherever one is previewed.
-
-   Its title, with its body as the fallback for a memory that has none --
-   `untitled` is a defect Health counts, so a name cannot be assumed -- and
-   as the tooltip when a title is there. `named` says which of the two came
-   back, so a row naming itself reads at full contrast and one falling back
-   to its body stays as quiet as the body it shows (.mem-named).
-
-   The memories list has worked this way since it was built. The relation
-   rail, the diagram's links and the optimization panes previewed a peer by
-   its opening line even when it had a name, because _peer_card did not
-   send one. */
+/* How a peer memory is named: its title, else its body (also the tooltip). `named` says which,
+   so a fallback stays as quiet as the body it shows (.mem-named). */
 export const peerName = peer => {
   const title = String(peer?.title || '').trim();
   const body = String(peer?.snippet || '').trim();
   return { text: title || body, hover: title ? body : '', named: !!title };
 };
 
-/* A relation type was a text input behind a <datalist>, and admin.css hides
-   the native datalist indicator -- so the field looked like free text and
-   gave no sign a known set existed. Recall where recognition was available.
-   A named list of the five, and the escape hatch keeps the string open.
-
-   Emits the picker AND its custom-value sibling; wireRelTypeField() joins
-   them and returns the value getter. */
+/* A named picker of the known relation types, with an escape hatch for any string. Emits the
+   picker and its custom-value sibling; wireRelTypeField() joins them and returns the getter. */
 const relItems = options => [
   { value: '', label: t('dr.rel.type.placeholder'),
     html: `<span class="pick-any">${t('dr.rel.type.placeholder')}</span>` },
@@ -164,18 +121,8 @@ export function wireRelTypeField(root, { selId, customId, options, onPick }) {
   return () => (btn.dataset.v === REL_OTHER ? custom.value.trim() : btn.dataset.v);
 }
 
-/* What a suggestion KIND does to a memory, as one of the six field roles the
-   theme already declares (--f-*, see admin.css).
-
-   Not a palette of its own: the hues the comp picked for these ARE that
-   ramp, and what a kind's colour has to say is what it DOES -- connect,
-   rewrite, decide, name, defer, remove -- which is exactly what the roles
-   are for. Two kinds doing the same kind of thing share a hue, and the
-   label beside the mark says which one it is.
-
-   Deliberately NOT the --t-* type ramp: painting a `reword` in the orange
-   that means "note" everywhere else in this UI is a bug this file has
-   already fixed once (see the note on .opt-kind). */
+/* What a suggestion kind does, as one of the six field roles (--f-*, admin.css); kinds that act
+   alike share a hue. Never the --t-* type ramp, where orange means "note". */
 export const KIND_ROLE = {
   link: 'aim', crosslist: 'aim',
   reword: 'hold', compact: 'hold', distill: 'hold', unleak: 'hold',
@@ -190,17 +137,13 @@ export const kindColor = kind => `var(--f-${KIND_ROLE[kind] || 'aim'})`;
 export const typeColor = tp => (TYPES[tp] || {}).color || '#9e9e9e';
 export const typeClass = tp => TYPES[tp] ? `t-${tp}` : '';
 
-/* The dot inside the chip is the type's FILL colour and the name is its
-   ink -- both steps of one ramp, one class setting both (see .type-tag).
-   `.dot` on its own stays for the places that are a mark beside something
-   else: a legend, a picker row, a graph card. */
+/* The chip's dot is the type's fill and its name the ink, one class setting both (.type-tag);
+   `.dot` alone is for a mark beside something else. */
 export const typeTag = tp =>
   `<span class="type-tag ${typeClass(tp)}"><span class="dot"></span>${esc(tp)}</span>`;
 
-/* `compact` drops the word and keeps the mark, for a dense list row where the
-   same three states repeat fifty times: the ring shape and the colour carry
-   it, and the word is one hover and one drawer away. The title is not
-   decoration here -- it is the only place the label survives. */
+/* `compact` keeps only the mark for dense rows; the title is then the only place the label
+   survives. */
 export const confPill = (c, compact = false) => {
   const meta = CONF[c];
   const label = esc(meta ? meta.label : c);
@@ -208,21 +151,15 @@ export const confPill = (c, compact = false) => {
     + `${meta ? icon(meta.icon) : ''}${compact ? '' : label}</span>`;
 };
 
-/* A button, not a span with a click handler: pressing it copies, so it has
-   to be reachable by keyboard and it has to say what it does. The visible
-   text is the uid, which names the target but not the action, hence the
-   aria-label as well. */
+/* A button, since pressing it copies: keyboard-reachable, and aria-labelled because the visible
+   uid names the target, not the action. */
 export const uidChip = uid =>
   `<button type="button" class="uid-chip" data-copy="${esc(uid)}"
            title="${t('uid.copyTitle')}"
            aria-label="${esc(t('a11y.copyUid', { uid }))}">${esc(uid)}</button>`;
 
-/* A field's name in the reader's language. The label the server sends is the
-   one WRITTEN IN THE BODY -- the parser's anchor, what FTS indexes, what the
-   tool composes -- so it stays English wherever it is stored, and only its
-   name on screen is translated. A field with no entry yet falls back to that
-   label rather than to a bare key, and the stored spelling rides along in the
-   title so the pane and the raw body stay recognisably the same field. */
+/* A field's translated name. The server's label is the one written in the body, so it stays
+   English in storage and rides along in the title; a field with no entry falls back to it. */
 export const sectionLabel = (type, section) => {
   const key = `sec.${type}.${section.key}`;
   const named = t(key);
@@ -233,14 +170,8 @@ export const sectionLabelHTML = (type, section) =>
   `<span class="sec-label-text" title="${esc(section.label)}">`
   + `${esc(sectionLabel(type, section))}</span>`;
 
-/* What a field DOES, keyed by the section key it is written under. The type
-   palette says what a memory IS; this says what one of its blocks is for,
-   and the meaning is the same across types: what not to do, what to do
-   instead, what is settled, what is still in flight, what is waiting on a
-   decision, what is left for next time.
-   The twelve keys of SECTION_SPEC do not collide between types, so one flat
-   map covers all of them. A type with no sections has no key and falls back
-   to its own colour. */
+/* What a field does, by section key: one flat map, since SECTION_SPEC keys do not collide across
+   types. A type with no sections falls back to its own colour. */
 const SECTION_ROLE = {
   pattern: 'stop', why_wrong: 'hold', instead: 'go',
   intent: 'aim', established: 'go', pursuing: 'hold', open_questions: 'ask',
@@ -248,9 +179,8 @@ const SECTION_ROLE = {
   revised_belief: 'ask', next_time: 'next',
 };
 
-/* The pair of custom properties a block's mark and label are drawn from:
-   --h is the fill (the dot), --h-ink the letter. Both steps, because one
-   colour cannot do both jobs on this ground -- see the note on --t-*. */
+/* The custom properties a block's mark and label draw from: --h the fill, --h-ink the letter;
+   one colour cannot do both on this ground. */
 export const sectionHue = (type, key) => {
   const role = SECTION_ROLE[key];
   return role
@@ -258,14 +188,8 @@ export const sectionHue = (type, key) => {
     : `--h: var(--t-${type}); --h-ink: var(--t-${type}-ink)`;
 };
 
-/* ─── the two closed vocabularies, as picker rows ────────────────────────
-   A type and a confidence are identified everywhere else in this UI by a
-   mark -- a coloured dot, a ringed glyph -- and a native <option> could
-   carry neither, so the one list where you PICK one was the one place the
-   mark went missing. core/pick.js draws markup, so it comes along.
-
-   `any` is the row that stands for no filter at all. It is a sentence and not
-   a value, so it reads as one (.pick-any) instead of impersonating a type. */
+/* ─── the two closed vocabularies as picker rows, with their marks (core/pick.js draws markup).
+   `any` is the no-filter row, styled as a sentence (.pick-any). */
 
 export const typeItems = ({ any = '' } = {}) => [
   ...(any ? [{ value: '', label: any, html: `<span class="pick-any">${esc(any)}</span>` }] : []),
@@ -301,12 +225,8 @@ export const pinItems = ({ any = '' } = {}) => [
   })),
 ];
 
-/* ─── a load that failed ──────────────────────────────────────────────────
-   Six places rendered a fatal load error with `.empty` -- the same grey centred
-   sentence as "no results" -- so a dropped connection on Maintenance looked
-   exactly like a clean database, and the app had no retry control anywhere at
-   all. This is deliberately not `.empty`: left-aligned, marked, and carrying
-   the one thing that helps. */
+/* ─── a load that failed: deliberately not `.empty`, so a dropped connection never looks like an
+   empty store; left-aligned, marked, with a Retry. */
 
 export const failedHTML = err => `<div class="failed" role="alert">
   <span class="failed-mark">${icon('contradicted')}</span>
@@ -317,12 +237,8 @@ export const failedHTML = err => `<div class="failed" role="alert">
   <button type="button" class="btn btn-sm" data-retry>${t('common.retry')}</button>
 </div>`;
 
-/* Wraps a loader so a failure reports itself into `hostSel` with a Retry wired
-   back to this same wrapper: retrying re-runs exactly what failed, and a second
-   failure renders the same way instead of falling silent. The returned function
-   is also what a Refresh button should call, so the two paths cannot drift.
-   Resolves to undefined on failure rather than rejecting -- the failure has
-   already been reported on screen. */
+/* Wraps a loader so a failure renders into `hostSel` with a Retry that re-runs this wrapper, which
+   is also what Refresh should call. Resolves undefined on failure; it is already on screen. */
 export function retryable(hostSel, loader) {
   const run = () => loader().catch(err => {
     const host = document.querySelector(hostSel);
@@ -341,10 +257,8 @@ export function wireCopyChips(root) {
     el.addEventListener('click', e => { e.stopPropagation(); copyUid(el.dataset.copy); }));
 }
 
-/* ─── domain paths ───────────────────────────────────────────────────────
-   A domain is one string that reads as a path: 'acme/x100/p200' is a
-   routine inside a module inside a product. The server stores and matches
-   it; these are the four things a view needs to DRAW one. */
+/* ─── domain paths: 'acme/x100/p200' is a routine in a module in a product. The server stores
+   and matches them; these helpers draw them. */
 
 export const DOMAIN_SEP = '/';
 
@@ -352,18 +266,15 @@ export const domainSegments = d => (d || '').split(DOMAIN_SEP).filter(Boolean);
 export const domainLeaf = d => domainSegments(d).slice(-1)[0] || '';
 export const domainDepth = d => domainSegments(d).length;
 
-/* Whether a path IS a scope or sits under it. Segment-wise, like the
-   server's own check: 'acme/x1000' is not inside 'acme/x100' however
-   similar the two read. An empty scope holds everything. */
+/* Whether a path is a scope or under it, segment-wise like the server: 'acme/x1000' is not
+   inside 'acme/x100'. An empty scope holds everything. */
 export function inDomainPath(domain, scope) {
   const want = domainSegments(scope), segs = domainSegments(domain);
   return want.every((s, i) => segs[i] === s);
 }
 
-/* Tree order: a parent, then its whole subtree, then its next sibling.
-   Comparing the strings would not do it -- '-' sorts before '/', so a root
-   named 'acme-legacy' would land between 'acme' and 'acme/x100' and cut a
-   subtree in half. Segments, then depth. */
+/* Tree order: parent, its subtree, then the next sibling. By segments then depth, since '-'
+   sorts before '/' and would split a subtree. */
 export function byDomainPath(a, b) {
   const x = domainSegments(a.domain), y = domainSegments(b.domain);
   for (let i = 0; i < Math.min(x.length, y.length); i++) {
@@ -373,18 +284,8 @@ export function byDomainPath(a, b) {
   return x.length - y.length;
 }
 
-/* The SHAPE of a domain tree, one entry per row: which ancestor columns
-   still have a row below them (so their line continues through this one),
-   and whether this row closes its branch.
-
-   `list` must already be in tree order (byDomainPath) -- that is what makes
-   this one pass: the next row at this depth or shallower is either a sibling
-   of this row or the end of its parent.
-
-   Kept here rather than in the one view that draws it, because the shape of
-   the tree and the way a given surface draws it are two different things: a
-   second renderer must not work the shape out for itself, or the same tree
-   ends up drawn as two different trees. */
+/* The tree's shape per row: which ancestor rails continue and whether the row closes its branch.
+   `list` must be in tree order (byDomainPath); shared so every renderer draws the same tree. */
 export function domainGuides(list) {
   const out = [];
   /* cont[k - 1]: the row last seen at depth k has a sibling still to come,
@@ -407,17 +308,8 @@ export function domainGuides(list) {
   return out;
 }
 
-/* One row's guide rails as markup, from one entry of domainGuides.
-
-   The columns are drawn by admin.css (.dom-rail), which measures them off
-   --dom-step -- so whatever hosts these has to declare that pair and lay its
-   row out the same way: the indent spacer, then an 18px twist slot, then the
-   name. `leaf` says there is no twist in that slot, and the closing stroke
-   runs on across it to the name instead of stopping at an empty box.
-
-   Markup and not just classes, because the domain table and the domain
-   picker draw the same tree, and two copies of this loop is how they would
-   come to draw it differently. */
+/* One row's guide rails as markup. Hosts declare --dom-step and lay rows out as spacer, an 18px
+   twist slot, then the name; `leaf` runs the closing stroke across an empty slot. */
 export const domainRailHTML = ({ depth, through, last }, { leaf = false } = {}) =>
   depth > 1
     ? `<span class="dom-rail${leaf ? ' dg-leaf' : ''}" aria-hidden="true">${
@@ -425,9 +317,7 @@ export const domainRailHTML = ({ depth, through, last }, { leaf = false } = {}) 
       }<i class="dg-elbow${last ? ' dg-end' : ''}"></i></span>`
     : '';
 
-/* For a free-text domain field: the whole path is the value, because that
-   is what gets typed and stored. Tree-ordered so the suggestions read as
-   the tree they are. */
+/* Suggestions for a free-text domain field: whole paths, in tree order. */
 export const domainDatalist = domains =>
   domains.slice().sort(byDomainPath)
     .map(d => `<option value="${esc(d.domain)}">`).join('');

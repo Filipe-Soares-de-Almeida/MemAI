@@ -646,7 +646,7 @@ def test_interactive_opens_above_the_label_threshold(fixture_data):
     scale produced."""
     html = ds.render_interactive(fixture_data, open_scale=0.85)
     assert "centreOn" in html
-    assert f"0.85" in html
+    assert "0.85" in html
     assert str(ds.LABEL_MIN_SCALE) in html
 
 

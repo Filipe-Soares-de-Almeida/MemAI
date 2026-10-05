@@ -1,13 +1,5 @@
-/* Circle packing for the graph arrangements.
-
-   `packSiblings` lays circles tangent to one another by front chain and
-   `enclose` finds the smallest circle containing a set; both are the
-   d3-hierarchy algorithms (Wang et al., Welzl), which nested circles need
-   exactly: a domain has to read as one body, and a greedy spiral with
-   relaxation leaves a bag of marbles instead.
-
-   Every function here works in world units and writes x/y onto the objects
-   it is handed. */
+/* Circle packing in world units: front-chain sibling packing and Welzl's smallest enclosing
+   circle (the d3-hierarchy algorithms), so a nested domain reads as one body. */
 
 export const clamp = (v, lo, hi) => (v < lo ? lo : v > hi ? hi : v);
 

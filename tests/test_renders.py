@@ -10,8 +10,8 @@ environment variable says it is.
 from __future__ import annotations
 
 import os
-from pathlib import Path
 import time
+from pathlib import Path
 
 import pytest
 from starlette.testclient import TestClient

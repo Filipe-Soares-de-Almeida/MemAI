@@ -1,27 +1,14 @@
-/* The 2D force layout the arrangements settle with: a Barnes-Hut quadtree,
-   Plummer softening, and no repulsion cutoff.
-
-   A cutoff cannot be used here. Inside a cloud wider than the cutoff a body's
-   repulsion sums to nearly zero by symmetry while any pull that grows with
-   distance keeps rising, so the arrangement collapses to the cutoff's own
-   scale. The quadtree costs O(n log n) and has no such scale.
-
-   Centring is a TRANSLATION of the centroid, never a spring toward the
-   origin -- a spring is the same distance-growing pull under another name. */
+/* The 2D force layout: Barnes-Hut quadtree, Plummer softening, no repulsion cutoff (a cutoff
+   collapses the cloud to its own scale). Centring translates the centroid, never a spring. */
 
 /* the Barnes-Hut opening angle, squared: 0.9^2 */
 const THETA2 = 0.81;
 
-/* Depth is capped and a full cell keeps a BUCKET. Two bodies at the same
-   coordinate, or closer than the float grid at the current cell size, land in
-   the same child at every split, and the tree would recurse forever. */
+/* Depth is capped and full cells keep a bucket, so coincident bodies cannot recurse forever. */
 const MAX_DEPTH = 26;
 
-/* The softening length, squared. Repulsion divides by `d2 + SOFT2` rather
-   than by a floored `d2`, which caps the force at `k*m/SOFT2` and stays
-   smooth everywhere. A floor hands back a hundred times the one-unit force to
-   two bodies seeded on top of each other -- a domain hub and its single
-   memory, routinely -- and they leave the field on one impulse. */
+/* Softening length squared: repulsion divides by `d2 + SOFT2`, capping it smoothly so bodies
+   seeded on top of each other do not fly apart. */
 const SOFT2 = 16;
 
 class Quad {
@@ -131,11 +118,8 @@ export function repel(q, b, k, out) {
   if (q.kids) for (const kid of q.kids) repel(kid, b, k, out);
 }
 
-/* A simulation over `bodies` ({x, y, m, fixed}) with `links` ({a, b, len, k}).
-
-   `groupK` pulls a body toward `b.seat`, a cohesion that grows with distance,
-   so a seat has to be FIXED: a seat that drifts lets the arrangement ride it
-   inward. */
+/* A simulation over `bodies` ({x, y, m, fixed}) and `links` ({a, b, len, k}). `groupK` pulls
+   toward `b.seat`, which must be fixed or the arrangement rides it inward. */
 export class Sim {
   constructor(bodies, links, opts = {}) {
     this.bodies = bodies;

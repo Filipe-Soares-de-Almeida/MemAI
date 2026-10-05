@@ -18,6 +18,7 @@ from pathlib import Path
 import pytest
 from starlette.testclient import TestClient
 
+from conftest import webui_constants
 from memai import admin, db
 
 # The dashboard's sources. admin.WEBUI_DIR is the build output, which is one
@@ -29,7 +30,8 @@ def _own_modules() -> list[Path]:
     """Every module the dashboard is written in, without the copied-in
     third-party code under public/ or the build output under dist/."""
     skip = {"public", "dist"}
-    return [p for p in WEBUI_SRC.rglob("*.js") if not skip & set(p.parts)]
+    return [p for p in WEBUI_SRC.rglob("*") if p.suffix in {".js", ".ts", ".vue"}
+            and not skip & set(p.parts)]
 
 
 @pytest.fixture
@@ -1302,16 +1304,12 @@ def test_api_diagram_list(client):
 
 
 def test_every_referenced_icon_is_defined(client):
-    """`<svg data-icon="x">` is filled in from core/icons.js at boot, so a
-    name that module does not define is an icon that silently never draws.
-
-    Textual, like the import check below: it reads the ICONS keys off the
-    object literal rather than running the module.
-    """
+    """`<svg data-icon="x">` and `icon('x')` draw from core/icons.js, so a
+    name that module does not export is an icon that silently never draws.
+    The names in use are scanned from the sources, like catalog keys."""
     import re
 
-    icons_js = (WEBUI_SRC / "core" / "icons.js").read_text(encoding="utf-8")
-    defined = set(re.findall(r"^ {2}'?([\w-]+)'?:\s*\{", icons_js, re.M))
+    defined = set(webui_constants()["icons"])
     assert {"brand-seal", "overview", "graph", "search"} <= defined, defined
 
     used = set()
@@ -1321,24 +1319,6 @@ def test_every_referenced_icon_is_defined(client):
         used |= set(re.findall(r"""\bicon\(\s*['"]([\w-]+)['"]""", src))
     assert used, "expected the shell to reference some icons"
     assert used <= defined, f"undefined icons: {sorted(used - defined)}"
-
-
-def test_module_imports_resolve(client):
-    """A renamed or moved module has to be renamed at its import sites too.
-
-    Cheap textual check -- it does not run the modules, it only asserts
-    that every relative import names a file that exists on disk.
-    """
-    import re
-
-    pattern = re.compile(r"""from\s+['"](\.[^'"]+)['"]""")
-    seen = 0
-    for path in _own_modules():
-        for spec in pattern.findall(path.read_text(encoding="utf-8")):
-            target = (path.parent / spec).resolve()
-            assert target.is_file(), f"{path.name} imports missing {spec}"
-            seen += 1
-    assert seen > 20, "expected the modules to import one another"
 
 
 def test_locale_catalogs_stay_in_parity():

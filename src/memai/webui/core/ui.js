@@ -1,43 +1,12 @@
-/* Floating chrome: toasts, the hover tip, modals, the context menu.
-
-   Everything here is parented outside #view, so it survives a view swap
-   and has to be dismissed deliberately -- see the tipHide() calls at the
-   top of openModal and openCtxMenu, and lifecycle.js for the general
-   case. */
+/* Floating chrome: toasts, the hover tip, modals, the context menu. All of it lives outside
+   #view, so it survives a view swap and is dismissed deliberately (see lifecycle.js). */
 
 import { $, esc } from './dom.js';
 import { t } from '../i18n.js';
 import { icon } from './icons.js';
 
-/* ─── toasts ──────────────────────────────────────────────────────────────
-   Thirty-five call sites push SEVEN different shapes of message through this
-   one function: a bare confirmation, a counted one, an object being named, an
-   irreversible deletion, a partial failure, a raw API error, and -- until this
-   round -- a form-validation nag fired four hundred pixels from the field that
-   was wrong. It used to answer all seven with the same 3.6-second rectangle
-   that could not be dismissed, could not be acted on, offered no Undo for any
-   of the reversible things it reported, and stacked without a limit.
-
-   What a kind means now:
-
-     ''      nothing happened. No mark, no hue -- a neutral result is neutral,
-             and two call sites used to get the BRAND colour for this.
-     'ok'    it worked.
-     'warn'  it partly worked; `detail` says which part did not.
-     'bad'   it failed. Never auto-dismisses, because a failure is something to
-             read and act on, and it already carries role="alert".
-
-   State is carried by the MARK's shape and by the container -- never by a
-   coloured strip on one edge. The three marks in core/icons.js are already a
-   closed ring, an open ring and a crossed ring, so the three states are told
-   apart on a greyscale monitor.
-
-   opts:
-     detail  a second line: an error message, a uid, the ids that failed. Keeps
-             the headline short and stable while the specifics still ship.
-     action  {label, run} -- Undo, Retry, View. Extends the timer, because an
-             Undo you cannot reach in time is not an Undo.
-     sticky  force no auto-dismiss ('bad' implies it).                        */
+/* ─── toasts: kind '' neutral, 'ok', 'warn' (partial, `detail` says what), 'bad' (sticky alert).
+   opts: detail (second line), action {label, run} (extends the timer), sticky. */
 
 const MARK = { ok: 'confirmed', warn: 'unverified', bad: 'contradicted' };
 const LIFE = { '': 3200, ok: 3200, warn: 5000 };
@@ -49,12 +18,8 @@ const waiting = [];
 let escWired = false;
 let stackSize = null;
 
-/* The stack floats over content that scrolls, so it publishes its own height
-   the way the bulk bar publishes its own: .view and the record's own grid
-   reserve that much extra bottom padding, and the toast lands on padding the
-   reader can scroll past rather than on the last of the content. Measured: at
-   1280x800 the stack overlaps an open record by 400x50px, and the record is
-   exactly where most toasts fire. */
+/* The stack publishes its height so .view and the record grid reserve that much bottom padding,
+   and a toast lands on scrollable padding instead of over the last content. */
 function publishStackHeight(host) {
   const h = host.children.length ? host.offsetHeight + 10 : 0;
   document.documentElement.style.setProperty('--toast-h', `${h}px`);
@@ -62,9 +27,7 @@ function publishStackHeight(host) {
 
 export function toast(msg, kind = '', opts = {}) {
   const host = $('#toasts');
-  /* Collapse a repeat instead of stacking it: applying six suggestions fires
-     six identical toasts (optimization.js runs one per apply), which used to
-     push the earliest out of sight with nothing to scroll. */
+  /* Collapse a repeat instead of stacking it: a batch of applies fires identical toasts. */
   const newest = host.lastElementChild;
   if (newest && !newest.dataset.going && !opts.action
       && newest.dataset.msg === msg && newest.dataset.kind === kind) {
@@ -87,9 +50,7 @@ function mount(host, msg, kind, opts) {
   el.dataset.kind = kind;
   if (opts.sticky ?? kind === 'bad') el.dataset.sticky = '1';
   if (opts.action) el.dataset.acting = '1';
-  /* A failure interrupts; a confirmation waits its turn. The container is
-     aria-live="polite", which is right for "archived" and wrong for "the
-     write was rejected" -- role="alert" on the node itself is assertive. */
+  /* The container is aria-live="polite"; a failure needs role="alert" to interrupt. */
   el.setAttribute('role', kind === 'bad' ? 'alert' : 'status');
 
   el.innerHTML = `${MARK[kind] ? `<span class="toast-mark">${icon(MARK[kind])}</span>` : ''}
@@ -101,10 +62,8 @@ function mount(host, msg, kind, opts) {
     <button type="button" class="icon-btn" data-close
             aria-label="${esc(t('common.close'))}">${icon('close')}</button>`;
 
-  /* textContent, never innerHTML, for every caller-supplied string. Five
-     catalog entries carry <b>/<code>, and memories.js records a shipped bug
-     where one of them printed as literal tags. The body of a toast is TEXT;
-     emphasis is a node this function builds, never a string it parses. */
+  /* textContent, never innerHTML, for caller strings: catalog entries with <b>/<code> would print
+     as literal tags. Emphasis is a node built here. */
   el.querySelector('.toast-msg').textContent = msg;
   if (opts.detail) el.querySelector('.toast-detail').textContent = opts.detail;
   if (opts.action) {
@@ -143,15 +102,8 @@ function mount(host, msg, kind, opts) {
   return el;
 }
 
-/* Every failure in this app used to say only what the API said: an un-i18n'd
-   string of unbounded length, in a corner, gone in 3.6 seconds, with no way to
-   re-read it and with nothing naming what had actually failed -- a pt-BR user
-   got an English sentence from the server and no context for it.
-
-   The headline is a stable translated sentence naming the ACTION that failed;
-   err.message drops to the detail line, still there for whoever needs it and no
-   longer the whole message. 'bad' does not auto-dismiss, so it waits to be
-   read, and `opts.action` carries a Retry where the call is idempotent. */
+/* The headline is a translated sentence naming the action that failed; err.message goes to the
+   detail line. 'bad' waits to be read, and `opts.action` can carry a Retry. */
 export const failed = (key, err, opts = {}) =>
   toast(t(key), 'bad', { detail: err?.message || '', ...opts });
 
@@ -178,12 +130,8 @@ function drop(el) {
   }, 300);
 }
 
-/* ─── hover tip ───────────────────────────────────────────────────────
-   Positioned in an animation frame, and measured only when the content
-   changes. Writing innerHTML and reading getBoundingClientRect on the next
-   line forces a synchronous layout, and both canvases call this on every
-   pointermove -- so a slow drag across a card used to pay for a reflow per
-   pixel. The size only changes when the words do. */
+/* ─── hover tip: positioned in an animation frame and measured only when its content changes,
+   since both canvases call it on every pointermove. */
 
 let tipHtml = '', tipBox = null, tipFrame = 0;
 const tipAt = { x: 0, y: 0 };
@@ -231,10 +179,7 @@ export const copyUid = uid => copyText(uid, t('toast.uidCopied', { uid }));
 
 export const copyCode = text => copyText(text, t('toast.codeCopied'));
 
-/* ─── toggle state ────────────────────────────────────────────────────
-   A control that stays pressed says so in the accessibility tree as well as
-   in its fill. For a .btn; a .seg button wears its own pressed state and
-   sets aria-pressed itself. */
+/* ─── toggle state: a pressed .btn also sets aria-pressed; a .seg button handles its own. */
 
 export const setPressed = (el, on) => {
   if (!el) return;
@@ -242,14 +187,8 @@ export const setPressed = (el, on) => {
   el.classList.toggle('btn-solid', !!on);
 };
 
-/* Everything behind the modal stack -- the app bar and the view -- taken out
-   of the tab order and out of the accessibility tree for as long as anything
-   is layered over it: a dialog sits over the whole app behind a scrim, and
-   tabbing into what it covers moves an invisible caret through it.
-
-   `inert` and not aria-hidden: it does both, and it also stops a click.
-   Applied by openModal/closeModal at the edges of the stack, so no caller
-   has to remember it. */
+/* Takes the app bar and view out of tab order and the accessibility tree while a modal is open.
+   `inert`, not aria-hidden, because it also stops clicks. */
 function inertBackground(on) {
   for (const sel of ['.appbar', '.frame']) {
     const el = document.querySelector(sel);
@@ -257,24 +196,8 @@ function inertBackground(on) {
   }
 }
 
-/* ─── modal machinery ───────────────────────────────────────────────────
-   A modal takes the screen: it is labelled aria-modal, it keeps Tab
-   inside itself, and closing it puts the caret back where it was. The
-   context menu below is the deliberate opposite -- see its own note.
-
-   Modals STACK, because a form can open a form of its own: the link picker
-   opens over whatever asked for it, and closing it goes back to that.
-
-   So openModal PUSHES and closeModal POPS exactly one level -- Escape
-   backs out of a sub-form into the form that raised it, which is the only
-   reading of Escape here that cannot lose work. A caller that owns several
-   levels closes them by popping until its own is gone -- see closeRecord()
-   in views/record.js.
-
-   Only the TOP modal is live. One keydown listener consults the top of
-   the stack, rather than every modal installing a trap of its own and two
-   traps then fighting over where the caret belongs; the scrims below are
-   covered by the one above, so a click cannot reach them either. */
+/* ─── modal machinery: modals STACK; openModal pushes, closeModal and Escape pop one level, and
+   only the top modal is live, with one keydown listener for the whole stack. */
 
 const FOCUSABLE = ['a[href]', 'button:not([disabled])', 'input:not([disabled])',
                    'textarea:not([disabled])', 'select:not([disabled])',
@@ -292,21 +215,14 @@ const focusInto = dialog => {
 
 export function openModal({ title, bodyHTML, footHTML, ariaLabel,
                             wide = false, tall = false }) {
-  /* Whatever had the caret -- INCLUDING a control inside the modal
-     underneath. That one is still on screen when this level closes, which
-     is exactly where the caret has to go back to. */
+  /* Whatever had the caret, including a control in the modal underneath, gets it back. */
   const opener = document.activeElement;
-  /* A hover tip outlives the pointer that summoned it -- open a modal from
-     the canvas (or from a context menu over a card) and the tip is left
-     floating on top of the dialog, because nothing moved off the card to
-     dismiss it. Whatever is opening now owns the screen. */
+  /* A hover tip would otherwise float over the dialog; whatever opens now owns the screen. */
   tipHide();
 
   const scrim = document.createElement('div');
   scrim.className = `modal-scrim${modals.length ? ' stacked' : ''}`;
-  /* `title` may carry markup -- the memory record's heading is a row of
-     chips -- so the accessible name comes from ariaLabel when the caller
-     has one, rather than from a string of tags */
+  /* `title` may carry markup, so the accessible name prefers ariaLabel */
   scrim.innerHTML = `<div class="modal${wide ? ' modal-wide' : ''}${tall ? ' modal-tall' : ''}"
        role="dialog" aria-modal="true" aria-label="${esc(ariaLabel || title)}" tabindex="-1">
     <div class="modal-head">${title}</div>
@@ -320,9 +236,8 @@ export function openModal({ title, bodyHTML, footHTML, ariaLabel,
 
   if (!trapWired) {
     trapWired = true;
-    /* Tab wraps inside the topmost dialog. Recomputed per keypress rather
-       than cached: a modal body can gain and lose controls while it is
-       open (the new-memory form swaps a textarea for a title field). */
+    /* Tab wraps inside the topmost dialog, recomputed per keypress since a modal body can
+       gain and lose controls while open. */
     addEventListener('keydown', e => {
       const top = topModal();
       if (e.key !== 'Tab' || !top) return;
@@ -351,9 +266,7 @@ export function closeModal() {
   /* released before the focus call below: an inert subtree cannot take
      focus, so restoring it first would silently do nothing */
   if (!back) inertBackground(false);
-  /* the opener may itself have been re-rendered away while this was open
-     (saving from the record repaints it), hence the guard -- and then the
-     form underneath takes the caret rather than the page behind it all */
+  /* the opener may have been re-rendered away; then the form underneath takes the caret */
   if (top.opener && document.contains(top.opener)) top.opener.focus();
   else if (back) focusInto(back.scrim.querySelector('.modal'));
 }
@@ -392,10 +305,8 @@ export function promptModal({ title, body = '', label, placeholder = '', value =
   });
 }
 
-/* The dialog for an act with no way back. The phrase is printed in the
-   dialog and never pre-filled, and the button stays disabled until the field
-   holds it exactly; the field says why while it does not. Resolves true on
-   the button and false on Cancel. */
+/* Confirms an irreversible act: the button stays disabled until the field holds the printed
+   phrase exactly. Resolves true on the button, false on Cancel. */
 export function typedConfirmModal({ title, bodyHTML = '', phrase, okLabel }) {
   return new Promise(resolve => {
     const m = openModal({
@@ -424,13 +335,8 @@ export function typedConfirmModal({ title, bodyHTML = '', phrase, okLabel }) {
   });
 }
 
-/* ─── menu of actions ────────────────────────────────────────────────
-   Not a modal: it has no scrim and no focus trap, because it must be
-   dismissable by clicking the thing you actually wanted. Items are
-   `{label, run, danger}` or `{sep: true}`.
-
-   Two ways in, and they differ only in where the menu lands: openCtxMenu at a
-   pointer, openDropMenu under the control that opened it. */
+/* ─── menu of actions: no scrim and no focus trap, so a click elsewhere dismisses it. Items are
+   `{label, run, danger}` or `{sep: true}`; openCtxMenu lands at a pointer, openDropMenu at a control. */
 
 let ctxMenu = null, ctxDrop = null;
 
@@ -444,10 +350,8 @@ export function closeCtxMenu() {
 /* At a point -- a right-click, or a canvas the pointer is over. */
 export const openCtxMenu = (x, y, items) => openMenu(items, { x, y });
 
-/* Under the button that opened it: measured against that button, flipped when
-   it does not fit below, and hung off the button's RIGHT edge when `align`
-   says so -- for a control at the end of a row, where a left-aligned menu
-   wider than its button runs off past it. */
+/* Under the button that opened it, flipped when it does not fit, right-aligned when `align`
+   says so for a control at the end of a row. */
 export function openDropMenu(btn, items, { align = 'left' } = {}) {
   return openMenu(items, { btn, align });
 }
@@ -539,9 +443,8 @@ function place(el, { x, y, btn, align }) {
   el.style.top = `${Math.max(8, Math.min(at.y, innerHeight - box.height - 8))}px`;
 }
 
-/* Below the button unless it does not fit and there is more room above. A menu
-   is a list of ACTIONS and not what a control currently holds, so it clears
-   the button by 4px rather than joining it the way a picker's panel does. */
+/* Below the button unless there is more room above; a 4px gap, since a menu lists actions
+   rather than the control's value. */
 function dropPoint(r, box, align) {
   const room = innerHeight - r.bottom - 8;
   const below = box.height <= room || r.top - 8 < room;

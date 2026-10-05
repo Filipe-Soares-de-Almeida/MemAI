@@ -24,41 +24,13 @@ import { markPair } from '../core/textdiff.js';
 import { go, previousRoute, replaceParams } from '../core/router.js';
 import { openRecord } from './record.js';
 import { I18N, t } from '../i18n.js';
+import { DIFF_KINDS, SET_KINDS, FLAG_KINDS, LINE_KINDS, TEXT_KINDS, CONTENT_KINDS,
+         WHAT_MIXED } from '../core/suggestion-kinds.js';
 
 /* ─── one suggestion, rendered by kind ───────────────────────────────── */
 
-/* the kinds the before/after pair below knows how to render. Anything else
-   is shown as its payload rather than as two empty boxes -- see optRaw. */
-const DIFF_KINDS = new Set(['compact', 'reword', 'retag', 'retitle', 'redomain',
-                            'crosslist', 'set_confidence', 'review', 'archive',
-                            'unleak']);
-
-/* A shape of change, and one pane apiece. A kind is not a diff because
-   it replaces something: a body is PROSE and is read, a tag list is a SET
-   and is compared item by item, and a confidence is a FLAG the rest of this
-   UI already draws as a ringed pill. Rendering all three as two walls of
-   text put one word in a pane four hundred pixels tall and asked the reader
-   to spot which word it was. */
-const SET_KINDS = new Set(['retag', 'crosslist']);
-const FLAG_KINDS = new Set(['set_confidence', 'archive']);
-const LINE_KINDS = new Set(['retitle', 'redomain', 'review']);
-
-/* A fifth shape: TEXT losing a piece of itself. `unleak` removes a leaked
-   tool call from one field, and the payload says WHICH -- a body, a tag
-   list, a source reference. One renderer, because it is one kind of change;
-   the field picks the wells or the two lines, since a source reference in a
-   pane six hundred pixels tall is one line of text in an empty room. */
-const TEXT_KINDS = new Set(['unleak']);
 const leakField = s => (s.payload || {}).field || 'content';
 const isBodyLeak = s => TEXT_KINDS.has(s.kind) && leakField(s) === 'content';
-
-/* The kinds whose "before" IS the memory's own content. For these, the
-   memory-under-review preview and the Before pane print the identical
-   string, one above the other, on the same card -- so the preview is
-   dropped. Every other diff kind puts a tag, a domain, a confidence or a
-   status in Before, and then the preview is the only thing on the card that
-   says WHICH memory is being retagged. */
-const CONTENT_KINDS = new Set(['compact', 'reword']);
 
 /* A body is drawn by the renderer the record draws it with, not escaped into
    one block: what is stored is a memory's own markup -- bold, lists, fenced
@@ -309,21 +281,8 @@ function verifiedState(verified, pending) {
 
 const VERIFIED_FILL = { all: 'var(--ok)', some: 'var(--warn)', done: 'var(--ink-3)' };
 
-/* The sentence a group's row says about itself. The server counts; the
-   catalog words it.
-
-   Three kinds have a second sentence for a batch that is not of one mind:
-   moving to ONE domain can name it, moving to four cannot, and the same
-   goes for the confidence being set and the relation being created. The
-   server sends the field empty when the batch disagrees, which is what
-   picks the variant here. */
-const WHAT_MIXED = { redomain: 'to', set_confidence: 'conf', link: 'rel' };
-
-/* Two of those facts are vocabularies this UI already translates, and the
-   server sends the stored spelling. Naming a confidence `contradicted` and
-   a relation `relates_to` inside an otherwise translated sentence is the
-   same leak the kind masks close. A domain path stays as it is: it is data,
-   not vocabulary. */
+/* a confidence or a relation type in a group's sentence arrives in its stored
+   spelling and is shown by its name; a domain path is data and stays as is */
 const WHAT_MASK = {
   conf: c => midSentence((CONF[c] || {}).label || c),
   rel: v => midSentence(relLabel(v)),

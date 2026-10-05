@@ -1,49 +1,5 @@
-/* MemAI · diagram editor (vanilla JS ES module, no build step).
-
-   A canvas editor for one type='diagram' memory. Deliberately NOT a
-   force layout: every node arrives with x/y from the store, so this file
-   has no layout algorithm and no fallback seeding. A node without
-   coordinates is a server bug, not something to paper over here — which
-   is also why two people looking at the same diagram, and a diagram
-   nobody has ever opened, all show the same picture.
-
-   Consequences of that split:
-     · no physics loop. The canvas redraws when something changes
-       (requestDraw), so an idle editor costs nothing.
-     · dragging is optimistic: the box follows the mouse and the new
-       coordinates are handed to hooks.onMove, which persists them. If
-       that write fails the caller re-fetches and calls setData().
-     · "auto-arrange" is a server round-trip (hooks.onRelayout), never a
-       layout computed here.
-
-   All DOM outside the canvas (the inspector, toolbar wiring, toasts)
-   belongs to app.js and reaches this class through `hooks`.
-
-   =======================================================================
-   THIS FILE HAS A PYTHON TWIN: memai/diagram_svg.py
-   =======================================================================
-   That module renders the same diagram as SVG for readers with no browser
-   (a chat client, an exporter). It is a transcription of the edge geometry
-   below -- the constants, route(), sides(), laneEdges(), detours(),
-   corridorClear(), assignFans(), unfanCollisions(), badgeAnchor(), and the
-   wrap/clamp/shortLabel text rules.
-
-   Change any of those here, change them there, then run:
-
-       node tools/route-parity.mjs --write   # re-record from THIS file
-       pytest tests/test_diagram_svg.py      # hold Python to the recording
-
-   A divergence does not raise anywhere. It draws a flow that is subtly not
-   the one the user arranged, which is why the parity harness exists and
-   why re-recording is a deliberate step rather than automatic.
-
-   Why two implementations at all: this file needs the geometry in
-   JavaScript regardless, because it hit-tests, drags and zooms against it.
-   The alternative was a headless browser on the server.
-
-   NOT duplicated: node layout. x/y comes from db.py and both sides read
-   it, which is what keeps this file free of a layout algorithm.
-   ======================================================================= */
+/* Canvas editor for one diagram memory; positions come from the store. Edge geometry has a Python
+   twin, memai/diagram_svg.py: change both, then route-parity.mjs --write and test_diagram_svg.py. */
 
 const esc = s => String(s ?? '').replace(/[&<>"']/g,
   c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -1692,18 +1648,15 @@ export class DiagramEditor {
     e.hit = box;                         /* for labelAt(), see onClick */
   }
 
-  /* An edge label cut down to the phrase that is drawn on the line. Returns
-     the label unchanged when the whole thing fits, so a caller can compare
-     the two to find out whether anything is being hidden. */
+  /* An edge label cut to the phrase drawn on the line; unchanged when it fits, so a caller can
+     compare to see whether anything is hidden. */
   static shortLabel(text) {
     const full = String(text ?? '').trim();
     const words = full.split(/\s+/);
     if (words.length <= BADGE_WORDS || full.length <= BADGE_CHARS) return full;
     let cut = words.slice(0, BADGE_WORDS).join(' ');
     if (cut.length > BADGE_CHARS) cut = cut.slice(0, BADGE_CHARS);
-    /* Either cut can land on punctuation -- a space, a comma, the colon that
-       introduced the half being dropped -- and that reads as a typo once the
-       ellipsis is stuck to it. */
+    /* trailing punctuation would read as a typo beside the ellipsis */
     return `${cut.replace(/[\s,;:.\-/]+$/, '')}…`;
   }
 
@@ -1739,12 +1692,8 @@ export class DiagramEditor {
     }
 
     if (this.scale < 0.3) return;
-    /* World units, NOT 11.5/scale. The boxes are in world units, so a font
-       sized to stay constant on screen grows relative to its box as you
-       zoom out and the label spills over the edges -- which is exactly
-       what happened. Scaling with the box keeps text inside it at every
-       zoom, at the cost of small text when zoomed far out (hence the
-       early return above). The diagram's font scale multiplies both. */
+    /* World units, not 11.5/scale, so text stays inside its box at every zoom (small when far out,
+       hence the early return); the diagram's font scale multiplies both. */
     const px = LABEL_PX * this.fontScale;
     const lh = LABEL_LH * this.fontScale;
     cx.font = `${px}px ${FONT_UI}`;
@@ -1760,13 +1709,8 @@ export class DiagramEditor {
     const top = n.y - (lines.length - 1) * lh / 2;
     lines.forEach((line, i) => cx.fillText(line, n.x, top + i * lh));
 
-    /* Attached memories carry a marker, because nothing else on the canvas
-       hints at them. A note does NOT: hovering the card shows it, and a
-       glyph on most of the cards of a documented flow is just noise.
-
-       Steps that continue in another flow get their own mark, on the row
-       below: two counts on one row read as a single two-digit number, and
-       these two say different things. */
+    /* Attached memories get a marker (a note shows on hover); steps continuing in another flow
+       get theirs on the row below, since two counts on one row read as one number. */
     if (this.scale > 0.45) {
       const count = this.linkCount[n.key];
       const jumps = this.jumpCount[n.key];
@@ -1777,32 +1721,13 @@ export class DiagramEditor {
     if (this.resizable(n)) this.drawHandles(n);
   }
 
-  /* A count and its glyph, floating OUTSIDE the card on the right.
-     `row` is -1 for the upper badge and 1 for the lower one.
-
-     Outside, because inside is where the label is: on a card whose text
-     fills it -- which is most of them, since a card is sized to its label
-     -- a badge in the corner landed ON the last line and the two read as
-     one smudge.
-
-     It hugs the OUTLINE rather than the bounding box, which is the whole
-     reason halfWidthAt exists: beside a diamond the box corner is empty
-     air, and a badge parked out there looks like it belongs to nothing.
-     Beside a parallelogram the box is wrong the other way -- the slant
-     pulls the edge in, so a badge on the box would sit ON the card at one
-     end and float away at the other.
-
-     The two rows straddle the card's middle rather than sitting at its
-     top and bottom, because top and bottom are where the vertical edges
-     attach; the middle of a side is one anchor, and the badges leave it a
-     gap. */
+  /* A count and glyph OUTSIDE the card on the right (`row` -1 upper, 1 lower), hugging the outline
+     via halfWidthAt, straddling the middle so the side's edge anchor stays clear. */
   drawBadge(n, row, text, drawMark) {
     const { cx } = this;
     cx.save();
     const bpx = BADGE_PX * this.fontScale;
-    /* NOT the dark ink a terminal card used to get: that only read because
-       the badge was drawn on the card's own teal fill. Out here it would be
-       dark on the diagram's background. */
+    /* the badge sits on the diagram background, not the card fill */
     const color = this.colInk2;
     const { left, midY } = DiagramEditor.badgeAnchor(n, row, bpx);
     cx.font = `${bpx}px ${FONT_MONO}`;
@@ -1814,20 +1739,12 @@ export class DiagramEditor {
     cx.restore();
   }
 
-  /* Where a badge starts and where its middle is. Split out of drawBadge so
-     the parity harness can record it: it is pure geometry -- only the count's
-     own width needs the canvas -- and nothing else would notice BADGE_OUT or
-     the row offset drifting apart from diagram_svg.py. */
+  /* Where a badge starts and its middle: pure geometry, split out so the parity harness records it
+     against diagram_svg.py. */
   static badgeAnchor(n, row, bpx) {
     const dy = row * bpx * 1.1;
-    /* The widest the ring gets over the badge's OWN height, not at the row's
-       centre line: a badge is bpx*1.6 tall, and the ring is a curve across
-       that. Measured at the centre only, a diamond's badge cleared by 7 at
-       its middle and was 14 units INSIDE the ring at its top corner -- the
-       ring bulges towards the card's middle, which is the end of the row
-       nearest it. Both extremes, because the shapes disagree about which one
-       is worst: a diamond and a stadium are widest at the inner end, a
-       parallelogram leans the other way and is widest at the outer one. */
+    /* The ring's widest point over the badge's whole height (bpx*1.6), at both ends: diamonds and
+       stadiums are widest at the inner end, a parallelogram at the outer. */
     const half = bpx * 0.8;
     const reach = Math.max(
       DiagramEditor.halfWidthAt(n, dy - half, RING_GROW),
@@ -1835,12 +1752,8 @@ export class DiagramEditor {
     return { left: n.x + reach + BADGE_OUT, midY: n.y + dy };
   }
 
-  /* The "continues in another flow" mark: a wall with an arrow going
-     through it, which is what leaving this diagram is. Drawn rather than
-     typed for the same reason drawLinkMark is -- canvas cannot use the SVG
-     set in core/icons.js, and a glyph picked out of a font is a glyph some
-     system does not ship. Right-to-left from `right`, beside a count of
-     unknown width. */
+  /* The "continues in another flow" mark, a wall with an arrow through it, drawn by hand (canvas
+     cannot use core/icons.js) right-to-left from `right`. */
   drawJumpMark(right, midY, size, color) {
     const { cx } = this;
     const w = size * 0.62, h = size * 0.52;
@@ -1867,15 +1780,8 @@ export class DiagramEditor {
     cx.restore();
   }
 
-  /* The "has memories attached" mark, DRAWN rather than typed.
-
-     It used to be U+21F1, which Roboto does not have and most monospace
-     faces do not either: it fell through to whatever the system happened
-     to ship, and to a tofu box where nothing did. Canvas cannot use the
-     SVG set in core/icons.js, so this is the same idea by hand -- two
-     nodes and a tie, matching that set's `graph` icon, which is what a
-     linked memory is. Drawn right-to-left from `right`, so it sits beside
-     a count of unknown width. */
+  /* The "has memories attached" mark, two nodes and a tie like the `graph` icon, drawn by hand
+     since fonts lack a reliable glyph; right-to-left from `right`. */
   drawLinkMark(right, midY, size, color) {
     const { cx } = this;
     const r = size * 0.15;
@@ -1897,9 +1803,7 @@ export class DiagramEditor {
     cx.restore();
   }
 
-  /* Corner grips, on the selected card only and only while editing: four
-     more things to hit on every card would make dragging the flow harder,
-     not easier. */
+  /* Corner grips on the selected card only, and only while editing. */
   resizable(n) {
     return !this.readOnly && !this.connectMode && n.key === this.selected;
   }
@@ -1943,16 +1847,8 @@ export class DiagramEditor {
     cx.translate(this.tx, this.ty);
     cx.scale(this.scale, this.scale);
 
-    /* Lanes are geometry, so they have to follow a drag: moving a step can
-       turn a forward edge into a loop closer, or park it over a box it now
-       runs through. They cannot be cached per node either -- dragging one
-       card can make an unrelated edge cross it.
-
-       But the full solve is the most expensive thing in this file and a
-       drag redraws on every mousemove, so while something is being moved
-       only the cheap half runs (loop closers still get their lanes;
-       forward edges are drawn straight, crossings and all). onUp marks the
-       routes dirty and the next frame solves them properly. */
+    /* Lanes follow a drag, but the full solve is too slow per mousemove: while moving, only loop
+       closers get lanes; onUp marks routes dirty for a full solve. */
     const interacting = !!(this.drag || this.sizing);
     if (this.routesDirty || interacting) {
       this.laneEdges({ detours: !interacting });

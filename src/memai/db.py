@@ -28,68 +28,47 @@ import secrets
 import sqlite3
 import zipfile
 from contextlib import contextmanager
-from datetime import date, datetime, timedelta, timezone
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
+from typing import Any
 
 from memai import guard, sections
-from memai.lite import (DOMAIN_SEP, TASK_ASK_MINUTES_DEFAULT,  # noqa: F401
-                        WARDEN_MINUTES_DEFAULT, home, normalize_domain, now_iso,
-                        split_domain)
+from memai.lite import (  # noqa: F401
+    DOMAIN_SEP,
+    TASK_ASK_MINUTES_DEFAULT,
+    WARDEN_MINUTES_DEFAULT,
+    home,
+    normalize_domain,
+    now_iso,
+    split_domain,
+)
 
-# Domain-casing policy. Stored in the `meta` table under DOMAIN_CASE_KEY and
-# enforced at every domain write path. 'preserve' keeps free-text casing;
-# 'lower'/'upper' coerce every stored domain.
+# Domain-casing policy, stored in `meta` under DOMAIN_CASE_KEY and enforced on every domain write:
+# 'preserve' keeps the casing written, 'lower'/'upper' coerce it.
 DOMAIN_CASE_KEY = "domain_case"
 DOMAIN_CASE_MODES = ("preserve", "lower", "upper")
 DOMAIN_CASE_DEFAULT = "preserve"
 
-# A domain is one string that reads as a PATH: the segments between
-# DOMAIN_SEP nest, outermost first, so 'acme/x100/p200' files a memory
-# under a routine that belongs to a module that belongs to a product.
-# Asking about the module includes its routines.
-#
-# The nesting lives in the string: no domains table, no id to resolve. A
-# store with no separator anywhere is a tree of depth 1, and FTS tokenizes
-# the ancestors into searchable words.
+# A domain is a PATH: segments between DOMAIN_SEP nest outermost first, and a scope includes its
+# subtree. The nesting lives in the string, with no domains table; FTS indexes each ancestor.
 
-# A memory is FILED at one path and can additionally BELONG to others. The
-# path says where it lives -- one direct parent, the thing a re-home
-# renames. A cross-listing says it is also part of a subject that cuts
-# ACROSS the tree: the same routine belongs to the module it runs in and to
-# the end-to-end flow it is a step of, and neither of those is the other's
-# ancestor. `memory_domains` holds those extra memberships, one row per
-# path, and every domain filter reads it (see domain_clause).
-#
-# `memories.also_domains` carries the same paths as one text field, for the
-# one reader that cannot join: the FTS index. Nothing filters on it -- see
-# _write_domain_links, its only writer.
+# A memory is FILED at one path and may also BELONG to others, one `memory_domains` row each, read
+# by every domain filter; `memories.also_domains` copies them for FTS only (_write_domain_links).
 ALSO_SEP = "\n"
 
-# How much a memory is trusted, on its own axis: `status` says whether a row
-# is in play at all, this says whether what it claims still holds. Up here
-# rather than beside the curation code because retrieval reads it too --
-# a contradicted memory sorts behind everything that still holds, and a
-# warm-up leaves it out (see search_ranked, _sound_clause).
+# Trust on its own axis beside `status`; retrieval reads it too: a contradicted memory sorts last
+# and a warm-up leaves it out (search_ranked, _sound_clause).
 CONFIDENCE_CONTRADICTED = "contradicted"
 
-# The longest a title may be, counted in characters after stripping. A title
-# is one line naming the memory, and every listing shows a row by it: wider
-# than this it stops naming the memory and starts restating it.
+# Characters a stripped title may hold: past this it restates the memory instead of naming it.
 TITLE_MAX = 120
 
 # The FTS index and its triggers, kept separate because they are also what a
 # store built before a new indexed column has to be rebuilt from (_ensure_fts).
 _FTS_COLUMNS = ("title", "content", "tags", "domain", "also_domains")
 
-# BM25 weights per indexed column, in _FTS_COLUMNS order. Unweighted, a
-# domain match scored like a claim: every row filed under 'acme/cache'
-# ranked for the word "cache" whether or not it said anything about one,
-# and in a store organised by domain that is most of the store. The paths
-# stay indexed -- a scope name should be findable -- they just stop
-# outranking the memory that actually discusses the subject. Keyed by name
-# so adding an indexed column without weighting it fails at import.
-# `title` outweighs the body: it is one line a writer chose to name the
-# memory by, so a match there is about the subject, not a mention in passing.
+# BM25 weights in _FTS_COLUMNS order, keyed by name so an unweighted new column fails at import.
+# Paths stay findable but never outrank a memory about the subject; a title outranks the body.
 _FTS_WEIGHTS = {"title": 1.5, "content": 1.0, "tags": 0.8,
                 "domain": 0.3, "also_domains": 0.3}
 _BM25 = f"bm25(memories_fts, {', '.join(str(_FTS_WEIGHTS[c]) for c in _FTS_COLUMNS)})"
@@ -405,13 +384,9 @@ CREATE TABLE IF NOT EXISTS health_daily (
 
 
 # ---------------------------------------------------------------- projects
-# One project is one SQLite file holding a whole memory. The home directory
-# (MEMAI_HOME, or ~/.memai) holds `memai.db`, the project named
-# GENERAL_PROJECT, and `projects/<name>.db` for every other one. A one-line
-# file named ACTIVE_FILE in the home says which of them connect() opens when
-# handed no path; without it, or naming a project that is not there, that is
-# GENERAL_PROJECT. The file is read on every connect(), so a switch written
-# by one process reaches every other process on its next call.
+
+# One project is one SQLite file: GENERAL_FILE for GENERAL_PROJECT, projects/<name>.db for others.
+# ACTIVE_FILE in the home names the one connect() opens, re-read each call so a switch spreads.
 GENERAL_PROJECT = "General"
 GENERAL_FILE = "memai.db"
 PROJECTS_DIRNAME = "projects"
@@ -420,11 +395,8 @@ BACKUPS_DIRNAME = "backups"
 ARCHIVES_DIRNAME = "archive"
 SHELF_META_FILE = "shelf.json"
 PROJECT_NAME_MAX = 80
-# A project's name is its file name, so it follows the rules of the strictest
-# filesystem the home may sit on, which is Windows: none of these characters,
-# no control character, no leading or trailing space, no trailing dot, and
-# none of the device names. Two names that differ only in case are one file
-# there, so they are one project everywhere.
+# A project name is a file name, so it follows Windows rules: no reserved or control characters,
+# no edge spaces, no trailing dot, no device names, and names differing only in case are one.
 _PROJECT_BAD_CHARS = frozenset('<>:"/\\|?*') | frozenset(chr(c) for c in range(32))
 _PROJECT_DEVICES = frozenset(
     ["con", "prn", "aux", "nul",
@@ -629,7 +601,7 @@ def backups_dir(project: str = GENERAL_PROJECT) -> Path:
 def backup_name(project: str, kind: str = "") -> str:
     """`<project>-[<kind>-]<UTC stamp>.db`: the file a backup of `project` is
     written as."""
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+    stamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
     return f"{project}-{kind}-{stamp}.db" if kind else f"{project}-{stamp}.db"
 
 
@@ -699,7 +671,7 @@ def set_shelf_meta(project: str, name: str, **fields) -> dict:
 
 
 def forget_shelf_meta(project: str, names: list[str]) -> None:
-    """Drop what was written about backups that no longer exist."""
+    """Drop what was written about backups that are gone."""
     data = shelf_meta(project)
     if not any(n in data for n in names):
         return
@@ -727,7 +699,7 @@ def archive_name(project: str, when: date | None = None) -> str:
     """`<project>-<YYYY-MM>.zip`: the archive a backup taken in that month
     joins. One per month per project, so archiving twice in September adds to
     the same file rather than making a second one."""
-    stamp = (when or datetime.now(timezone.utc).date()).strftime("%Y-%m")
+    stamp = (when or datetime.now(UTC).date()).strftime("%Y-%m")
     return f"{project}-{stamp}.zip"
 
 
@@ -748,8 +720,7 @@ def archive_label(label: str) -> str:
     label = (label or "").strip()
     if not label or len(label) > ARCHIVE_LABEL_MAX or not _ARCHIVE_LABEL.fullmatch(label):
         raise ValueError(
-            "zip name must be 1-%d letters, digits, spaces, '_', '-' or '.'"
-            % ARCHIVE_LABEL_MAX)
+            f"zip name must be 1-{ARCHIVE_LABEL_MAX} letters, digits, spaces, '_', '-' or '.'")
     return label
 
 
@@ -871,7 +842,7 @@ def _group_buckets(project: str, names: list[str], group: str) -> dict[Path, lis
     archives = archives_dir(project)
     buckets: dict[Path, list[Path]] = {}
     for src in _shelf_sources(project, names):
-        taken = datetime.fromtimestamp(src.stat().st_mtime, tz=timezone.utc)
+        taken = datetime.fromtimestamp(src.stat().st_mtime, tz=UTC)
         buckets.setdefault(archives / archive_group_name(project, group, taken), []).append(src)
     return buckets
 
@@ -983,9 +954,7 @@ def unarchive(project: str, name: str) -> list[str]:
                 raise ValueError(f"already on the shelf: {member.name}")
         for i in members:
             zf.extract(i, shelf)
-            # extract() leaves the file stamped with the moment it was
-            # written, so a restored backup would read as taken just now and
-            # sort to the top of a shelf ordered by when it was taken.
+            # extract() stamps the file with now; restore the backup's own time so the shelf sorts right.
             stamp = _member_mtime(i).timestamp()
             os.utime(shelf / i.filename, (stamp, stamp))
     full.unlink()
@@ -1017,9 +986,7 @@ def backup_to(dest: Path, *, project: str | None = None) -> Path:
     return dest
 
 
-# How long a generated SVG is kept. A render is a cache -- the diagram it
-# came from is the real record -- so the only question is how much disk the
-# user wants it to occupy.
+# How long a generated SVG is kept. A render is a cache of the diagram, so this is a disk budget.
 SVG_RETENTION_KEY = "svg_retention"
 SVG_RETENTION_MODES = ("1d", "7d", "30d", "never")
 SVG_RETENTION_DEFAULT = "7d"
@@ -1089,9 +1056,9 @@ def set_warden_minutes(conn: sqlite3.Connection, minutes: object) -> int:
     low, high = WARDEN_MINUTES_RANGE
     try:
         value = int(str(minutes).strip())
-    except (TypeError, ValueError):
+    except (TypeError, ValueError) as exc:
         raise ValueError(f"warden_minutes must be a whole number of minutes "
-                         f"between {low} and {high}")
+                         f"between {low} and {high}") from exc
     if not low <= value <= high:
         raise ValueError(f"warden_minutes must be between {low} and {high}")
     _set_meta(conn, WARDEN_MINUTES_KEY, str(value))
@@ -1138,9 +1105,9 @@ def set_task_ask_minutes(conn: sqlite3.Connection, minutes: object) -> int:
     low, high = TASK_ASK_MINUTES_RANGE
     try:
         value = int(str(minutes).strip())
-    except (TypeError, ValueError):
+    except (TypeError, ValueError) as exc:
         raise ValueError(f"task_ask_minutes must be a whole number of minutes "
-                         f"between {low} and {high}")
+                         f"between {low} and {high}") from exc
     if not low <= value <= high:
         raise ValueError(f"task_ask_minutes must be between {low} and {high}")
     _set_meta(conn, TASK_ASK_MINUTES_KEY, str(value))
@@ -1204,18 +1171,15 @@ def prune_renders(mode: str, *, keep: Path | None = None) -> dict:
     days = _RETENTION_DAYS.get(mode)
     if days is None:
         return {"pruned": 0, "bytes": 0, "mode": mode}
-    cutoff = datetime.now(timezone.utc).timestamp() - days * 86400
+    cutoff = datetime.now(UTC).timestamp() - days * 86400
     swept = _sweep_renders(lambda stat: stat.st_mtime < cutoff, keep=keep)
     return {**swept, "mode": mode}
 
 
 # ------------------------------------------------------------- going stale
 
-# A memory about code is true until the code changes, and the store has no
-# way to notice that on its own. `review_after` is the writer's own estimate
-# of when the claim stops being safe to trust unchecked -- a date, so the
-# question "what in here is overdue" is a comparison rather than a judgement,
-# and a warm-up can ask it without reading anything.
+# `review_after` is the writer's estimate of when a claim stops being safe unchecked; a date, so
+# "what is overdue" is a comparison a warm-up can make without reading.
 _REVIEW_RELATIVE = re.compile(r"^(\d{1,4})\s*d$", re.I)
 
 
@@ -1241,9 +1205,10 @@ def normalize_review_after(value: str, *, today: str | None = None) -> str:
                 + timedelta(days=int(rel.group(1)))).isoformat()
     try:
         return date.fromisoformat(v[:10]).isoformat()
-    except ValueError:
+    except ValueError as exc:
         raise ValueError(
-            f"review_after must be a date ('2026-11-01') or a span ('90d'); got {value!r}")
+            f"review_after must be a date ('2026-11-01') or a span ('90d'); got {value!r}"
+        ) from exc
 
 
 def _due_clause(at: str | None = None) -> tuple[str, list]:
@@ -1276,20 +1241,8 @@ def due_for_review(
 # Deliberately the same span the writing tools suggest for review_after.
 STALE_DAYS = 90
 
-# The four axes of the health index, each a percentage of the ACTIVE
-# memories that satisfy it. Every one is a fact the store can check today,
-# and the SQL is written out here rather than assembled, so what an axis
-# measures can be read off it.
-#
-#   curation      vetted by a human. A contradicted memory is not confirmed,
-#                 so it weighs exactly like an unverified one until it is
-#                 superseded or archived -- it is not penalised twice.
-#   connectivity  reachable from something else. An island is a memory only
-#                 an exact query finds.
-#   freshness     not overdue: no review date in the past, and not left
-#                 unvetted for STALE_DAYS.
-#   organization  findable by something other than its own wording -- a
-#                 title, tags that are not just the type, and a domain.
+# The health axes, each the share of ACTIVE memories satisfying its SQL (written out to be read):
+# curation (confirmed), connectivity, freshness (STALE_DAYS) and organization.
 _HEALTH_AXES: tuple[tuple[str, str], ...] = (
     ("curation", "confidence = 'confirmed'"),
     ("connectivity",
@@ -1354,9 +1307,7 @@ def new_uid() -> str:
     return secrets.token_hex(8)
 
 
-# Characters a token is worth in est_tokens. An ESTIMATE, not a tokenizer:
-# no host's tokenizer is reachable from here, so the count is a fixed ratio
-# over the character length.
+# Characters per token in est_tokens: a fixed-ratio estimate, since no host tokenizer is reachable.
 CHARS_PER_TOKEN = 4
 
 
@@ -1503,12 +1454,8 @@ def apply_link_policy(
     return sorted(out)
 
 
-# Columns added to a table that already exists in someone's store.
-# `CREATE TABLE IF NOT EXISTS` -- how everything else here migrates -- is
-# free for a new TABLE and does nothing at all for a new COLUMN, so a
-# store created before the column would keep failing on every query that
-# names it. Each entry must be nullable or carry a default: ADD COLUMN
-# fills existing rows with it.
+# Columns added to existing tables, since CREATE TABLE IF NOT EXISTS never adds a column. Each must
+# be nullable or carry a default: ADD COLUMN fills existing rows with it.
 _ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
     ("diagrams", "font_scale", "REAL NOT NULL DEFAULT 1"),
     ("tasks", "item_seq", "INTEGER NOT NULL DEFAULT 0"),
@@ -1871,11 +1818,8 @@ def get_sections(conn: sqlite3.Connection, uid: str) -> list[dict]:
     ]
 
 
-# Why the file is holding free pages. A removal inside the store frees pages
-# without shrinking the file -- only VACUUM does that -- and a size that does
-# not match what the store holds is otherwise unexplained. The dashboard's
-# health reads this so its disk row can name the space, and its VACUUM clears
-# it.
+# Why the file holds free pages: removals free pages without shrinking the file, so the
+# dashboard's disk row names the space and its VACUUM clears it.
 COMPACT_REASON_KEY = "compact_reason"
 COMPACT_REASON_VECTORS = "vector_store"
 
@@ -1890,9 +1834,8 @@ def clear_compact_reason(conn: sqlite3.Connection) -> None:
     conn.execute("DELETE FROM meta WHERE key = ?", (COMPACT_REASON_KEY,))
 
 
-# What a store can carry that nothing here reads: the sqlite-vec virtual
-# table, the shadow tables vec0 keeps its data in, the meta keys naming an
-# embedding model, and two usage counters beside via_fts.
+# What a store can carry that nothing here reads: the sqlite-vec table and its vec0 shadow tables,
+# the embedding meta keys, and two usage counters beside via_fts.
 _VEC_TABLE = "memories_vec"
 _VEC_META_KEYS = ("embed_model", "embed_dim")
 _VEC_USAGE_COLUMNS = ("via_vec", "via_both")
@@ -2111,9 +2054,9 @@ def restore_diagram_refs(conn: sqlite3.Connection, record: dict) -> None:
     conn.executemany(
         "INSERT OR IGNORE INTO diagram_node_links "
         "(memory_uid, node_key, target_uid, relation_type, created_at) VALUES (?, ?, ?, ?, ?)",
-        [(uid, l["node_key"], l["target_uid"], l.get("relation_type", "explains"),
-          l.get("created_at") or ts)
-         for l in (record.get("links") or []) if known(l["target_uid"])])
+        [(uid, link["node_key"], link["target_uid"], link.get("relation_type", "explains"),
+          link.get("created_at") or ts)
+         for link in (record.get("links") or []) if known(link["target_uid"])])
     # only the outgoing side: a jump is stored once and read from both ends,
     # so restoring both would write the same row twice
     conn.executemany(
@@ -2137,6 +2080,14 @@ def restore_edit(conn: sqlite3.Connection, record: dict) -> None:
 
 def get_memory(conn: sqlite3.Connection, uid: str) -> sqlite3.Row | None:
     return conn.execute("SELECT * FROM memories WHERE uid = ?", (uid,)).fetchone()
+
+
+def memory_row(conn: sqlite3.Connection, uid: str | None) -> sqlite3.Row:
+    """The memory `uid` names; ValueError when it names none."""
+    row = get_memory(conn, uid) if uid else None
+    if row is None:
+        raise ValueError(f"no memory {uid!r}")
+    return row
 
 
 def update_memory_content(
@@ -2382,7 +2333,7 @@ def purge_memory(conn: sqlite3.Connection, uid: str) -> bool:
     Diagram tables cascade both ways: the graph of a purged diagram goes,
     and so does any OTHER diagram's node link or jump that pointed at this
     memory -- otherwise a purged note leaves a node link dangling at a uid
-    that no longer resolves.
+    that resolves to nothing.
 
     A task's rows (comments, item links, items, the head row) go with it,
     and so does any task item link that pointed at this memory.
@@ -2454,7 +2405,7 @@ def record_recall(
     None of this may ever reach a ranking -- see the schema comment on
     memory_usage for why, and test_usage.py for the test that says so.
 
-    Best-effort: a uid that no longer exists is skipped rather than failing
+    Best-effort: a uid that does not exist is skipped rather than failing
     the read that produced it.
     """
     seen = [u for u in dict.fromkeys(uids) if u]
@@ -2533,7 +2484,7 @@ def add_relation(
         "INSERT INTO relations (from_uid, to_uid, relation_type, note, created_at) VALUES (?, ?, ?, ?, ?)",
         (from_uid, to_uid, relation_type, note, now_iso()),
     )
-    return cur.lastrowid
+    return cur.lastrowid or 0
 
 
 def get_relations(conn: sqlite3.Connection, uid: str) -> list[sqlite3.Row]:
@@ -2544,33 +2495,19 @@ def get_relations(conn: sqlite3.Connection, uid: str) -> list[sqlite3.Row]:
 
 
 # -------------------------------------------------------------------- diagrams
-#
-# A diagram documents what a routine does, start to end, as a graph: one
-# row per step so a step can carry its own note and its own links to
-# other memories. The graph is the source of truth; memories.content
-# holds a generated prose rendering of it (see _render_text), which is
-# what FTS indexes. Nothing hand-writes that
-# content -- the free-text editors refuse a diagram for exactly that
-# reason (see is_diagram).
+
+# A diagram is a graph, one row per step. The graph is the record; memories.content is a generated
+# rendering for FTS (_render_text), so the free-text editors refuse a diagram (is_diagram).
 
 DIAGRAM_TYPE = "diagram"
 DIAGRAM_KINDS = ("flowchart",)
 NODE_SHAPES = ("start", "step", "decision", "io", "end")
 
-# Cap on a rendered body handed back to an agent, so one big flow cannot
-# eat a whole context window. Same intent as CORPUS_SNIPPET_LEN; the
-# stored content is never truncated, only what a tool returns.
+# Cap on a rendered body returned to an agent; the stored content is never truncated.
 DIAGRAM_BODY_BUDGET = 12_000
 
-# Abstract canvas units. Renderers pan and zoom these; they never
-# re-arrange them. Layout is computed HERE so every consumer -- admin
-# canvas, a chat-side renderer, a future exporter -- draws the same
-# picture, including a diagram nobody has ever opened in the editor.
-#
-# The default box, which a renderer MUST draw a node at when the node
-# carries no size of its own. Duplicated in the canvas (diagram.js) for
-# the same reason the shapes are: the two have to agree or a stored
-# arrangement stops matching what is drawn on it.
+# Abstract canvas units, laid out here so every renderer draws the same picture. The default box
+# must match the canvas copy (diagram.js), or a stored arrangement stops matching what is drawn.
 NODE_DEFAULT_W = 170.0
 NODE_DEFAULT_H = 48.0
 DECISION_DEFAULT_H = 66.0        # a diamond needs the extra height to read
@@ -2580,12 +2517,8 @@ NODE_MIN_W, NODE_MAX_W = 110.0, 560.0
 NODE_MIN_H, NODE_MAX_H = 34.0, 340.0
 FONT_SCALE_MIN, FONT_SCALE_MAX = 0.7, 2.5
 
-# Air between boxes, on top of whatever the boxes measure. Generous on
-# purpose: the gaps end up wider than a default box. A thirty-step routine
-# packed shoulder to shoulder is a wall of text -- the edges are what carry
-# the sequence, so the boxes can afford to sit apart. Changing these only
-# affects diagrams created or re-arranged afterwards; stored coordinates
-# are never rewritten behind the user's back (see relayout_diagram).
+# Air between boxes, wider than a default box: edges carry the sequence. A change applies only to
+# diagrams arranged afterwards; stored coordinates are never rewritten (see relayout_diagram).
 LAYOUT_GAP_X = 130.0
 LAYOUT_GAP_Y = 152.0
 LAYOUT_COL_W = NODE_DEFAULT_W + LAYOUT_GAP_X   # 300, the pitch for default boxes
@@ -2845,9 +2778,8 @@ def _layout_graph(
                 seen.add(nxt)
                 queue.append(nxt)
 
-    # Kahn over the same skeleton, relaxing depth upward as we go: one
-    # pass is enough for longest-path layering because a node is only
-    # released once every predecessor has been placed
+    # Kahn over the same skeleton, relaxing depth upward: one pass gives longest-path layering,
+    # since a node is released only once every predecessor is placed
     indeg = {k: 0 for k in order}
     for k in order:
         for nxt in forward(k):
@@ -2865,25 +2797,21 @@ def _layout_graph(
             if indeg[nxt] == 0:
                 ready.append(nxt)
 
-    # Anything with no depth yet parks in a row of its own: nodes the flow
-    # cannot reach (possible via the incremental writers, which skip the
-    # reachability rule) and, defensively, any node a residual cycle kept
-    # from being released above.
+    # Nodes still without a depth get a row of their own: unreachable ones (the incremental writers
+    # skip that rule) and any a residual cycle held back.
     floor = max(depth.values()) + 1 if depth else 0
     stragglers = [k for k in keys if k not in depth]
     for k in stragglers:
         depth[k] = floor
 
-    # Within a row, discovery order. BFS already groups a node's children
-    # next to each other, and the crossings that remain come from
-    # many-to-many fan-in, which no ordering within a row can remove.
+    # Within a row, discovery order: BFS keeps siblings together, and many-to-many fan-in crossings
+    # cannot be removed by any row order.
     rows: dict[int, list[str]] = {}
     for k in order + [k for k in stragglers if k not in seen]:
         rows.setdefault(depth[k], []).append(k)
 
-    # The pitch follows the biggest box in the diagram, so resizing a card
-    # -- or scaling the text every default box is sized from -- does not
-    # make the next auto-arrange overlap it with its neighbours.
+    # The pitch follows the biggest box, so a resized card or a larger font scale cannot make the
+    # next auto-arrange overlap it.
     boxes = [node_box(n, font_scale) for n in nodes]
     col_w = max(LAYOUT_COL_W, max(w for w, _ in boxes) + LAYOUT_GAP_X)
     row_h = max(LAYOUT_ROW_H, max(h for _, h in boxes) + LAYOUT_GAP_Y)
@@ -2936,9 +2864,8 @@ def _mermaid_escape(text: str) -> str:
     return text.replace('"', "#quot;").replace("\n", " ")
 
 
-# Mermaid keywords that cannot appear bare as a node id. `end` is the
-# dangerous one: it closes a subgraph, so a node keyed 'end' -- the
-# obvious key for a terminal step -- silently breaks the whole diagram.
+# Mermaid keywords that cannot be bare node ids; `end` closes a subgraph, so a step keyed 'end'
+# silently breaks the diagram.
 _MERMAID_RESERVED = frozenset({
     "end", "graph", "subgraph", "flowchart", "class", "classdef",
     "click", "style", "linkstyle", "direction",
@@ -2992,14 +2919,14 @@ def _font_scale(conn: sqlite3.Connection, uid: str) -> float:
     return float((row["font_scale"] if row is not None else 1) or 1)
 
 
-def is_diagram(conn: sqlite3.Connection, uid: str) -> bool:
+def is_diagram(conn: sqlite3.Connection, uid: str | None) -> bool:
     """True for a diagram memory.
 
     The guard the free-text content editors use: hand-editing a diagram's
     content would desync it from the graph that generates it, so they
     refuse and point at the diagram writers instead.
     """
-    row = get_memory(conn, uid)
+    row = get_memory(conn, uid) if uid else None
     return row is not None and row["type"] == DIAGRAM_TYPE
 
 
@@ -3310,11 +3237,8 @@ def set_diagram_meta(
     # the graph's title is the memory's title; one name, stored twice
     conn.execute("UPDATE memories SET title = ? WHERE uid = ?", (new_title, uid))
     if scale != was:
-        # Every default box just changed size, so the arrangement has to
-        # come with it: scaling the coordinates by the same factor keeps a
-        # hand-arranged flow arranged, instead of leaving cards overlapping
-        # until someone re-arranges the whole thing. A box someone sized by
-        # hand keeps that size -- they picked it looking at that text.
+        # Default boxes just changed size, so coordinates scale by the same factor to keep the
+        # arrangement; a hand-sized box keeps its size.
         conn.execute(
             "UPDATE diagram_nodes SET x = x * ?, y = y * ? WHERE memory_uid = ?",
             (scale / was, scale / was, uid),
@@ -3346,7 +3270,8 @@ def set_node_positions(conn: sqlite3.Connection, uid: str, positions: object) ->
     written = 0
     for key, raw in (positions or {}).items():  # type: ignore[union-attr]
         try:
-            pair = (raw.get("x"), raw.get("y")) if isinstance(raw, dict) else (raw[0], raw[1])
+            pair: tuple[Any, Any] = ((raw.get("x"), raw.get("y")) if isinstance(raw, dict)
+                                     else (raw[0], raw[1]))
             x, y = float(pair[0]), float(pair[1])
         except (TypeError, ValueError, IndexError, KeyError):
             continue
@@ -3530,9 +3455,7 @@ def delete_diagram_jump(
     return cur.rowcount > 0
 
 
-# One query per direction. Which column carries the peer is the only
-# difference between them, and folding the two into a single UNION hid
-# exactly that.
+# One query per direction: which column carries the peer is the only difference, kept visible.
 _JUMP_SQL = """SELECT j.*, d.title AS peer_title, m.status AS peer_status,
                       n.label AS peer_node_label
                FROM diagram_jumps j
@@ -3692,9 +3615,7 @@ def diagram_overview(
     ):
         jumps_by[r["uid"]] = r["n"]
 
-    # the subjects a flow also belongs to: the Diagrams view matches its
-    # filter against them, so a flow that is a step of an end-to-end process
-    # is found by that process's name as well as by its own
+    # also-paths, so the Diagrams filter finds a flow by the end-to-end process it is a step of
     also_by = domain_links_for(conn, [r["uid"] for r in rows])
 
     out = []
@@ -3748,12 +3669,8 @@ def _fts_query(raw: str) -> str:
     terms = [t.strip() for t in raw.replace(" OR ", " ").split() if t.strip()]
     if not terms:
         return raw
-    # EVERY term is quoted, not only the ones with punctuation in them. A bare
-    # alphanumeric term looked safe and is not: 'AND', 'NOT' and 'NEAR' are
-    # fts5 operators, so a query containing one reached the engine as syntax
-    # and took the whole search down with an OperationalError -- out of a tool
-    # call, that is a crash rather than a bad result. Quoting is free: a
-    # quoted single token matches exactly what the bare one did.
+    # EVERY term is quoted: bare 'AND', 'NOT' and 'NEAR' are fts5 operators and raise an
+    # OperationalError; a quoted single token matches what the bare one would.
     escaped = ['"' + t.replace('"', '""') + '"' for t in terms]
     return " OR ".join(escaped)
 
@@ -3787,7 +3704,7 @@ def domain_clause(
     scope nests is that asking about 'acme/x100' must not hide what is
     filed under 'acme/x100/p200'. In a store with no nesting the prefix
     arm matches nothing extra, so this returns exactly the rows plain
-    equality used to.
+    equality would.
 
     subtree=False is for the questions about the bucket itself rather than
     the scope: what is filed at THIS path, and which rows a rename of this
@@ -3897,9 +3814,8 @@ def resolve_domain_scopes(conn: sqlite3.Connection, domain: str) -> list[str]:
     path = normalize_domain(case_domain(get_domain_case(conn), domain))
     if not path:
         return []
-    # Fast path: something is filed at exactly this string. The literal
-    # reading is then settled and no scan is needed -- which is the common
-    # call, a path taken from list_domains() and passed straight back.
+    # Fast path: something is filed at exactly this string, the common case of a path passed back
+    # from list_domains().
     if conn.execute(
         "SELECT 1 FROM (SELECT domain FROM memories UNION "
         "SELECT domain FROM memory_domains) WHERE domain = ? LIMIT 1",
@@ -3909,10 +3825,8 @@ def resolve_domain_scopes(conn: sqlite3.Connection, domain: str) -> list[str]:
 
     want = split_domain(path)
     stored = [split_domain(r["domain"]) for r in conn.execute(all_domains_sql())]
-    # The literal reading, folded: every stored path this one is the front
-    # of, cut back to the depth that was asked for. Covers the same-path
-    # spelling and the level that exists only because something deeper is
-    # filed under it -- both are "this path", not a name found inside one.
+    # The literal reading, folded: every stored path this one prefixes, cut to the asked depth,
+    # covering a spelling variant and an implicit level.
     literal = {
         DOMAIN_SEP.join(segments[:len(want)])
         for segments in stored
@@ -3926,11 +3840,8 @@ def resolve_domain_scopes(conn: sqlite3.Connection, domain: str) -> list[str]:
         found = _inner_scope(segments, want)
         if found:
             scopes.add(found)
-    # No scope in here can contain another, so there is nothing to collapse:
-    # a scope that ended deeper than an ancestor scope would mean the query
-    # also occurred at the ancestor's depth in that same path, and
-    # _inner_scope would have stopped there. Which is why it takes the
-    # outermost occurrence -- the alternative needs this set pruned.
+    # No scope here contains another, since _inner_scope stops at the outermost occurrence; nothing
+    # to collapse.
     return sorted(scopes) or [path]
 
 
@@ -4013,11 +3924,8 @@ def search_memories(
     return conn.execute(" ".join(sql), params).fetchall()
 
 
-# A query that is nothing but an opaque token -- a uid, a sha, a hex blob --
-# names one row rather than describing a subject, and the index cannot match
-# on it. Twelve characters is the floor because a uid is sixteen and a
-# shortened sha is seven to twelve; below that the pattern starts matching
-# words like 'facade' and 'decade'.
+# A query that is only an opaque token (uid, sha, hex) names a row the index cannot match. Twelve
+# is the floor: a uid is 16, a short sha 7-12, and fewer matches words like 'facade'.
 _OPAQUE_QUERY = re.compile(r"[0-9a-f]{12,}", re.IGNORECASE)
 
 
@@ -4060,11 +3968,8 @@ def search_ranked(
     the opposite case -- a human curating the store needs to SEE that the
     same fact was written five times, which is what the dedup queue is for.
     """
-    # A query that IS a uid names one row, and the index cannot match on it:
-    # a uid occurs in OTHER bodies as [[uid]], so the search answers "what
-    # points at this" and never "this". The named row is pinned above its
-    # referrers -- the same treatment admin.py gives a pasted uid, here so
-    # every caller inherits it rather than the dashboard alone.
+    # A uid query matches only [[uid]] in other bodies, so the named row is pinned above its
+    # referrers here, for every caller, as admin.py does for a pasted uid.
     pinned: dict | None = None
     if is_opaque_query(query):
         row = get_memory(conn, query.strip())
@@ -4080,9 +3985,7 @@ def search_ranked(
         d["match_source"] = "fts"
         hits.append(d)
 
-    # Contradicted last, and only then by score: a memory marked known-wrong
-    # still comes back, never ahead of one that still holds. bm25 ascends, so
-    # the rank is the second key as it stands.
+    # Contradicted last, then by score (bm25 ascends): a known-wrong memory never leads one that holds.
     hits.sort(key=lambda d: (d.get("confidence") == CONFIDENCE_CONTRADICTED,
                              d["fts_rank"]))
     results = (_collapse_near_copies(hits) if collapse else hits)[:limit]
@@ -4095,9 +3998,8 @@ def search_ranked(
 
 # -------------------------------------------------------------- similarity
 
-# Similarity between two memories is measured over WORD tokens. difflib's
-# quick_ratio is a character-multiset bound, not a text measure: on prose
-# in one language it reads high for every pair, duplicate or not.
+# Similarity is measured over WORD tokens: difflib's quick_ratio is a character-multiset bound that
+# reads high for any two texts in one language.
 _WORD_RE = re.compile(r"\w+", re.UNICODE)
 
 
@@ -4171,9 +4073,7 @@ def text_ratio(a: str, b: str) -> float:
     return difflib.SequenceMatcher(None, _tokens(a), _tokens(b)).ratio()
 
 
-# Above this ratio two results are the same text, not two takes on one
-# subject. Near-identity on purpose: this drops copies of one fact, it
-# does not judge whether two related memories are each worth a slot.
+# Above this ratio two results are the same text; it drops copies, it does not rank related memories.
 _COPY_RATIO = 0.92
 
 
@@ -4444,9 +4344,8 @@ def domain_census(
     rows = conn.execute(
         f"SELECT domain, type, COUNT(*) AS n FROM memories WHERE {where_sql} "
         "GROUP BY domain, type", params).fetchall()
-    # the cross-listings of the in-scope memories, by the path they name --
-    # one row per (link path, type), so a child is placed by the membership
-    # that put the memory in this scope rather than by where it lives
+    # cross-listings of in-scope memories by the path they name, one row per (link path, type), so
+    # a child is placed by the membership that put the memory in scope
     link_rows = conn.execute(
         "SELECT dl.domain AS domain, m.type AS type, COUNT(*) AS n "
         "FROM memory_domains dl JOIN memories m ON m.uid = dl.memory_uid "
@@ -4494,9 +4393,8 @@ def domain_census(
     }
     if also_total:
         out["also"] = also_total
-    # Overdue for a recheck. One count, omitted when zero, because it is the
-    # one thing a warm-up can say about DECAY -- everything else it reports
-    # is what the scope holds, not whether it still holds.
+    # Overdue for a recheck: one count, omitted when zero, the only thing a warm-up says about
+    # decay rather than contents.
     due_clause, due_params = _due_clause()
     stale = conn.execute(
         f"SELECT COUNT(*) FROM memories WHERE {where_sql} AND {due_clause}",
@@ -4522,7 +4420,7 @@ def move_domain(
 
     Cross-listings pointing INTO the moved scope follow it: renaming a
     subject renames it for the memories that merely belong to it too, or
-    they would be left pointing at a path that no longer exists. What does
+    they would be left pointing at a path that does not exist. What does
     NOT follow is the memory itself -- the rows to re-home are matched on
     the filed path alone (also=False), because a cross-listing says a memory
     belongs to a subject, not that it lives there.
@@ -4560,9 +4458,8 @@ def move_domain(
     if not rows and not link_rows:
         raise ValueError(f"no memories in domain '{src}'")
 
-    # "merge" means rows that were NOT part of this move already live at
-    # the target scope -- asked before the UPDATE, or every move would
-    # look like one
+    # "merge": rows outside this move already live at the target; asked before the UPDATE, or
+    # every move would look like one
     moving = {r["rowid_pk"] for r in rows}
     dst_clause, dst_params = domain_clause(dst, alias="", subtree=True, also=False)
     merged = any(
@@ -4587,17 +4484,8 @@ def move_domain(
              f"meta: domain '{old}' → '{target}'"))
         touched.add(old)
 
-    # Retargeting a cross-listing can land it on the memory's own path -- a
-    # re-home that makes the two subjects one -- and apply_link_policy then
-    # drops it. Same on the other side: a memory whose FILED path just moved
-    # under a subject it was cross-listed into no longer needs the
-    # cross-listing. Both go through set_domain_links, which is where that
-    # policy lives, rather than an UPDATE per row.
-    #
-    # Only the paths this move SELECTED are retargeted. A subtree=False move
-    # is one exact string at a time (the normalize pass), and rewriting a
-    # descendant membership here would rename it out from under its own entry
-    # in that plan, which then finds nothing to move.
+    # Cross-listings go through set_domain_links, whose policy drops one that lands on or under the
+    # filed path. Only paths this move SELECTED are retargeted, so a subtree=False plan stays valid.
     moved_paths = {r["domain"] for r in link_rows}
     relinked = sorted({r["memory_uid"] for r in link_rows})
     for uid in relinked:
@@ -4864,10 +4752,8 @@ def _timeline_pair(a: sqlite3.Row, b: sqlite3.Row) -> bool:
     return same_domain or same_session
 
 
-# What a just-written memory has to resemble before the writer says so.
-# Higher than dedup_candidates' 0.6, which feeds a review queue a human
-# reads at leisure: this one interrupts an agent mid-write, so it has to be
-# quiet unless the collision is real.
+# How similar a just-written memory must be before the writer is told. Above dedup_candidates'
+# 0.6: this interrupts an agent mid-write, so only a real collision speaks.
 SIMILAR_ON_WRITE = 0.75
 SIMILAR_ON_WRITE_MAX = 3
 SIMILAR_SNIPPET = 160
@@ -4896,9 +4782,7 @@ def similar_memories(
     if row is None or row["type"] in GENERATED_TYPES:
         return []
 
-    # A scan, so it stays inside the scope the memory was filed under -- a
-    # write must not get slower as the store grows in branches it has
-    # nothing to do with.
+    # Scanned within the memory's own scope, so a write does not slow down as unrelated branches grow.
     prepared = _Prepared(row["content"])
     scored: list[tuple[sqlite3.Row, float, str]] = []
     clause, params = domain_clause(row["domain"], alias="") if row["domain"] else ("", [])
@@ -5001,9 +4885,8 @@ SUGGESTION_KINDS = (
     "set_confidence", "review", "archive", "link", "merge", "distill",
     "unleak",
 )
-# The text fields a leaked tool call lands in, and the ones `unleak` repairs
-# -- one field per suggestion, so a reviewer decides the body and the tags
-# separately and either can be undone on its own.
+# Text fields a leaked tool call lands in and `unleak` repairs, one per suggestion so each can be
+# decided and undone on its own.
 LEAK_FIELDS = ("content", "tags", "source_ref")
 # Findings a scan reports; the count of what it left behind comes with it.
 LEAK_SCAN_CAP = 40
@@ -5012,10 +4895,8 @@ LEAK_SCAN_CAP = 40
 DISTILL_TYPES = ("note", "reasoning", "anti_pattern")
 # the payload keys distill applies; any other key is a staging error
 DISTILL_PAYLOAD_KEYS = ("source_uids", "new_type", "new_content", "title", "tags", "domain")
-# the kinds staging refuses without a non-empty `verified`, mapped to what
-# each one is being asked to justify: every one of them archives a memory.
-# set_confidence belongs here only when its payload says `contradicted`, so
-# it is checked where that payload is read.
+# Kinds staging refuses without a non-empty `verified`, each archiving a memory; set_confidence
+# needs it only for `contradicted`, checked where that payload is read.
 VERIFIED_REQUIRED = {
     "archive": "verified required: describe the live-facts check that makes this memory archivable",
     "merge": "verified required: merge archives payload.drop_uid -- describe the live-facts check",
@@ -5026,13 +4907,8 @@ VERIFIED_REQUIRED = {
 CORPUS_SNIPPET_LEN = 120
 CORPUS_TAGS_LEN = 100
 CORPUS_ANCHORS_CAP = 5
-# Per-page ceiling on the serialized memory listing (compact-JSON chars).
-# MCP hosts cap tool output around 25k tokens, and dense JSON (hex uids,
-# timestamps, punctuation) tokenizes at roughly 3 chars/token -- a 76k-char
-# response was observed to overflow the cap. 28k of listing keeps the full
-# response (pretty-printing + stats/hints/relations on top) near ~12k
-# tokens, no matter how fat individual memories are. Callers page with
-# offset.
+# Per-page ceiling on the serialized listing (compact-JSON chars). Hosts cap output near 25k tokens
+# and dense JSON runs ~3 chars/token; 28k keeps the full response near 12k tokens.
 CORPUS_CHAR_BUDGET = 28_000
 
 # Verifiable anchors an agent can go check against live facts: URLs,
@@ -5308,10 +5184,8 @@ def optimization_corpus(
             m["status"] = r["status"]
         if r["superseded_by"]:
             m["superseded_by"] = r["superseded_by"]
-        # What the writer said would need rechecking, and where to check it.
-        # `due` rather than a date comparison the reader has to make: the
-        # question a pass asks is "is this one overdue", and answering it
-        # here is one character against a paragraph of arithmetic.
+        # What the writer said needs rechecking and where; `due` answers "is this overdue" so the
+        # reader does no date arithmetic.
         if r["review_after"]:
             m["review_after"] = r["review_after"]
             if r["review_after"] <= today:
@@ -5332,9 +5206,8 @@ def optimization_corpus(
             break
     uids = {m["uid"] for m in mems}
 
-    # What each one has been WORTH, next to what it says. Omitted when zero,
-    # like every other default here -- and a memory with no `recalls` at all
-    # is the interesting case, not a missing field.
+    # What each one has been worth, omitted when zero like every default here; a memory with no
+    # `recalls` is the interesting case.
     usage = usage_for(conn, uids)
     for m in mems:
         u = usage.get(m["uid"])
@@ -5359,21 +5232,13 @@ def optimization_corpus(
         "by_confidence": agg("confidence"),
         "by_domain": by_domain,
         "empty_domain": by_domain.get("", 0),
-        # Over the whole filtered corpus, not the page. Read it as
-        # UNPROVEN, never as useless: a memory nobody has needed yet is
-        # indistinguishable from one about a rare subject, and the rare
-        # subject is often the reason a store exists at all. The number is
-        # worth knowing store-wide -- if almost nothing has ever been read
-        # back, the store is a write log -- and worth nothing about any
-        # single row.
+        # Over the whole filtered corpus. Read as UNPROVEN, never useless: telling store-wide
+        # (a write log if near total), meaningless for any single row.
         "never_recalled": conn.execute(
             f"SELECT COUNT(*) FROM memories WHERE {where_sql} AND uid NOT IN "
             "(SELECT memory_uid FROM memory_usage)", params).fetchone()[0],
-        # Whatever a writer dated for a recheck and nobody rechecked. The
-        # rows here are not suspect because they are old -- they are suspect
-        # because somebody who knew the subject said when to look again.
-        # Tags empty, or nothing but the type every read already filters
-        # on: no synonym either way, and `retag` is the kind that fixes it.
+        # Rechecks a writer dated and nobody did. Tags empty or only the type carry no synonym;
+        # `retag` fixes them.
         "untagged": conn.execute(
             f"SELECT COUNT(*) FROM memories WHERE {where_sql} "
             "AND (TRIM(tags) = '' OR TRIM(tags) = type)", params).fetchone()[0],
@@ -5387,11 +5252,8 @@ def optimization_corpus(
             [*params, today]).fetchone()[0],
     }
 
-    # domain hints cluster over the WHOLE store; with `since`, keep only
-    # clusters that touch the delta (counts stay store-wide). Nesting
-    # proposals follow the same rule: a flat domain is worth re-homing
-    # whether or not the memory that revealed it is new, but a proposal
-    # about a corner of the store this run never looked at is noise.
+    # Domain and nesting hints cluster over the WHOLE store; with `since`, only clusters touching
+    # the delta are kept (counts stay store-wide).
     if since:
         by_domain_global = dict(conn.execute(
             f"SELECT domain, COUNT(*) FROM memories WHERE {base_where_sql} "
@@ -5403,9 +5265,7 @@ def optimization_corpus(
         hints = _domain_hints(by_domain)
         nesting = _nesting_hints(by_domain)
 
-    # Leaked calls are read over the scan's own window, not the page: a
-    # finding is about one row, so pagination would hide the rest of them
-    # behind an offset a curation pass has no reason to walk.
+    # Leaked calls over the scan's own window, not the page: pagination would hide findings.
     leaked, leaked_total = _leak_findings(conn, where_sql, params)
     stats["leaked_calls"] = leaked_total
 
@@ -5468,10 +5328,8 @@ def _validate_suggestion(conn: sqlite3.Connection, s: object) -> tuple[dict | No
             return None, err
         if not str(payload.get("new_content", "")).strip():
             return None, "payload.new_content required"
-        # caught here rather than on apply: a rewrite that would not read
-        # back into its type's fields never reaches the queue a human works
-        # through, so nothing in that queue is waiting to fail
-        row = get_memory(conn, target_uid)
+        # checked at staging, so nothing in the human's queue is waiting to fail on apply
+        row = memory_row(conn, target_uid)
         err = section_error(conn, row["type"], str(payload["new_content"]))
         if err:
             return None, err
@@ -5487,14 +5345,12 @@ def _validate_suggestion(conn: sqlite3.Connection, s: object) -> tuple[dict | No
             err = _generated_content_error(conn, target_uid)
             if err:
                 return None, err
-        row = get_memory(conn, target_uid)
+        row = memory_row(conn, target_uid)
         text = row[field] or ""
         if not guard.leak_marks(row["type"], text):
             return None, f"nothing leaked in {field} of {target_uid}: no marks to remove"
-        # the repair is computed HERE, from the row itself, and travels in the
-        # payload: the panel shows what will hold, the ledger counts the
-        # characters, and the caller never retypes a body it would have to
-        # copy faithfully -- which is the defect this kind exists to clean up
+        # the repair is computed HERE and travels in the payload, so the caller never retypes the
+        # body, which is the defect this kind cleans up
         clean, _ = guard.strip_leak(row["type"], text)
         left = guard.leak_marks(row["type"], clean)
         if left:
@@ -5530,9 +5386,8 @@ def _validate_suggestion(conn: sqlite3.Connection, s: object) -> tuple[dict | No
             return None, err
         if "review_after" not in payload:
             return None, "payload.review_after required ('' clears the date)"
-        # normalized at staging time for the same reason redomain is: the
-        # panel shows this payload as what will hold, and '90d' means a
-        # different day depending on when it is read
+        # normalized at staging, as redomain is: the panel shows it as what will hold, and '90d'
+        # means a different day depending on when it is read
         try:
             payload = {**payload,
                        "review_after": normalize_review_after(str(payload["review_after"]))}
@@ -5544,9 +5399,7 @@ def _validate_suggestion(conn: sqlite3.Connection, s: object) -> tuple[dict | No
             return None, err
         if "domain" not in payload:
             return None, "payload.domain required"
-        # normalize at staging time, not only on apply: the panel shows
-        # this payload as the proposed target, and it has to be the path
-        # the memory will actually end up in
+        # normalized at staging too: the panel must show the path the memory will end up in
         payload = {**payload, "domain": normalize_domain(str(payload["domain"]))}
     elif kind == "crosslist":
         err = target_err()
@@ -5554,16 +5407,13 @@ def _validate_suggestion(conn: sqlite3.Connection, s: object) -> tuple[dict | No
             return None, err
         if "also" not in payload:
             return None, "payload.also required"
-        # the whole set is REPLACED, and the panel shows this payload as what
-        # will hold -- so the staging pass runs the same policy the apply
-        # will (casing, path shape, and dropping a path the memory's own
-        # domain already covers) rather than showing paths that then change
-        row = get_memory(conn, target_uid)
+        # the whole set is REPLACED, so staging runs the apply's policy (casing, path shape, dropping
+        # a path the own domain covers) and the panel shows what will hold
+        row = memory_row(conn, target_uid)
         given = parse_domains(payload["also"])
         want = apply_link_policy(conn, given, row["domain"])
-        # an empty list is a legitimate suggestion ("drop every cross-listing"),
-        # but a non-empty one that survives as empty is not the suggestion it
-        # looks like: it would apply as a clear, so say what happened instead
+        # an empty list is a legitimate suggestion, but a non-empty one that empties would apply as
+        # a clear, so say so instead
         if given and not want:
             return None, (
                 f"every path given is already covered by the memory's domain "
@@ -5630,16 +5480,14 @@ def _validate_suggestion(conn: sqlite3.Connection, s: object) -> tuple[dict | No
             if is_diagram(conn, u):
                 return None, (f"{u} is a diagram: distill archives its sources. "
                               "Use archive to retire a flow on its own.")
-            if get_memory(conn, u)["type"] == TASK_TYPE:
+            if memory_row(conn, u)["type"] == TASK_TYPE:
                 return None, (f"{u} is a task: distill archives its sources, and a task "
                               "closes through its own items.")
         if payload.get("new_type") not in DISTILL_TYPES:
             return None, f"payload.new_type must be one of {DISTILL_TYPES}"
         if not str(payload.get("new_content", "")).strip():
             return None, "payload.new_content required"
-        # the memory this writes is authored here and nowhere else: no writing
-        # tool names it afterwards, so a distill with no title leaves a
-        # permanently unnamed row
+        # no writing tool names this memory afterwards, so a distill with no title stays unnamed
         if not str(payload.get("title", "")).strip():
             return None, "payload.title required (the distilled memory needs a name)"
         too_long = title_error(str(payload["title"]))
@@ -5774,13 +5622,13 @@ def _update_meta_field(conn: sqlite3.Connection, uid: str, field: str, value: st
     the f-string interpolation is not an injection surface.
 
     A domain change re-runs the cross-listing policy: the memory's new path
-    may already satisfy a membership it used to need (see
+    may already satisfy a membership the old path needed (see
     apply_link_policy), and leaving that row would count it twice in its
     own branch.
     """
     if field == "domain":
         value = apply_domain_policy(conn, value)
-    row = get_memory(conn, uid)
+    row = memory_row(conn, uid)
     conn.execute(
         f"UPDATE memories SET {field} = ?, updated_at = ? WHERE uid = ?",
         (value, now_iso(), uid),
@@ -5794,67 +5642,77 @@ def _update_meta_field(conn: sqlite3.Connection, uid: str, field: str, value: st
         set_domain_links(conn, uid, get_domain_links(conn, uid))
 
 
+def _target(kind: str, target_uid: str | None) -> str:
+    """The uid a suggestion acts on; link, merge and distill name theirs in the payload."""
+    if target_uid:
+        return target_uid
+    if kind in ("link", "merge", "distill"):
+        return ""
+    raise ValueError(f"{kind} needs a target_uid")
+
+
 def _apply_kind(conn: sqlite3.Connection, kind: str, target_uid: str | None, payload: dict) -> dict:
     """Execute one suggestion and return the prev_state dict for undo."""
+    uid = _target(kind, target_uid)
     if kind in ("compact", "reword"):
         # staging refuses these on a diagram or task, but a staged run may still
         # hold one; applying it would write over the projection
-        err = _generated_content_error(conn, target_uid)
+        err = _generated_content_error(conn, uid)
         if err:
             raise ValueError(err)
-        row = get_memory(conn, target_uid)
+        row = memory_row(conn, uid)
         prev = {"content": row["content"]}
-        update_memory_content(conn, target_uid, payload["new_content"], note=f"optimize:{kind}")
+        update_memory_content(conn, uid, payload["new_content"], note=f"optimize:{kind}")
         return prev
     if kind == "unleak":
         field = str(payload.get("field", "")).strip() or LEAK_FIELDS[0]
         if field == "content":
-            err = _generated_content_error(conn, target_uid)
+            err = _generated_content_error(conn, uid)
             if err:
                 raise ValueError(err)
-        row = get_memory(conn, target_uid)
+        row = memory_row(conn, uid)
         prev = {field: row[field]}
         text = str(payload["new_text"])
         if field == "content":
-            update_memory_content(conn, target_uid, text, note=f"optimize:{kind}")
+            update_memory_content(conn, uid, text, note=f"optimize:{kind}")
         else:
-            _update_meta_field(conn, target_uid, field, text)
+            _update_meta_field(conn, uid, field, text)
         return prev
     if kind == "retag":
-        row = get_memory(conn, target_uid)
+        row = memory_row(conn, uid)
         prev = {"tags": row["tags"]}
-        _update_meta_field(conn, target_uid, "tags", str(payload["tags"]).strip())
+        _update_meta_field(conn, uid, "tags", str(payload["tags"]).strip())
         return prev
     if kind == "retitle":
-        row = get_memory(conn, target_uid)
+        row = memory_row(conn, uid)
         prev = {"title": row["title"]}
-        _update_meta_field(conn, target_uid, "title", str(payload["title"]).strip())
+        _update_meta_field(conn, uid, "title", str(payload["title"]).strip())
         return prev
     if kind == "review":
-        row = get_memory(conn, target_uid)
+        row = memory_row(conn, uid)
         prev = {"review_after": row["review_after"]}
-        set_review_after(conn, target_uid, str(payload["review_after"]))
+        set_review_after(conn, uid, str(payload["review_after"]))
         return prev
     if kind == "redomain":
-        row = get_memory(conn, target_uid)
+        row = memory_row(conn, uid)
         prev = {"domain": row["domain"]}
-        _update_meta_field(conn, target_uid, "domain", str(payload["domain"]).strip())
+        _update_meta_field(conn, uid, "domain", str(payload["domain"]).strip())
         return prev
     if kind == "crosslist":
         # the whole set, not an addition: undo restores exactly this list
-        prev = {"also": get_domain_links(conn, target_uid)}
-        set_domain_links(conn, target_uid, payload["also"], note=f"optimize:{kind}")
+        prev = {"also": get_domain_links(conn, uid)}
+        set_domain_links(conn, uid, payload["also"], note=f"optimize:{kind}")
         return prev
     if kind == "set_confidence":
-        row = get_memory(conn, target_uid)
+        row = memory_row(conn, uid)
         prev = {"confidence": row["confidence"]}
-        set_confidence(conn, target_uid, payload["confidence"])
+        set_confidence(conn, uid, payload["confidence"])
         return prev
     if kind == "archive":
-        row = get_memory(conn, target_uid)
+        row = memory_row(conn, uid)
         prev = {"status": row["status"], "superseded_by": row["superseded_by"]}
         reason = str(payload.get("reason", "")).strip() or "optimize: archived"
-        set_status(conn, target_uid, "archived", note=reason)
+        set_status(conn, uid, "archived", note=reason)
         return prev
     if kind == "link":
         rid = add_relation(
@@ -5864,7 +5722,7 @@ def _apply_kind(conn: sqlite3.Connection, kind: str, target_uid: str | None, pay
         return {"relation_id": rid}
     if kind == "merge":
         keep, drop = payload["keep_uid"].strip(), payload["drop_uid"].strip()
-        drow = get_memory(conn, drop)
+        drow = memory_row(conn, drop)
         prev = {"drop_status": drow["status"], "drop_superseded_by": drow["superseded_by"]}
         rid = add_relation(conn, keep, drop, "supersedes", str(payload.get("note", "")).strip())
         prev["relation_id"] = rid
@@ -5881,7 +5739,7 @@ def _apply_kind(conn: sqlite3.Connection, kind: str, target_uid: str | None, pay
         )
         prev = {"new_uid": new_uid, "relation_ids": [], "sources": []}
         for u in payload["source_uids"]:
-            row = get_memory(conn, u)
+            row = memory_row(conn, u)
             prev["sources"].append(
                 {"uid": u, "status": row["status"], "superseded_by": row["superseded_by"]})
             prev["relation_ids"].append(
@@ -5895,33 +5753,32 @@ def _apply_kind(conn: sqlite3.Connection, kind: str, target_uid: str | None, pay
 def _revert_kind(
     conn: sqlite3.Connection, kind: str, target_uid: str | None, payload: dict, prev: dict
 ) -> None:
+    uid = _target(kind, target_uid)
     if kind in ("compact", "reword"):
-        update_memory_content(conn, target_uid, prev["content"], note=f"optimize:undo {kind}")
+        update_memory_content(conn, uid, prev["content"], note=f"optimize:undo {kind}")
     elif kind == "unleak":
         field = str(payload.get("field", "")).strip() or LEAK_FIELDS[0]
         if field == "content":
-            # the body being restored is the leaked one, which the store no
-            # longer accepts from a writer: an undo puts back what was there,
-            # not what would be allowed in now
-            update_memory_content(conn, target_uid, prev["content"],
+            # restores a leaked body that writers are refused: an undo puts back what was there
+            update_memory_content(conn, uid, prev["content"],
                                   note=f"optimize:undo {kind}", leaked_ok=True)
         else:
-            _update_meta_field(conn, target_uid, field, prev[field])
+            _update_meta_field(conn, uid, field, prev[field])
     elif kind == "retag":
-        _update_meta_field(conn, target_uid, "tags", prev["tags"])
+        _update_meta_field(conn, uid, "tags", prev["tags"])
     elif kind == "retitle":
-        _update_meta_field(conn, target_uid, "title", prev["title"])
+        _update_meta_field(conn, uid, "title", prev["title"])
     elif kind == "review":
-        set_review_after(conn, target_uid, prev["review_after"])
+        set_review_after(conn, uid, prev["review_after"])
     elif kind == "redomain":
-        _update_meta_field(conn, target_uid, "domain", prev["domain"])
+        _update_meta_field(conn, uid, "domain", prev["domain"])
     elif kind == "crosslist":
-        set_domain_links(conn, target_uid, prev["also"], coerce=False,
+        set_domain_links(conn, uid, prev["also"], coerce=False,
                          note="optimize:undo crosslist")
     elif kind == "set_confidence":
-        set_confidence(conn, target_uid, prev["confidence"])
+        set_confidence(conn, uid, prev["confidence"])
     elif kind == "archive":
-        set_status(conn, target_uid, prev["status"],
+        set_status(conn, uid, prev["status"],
                    superseded_by=prev.get("superseded_by"), note="optimize: undo archive")
     elif kind == "link":
         conn.execute("DELETE FROM relations WHERE id = ?", (prev["relation_id"],))

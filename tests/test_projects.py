@@ -82,9 +82,8 @@ def test_a_name_already_taken_in_any_casing_is_refused(home):
 
 def test_connect_takes_a_path_or_a_project_but_not_both(home):
     db.create_project("Acme")
-    with pytest.raises(ValueError, match="not both"):
-        with db.connect(home / "memai.db", project="Acme"):
-            pass
+    with pytest.raises(ValueError, match="not both"), db.connect(home / "memai.db", project="Acme"):
+        pass
 
 
 def test_switching_redirects_every_connect_without_a_path(home):

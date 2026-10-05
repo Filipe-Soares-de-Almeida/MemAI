@@ -38,9 +38,8 @@ import re
 
 from memai import sections
 
-# tool -> the parameters it has no default for. `title` opens every writer's
-# signature, so it opens every tuple here: the order is compared against the
-# signature itself (tests/test_guard.py).
+# tool -> its parameters with no default. `title` opens every writer's signature, so it opens
+# every tuple; tests/test_guard.py compares the order to the signature.
 GUARDED: dict[str, tuple[str, ...]] = {
     "note": ("title", "content"),
     "reasoning": ("title", "content"),
@@ -52,9 +51,8 @@ GUARDED: dict[str, tuple[str, ...]] = {
        for tool, spec in sections.SECTION_SPEC.items()},
 }
 
-# tool -> the optional parameters worth missing. Absence here is not an
-# error, and that is the problem: a dropped `domain` or `source_ref` writes
-# a memory nobody can file or check, with nothing on screen to say so.
+# tool -> optional parameters worth missing: a dropped `domain` or `source_ref` writes a memory
+# nobody can file or check, with nothing on screen to say so.
 WATCHED: dict[str, tuple[str, ...]] = {
     "note": ("domain", "tags", "source_ref"),
     "reasoning": ("domain", "tags", "source_ref"),
@@ -63,11 +61,8 @@ WATCHED: dict[str, tuple[str, ...]] = {
     "task": ("domain", "tags"),
 }
 
-# tool -> the parameters it takes that have a default, in signature order.
-# GUARDED holds the ones that have none, so the two together are the whole
-# signature (tests/test_guard.py). WATCHED is the subset an absence is worth
-# warning about; a leak names the fields that never arrived, and most of a
-# call's fields are optional, so the closing tags are read from all of them.
+# tool -> its defaulted parameters in signature order; with GUARDED, the whole signature
+# (tests/test_guard.py). A leak's closing tags are read from all of them, not only WATCHED.
 OPTIONAL: dict[str, tuple[str, ...]] = {
     "note": ("domain", "also", "tags", "session", "review_after", "source_ref"),
     "reasoning": ("domain", "also", "tags", "session", "review_after", "source_ref"),
@@ -83,10 +78,8 @@ OPTIONAL: dict[str, tuple[str, ...]] = {
 # of a parameter, is that parameter holding the rest of the call.
 FRAME: tuple[str, ...] = ("invoke", "parameter", "function_calls")
 
-# What a dropped tag leaves behind when it lands inside the NEXT parameter's
-# text instead of vanishing: the tag's own source, written into a memory's
-# body. Warned about, never refused -- a memory documenting this defect
-# quotes these marks on purpose.
+# A dropped tag's own source left inside the NEXT parameter's text. Warned about, never refused:
+# a memory documenting this defect quotes these marks on purpose.
 DEBRIS = ("parameter name=", "</", "<parameter")
 
 
@@ -94,9 +87,8 @@ DEBRIS = ("parameter name=", "</", "<parameter")
 # SessionStart hook briefed has every other tool refused until it calls one.
 WARM_UP: tuple[str, ...] = ("pulse", "must_read")
 
-# Tools that are not memai's and still go through before the warm-up: the
-# host's loader for deferred tools, without which the memai tools cannot be
-# called at all.
+# Non-memai tools allowed before the warm-up: the host's deferred-tool loader, without which the
+# memai tools cannot be called.
 BEFORE_WARM_UP: tuple[str, ...] = ("ToolSearch",)
 
 # Refusals a session takes before the hold gives way. A host without the memai
@@ -170,7 +162,7 @@ def fields(tool: str) -> tuple[str, ...]:
     return GUARDED.get(tool, ()) + OPTIONAL.get(tool, ())
 
 
-@functools.lru_cache(maxsize=None)
+@functools.cache
 def _closing(names: tuple[str, ...]) -> re.Pattern[str]:
     """Matches a closing tag naming one of `names`, with or without the prefix."""
     return re.compile(rf"</(?:antml:)?(?:{'|'.join(names)})>")
@@ -199,17 +191,15 @@ def leaked(tool: str, params: dict) -> dict[str, list[str]]:
     return {k: marks for k, marks in found.items() if marks}
 
 
-# A line that is nothing but a tag: the frame of a call, a parameter opener,
-# or a closing tag on its own. `strip_leak` drops the whole line, because a
-# line like this carries no text of the memory's own.
+# A line that is only a tag (a call frame, a parameter opener, a lone closing tag); `strip_leak`
+# drops it whole, since it carries no text of the memory's own.
 _TAG_LINE = re.compile(
     r"^\s*(?:</?(?:antml:)?(?:invoke|parameter|function_calls)\b[^>]*>?"
     r"|<(?:antml:)?parameter\s+name=.*"
     r"|</?[a-z_]+>\s*)$", re.I)
 
-# A line opening a field as a shorthand tag -- `<domain>acme/x100` -- with or
-# without its closing half. The name is checked against the tool's own
-# parameters, so a line opening `<div>` is text.
+# A line opening a field as a shorthand tag, `<domain>acme/x100`, closed or not. The name is
+# checked against the tool's parameters, so `<div>` stays text.
 _FIELD_LINE = re.compile(r"^\s*<([a-z_]+)>", re.I)
 
 # What such a line declares, in either spelling: `<domain>acme/x100</domain>`

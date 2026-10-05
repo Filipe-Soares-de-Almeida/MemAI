@@ -11,13 +11,12 @@ from __future__ import annotations
 
 import io
 import json
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
 from conftest import shaped
 from memai import brief, db, hook, hook_install, server, tasks, warden
-
 
 DOMAIN_CAP = brief.DOMAINS
 
@@ -253,7 +252,7 @@ def test_stop_is_quiet_when_the_session_wrote_something(store, capsysbinary):
 
 
 def test_stop_asks_when_nothing_was_written(store, capsysbinary):
-    old = (datetime.now(timezone.utc) - timedelta(days=3)).isoformat()
+    old = (datetime.now(UTC) - timedelta(days=3)).isoformat()
     with db.connect() as conn:
         _seed(conn, created_at=old)
     out = _run("stop", {}, capsysbinary)
@@ -263,7 +262,7 @@ def test_stop_asks_when_nothing_was_written(store, capsysbinary):
 
 def test_stop_does_not_answer_its_own_nudge(store, capsysbinary):
     """stop_hook_active means this run was triggered by the last one."""
-    old = (datetime.now(timezone.utc) - timedelta(days=3)).isoformat()
+    old = (datetime.now(UTC) - timedelta(days=3)).isoformat()
     with db.connect() as conn:
         _seed(conn, created_at=old)
     assert _run("stop", {"stop_hook_active": True}, capsysbinary) is None
@@ -313,7 +312,7 @@ def test_an_agent_installed_after_the_session_started_is_not_asked_for(
     warden.began("session-1")
     # A session already running when the install lands: minutes, not the
     # microseconds GRACE is there to absorb.
-    earlier = (datetime.now(timezone.utc) - timedelta(minutes=10)).isoformat()
+    earlier = (datetime.now(UTC) - timedelta(minutes=10)).isoformat()
     warden.state_path("session-1").write_text(
         json.dumps({"started_at": earlier}), encoding="utf-8")
     hook_install.install_agents(hook_install.agents_dir(settings))
@@ -398,7 +397,7 @@ def test_a_session_without_an_id_is_never_asked(store, capsysbinary, tmp_path):
 
 def test_both_notes_travel_in_one_result(store, capsysbinary, tmp_path):
     """A turn that owes a checkpoint and a warden run emits one object."""
-    old = (datetime.now(timezone.utc) - timedelta(days=3)).isoformat()
+    old = (datetime.now(UTC) - timedelta(days=3)).isoformat()
     with db.connect() as conn:
         _seed(conn, created_at=old)
     out = _run("stop", {"session_id": "session-1"}, capsysbinary,
@@ -514,12 +513,12 @@ def test_a_payload_that_is_not_json_does_not_stop_the_statusline(store, capsysbi
     (timedelta(minutes=-5), "0m"),
 ])
 def test_an_age_reads_in_the_largest_unit_that_fits(delta, expected):
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     assert hook._age((now - delta).isoformat(), now=now) == expected
 
 
 def test_a_timestamp_without_an_offset_is_read_as_utc():
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     naive = (now - timedelta(hours=2)).replace(tzinfo=None).isoformat()
     assert hook._age(naive, now=now) == "2h"
 
@@ -584,7 +583,7 @@ def test_the_switch_silences_the_ask(store, capsysbinary, tmp_path):
 
 def test_the_switch_does_not_silence_the_checkpoint_nudge(store, capsysbinary, tmp_path):
     """It turns off one note, not the hook."""
-    old = (datetime.now(timezone.utc) - timedelta(days=3)).isoformat()
+    old = (datetime.now(UTC) - timedelta(days=3)).isoformat()
     with db.connect() as conn:
         _seed(conn, created_at=old)
         db.set_warden_enabled(conn, False)
@@ -602,7 +601,7 @@ def test_the_stored_interval_is_what_the_hook_uses(store, capsysbinary, tmp_path
         db.set_warden_minutes(conn, 60)
     assert _run("stop", {"session_id": "session-1"}, capsysbinary, argv=argv)
     # 30 minutes on, the stored 60 has not elapsed, so nothing is asked
-    later = (datetime.now(timezone.utc) - timedelta(minutes=30)).isoformat()
+    later = (datetime.now(UTC) - timedelta(minutes=30)).isoformat()
     warden.state_path("session-1").write_text(
         json.dumps({**warden.read("session-1"), "asked_at": later}), encoding="utf-8")
     assert _run("stop", {"session_id": "session-1"}, capsysbinary, argv=argv) is None
@@ -617,7 +616,7 @@ def test_the_flag_overrides_the_stored_interval(store, capsysbinary, tmp_path):
     assert _run("stop", {"session_id": "session-1"}, capsysbinary, argv=argv)
     assert _run("stop", {"session_id": "session-1"}, capsysbinary,
                 argv=(*argv, "--warden-minutes", "1")) is None
-    hours = (datetime.now(timezone.utc) - timedelta(minutes=5)).isoformat()
+    hours = (datetime.now(UTC) - timedelta(minutes=5)).isoformat()
     warden.state_path("session-1").write_text(
         json.dumps({**warden.read("session-1"), "asked_at": hours}), encoding="utf-8")
     assert _run("stop", {"session_id": "session-1"}, capsysbinary,
@@ -636,7 +635,7 @@ def _open_tasks(count: int = 2, *, backdate: bool = False, worked: bool = True) 
         for _ in range(count):
             _seed_task(conn)
         if backdate:
-            old = (datetime.now(timezone.utc) - timedelta(days=3)).isoformat()
+            old = (datetime.now(UTC) - timedelta(days=3)).isoformat()
             conn.execute("UPDATE memories SET created_at = ?", (old,))
     if worked:
         warden.record_domain(SESSION, "acme/x100")
@@ -644,7 +643,7 @@ def _open_tasks(count: int = 2, *, backdate: bool = False, worked: bool = True) 
 
 def _age_task_ask(session_id: str, minutes: int) -> None:
     """Move the task ask's stamp back, as if that long had passed."""
-    earlier = (datetime.now(timezone.utc) - timedelta(minutes=minutes)).isoformat()
+    earlier = (datetime.now(UTC) - timedelta(minutes=minutes)).isoformat()
     warden.state_path(session_id).write_text(
         json.dumps({**warden.read(session_id), "tasks_asked_at": earlier}),
         encoding="utf-8")

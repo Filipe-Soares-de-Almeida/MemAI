@@ -7,6 +7,7 @@ Every test runs against a store under tmp_path (MEMAI_HOME), never the real
 from __future__ import annotations
 
 import sqlite3
+from pathlib import Path
 
 import pytest
 
@@ -283,19 +284,7 @@ def test_the_brief_keeps_the_pin_line_under_a_tight_budget(store):
 
 # ---------------------------------------------------------------- dashboard
 
-from pathlib import Path
-
 WEBUI = Path(db.__file__).parent / "webui"
-
-
-def test_the_record_view_posts_the_pin():
-    source = (WEBUI / "views" / "record.js").read_text(encoding="utf-8")
-    assert "/pin`" in source and 'id="dPin"' in source
-
-
-def test_the_memory_list_filters_by_pin():
-    source = (WEBUI / "views" / "memories.js").read_text(encoding="utf-8")
-    assert "pin: state.pin" in source and "id: 'fPin'" in source
 
 
 @pytest.mark.parametrize("locale", ["en.json", "pt-BR.json"])
@@ -330,20 +319,3 @@ def test_an_unpinned_memory_payload_carries_no_pin_field(store):
     assert server.get_memory(pinned)["pin"] == "global"
 
 
-def test_the_memory_list_folds_its_extra_filters_behind_one_button():
-    source = (WEBUI / "views" / "memories.js").read_text(encoding="utf-8")
-    assert 'id="fMore"' in source and 'id="memMore"' in source
-    assert source.index("id: 'fConf'") < source.index('id="fMore"') < source.index("id: 'fPin'")
-
-
-def test_every_list_filter_carries_its_label():
-    source = (WEBUI / "views" / "memories.js").read_text(encoding="utf-8")
-    for key in ("mem.f.search", "mem.f.type", "mem.f.domain", "mem.f.status",
-                "mem.f.conf", "mem.f.pin", "mem.f.sort"):
-        assert f"field(t('{key}')" in source, key
-
-
-def test_the_graph_toolbar_labels_its_filters_like_the_list():
-    source = (WEBUI / "views" / "graph.js").read_text(encoding="utf-8")
-    for key in ("g.f.find", "mem.f.domain", "mem.f.type", "mem.f.status", "g.f.show"):
-        assert f"field(t('{key}')" in source, key

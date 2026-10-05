@@ -23,5 +23,6 @@ Link any issue this addresses. Use "fixes #123" to close it on merge.
 - [ ] Commits follow Conventional Commits, and a breaking change carries `!` or a `BREAKING CHANGE:` footer
 - [ ] Tests cover the change, and they fail without it
 - [ ] `pytest -q` passes
+- [ ] `ruff check src tests tools` and `pyright` pass
 - [ ] Docs are updated where the change is visible to someone using MemAI
 - [ ] The dashboard builds with `npm run build` — only when `src/memai/webui` changed
