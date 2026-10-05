@@ -409,6 +409,7 @@ def test_the_commands_pull_before_they_install(tmp_path):
     first, second = update.commands(tmp_path)
     assert first.startswith(f'git -C "{tmp_path}"') and first.endswith("pull --ff-only")
     assert "--require-hashes -r requirements-dev.txt" in second
+    assert second.index("uninstall -y -q memai") < second.index("--require-hashes")
     assert "--no-deps -e ." in second and "tools/install-webui.py" in second
 
 
