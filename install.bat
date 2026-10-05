@@ -27,6 +27,8 @@ if errorlevel 1 exit /b 1
 call .venv\Scripts\activate.bat
 rem The lock pins every package CI tested, by hash. pip refuses an editable
 rem project under --require-hashes, so the checkout goes in on its own after it.
+rem The installed memai goes first: pip checks the lock against its old pins.
+python -m pip show -q memai >nul 2>nul && python -m pip uninstall -y -q memai
 python -m pip install --require-hashes -r requirements-dev.txt
 if errorlevel 1 (
     echo.
