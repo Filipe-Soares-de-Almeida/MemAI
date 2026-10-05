@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.8.0](https://github.com/Filipe-Soares-de-Almeida/MemAI/compare/v0.7.0...v0.8.0) (2026-10-05)
+
+
+### ⚠ BREAKING CHANGES
+
+* **deps:** memai requires mcp>=2.2,<2.3.
+
+### Build System
+
+* **deps:** move the server to mcp 2.2 ([#71](https://github.com/Filipe-Soares-de-Almeida/MemAI/issues/71)) ([09b159c](https://github.com/Filipe-Soares-de-Almeida/MemAI/commit/09b159cd25f5d49fe8dcb012adbc7294f47fcc1e))
+
 ## [0.7.0](https://github.com/Filipe-Soares-de-Almeida/MemAI/compare/v0.6.0...v0.7.0) (2026-10-04)
 
 
