@@ -4,7 +4,9 @@
 import { esc, fmtAgo, fmtDate, fmtInt } from '../core/dom.js';
 import { api, seg } from '../core/api.js';
 import { icon } from '../core/icons.js';
-import { toast, failed, openDropMenu, confirmModal } from '../core/ui.js';
+import { toast, failed, openDropMenu, confirmModal, copyCode, keysHTML, saveKeysHTML } from '../core/ui.js';
+import { renderRich, wireRich } from '../core/richtext.js';
+import { highlightIn } from '../core/highlight.js';
 import { pickMemories } from '../core/link-picker.js';
 import { typeTag } from '../core/shared.js';
 import { go, parseHash, refreshBehind } from '../core/router.js';
@@ -18,11 +20,24 @@ const NEXT = { todo: 'doing', doing: 'done', done: 'todo', dropped: 'todo' };
 
 const OLDER_SHOWN = 3;
 
+/* db.TITLE_MAX and tasks.NOTE_MAX on the server */
+const NOTE_TITLE_MAX = 120;
+const NOTE_MAX = 4000;
+
+/* the opening of a body as plain words: markup that only means something when drawn goes */
+const peekOf = text => String(text || '')
+  .replace(/```[^\n]*|={2,}|\|?\s*:?-{2,}:?\s*(?=\||$)|[|`*]/gm, ' ')
+  .replace(/\s+/g, ' ').trim().slice(0, 180);
+
 /* What survives a repaint, per task: the open item, the editors that are open,
    and the text typed but not yet sent. */
 let ui = null;
 const fresh = uid => ({
-  uid, open: '', goalEditing: false, adding: false, allComments: false, noteEdit: '',
+  uid, open: '', goalEditing: false, adding: false, allComments: false,
+  /* the note being edited by id, or `new:<item key>`; its draft outlives a repaint */
+  noteEdit: '', noteDraft: null,
+  /* notes opened or shut by hand; a list of one note starts open */
+  notesOpen: new Set(), notesShut: new Set(),
   drafts: new Map(), progress: null,
   /* what the last paint drew, so the next one animates only what is new */
   seen: null, pulse: '', opened: '',
@@ -39,7 +54,8 @@ const selectorOf = el => {
   if (el.id) return `#${CSS.escape(el.id)}`;
   if (el.hasAttribute('data-unlink'))
     return `[data-unlink="${CSS.escape(el.dataset.unlink)}"][data-item="${CSS.escape(el.dataset.item)}"]`;
-  for (const a of ['data-step', 'data-toggle', 'data-menu', 'data-draft', 'data-send', 'data-link'])
+  for (const a of ['data-step', 'data-toggle', 'data-menu', 'data-draft', 'data-send', 'data-link',
+                   'data-note-field', 'data-note-open', 'data-note-edit', 'data-note-add', 'data-note-scope'])
     if (el.hasAttribute(a)) return `[${a}="${CSS.escape(el.getAttribute(a))}"]`;
   return '';
 };
@@ -180,39 +196,82 @@ export function mountTask(host, { uid, task, status }, { onStatus, onWrite } = {
         <textarea class="tk-box" rows="2" data-draft="${esc(scope)}"
                   placeholder="${esc(ph)}" aria-label="${esc(ph)}">${esc(draft)}</textarea>
         <div class="tk-reply-foot">
-          <span class="tk-hint">${t('task.comment.hint')}</span>
+          <span class="tk-hint">${saveKeysHTML(t('task.comment.hint'))}</span>
           <button type="button" class="btn btn-sm btn-solid" data-send="${esc(scope)}" ${draft.trim() ? '' : 'disabled'}>${t('task.comment.send')}</button>
         </div>
       </div>
     </div>`;
   };
 
-  /* `noteEdit` names the note being edited by id, or `new:<item key>` for one being written */
-  const noteFormHTML = (note, scope) => `<div class="tk-note is-editing">
-      <input class="tk-box" data-note-field="title" maxlength="120"
-             aria-label="${esc(t('task.note.title'))}" placeholder="${esc(t('task.note.title'))}"
-             value="${esc(note?.title || '')}">
-      <textarea class="tk-box" rows="5" data-note-field="body" maxlength="4000"
-                aria-label="${esc(t('task.note.body'))}" placeholder="${esc(t('task.note.body'))}">${esc(note?.body || '')}</textarea>
-      <input class="tk-box" data-note-field="items" aria-label="${esc(t('task.note.items'))}"
-             placeholder="${esc(t('task.note.items'))}"
-             value="${esc((note ? note.items : scope ? [scope] : []).join(', '))}">
-      <div class="tk-actions">
-        <button type="button" class="btn btn-sm btn-solid" data-note-save="${esc(note ? String(note.id) : `new:${scope}`)}">${t('common.save')}</button>
-        <button type="button" class="btn btn-sm btn-ghost" data-note-cancel>${t('common.cancel')}</button>
+  const scopeSum = n => (n ? t('task.note.scope.n', { n }) : t('task.note.scope.all'));
+
+  /* Which items a note applies to, picked from the checklist itself; none picked is the whole task. */
+  const scopeHTML = chosen => `<div class="tk-scope">
+      <div class="tk-scope-head">
+        <span class="rf-sub">${t('task.note.scope')}</span>
+        <span class="tk-scope-sum" data-note-scope-sum>${scopeSum(chosen.size)}</span>
+      </div>
+      <div class="tk-scope-list" role="group" aria-label="${esc(t('task.note.scope.aria'))}">
+        ${current.items.map(i => `<label class="tk-scope-row" title="${esc(i.text)}">
+            <input type="checkbox" data-note-scope="${esc(i.key)}"${chosen.has(i.key) ? ' checked' : ''}>
+            <span class="tk-scope-text">${esc(i.text)}</span>
+          </label>`).join('')}
       </div>
     </div>`;
 
-  const noteHTML = n => (String(n.id) === state.noteEdit ? noteFormHTML(n, '') : `<article class="tk-note">
-      <header class="tk-note-head">
-        <h4 class="tk-note-title">${esc(n.title)}</h4>
-        <button type="button" class="icon-btn" data-note-edit="${n.id}"
-                title="${esc(t('task.note.edit'))}" aria-label="${esc(t('task.note.edit'))}">${icon('pencil')}</button>
-        <button type="button" class="icon-btn danger" data-note-del="${n.id}"
-                title="${esc(t('task.note.delete'))}" aria-label="${esc(t('task.note.delete'))}">${icon('trash')}</button>
+  /* The record's field editor without its preview: saving is what shows the note as it reads. */
+  const noteFormHTML = (note, scope) => {
+    const d = state.noteDraft;
+    const id = note ? String(note.id) : `new:${scope}`;
+    return `<section class="rf is-open tk-note" data-note-form="${esc(id)}">
+      <header class="rf-head">
+        <input class="tk-note-title-box" data-note-field="title" maxlength="${NOTE_TITLE_MAX}" spellcheck="false"
+               aria-label="${esc(t('task.note.title'))}" placeholder="${esc(t('task.note.title'))}"
+               value="${esc(d.title)}">
       </header>
-      <p class="tk-note-body">${esc(n.body)}</p>
-    </article>`);
+      <div class="rf-split rf-solo">
+        <div class="rf-pane">
+          <textarea data-note-field="body" rows="12" spellcheck="false" maxlength="${NOTE_MAX}"
+                    aria-label="${esc(t('task.note.body'))}" placeholder="${esc(t('task.note.body'))}">${esc(d.body)}</textarea>
+          <div class="tk-note-foot">
+            <span class="tk-hint">${saveKeysHTML(t('dr.key.save'))}${keysHTML(['Esc'], t('dr.key.close'))}</span>
+            <span class="rf-count" data-note-count>${t('dr.sections.count', { n: d.body.length, max: NOTE_MAX })}</span>
+          </div>
+        </div>
+      </div>
+      ${current.items.length ? scopeHTML(new Set(d.items)) : ''}
+      <div class="rf-save">
+        <button type="button" class="btn btn-solid btn-sm" data-note-save="${esc(id)}">${t('common.save')}</button>
+        <button type="button" class="btn btn-sm" data-note-cancel>${t('common.cancel')}</button>
+        ${note ? `<button type="button" class="btn btn-sm btn-danger tk-note-del" data-note-del="${note.id}">${icon('trash')}${t('task.note.delete')}</button>` : ''}
+      </div>
+    </section>`;
+  };
+
+  const noteIsOpen = (n, list) => state.notesOpen.has(String(n.id))
+    || (list.length === 1 && !state.notesShut.has(String(n.id)));
+
+  /* A note reads as a record field: its name on the raised head, its body as rich text. Shut, the
+     head carries the opening lines, as a row of the record's index does. */
+  const noteHTML = (n, list) => {
+    if (String(n.id) === state.noteEdit) return noteFormHTML(n, '');
+    const open = noteIsOpen(n, list);
+    return `<article class="rf tk-note${open ? '' : ' is-shut'}">
+      <header class="rf-head">
+        <button type="button" class="tk-note-toggle" data-note-open="${n.id}"
+                aria-expanded="${open}"${open ? ` aria-controls="tkn-${n.id}"` : ''}>
+          <span class="tk-chev" aria-hidden="true">${icon('chevron-right')}</span>
+          <span class="tk-note-name">
+            <span class="tk-note-title">${esc(n.title)}</span>
+            ${open ? '' : `<span class="tk-note-peek">${esc(peekOf(n.body))}</span>`}
+          </span>
+        </button>
+        <button type="button" class="rf-edit" data-note-edit="${n.id}"
+                aria-label="${esc(t('task.note.edit'))}">${icon('pencil')}${t('common.edit')}</button>
+      </header>
+      ${open ? `<div class="rf-body" id="tkn-${n.id}"><div class="content-prose rt">${renderRich(n.body, n.body_links)}</div></div>` : ''}
+    </article>`;
+  };
 
   const notesHTML = (list, scope) => {
     const writing = state.noteEdit === `new:${scope}`;
@@ -221,7 +280,7 @@ export function mountTask(host, { uid, task, status }, { onStatus, onWrite } = {
         <button type="button" class="rs-more" data-note-add="${esc(scope)}">${t('task.note.add')}</button>
       </div>
       <div class="tk-notes">
-        ${list.map(noteHTML).join('') || (writing ? '' : `<div class="hint-sm">${t('task.notes.empty')}</div>`)}
+        ${list.map(n => noteHTML(n, list)).join('') || (writing ? '' : `<div class="hint-sm">${t('task.notes.empty')}</div>`)}
         ${writing ? noteFormHTML(null, scope) : ''}
       </div>`;
   };
@@ -274,7 +333,7 @@ export function mountTask(host, { uid, task, status }, { onStatus, onWrite } = {
                 aria-expanded="${open}"${open ? ` aria-controls="tkp-${esc(item.key)}"` : ''}>
           <span class="tk-text">${esc(item.text)}</span>
           <span class="tk-counts">${notes
-            ? `<span class="tk-count" title="${esc(t('task.notes.n', { n: notes }))}"><span aria-hidden="true">${icon('label')}${notes}</span><span class="sr-only">${esc(t('task.notes.n', { n: notes }))}</span></span>` : ''}${links
+            ? `<span class="tk-count" title="${esc(t('task.notes.n', { n: notes }))}"><span aria-hidden="true">${icon('note')}${notes}</span><span class="sr-only">${esc(t('task.notes.n', { n: notes }))}</span></span>` : ''}${links
             ? `<span class="tk-count" title="${esc(t('task.links.n', { n: links }))}"><span aria-hidden="true">${icon('relation')}${links}</span><span class="sr-only">${esc(t('task.links.n', { n: links }))}</span></span>` : ''}${talk
             ? `<span class="tk-count" title="${esc(t('task.comments.n', { n: talk }))}"><span aria-hidden="true">${icon('comment')}${talk}</span><span class="sr-only">${esc(t('task.comments.n', { n: talk }))}</span></span>` : ''}</span>
           <span class="tk-chev">${icon('chevron-right')}</span>
@@ -504,32 +563,81 @@ export function mountTask(host, { uid, task, status }, { onStatus, onWrite } = {
     q('#tkOlder')?.addEventListener('click', () => { state.allComments = true; paint(); });
 
     /* ── task notes ── */
-    const editNote = which => {
-      state.noteEdit = which;
+    const openLink = target => go('memory', { uid: target });
+    all('.tk-note .rf-body').forEach(body => wireRich(body, { open: openLink, copy: copyCode }));
+    highlightIn(host).catch(() => {});
+
+    all('[data-note-open]').forEach(b => b.addEventListener('click', () => {
+      const id = b.dataset.noteOpen;
+      if (b.getAttribute('aria-expanded') === 'true') { state.notesOpen.delete(id); state.notesShut.add(id); }
+      else { state.notesShut.delete(id); state.notesOpen.add(id); }
       paint();
-      q('[data-note-field="title"]')?.focus();
+    }));
+    const editNote = which => {
+      const note = current.notes.find(n => String(n.id) === which);
+      const scope = which.startsWith('new:') ? which.slice(4) : '';
+      state.noteEdit = which;
+      state.noteDraft = { title: note?.title || '', body: note?.body || '',
+                          items: note ? [...note.items] : scope ? [scope] : [] };
+      focusAfter(note ? '[data-note-field="body"]' : '[data-note-field="title"]');
+      paint();
     };
     all('[data-note-add]').forEach(b => b.addEventListener('click', () => editNote(`new:${b.dataset.noteAdd}`)));
     all('[data-note-edit]').forEach(b => b.addEventListener('click', () => editNote(b.dataset.noteEdit)));
-    q('[data-note-cancel]')?.addEventListener('click', () => { state.noteEdit = ''; paint(); });
-    q('[data-note-save]')?.addEventListener('click', async e => {
-      const target = e.currentTarget.dataset.noteSave;
-      const form = e.currentTarget.closest('.tk-note');
-      const field = name => form.querySelector(`[data-note-field="${name}"]`).value.trim();
-      const body = { title: field('title'), body: field('body'),
-                     items: field('items').split(/[\s,]+/).filter(Boolean) };
-      if (!target.startsWith('new:')) body.id = Number(target);
-      await write('note', body, { errKey: 'task.err.note', onOk: s => { s.noteEdit = ''; } });
-    });
-    all('[data-note-del]').forEach(b => b.addEventListener('click', async () => {
-      const note = current.notes.find(n => String(n.id) === b.dataset.noteDel);
-      if (!note || busy) return;
-      const ok = await confirmModal({
-        title: t('task.note.delete'), body: t('task.note.delete.body', { title: esc(note.title) }),
-        okLabel: t('task.note.delete'), danger: true });
-      if (!ok) return;
-      await write('note', { id: note.id }, { method: 'DELETE', errKey: 'task.err.note' });
-    }));
+
+    const form = q('[data-note-form]');
+    if (form) {
+      const d = state.noteDraft;
+      const target = form.dataset.noteForm;
+      const fresh = target.startsWith('new:');
+      const back = fresh ? attr('data-note-add', target.slice(4)) : attr('data-note-edit', target);
+      const title = form.querySelector('[data-note-field="title"]');
+      const body = form.querySelector('[data-note-field="body"]');
+      const save = form.querySelector('[data-note-save]');
+      const count = form.querySelector('[data-note-count]');
+      const ready = () => { save.disabled = !d.title.trim() || !d.body.trim(); };
+      const leave = () => { state.noteEdit = ''; state.noteDraft = null; focusAfter(back); paint(); };
+      const submit = async () => {
+        if (save.disabled) return;
+        const payload = { title: d.title.trim(), body: d.body.trim(),
+                          items: current.items.map(i => i.key).filter(k => d.items.includes(k)) };
+        if (!fresh) payload.id = Number(target);
+        focusAfter(back);
+        await write('note', payload, { errKey: 'task.err.note', onOk: s => {
+          s.noteEdit = '';
+          s.noteDraft = null;
+          if (!fresh) { s.notesShut.delete(target); s.notesOpen.add(target); }
+        } });
+      };
+      ready();
+      title.addEventListener('input', () => { d.title = title.value; ready(); });
+      body.addEventListener('input', () => {
+        d.body = body.value;
+        ready();
+        count.textContent = t('dr.sections.count', { n: d.body.length, max: NOTE_MAX });
+      });
+      form.querySelectorAll('[data-note-scope]').forEach(box => box.addEventListener('change', () => {
+        const key = box.dataset.noteScope;
+        d.items = box.checked ? [...d.items.filter(k => k !== key), key] : d.items.filter(k => k !== key);
+        form.querySelector('[data-note-scope-sum]').textContent = scopeSum(d.items.length);
+      }));
+      form.addEventListener('keydown', e => {
+        if (e.key === 'Escape') { e.preventDefault(); leave(); }
+        if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') { e.preventDefault(); submit(); }
+      });
+      save.addEventListener('click', submit);
+      form.querySelector('[data-note-cancel]').addEventListener('click', leave);
+      form.querySelector('[data-note-del]')?.addEventListener('click', async () => {
+        const note = current.notes.find(n => String(n.id) === target);
+        if (!note || busy) return;
+        const ok = await confirmModal({
+          title: t('task.note.delete'), body: t('task.note.delete.body', { title: esc(note.title) }),
+          okLabel: t('task.note.delete'), danger: true });
+        if (!ok) return;
+        await write('note', { id: note.id }, { method: 'DELETE', errKey: 'task.err.note',
+          onOk: s => { s.noteEdit = ''; s.noteDraft = null; } });
+      });
+    }
 
     /* ── the goal ── */
     q('#tkGoalEdit')?.addEventListener('click', () => {

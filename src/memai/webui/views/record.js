@@ -17,7 +17,7 @@ import { esc, fmtDate, fmtInt, debounce } from '../core/dom.js';
 import { api, seg } from '../core/api.js';
 import { icon } from '../core/icons.js';
 import { toast, failed, openModal, closeModal, confirmModal, promptModal,
-         openDropMenu, copyCode, copyUid, modalOpen } from '../core/ui.js';
+         openDropMenu, copyCode, copyUid, modalOpen, keysHTML, saveKeysHTML } from '../core/ui.js';
 import { typeTag, uidChip, statusTag, wireCopyChips,
          CONF, PIN, REL_SUGGEST, relLabel, relTypeTitle, peerName, typeItems,
          sectionLabel, sectionLabelHTML, sectionHue,
@@ -372,7 +372,7 @@ function fieldHTML(f, m) {
       <span class="rf-label">${f.labelHTML}</span>
       ${countHTML(f)}
       ${editing.all ? '' : `<span class="rf-keys">
-        <kbd>${t('dr.key.save')}</kbd><kbd>${t('dr.key.close')}</kbd></span>`}
+        ${saveKeysHTML(t('dr.key.save'))}${keysHTML(['Esc'], t('dr.key.close'))}</span>`}
     </header>
     <div class="rf-split${editing.all ? ' rf-solo' : ''}">
       <div class="rf-pane">
