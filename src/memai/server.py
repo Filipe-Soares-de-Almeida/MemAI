@@ -36,7 +36,7 @@ from __future__ import annotations
 import json
 import os
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 
 from memai import (autostart, brief, db, diagram_svg, hook_install, pending as pending_lists,
                    portable, sections, tasks, update)
@@ -171,7 +171,7 @@ def _instructions() -> str:
     return "\n\n".join([INSTRUCTIONS, *(note for note in notes if note)])
 
 
-mcp = FastMCP("memai", instructions=_instructions())
+mcp = MCPServer("memai", instructions=_instructions())
 
 
 def _new_session_id() -> str:
@@ -210,7 +210,7 @@ _GROUP_OF: dict[str, str] = {}
 
 
 def tool(group: str):
-    """Register a tool with FastMCP when its group is active.
+    """Register a tool with the MCP server when its group is active.
 
     Always returns the plain function, so the module-level name stays
     callable from the admin surface and the tests whether or not the schema

@@ -47,7 +47,7 @@ def _published(module) -> set[str]:
 def _schema_chars(module) -> int:
     return sum(
         len(json.dumps({"name": t.name, "description": t.description,
-                        "inputSchema": t.inputSchema}, ensure_ascii=False))
+                        "inputSchema": t.input_schema}, ensure_ascii=False))
         for t in asyncio.run(module.mcp.list_tools()))
 
 
