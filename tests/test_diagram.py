@@ -13,6 +13,7 @@ everything else leans on them:
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -862,8 +863,9 @@ def test_mcp_get_diagram_formats(mcp):
     assert mcp.get_diagram(uid, format="mermaid")["body"].splitlines()[0] == "---"
     assert mcp.get_diagram(uid, format="text")["body"].startswith("DIAGRAM:")
 
-    data = mcp.get_diagram(uid, format="json")
-    assert data["format"] == "json"
+    page = mcp.get_diagram(uid, format="json")
+    assert page["format"] == "json" and "next_offset" not in page
+    data = json.loads(page["body"])
     # json is the one format carrying the stored arrangement
     assert all(isinstance(n["x"], float) for n in data["nodes"])
 
@@ -872,7 +874,7 @@ def test_mcp_refuses_a_hand_written_diagram_content(mcp):
     uid = mcp.diagram(title="Nightly export routine", nodes=NODES, edges=EDGES)["uid"]
     res = mcp.edit_memory(uid, "hand written")
     assert res["ok"] is False and "generated from the graph" in res["errors"][0]
-    assert mcp.get_memory(uid)["content"].startswith("DIAGRAM:")
+    assert mcp.get_diagram(uid, format="text")["body"].startswith("DIAGRAM:")
 
 
 def test_mcp_get_memory_shows_the_link_from_both_ends(mcp):
@@ -883,10 +885,13 @@ def test_mcp_get_memory_shows_the_link_from_both_ends(mcp):
 
     diagram_view = mcp.get_memory(uid)
     assert "flowchart TD" in diagram_view["mermaid"]
-    assert diagram_view["node_links"][0]["target_uid"] == note
+    assert diagram_view["node_link_count"] == 1
+    graph = json.loads(mcp.get_diagram(uid, format="json")["body"])
+    assert graph["links"][0]["target_uid"] == note
 
     note_view = mcp.get_memory(note)
-    assert note_view["referenced_by_diagrams"][0]["memory_uid"] == uid
+    assert note_view["referenced_by_diagrams"] == 1
+    assert mcp.get_relations(note, part="diagrams")["records"][0]["memory_uid"] == uid
     assert mcp.diagram_link(uid, "load", note, delete=True) == {"ok": True}
     assert mcp.diagram_link(uid, "load", note, delete=True)["ok"] is False
 
@@ -896,9 +901,9 @@ def test_mcp_jump_is_visible_on_both_diagrams(mcp):
     b = mcp.diagram(title="Store reconciliation routine", nodes=NODES, edges=EDGES)["uid"]
     assert mcp.diagram_jump(a, "write", b, "load", label="per store") == {"ok": True}
 
-    assert mcp.get_memory(a)["jumps"][0]["direction"] == "out"
-    assert mcp.get_memory(b)["jumps"][0]["node_key"] == "load"
-    assert mcp.get_diagram(b, format="json")["jumps"][0]["peer_uid"] == a
+    assert mcp.get_memory(a)["jump_count"] == 1 and mcp.get_memory(b)["jump_count"] == 1
+    jumps = json.loads(mcp.get_diagram(b, format="json")["body"])["jumps"]
+    assert jumps[0]["node_key"] == "load" and jumps[0]["peer_uid"] == a
 
     assert "draw an edge" in mcp.diagram_jump(a, "write", a)["errors"][0]
     assert mcp.diagram_jump(b, "load", a, "write", delete=True) == {"ok": True}
@@ -920,11 +925,19 @@ def test_mcp_relayout_reports_what_it_moved(mcp):
     assert mcp.diagram_relayout("nope") == {"ok": False, "nodes": 0}
 
 
-def test_capped_body_points_at_the_dashboard(mcp):
-    assert mcp._capped("x" * 10) == "x" * 10
-    long = mcp._capped("x" * (db.DIAGRAM_BODY_BUDGET + 500))
-    assert len(long) < db.DIAGRAM_BODY_BUDGET + 200
-    assert "admin dashboard" in long
+def test_a_long_body_pages_through_offset(mcp):
+    nodes = [{"key": "start", "shape": "start", "label": "begin"}] + [
+        {"key": f"s{k}", "label": f"step {k} " + "x" * 200} for k in range(200)]
+    edges = [{"from": "start", "to": "s0"}] + [
+        {"from": f"s{k}", "to": f"s{k + 1}"} for k in range(199)]
+    uid = mcp.diagram(title="Long routine", nodes=nodes, edges=edges)["uid"]
+    page, parts = mcp.get_diagram(uid, format="json"), []
+    while True:
+        parts.append(page["body"])
+        if "next_offset" not in page:
+            break
+        page = mcp.get_diagram(uid, format="json", offset=page["next_offset"])
+    assert len(parts) > 1 and len(json.loads("".join(parts))["nodes"]) == 201
 
 
 def test_every_registered_tool_has_a_summary_line(mcp):

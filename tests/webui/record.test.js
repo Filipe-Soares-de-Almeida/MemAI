@@ -45,7 +45,7 @@ describe('the pin control', () => {
 describe('a task shown in its record', () => {
   it('reads the record again after a checklist write and repaints the side panel from it', async () => {
     const uid = 'a1b2c3d4e5f60002';
-    const task = { goal: 'Ship the lantern firmware', state: 'open', completed_at: null, comments: [],
+    const task = { goal: 'Ship the lantern firmware', state: 'open', completed_at: null, comments: [], notes: [],
                    items: [{ key: 'i1', text: 'Solder the header', state: 'todo', links: [] }] };
     const m = memory(uid, { type: 'task', task, content: 'GOAL: Ship the lantern firmware' });
     const later = { ...m, updated_at: '2026-03-04T12:00:00+00:00', content: `${m.content}\n- [~] Solder the header`,

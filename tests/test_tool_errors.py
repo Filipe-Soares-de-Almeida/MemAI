@@ -100,7 +100,7 @@ def test_replace_is_still_the_default(store):
 def test_an_append_keeps_the_previous_version(store):
     uid = server.note("fixture title", content="cache warmup runs nightly")["uid"]
     server.edit_memory(uid, "and skips holidays", mode="append", note="learned today")
-    history = server.get_memory(uid)["edit_history"]
+    history = server.get_memory(uid, edits_offset=0)["records"]
     assert history[-1]["prev_content"] == "cache warmup runs nightly"
     assert history[-1]["note"] == "learned today"
 

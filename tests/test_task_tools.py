@@ -69,11 +69,12 @@ def test_task_item_applies_link_comment_and_state_together(store):
     assert result["state"] == "done"
     assert result["progress"] == {"done": 1, "dropped": 0, "total": 2}
     assert result["task_state"] == "open" and result["archived"] is False
-    task = server.get_memory(uid)["task"]
-    assert [c["item"] for c in task["comments"]] == ["i1"]
-    assert task["comments"][0]["body"] == "lexer merged"
-    assert task["comments"][0]["author"] == "agent"
-    assert [link["uid"] for link in task["items"][0]["links"]] == [note_uid]
+    comments = server.task_read(uid, "comments", item="i1")["records"]
+    assert [c["item"] for c in comments] == ["i1"]
+    assert comments[0]["body"] == "lexer merged"
+    assert comments[0]["author"] == "agent"
+    assert [link["uid"] for link in server.task_read(uid, "links", item="i1")["records"]] == [
+        note_uid]
 
 
 def test_task_item_with_a_comment_alone_reports_the_current_state(store):
@@ -94,8 +95,8 @@ def test_task_item_with_an_unknown_related_uid_changes_nothing(store):
     assert result["ok"] is False and "no-such-uid" in " ".join(result["errors"])
     with db.connect() as conn:
         assert _snapshot(conn, uid) == before
-    task = server.get_memory(uid)["task"]
-    assert task["items"][0]["state"] == "todo" and task["comments"] == []
+    assert server.task_read(uid, "items")["records"][0]["state"] == "todo"
+    assert server.task_read(uid, "comments", item="i1")["total"] == 0
 
 
 def test_task_item_with_a_bad_state_rolls_back_the_link_and_comment(store):
@@ -152,7 +153,7 @@ def test_forget_on_an_open_task_cancels_it(store):
 def test_get_memory_carries_the_task_block(store):
     uid = _task()["uid"]
     task = server.get_memory(uid)["task"]
-    assert {"goal", "state", "items", "comments"} <= set(task)
+    assert {"goal", "state", "progress", "counts", "next"} <= set(task)
     assert task["goal"] == "Parse every config file"
 
 

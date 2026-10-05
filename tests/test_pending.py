@@ -237,7 +237,7 @@ def test_pulse_still_returns_the_checkpoint_in_full(store):
     assert checkpoint["uid"] == uid
     assert body.strip() in checkpoint["content"]
     assert "[+" not in checkpoint["content"]
-    assert len(checkpoint["relations"]) == 1
+    assert checkpoint["relation_count"] == 1 and "next" not in checkpoint
 
 
 def test_pulse_counts_do_not_include_contradicted_rows(seeded):

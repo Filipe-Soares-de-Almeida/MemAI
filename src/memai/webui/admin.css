@@ -2865,6 +2865,23 @@ textarea.tk-box {
 /* A thread: a comment is a line under its writer's mark, the reply box its last line. A person's
    mark is round, an agent's square, and each says who in words, so colour is not the cue. */
 .tk-thread { padding: var(--sp-4) var(--sp-5); display: flex; flex-direction: column; gap: var(--sp-3); }
+.tk-tnotes { padding: var(--sp-4) var(--sp-5); display: flex; flex-direction: column; gap: var(--sp-3); }
+.tk-notes { display: flex; flex-direction: column; gap: var(--sp-2); }
+.tk-note {
+  display: flex; flex-direction: column; gap: var(--sp-1);
+  padding: var(--sp-2) var(--sp-3); border: 1px solid var(--line); border-radius: var(--r-md);
+}
+.tk-note.is-editing { gap: var(--sp-2); }
+.tk-note-head { display: flex; align-items: center; gap: var(--sp-2); }
+.tk-note-title {
+  margin: 0; flex: 1; min-width: 0;
+  font: 500 var(--fs-body) var(--font-ui); color: var(--ink); overflow-wrap: anywhere;
+}
+.tk-note-body {
+  margin: 0; max-width: 72ch;
+  font: 400 var(--fs-body)/1.55 var(--font-ui); color: var(--ink);
+  white-space: pre-wrap; overflow-wrap: anywhere;
+}
 .tk-older { margin-left: 0; align-self: flex-start; }
 .tk-cs { display: flex; flex-direction: column; }
 .tk-c {

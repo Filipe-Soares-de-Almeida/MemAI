@@ -961,7 +961,7 @@ def test_optimize_runs_and_status_tools(tmp_path, monkeypatch):
             {"kind": "reword", "target_uid": uid, "payload": {"new_content": "better"}},
         ])
 
-    runs = server.optimize_runs()
+    runs = server.optimize_runs()["runs"]
     assert runs[0]["id"] == staged["run_id"]
     assert (runs[0]["total"], runs[0]["pending"]) == (1, 1)
 

@@ -62,7 +62,7 @@ sub-skill. Read each source once; nothing below is read twice.
    - The documented flows are counted under the `diagram` entry of `must_read`:
      `must_read(domain, type='diagram')` lists them **by title only**, never
      inlined. Open one with `get_diagram(uid, format='json')`.
-2. **`list_domains()`** — the **tree**, not a list: per entry `parent`,
+2. **`list_domains()`** — the **tree**, not a list (paged: follow `next_offset`): per entry `parent`,
    `depth`, `count` (filed at exactly that path), `subtree` (that plus its
    descendants), `children`, `implicit` (a level that exists only because
    something deeper is filed below it), plus **`also`/`subtree_also`** for what
@@ -71,7 +71,7 @@ sub-skill. Read each source once; nothing below is read twice.
 3. **`get_domain_case()`** — the store's casing policy: `preserve` | `lower` |
    `upper`, `preserve` by default. It governs **writes**; reads fold case
    either way (§2).
-4. **`optimize_runs()`** — take the `created_at` of the **latest run**. The
+4. **`optimize_runs()`** — take the `created_at` of the **latest run** (in `runs`). The
    scan is **incremental**: `optimize_scan(since="<that created_at>")` reviews
    **only the delta** (a full scan on the first pass, or on request). The
    fields that drive the pass:

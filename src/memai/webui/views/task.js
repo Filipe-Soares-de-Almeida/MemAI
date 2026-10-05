@@ -22,7 +22,7 @@ const OLDER_SHOWN = 3;
    and the text typed but not yet sent. */
 let ui = null;
 const fresh = uid => ({
-  uid, open: '', goalEditing: false, adding: false, allComments: false,
+  uid, open: '', goalEditing: false, adding: false, allComments: false, noteEdit: '',
   drafts: new Map(), progress: null,
   /* what the last paint drew, so the next one animates only what is new */
   seen: null, pulse: '', opened: '',
@@ -187,10 +187,50 @@ export function mountTask(host, { uid, task, status }, { onStatus, onWrite } = {
     </div>`;
   };
 
+  /* `noteEdit` names the note being edited by id, or `new:<item key>` for one being written */
+  const noteFormHTML = (note, scope) => `<div class="tk-note is-editing">
+      <input class="tk-box" data-note-field="title" maxlength="120"
+             aria-label="${esc(t('task.note.title'))}" placeholder="${esc(t('task.note.title'))}"
+             value="${esc(note?.title || '')}">
+      <textarea class="tk-box" rows="5" data-note-field="body" maxlength="4000"
+                aria-label="${esc(t('task.note.body'))}" placeholder="${esc(t('task.note.body'))}">${esc(note?.body || '')}</textarea>
+      <input class="tk-box" data-note-field="items" aria-label="${esc(t('task.note.items'))}"
+             placeholder="${esc(t('task.note.items'))}"
+             value="${esc((note ? note.items : scope ? [scope] : []).join(', '))}">
+      <div class="tk-actions">
+        <button type="button" class="btn btn-sm btn-solid" data-note-save="${esc(note ? String(note.id) : `new:${scope}`)}">${t('common.save')}</button>
+        <button type="button" class="btn btn-sm btn-ghost" data-note-cancel>${t('common.cancel')}</button>
+      </div>
+    </div>`;
+
+  const noteHTML = n => (String(n.id) === state.noteEdit ? noteFormHTML(n, '') : `<article class="tk-note">
+      <header class="tk-note-head">
+        <h4 class="tk-note-title">${esc(n.title)}</h4>
+        <button type="button" class="icon-btn" data-note-edit="${n.id}"
+                title="${esc(t('task.note.edit'))}" aria-label="${esc(t('task.note.edit'))}">${icon('pencil')}</button>
+        <button type="button" class="icon-btn danger" data-note-del="${n.id}"
+                title="${esc(t('task.note.delete'))}" aria-label="${esc(t('task.note.delete'))}">${icon('trash')}</button>
+      </header>
+      <p class="tk-note-body">${esc(n.body)}</p>
+    </article>`);
+
+  const notesHTML = (list, scope) => {
+    const writing = state.noteEdit === `new:${scope}`;
+    return `<div class="tk-sub">
+        <h3 class="tk-sub-h">${t('task.notes')}<span class="rs-n">${list.length}</span></h3>
+        <button type="button" class="rs-more" data-note-add="${esc(scope)}">${t('task.note.add')}</button>
+      </div>
+      <div class="tk-notes">
+        ${list.map(noteHTML).join('') || (writing ? '' : `<div class="hint-sm">${t('task.notes.empty')}</div>`)}
+        ${writing ? noteFormHTML(null, scope) : ''}
+      </div>`;
+  };
+
   const itemPanelHTML = item => {
     const thread = current.comments.filter(c => c.item === item.key);
     return `<div class="tk-panel${enter.opened === item.key ? ' is-enter' : ''}" id="tkp-${esc(item.key)}" role="group"
                  aria-label="${esc(t('task.panel.aria', { text: item.text }))}">
+      ${notesHTML(current.notes.filter(n => n.items.includes(item.key)), item.key)}
       <div class="tk-sub">
         <h3 class="tk-sub-h">${t('task.links')}<span class="rs-n">${item.links.length}</span></h3>
         <button type="button" class="rs-more" data-link="${esc(item.key)}">${t('task.link.add')}</button>
@@ -219,6 +259,7 @@ export function mountTask(host, { uid, task, status }, { onStatus, onWrite } = {
     const open = state.open === item.key;
     const links = item.links.length;
     const talk = current.comments.filter(c => c.item === item.key).length;
+    const notes = current.notes.filter(n => n.items.includes(item.key)).length;
     const next = NEXT[item.state];
     const action = t(`task.mark.${next}`);
     const stateName = t(`task.state.${item.state}`);
@@ -232,7 +273,8 @@ export function mountTask(host, { uid, task, status }, { onStatus, onWrite } = {
         <button type="button" class="tk-main" data-toggle="${esc(item.key)}"
                 aria-expanded="${open}"${open ? ` aria-controls="tkp-${esc(item.key)}"` : ''}>
           <span class="tk-text">${esc(item.text)}</span>
-          <span class="tk-counts">${links
+          <span class="tk-counts">${notes
+            ? `<span class="tk-count" title="${esc(t('task.notes.n', { n: notes }))}"><span aria-hidden="true">${icon('label')}${notes}</span><span class="sr-only">${esc(t('task.notes.n', { n: notes }))}</span></span>` : ''}${links
             ? `<span class="tk-count" title="${esc(t('task.links.n', { n: links }))}"><span aria-hidden="true">${icon('relation')}${links}</span><span class="sr-only">${esc(t('task.links.n', { n: links }))}</span></span>` : ''}${talk
             ? `<span class="tk-count" title="${esc(t('task.comments.n', { n: talk }))}"><span aria-hidden="true">${icon('comment')}${talk}</span><span class="sr-only">${esc(t('task.comments.n', { n: talk }))}</span></span>` : ''}</span>
           <span class="tk-chev">${icon('chevron-right')}</span>
@@ -349,6 +391,9 @@ export function mountTask(host, { uid, task, status }, { onStatus, onWrite } = {
         ${goalHTML()}
         ${progressHTML()}
       </div>
+      <section class="tk-tnotes tk-card" aria-label="${esc(t('task.notes'))}">
+        ${notesHTML(current.notes.filter(n => !n.items.length), '')}
+      </section>
       <div class="tk-list tk-card">
         <ul class="tk-items">${current.items.map(itemHTML).join('')}</ul>
         ${addHTML()}
@@ -457,6 +502,34 @@ export function mountTask(host, { uid, task, status }, { onStatus, onWrite } = {
     });
 
     q('#tkOlder')?.addEventListener('click', () => { state.allComments = true; paint(); });
+
+    /* ── task notes ── */
+    const editNote = which => {
+      state.noteEdit = which;
+      paint();
+      q('[data-note-field="title"]')?.focus();
+    };
+    all('[data-note-add]').forEach(b => b.addEventListener('click', () => editNote(`new:${b.dataset.noteAdd}`)));
+    all('[data-note-edit]').forEach(b => b.addEventListener('click', () => editNote(b.dataset.noteEdit)));
+    q('[data-note-cancel]')?.addEventListener('click', () => { state.noteEdit = ''; paint(); });
+    q('[data-note-save]')?.addEventListener('click', async e => {
+      const target = e.currentTarget.dataset.noteSave;
+      const form = e.currentTarget.closest('.tk-note');
+      const field = name => form.querySelector(`[data-note-field="${name}"]`).value.trim();
+      const body = { title: field('title'), body: field('body'),
+                     items: field('items').split(/[\s,]+/).filter(Boolean) };
+      if (!target.startsWith('new:')) body.id = Number(target);
+      await write('note', body, { errKey: 'task.err.note', onOk: s => { s.noteEdit = ''; } });
+    });
+    all('[data-note-del]').forEach(b => b.addEventListener('click', async () => {
+      const note = current.notes.find(n => String(n.id) === b.dataset.noteDel);
+      if (!note || busy) return;
+      const ok = await confirmModal({
+        title: t('task.note.delete'), body: t('task.note.delete.body', { title: esc(note.title) }),
+        okLabel: t('task.note.delete'), danger: true });
+      if (!ok) return;
+      await write('note', { id: note.id }, { method: 'DELETE', errKey: 'task.err.note' });
+    }));
 
     /* ── the goal ── */
     q('#tkGoalEdit')?.addEventListener('click', () => {

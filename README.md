@@ -89,7 +89,16 @@ task(
     domain="acme/checkout/billing",
 )
 task_item(uid, "i1", state="done", comment="Handler keys off the event id.")
+task_note(uid, title="Refund replay", body="Refunds arrive twice on retry.", items="i2")
 ```
+
+What only makes sense inside the task — an item's brief, a rule several items
+share — is a task note, not a memory: search, recall and the session brief never
+return it. `get_memory(uid)` on a task returns its head (goal, progress, counts),
+and `task_read(uid, part)` reads its items, notes, comments and links one page at
+a time. Every tool result stays under the size Claude Code shows inline: what can
+grow comes back in pages with a `next_offset`. `memai-store task-adopt` turns
+memories linked to a task's items into its notes.
 
 Open tasks come first in the session-start brief. The PreToolUse hook notes the
 domains a session names in its memai calls, and at the end of a turn the `stop`

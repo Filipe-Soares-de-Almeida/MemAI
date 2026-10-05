@@ -336,6 +336,24 @@ CREATE TABLE IF NOT EXISTS task_comments (
 
 CREATE INDEX IF NOT EXISTS idx_task_comments_mem ON task_comments(memory_uid);
 
+CREATE TABLE IF NOT EXISTS task_notes (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    memory_uid TEXT NOT NULL REFERENCES memories(uid),
+    title      TEXT NOT NULL,
+    body       TEXT NOT NULL,
+    session    TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_task_notes_mem ON task_notes(memory_uid);
+
+CREATE TABLE IF NOT EXISTS task_note_items (
+    note_id  INTEGER NOT NULL REFERENCES task_notes(id),
+    item_key TEXT NOT NULL,
+    PRIMARY KEY (note_id, item_key)
+);
+
 CREATE TABLE IF NOT EXISTS meta (
     key    TEXT PRIMARY KEY,
     value  TEXT NOT NULL
@@ -2126,6 +2144,18 @@ def update_memory_content(
     return True
 
 
+def set_generated_content(conn: sqlite3.Connection, uid: str, content: str) -> None:
+    """Rewrite a body generated from other rows, recording no edit: those rows are the history."""
+    row = memory_row(conn, uid)
+    conn.execute("UPDATE memories SET content = ?, updated_at = ? WHERE uid = ?",
+                 (content, now_iso(), uid))
+    _write_sections(conn, uid, row["type"], content)
+
+
+def edit_count(conn: sqlite3.Connection, uid: str) -> int:
+    return conn.execute("SELECT COUNT(*) FROM edits WHERE memory_uid = ?", (uid,)).fetchone()[0]
+
+
 def get_edit_history(conn: sqlite3.Connection, uid: str) -> list[sqlite3.Row]:
     return conn.execute(
         "SELECT * FROM edits WHERE memory_uid = ? ORDER BY edited_at ASC", (uid,)
@@ -2361,6 +2391,10 @@ def purge_memory(conn: sqlite3.Connection, uid: str) -> bool:
     conn.execute("DELETE FROM diagram_nodes WHERE memory_uid = ?", (uid,))
     conn.execute("DELETE FROM diagram_edges WHERE memory_uid = ?", (uid,))
     conn.execute("DELETE FROM diagrams WHERE memory_uid = ?", (uid,))
+    conn.execute(
+        "DELETE FROM task_note_items WHERE note_id IN "
+        "(SELECT id FROM task_notes WHERE memory_uid = ?)", (uid,))
+    conn.execute("DELETE FROM task_notes WHERE memory_uid = ?", (uid,))
     conn.execute("DELETE FROM task_comments WHERE memory_uid = ?", (uid,))
     conn.execute(
         "DELETE FROM task_item_links WHERE memory_uid = ? OR target_uid = ?", (uid, uid)
@@ -3919,7 +3953,7 @@ def search_memories(
     if status:
         sql.append("AND m.status = ?")
         params.append(status)
-    sql.append("ORDER BY rank LIMIT ?")
+    sql.append("ORDER BY rank, m.rowid_pk LIMIT ?")
     params.append(limit)
     return conn.execute(" ".join(sql), params).fetchall()
 
@@ -3987,7 +4021,7 @@ def search_ranked(
 
     # Contradicted last, then by score (bm25 ascends): a known-wrong memory never leads one that holds.
     hits.sort(key=lambda d: (d.get("confidence") == CONFIDENCE_CONTRADICTED,
-                             d["fts_rank"]))
+                             d["fts_rank"], d.get("rowid_pk", 0)))
     results = (_collapse_near_copies(hits) if collapse else hits)[:limit]
     if pinned is not None:
         results = [pinned] + [r for r in results if r["uid"] != pinned["uid"]]
@@ -4910,6 +4944,8 @@ CORPUS_ANCHORS_CAP = 5
 # Per-page ceiling on the serialized listing (compact-JSON chars). Hosts cap output near 25k tokens
 # and dense JSON runs ~3 chars/token; 28k keeps the full response near 12k tokens.
 CORPUS_CHAR_BUDGET = 28_000
+# A full=True body longer than this is cut; get_memory(uid, content_offset=...) reads the rest.
+CORPUS_FULL_LEN = 8_000
 
 # Verifiable anchors an agent can go check against live facts: URLs,
 # file paths, table/field-style identifiers and SNAKE_CASE constants.
@@ -5098,7 +5134,7 @@ def optimization_corpus(
     one MCP response (the full-body version of a real 200-memory store was
     ~450KB; even snippet-only it overflowed on metadata alone):
       - content is a snippet with content_len alongside (full=True keeps
-        whole bodies; get_memory fetches one on demand)
+        bodies up to CORPUS_FULL_LEN; get_memory fetches one on demand)
       - tags longer than CORPUS_TAGS_LEN are cut, with tags_len alongside
       - empty/default fields are omitted (blank domain/session/tags, no
         cross-listings, null superseded_by, status matching the filter
@@ -5195,8 +5231,8 @@ def optimization_corpus(
         m["created_at"] = r["created_at"][:19]
         content = r["content"]
         m["content_len"] = len(content)
-        m["content"] = content if full or len(content) <= CORPUS_SNIPPET_LEN \
-            else content[: CORPUS_SNIPPET_LEN - 1] + "…"
+        cap = CORPUS_FULL_LEN if full else CORPUS_SNIPPET_LEN
+        m["content"] = content if len(content) <= cap else content[: cap - 1] + "…"
         anchors = _extract_anchors(content, cap=CORPUS_ANCHORS_CAP)
         if anchors:
             m["anchors"] = " ".join(anchors)
