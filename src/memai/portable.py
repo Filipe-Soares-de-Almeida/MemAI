@@ -470,13 +470,68 @@ def move(source: str, target: str, *, uids=(), domain: str = "", dry_run: bool =
             "errors": result["errors"], **report}
 
 
+def _adopt_refusal(conn, row, keys: list[str]) -> str:
+    if row is None or not keys:
+        return "not linked to this task"
+    if db.get_relations(conn, row["uid"]):
+        return "has relations"
+    if db.diagrams_referencing(conn, row["uid"]):
+        return "referenced by a diagram"
+    if len(row["content"]) > tasks.NOTE_MAX:
+        return f"body over {tasks.NOTE_MAX} characters"
+    return ""
+
+
+def adopt(task_uid: str, uids: list[str], *, dry_run: bool = True) -> dict:
+    """Turn memories linked to a task's items into that task's notes, and purge them.
+
+    A memory with relations, diagram references, a body over the note limit,
+    or no link to the task is refused, so nothing that stands on its own is
+    lost. One linked to every item becomes a task-level note. The real run
+    backs the store up first and drops the task's edit history.
+    """
+    project = db.active_project()
+    plan, refused = [], []
+    with db.connect() as conn:
+        if not tasks.is_task(conn, task_uid):
+            raise ValueError(f"no task {task_uid}")
+        all_keys = [r["item_key"] for r in conn.execute(
+            "SELECT item_key FROM task_items WHERE memory_uid = ? ORDER BY seq", (task_uid,))]
+        for uid in dict.fromkeys(uids):
+            row = db.get_memory(conn, uid)
+            keys = [r["item_key"] for r in conn.execute(
+                "SELECT l.item_key FROM task_item_links l JOIN task_items t "
+                "ON t.memory_uid = l.memory_uid AND t.item_key = l.item_key "
+                "WHERE l.memory_uid = ? AND l.target_uid = ? ORDER BY t.seq", (task_uid, uid))]
+            if reason := _adopt_refusal(conn, row, keys):
+                refused.append({"uid": uid, "reason": reason})
+                continue
+            whole = set(keys) == set(all_keys)
+            plan.append({"uid": uid, "title": row["title"], "body": row["content"],
+                         "items": [] if whole else keys, "level": "task" if whole else "item"})
+        edits = db.edit_count(conn, task_uid)
+    report = {"task": task_uid, "refused": refused, "edits_dropped": edits,
+              "plan": [{k: p[k] for k in ("uid", "title", "items", "level")} for p in plan]}
+    if dry_run or not plan:
+        return {"dry_run": dry_run, "backup": "", **report}
+    backup = _spare_name(db.backups_dir(project), db.backup_name(project, "adopt"))
+    db.backup_to(backup, project=project)
+    with db.connect() as conn:
+        for p in plan:
+            tasks.add_note(conn, task_uid, title=p["title"] or p["body"][:120], body=p["body"],
+                           items=p["items"])
+            db.purge_memory(conn, p["uid"])
+        conn.execute("DELETE FROM edits WHERE memory_uid = ?", (task_uid,))
+    return {"dry_run": False, "backup": str(backup), **report}
+
+
 # --------------------------------------------------------------------- cli
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="memai-store",
-        description="Export the memai store as text, import one back, or move "
-                    "memories between projects.")
+        description="Export the memai store as text, import one back, move "
+                    "memories between projects, or turn memories into a task's notes.")
     sub = parser.add_subparsers(dest="command", required=True)
 
     out = sub.add_parser("export", help="write the store as jsonl or markdown")
@@ -503,7 +558,17 @@ def main(argv: list[str] | None = None) -> int:
     mv.add_argument("--dry-run", action="store_true",
                     help="report what would move, move nothing")
 
+    ad = sub.add_parser("task-adopt", help="turn memories linked to a task into its notes")
+    ad.add_argument("task", help="the task uid")
+    ad.add_argument("uids", nargs="+", help="memory uids linked to the task's items")
+    ad.add_argument("--dry-run", action="store_true", help="report the plan, write nothing")
+
     args = parser.parse_args(argv)
+
+    if args.command == "task-adopt":
+        result = adopt(args.task, args.uids, dry_run=args.dry_run)
+        sys.stdout.buffer.write(json.dumps(result, ensure_ascii=False, indent=2).encode("utf-8"))
+        return 0
 
     if args.command == "export":
         with db.connect() as conn:
