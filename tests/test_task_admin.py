@@ -430,3 +430,34 @@ def test_a_task_write_from_a_foreign_origin_is_refused(client, method, path, bod
     assert res.status_code == 403
     assert _snapshot(uid) == before
     assert client.get("/api/memories?type=task").json()["total"] == 1
+
+
+def test_task_note_routes_round_trip(client):
+    uid = _task(client)
+    made = client.post(f"/api/tasks/{uid}/note",
+                       json={"title": "Chart rules", "body": "Depths in metres.", "items": ["i2"]})
+    assert made.status_code == 200, made.text
+    note = made.json()["task"]["notes"][0]
+    assert (note["title"], note["items"]) == ("Chart rules", ["i2"])
+    edited = client.post(f"/api/tasks/{uid}/note",
+                         json={"id": note["id"], "body": "Depths in fathoms.", "items": []}).json()
+    assert edited["task"]["notes"][0]["body"] == "Depths in fathoms."
+    assert edited["task"]["notes"][0]["items"] == []
+    gone = client.request("DELETE", f"/api/tasks/{uid}/note", json={"id": note["id"]}).json()
+    assert gone["task"]["notes"] == []
+
+
+def test_a_bad_task_note_is_refused(client):
+    uid = _task(client)
+    res = client.post(f"/api/tasks/{uid}/note", json={"title": "T", "body": "", "items": []})
+    assert res.status_code == 400
+    res = client.post(f"/api/tasks/{uid}/note", json={"title": "T", "body": "b", "items": ["i9"]})
+    assert res.status_code == 400
+
+
+def test_the_record_carries_every_task_note(client):
+    uid = _task(client)
+    client.post(f"/api/tasks/{uid}/note", json={"title": "Top", "body": "b", "items": []})
+    client.post(f"/api/tasks/{uid}/note", json={"title": "On i1", "body": "b", "items": ["i1"]})
+    record = client.get(f"/api/memories/{uid}").json()
+    assert [n["title"] for n in record["task"]["notes"]] == ["Top", "On i1"]

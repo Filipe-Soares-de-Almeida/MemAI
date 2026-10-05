@@ -105,7 +105,7 @@ def is_task(conn: sqlite3.Connection, uid: str) -> bool:
 
 
 def get_task(conn: sqlite3.Connection, uid: str) -> dict | None:
-    """The task's goal, state, items (with linked memories) and comments, or None."""
+    """The task's goal, state, items (with linked memories), comments and notes, or None."""
     head = conn.execute("SELECT * FROM tasks WHERE memory_uid = ?", (uid,)).fetchone()
     if head is None:
         return None
@@ -138,9 +138,12 @@ def get_task(conn: sqlite3.Connection, uid: str) -> dict | None:
             "SELECT * FROM task_comments WHERE memory_uid = ? ORDER BY created_at, id", (uid,)
         )
     ]
+    keys = _note_item_map(conn, uid)
+    notes = [_note_dict(r, keys) for r in conn.execute(
+        "SELECT * FROM task_notes WHERE memory_uid = ? ORDER BY created_at, id", (uid,))]
     return {
         "goal": head["goal"], "state": head["state"], "completed_at": head["completed_at"],
-        "items": items, "comments": comments,
+        "items": items, "comments": comments, "notes": notes,
     }
 
 

@@ -11,7 +11,7 @@ const item = (key, text, state = 'todo') => ({ key, text, state, links: [] });
 
 const taskOf = (items, extra = {}) => ({
   goal: 'Ship the lantern firmware', state: 'open', completed_at: null,
-  items, comments: [], ...extra,
+  items, comments: [], notes: [], ...extra,
 });
 
 let n = 0;
@@ -150,5 +150,36 @@ describe('the in-progress arc', () => {
     const ring = host.querySelector('[data-step="i1"] .tk-ring');
     expect(ring.getAttribute('style')).toBe('--spin-at:-0.25s');
     vi.restoreAllMocks();
+  });
+});
+
+describe('task notes', () => {
+  const note = (id, title, items = []) => ({ id, title, body: `${title} body`, items, updated_at: '' });
+
+  it('shows task-level notes above the items and an item\'s notes in its panel', () => {
+    const notes = [note(1, 'Bench rules'), note(2, 'Header pinout', ['i1'])];
+    const { host } = mount(taskOf([item('i1', 'Solder the header')], { notes }));
+    const top = host.querySelector('.tk-tnotes');
+    expect(top.textContent).toContain('Bench rules');
+    expect(top.textContent).not.toContain('Header pinout');
+    host.querySelector('[data-toggle="i1"]').click();
+    expect(host.querySelector('.tk-panel').textContent).toContain('Header pinout');
+  });
+
+  it('writes a new note on the item whose panel it was added from', async () => {
+    let written = [];
+    serveApi((path, { body }) => {
+      written = [note(7, body.title, body.items)];
+      return { task: taskOf([item('i1', 'Solder the header')], { notes: written }), status: 'active' };
+    });
+    const { host, uid } = mount(taskOf([item('i1', 'Solder the header')]));
+    host.querySelector('[data-toggle="i1"]').click();
+    host.querySelector('.tk-panel [data-note-add="i1"]').click();
+    host.querySelector('[data-note-field="title"]').value = 'Header pinout';
+    host.querySelector('[data-note-field="body"]').value = 'Pin 1 is square.';
+    host.querySelector('[data-note-save]').click();
+    await until(() => host.querySelector('.tk-panel .tk-note-title'));
+    expect(calls.at(-1)).toEqual({ path: `/api/tasks/${uid}/note`, method: 'POST',
+      body: { title: 'Header pinout', body: 'Pin 1 is square.', items: ['i1'] } });
   });
 });
