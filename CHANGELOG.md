@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.9.0](https://github.com/Filipe-Soares-de-Almeida/MemAI/compare/v0.8.0...v0.9.0) (2026-10-05)
+
+
+### ⚠ BREAKING CHANGES
+
+* **tasks:** keep task notes out of the memory set and page every tool result ([#78](https://github.com/Filipe-Soares-de-Almeida/MemAI/issues/78))
+
+### Features
+
+* **tasks:** keep task notes out of the memory set and page every tool result ([#78](https://github.com/Filipe-Soares-de-Almeida/MemAI/issues/78)) ([8d6fcb1](https://github.com/Filipe-Soares-de-Almeida/MemAI/commit/8d6fcb15537219c29a7ec6f3b7319260b6fa249c))
+
 ## [0.8.0](https://github.com/Filipe-Soares-de-Almeida/MemAI/compare/v0.7.0...v0.8.0) (2026-10-05)
 
 
