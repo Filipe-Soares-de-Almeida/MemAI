@@ -45,14 +45,14 @@ git clone https://github.com/Filipe-Soares-de-Almeida/MemAI.git
 cd MemAI
 ```
 
-On Windows, `install.bat` creates `.venv`, installs every dependency from
-`requirements-dev.txt`, installs the package editable on top, and installs the
-dashboard. Everywhere else:
+On Windows, `install.bat` creates `.venv`, installs the package editable, then
+every dependency from `requirements-dev.txt`, and installs the dashboard.
+Everywhere else:
 
 ```sh
 python -m venv .venv
-.venv/bin/pip install --require-hashes -r requirements-dev.txt
 .venv/bin/pip install --no-deps -e .
+.venv/bin/pip install --require-hashes -r requirements-dev.txt
 .venv/bin/python tools/install-webui.py
 ```
 

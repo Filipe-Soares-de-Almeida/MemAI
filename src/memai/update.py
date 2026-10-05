@@ -278,10 +278,10 @@ def commands(root: Path | None = None) -> list[str]:
         return [f'"{root / "update.bat"}"']
     pull = f'git -C "{root}" pull --ff-only'
     pip = f'"{sys.executable}" -m pip install'
-    # memai leaves first: pip checks the lock against the installed one's pins.
-    drop = f'"{sys.executable}" -m pip uninstall -y -q memai'
-    return [pull, f'cd "{root}" && {drop} && {pip} --require-hashes -r requirements-dev.txt '
-                  f'&& {pip} --no-deps -e . && "{sys.executable}" tools/install-webui.py']
+    # memai goes first: pip checks the lock against the installed memai's pins.
+    return [pull, f'cd "{root}" && {pip} --no-deps -e . '
+                  f'&& {pip} --require-hashes -r requirements-dev.txt '
+                  f'&& "{sys.executable}" tools/install-webui.py']
 
 
 def _lines(notes: object) -> list[str]:
