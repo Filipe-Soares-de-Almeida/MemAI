@@ -179,6 +179,17 @@ export const copyUid = uid => copyText(uid, t('toast.uidCopied', { uid }));
 
 export const copyCode = text => copyText(text, t('toast.codeCopied'));
 
+/* ─── a keyboard shortcut, each key a keycap, then what it does */
+
+const MAC = /Mac|iPhone|iPad/.test(navigator.userAgentData?.platform || navigator.platform || '');
+export const MOD_KEY = MAC ? '⌘' : 'Ctrl';
+
+export const keysHTML = (keys, action) => `<span class="key-hint">${keys
+  .map(k => `<kbd>${esc(k)}</kbd>`).join('<span class="key-plus" aria-hidden="true">+</span>')}
+  <span class="key-what">${esc(action)}</span></span>`;
+
+export const saveKeysHTML = action => keysHTML([MOD_KEY, 'Enter'], action);
+
 /* ─── toggle state: a pressed .btn also sets aria-pressed; a .seg button handles its own. */
 
 export const setPressed = (el, on) => {

@@ -2505,11 +2505,14 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
   font: 500 var(--fs-sm) var(--font-ui); color: var(--accent); cursor: pointer;
 }
 .rf-edit:hover { color: var(--accent-hi); }
-.rf-keys { margin-left: auto; display: flex; gap: var(--sp-1); }
-.rf-keys kbd {
-  font: 400 var(--fs-label) var(--font-m); color: var(--ink-3);
-  border: 1px solid var(--line); border-radius: var(--r-sm); padding: 1px var(--sp-1);
+.rf-keys { margin-left: auto; display: flex; gap: var(--sp-3); }
+/* a shortcut spelled out: every key its own cap, joined by +, then the action in words */
+.key-hint {
+  display: inline-flex; align-items: center; gap: var(--sp-1);
+  font-size: calc(var(--fs-label) * .88); color: var(--ink-3); white-space: nowrap;
 }
+.key-hint kbd { font-size: 1em; padding: 0 var(--sp-1); color: var(--ink-2); }
+.key-what { margin-left: var(--sp-1); }
 /* the part of the card that moves when the row it sits in is capped */
 .rf-body { flex: 1; min-height: 0; overflow-y: auto; padding: var(--sp-3); }
 .rf .sec-absent { margin: var(--sp-3); }
@@ -2866,22 +2869,63 @@ textarea.tk-box {
    mark is round, an agent's square, and each says who in words, so colour is not the cue. */
 .tk-thread { padding: var(--sp-4) var(--sp-5); display: flex; flex-direction: column; gap: var(--sp-3); }
 .tk-tnotes { padding: var(--sp-4) var(--sp-5); display: flex; flex-direction: column; gap: var(--sp-3); }
+/* A task note is a record field (.rf): a raised head that names it, a body drawn as rich text. On
+   the task's own card it would be surface on surface, so the card gets the hairline the page gives it. */
 .tk-notes { display: flex; flex-direction: column; gap: var(--sp-2); }
-.tk-note {
-  display: flex; flex-direction: column; gap: var(--sp-1);
-  padding: var(--sp-2) var(--sp-3); border: 1px solid var(--line); border-radius: var(--r-md);
+.tk-note { border: 1px solid var(--line); }
+.tk-note.is-open { border-color: transparent; }
+.tk-note.is-shut .rf-head { border-bottom: 0; }
+.tk-note .rf-body { max-height: min(60vh, 560px); padding: var(--sp-3) var(--sp-4); }
+.tk-note-toggle {
+  flex: 1; min-width: 0; min-height: var(--tap);
+  display: flex; align-items: center; gap: var(--sp-2);
+  background: none; border: 0; padding: 0; text-align: left; cursor: pointer; color: var(--ink);
 }
-.tk-note.is-editing { gap: var(--sp-2); }
-.tk-note-head { display: flex; align-items: center; gap: var(--sp-2); }
-.tk-note-title {
-  margin: 0; flex: 1; min-width: 0;
-  font: 500 var(--fs-body) var(--font-ui); color: var(--ink); overflow-wrap: anywhere;
+.tk-note-toggle[aria-expanded="true"] .tk-chev { transform: rotate(90deg); }
+.tk-note-toggle:hover .tk-chev { color: var(--ink); }
+.tk-note-name { min-width: 0; display: flex; align-items: baseline; gap: var(--sp-3); }
+.tk-note-title { flex: none; max-width: 100%; font: 500 var(--fs-body) var(--font-ui); overflow-wrap: anywhere; }
+.tk-note-peek {
+  min-width: 0; flex: 1;
+  font: 400 var(--fs-sm) var(--font-ui); color: var(--ink-3);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
-.tk-note-body {
-  margin: 0; max-width: 72ch;
-  font: 400 var(--fs-body)/1.55 var(--font-ui); color: var(--ink);
-  white-space: pre-wrap; overflow-wrap: anywhere;
+.tk-note .rf-edit { flex: none; }
+/* the name being written sits where the name is read, on the head, at the size a title reads at */
+.tk-note.is-open .rf-head { padding: var(--sp-3) var(--sp-4); }
+.tk-note-title-box {
+  flex: 1; min-width: 0; min-height: var(--ctl-h); padding: var(--sp-2) var(--sp-3); border-radius: var(--r-md);
+  font: 500 var(--fs-md) var(--font-ui);
+  background: var(--inset); border-color: rgba(187, 134, 252, .45);
 }
+.tk-note .rf-pane textarea { min-height: 260px; }
+/* under the box: how to save on the left, how much room is left on the right */
+.tk-note-foot { display: flex; align-items: center; gap: var(--sp-3); }
+.tk-note-foot .rf-count { margin-left: auto; }
+.tk-note-del { margin-left: auto; --ico: 12px; }
+
+/* Which items a note applies to: the checklist's own rows, each a checkbox, in a short scroller. */
+.tk-scope {
+  display: flex; flex-direction: column; gap: var(--sp-2);
+  padding: var(--sp-3); border-top: 1px solid var(--line-soft);
+}
+.tk-scope-head { display: flex; align-items: baseline; gap: var(--sp-3); }
+.tk-scope-sum { font: 400 var(--fs-sm) var(--font-ui); color: var(--ink-2); }
+.tk-scope-list {
+  display: flex; flex-direction: column; max-height: 11rem; overflow-y: auto;
+  background: var(--inset); border: 1px solid var(--line-soft); border-radius: var(--r-md);
+}
+.tk-scope-row {
+  display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: var(--sp-3);
+  min-height: var(--ctl-h-sm); padding: 0 var(--sp-3); text-align: left;
+  background: none; border: 0; cursor: pointer; color: var(--ink-2);
+  font: 400 var(--fs-sm) var(--font-ui);
+}
+.tk-scope-row + .tk-scope-row { border-top: 1px solid var(--line-soft); }
+.tk-scope-row:hover { background: var(--hover-2); color: var(--ink); }
+.tk-scope-row input[type="checkbox"] { margin: 0; }
+.tk-scope-text { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tk-scope-row:has(input:checked) { background: var(--accent-dim); color: var(--ink); }
 .tk-older { margin-left: 0; align-self: flex-start; }
 .tk-cs { display: flex; flex-direction: column; }
 .tk-c {
@@ -2931,7 +2975,7 @@ textarea.tk-box {
   display: flex; align-items: center; justify-content: space-between; gap: var(--sp-3);
   padding: var(--sp-1) var(--sp-2) var(--sp-2) var(--sp-3);
 }
-.tk-hint { font-size: var(--fs-label); color: var(--ink-3); }
+.tk-hint { display: inline-flex; gap: var(--sp-3); font-size: var(--fs-label); color: var(--ink-3); }
 
 @media (max-width: 640px) {
   .tk-head, .tk-thread { padding: var(--sp-3) var(--sp-4); }
