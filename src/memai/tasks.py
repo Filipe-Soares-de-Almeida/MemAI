@@ -7,7 +7,7 @@ goal and items, the way a diagram's content is generated from its graph.
 import re
 import sqlite3
 
-from . import db
+from . import budget, db
 
 ITEM_STATES = ("todo", "doing", "done", "dropped")
 TASK_STATES = ("open", "completed", "cancelled")
@@ -556,3 +556,86 @@ def restore_task(conn: sqlite3.Connection, record: dict) -> None:
             (uid, n["title"], n["body"], n.get("session", ""),
              n.get("created_at") or db.now_iso(), n.get("updated_at") or db.now_iso()))
         _set_note_items(conn, cur.lastrowid or 0, [k for k in n.get("items") or [] if k in known])
+
+
+PARTS = ("items", "notes", "comments", "links")
+
+
+def _require_task(conn: sqlite3.Connection, uid: str) -> sqlite3.Row:
+    row = conn.execute("SELECT * FROM tasks WHERE memory_uid = ?", (uid,)).fetchone()
+    if row is None:
+        raise ValueError(f"no task {uid}")
+    return row
+
+
+def _count(conn: sqlite3.Connection, sql: str, *args) -> int:
+    return conn.execute(sql, args).fetchone()[0]
+
+
+def _item_counts(conn: sqlite3.Connection, uid: str, key: str) -> dict:
+    return {
+        "notes": _count(conn, "SELECT COUNT(*) FROM task_note_items i JOIN task_notes n "
+                              "ON n.id = i.note_id WHERE n.memory_uid = ? AND i.item_key = ?",
+                        uid, key),
+        "comments": _count(conn, "SELECT COUNT(*) FROM task_comments "
+                                 "WHERE memory_uid = ? AND item_key = ?", uid, key),
+        "links": _count(conn, "SELECT COUNT(*) FROM task_item_links "
+                              "WHERE memory_uid = ? AND item_key = ?", uid, key),
+    }
+
+
+def head(conn: sqlite3.Connection, uid: str) -> dict:
+    """Goal, state, progress and the size of each task-level collection; no records."""
+    row = _require_task(conn, uid)
+    return {
+        "goal": row["goal"], "state": row["state"], "progress": progress(conn, uid),
+        "counts": {
+            "items": _count(conn, "SELECT COUNT(*) FROM task_items WHERE memory_uid = ?", uid),
+            "notes": _count(conn, "SELECT COUNT(*) FROM task_notes n WHERE memory_uid = ? AND "
+                                  "NOT EXISTS (SELECT 1 FROM task_note_items i "
+                                  "WHERE i.note_id = n.id)", uid),
+            "comments": _count(conn, "SELECT COUNT(*) FROM task_comments "
+                                     "WHERE memory_uid = ? AND item_key = ''", uid),
+        },
+    }
+
+
+def _records(conn: sqlite3.Connection, uid: str, part: str, key: str) -> list[dict]:
+    if part == "items":
+        return [{"key": i["key"], "state": i["state"], "text": i["text"],
+                 "counts": _item_counts(conn, uid, i["key"])} for i in _items(conn, uid)]
+    if part == "notes":
+        return notes(conn, uid, key)
+    if part == "comments":
+        return [{"id": r["id"], "item": r["item_key"], "body": r["body"], "author": r["author"],
+                 "created_at": r["created_at"]}
+                for r in conn.execute(
+                    "SELECT * FROM task_comments WHERE memory_uid = ? AND item_key = ? "
+                    "ORDER BY created_at, id", (uid, key))]
+    return [{"uid": r["target_uid"], "type": r["type"], "title": r["title"],
+             "est_tokens": db.est_tokens(r["n"])}
+            for r in conn.execute(
+                """SELECT l.target_uid, m.type, m.title, LENGTH(m.content) AS n
+                   FROM task_item_links l JOIN memories m ON m.uid = l.target_uid
+                   WHERE l.memory_uid = ? AND l.item_key = ?
+                   ORDER BY l.created_at, l.target_uid""", (uid, key))]
+
+
+def read_part(conn: sqlite3.Connection, uid: str, part: str, item: str = "",
+              offset: int = 0) -> dict:
+    """One page of one collection of the task; `next_offset` is absent on the last page."""
+    _require_task(conn, uid)
+    if part not in PARTS:
+        raise ValueError(f"{part!r} is not a part; use one of {', '.join(PARTS)}")
+    key = _require_item(conn, uid, item) if str(item).strip() else ""
+    if part == "items" and key:
+        raise ValueError("part='items' lists every item; leave item empty")
+    if part == "links" and not key:
+        raise ValueError("part='links' needs an item")
+    records = _records(conn, uid, part, key)
+    rows, nxt = budget.page(records, offset)
+    out = {"uid": uid, "part": part, "item": key, "total": len(records),
+           "offset": offset, "records": rows}
+    if nxt is not None:
+        out["next_offset"] = nxt
+    return out
