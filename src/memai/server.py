@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 
 from mcp.server.mcpserver import MCPServer
 
@@ -195,15 +196,80 @@ _ACTIVE_SETS = frozenset(
 
 _GROUP_OF: dict[str, str] = {}
 
+# Parameter text several writer tools share. A docstring line holding only
+# `@param <key>` is replaced by the entry, at that line's indentation.
+PARAM_DOCS: dict[str, str] = {
+    "title": """\
+title: one line naming what this memory is about, in the words someone
+would look for it by. It is what a list shows instead of the opening of
+the body, and it outweighs every other field in search, so a title that
+repeats the type ("note about the parser") names nothing. At most 120
+characters, and a name that needs more than that is summarizing the
+body instead of naming it.""",
+    "domain": """\
+domain: the subject this belongs to, as a path from the outermost
+scope in ('acme/x100/p200'). File it as deep as the fact is specific
+-- a note about one routine goes on the routine, and still comes back
+when someone asks about the module or the product above it.""",
+    "domain_brief": """\
+domain: the subject path this is filed under, outermost scope first
+('acme/x100/p200'). See note().""",
+    "also": """\
+also: other domain paths this belongs to, comma-separated. `domain` is
+where the memory LIVES -- one path, one parent chain. `also` is for the
+subjects that cut ACROSS that tree: the same routine belongs to the
+module it runs in and to the end-to-end flow it is one step of, and
+neither of those is the other's ancestor. Every read scoped to any of
+those paths returns it. A path that `domain` already sits under is
+dropped as redundant -- the result echoes what was stored.""",
+    "also_brief": """\
+also: other domain paths this belongs to, comma-separated -- the
+cross-cutting subjects beside the one it is filed under. See note().""",
+    "tags": """\
+tags: comma-separated keywords and synonyms. Retrieval is BM25 over
+content, tags and domain paths, and tags weigh second only to the body,
+so they are where a memory becomes findable by words its own text never
+uses -- the identifier, the symbol, the error string, the plain-language
+phrasing someone will actually type. A memory with none is reachable
+only by quoting itself.""",
+    "tags_brief": """\
+`tags` carries the synonyms the body never uses: retrieval is BM25 over
+content and tags, so a memory with none is reachable only by quoting
+itself. See note() for what belongs there.""",
+    "review_after": """\
+review_after: when this stops being safe to trust unchecked, as a date
+('2026-11-01') or a span from today ('90d'). pulse() counts what is
+overdue in a scope as `scope.stale` and optimize_scan lists it. Leave
+it empty for anything that does not go stale -- most facts do not, and
+a date nobody meant is worse than none.""",
+    "source_ref": """\
+source_ref: what the fact came FROM -- a path, a URL, a table name --
+so a later pass can check the claim against the thing itself instead
+of inferring what to check from the wording.""",
+}
+
+_PARAM_LINE = re.compile(r"^([ \t]*)@param (\w+)[ \t]*$", re.M)
+
+
+def _expand_params(doc: str | None) -> str | None:
+    """`doc` with every `@param <key>` line replaced by PARAM_DOCS[key]."""
+    if not doc:
+        return doc
+    return _PARAM_LINE.sub(
+        lambda m: "\n".join(m[1] + line if line else line
+                            for line in PARAM_DOCS[m[2]].splitlines()), doc)
+
 
 def tool(group: str):
     """Register a tool with the MCP server when its group is active.
 
     Always returns the plain function, so the module-level name stays
     callable from the admin surface and the tests whether or not the schema
-    was published.
+    was published. Shared parameter text is expanded into `__doc__` first,
+    so FastMCP publishes the full description.
     """
     def wrap(fn):
+        fn.__doc__ = _expand_params(fn.__doc__)
         _GROUP_OF[fn.__name__] = group
         if group in _ACTIVE_SETS:
             mcp.tool()(fn)
@@ -386,12 +452,7 @@ def note(title: str, content: str, domain: str = "", also: str = "", tags: str =
     back with recall() (or search(type='note')); must_read(type='note') lists
     the most recent ones as headers.
 
-    title: one line naming what this memory is about, in the words someone
-    would look for it by. It is what a list shows instead of the opening of
-    the body, and it outweighs every other field in search, so a title that
-    repeats the type ("note about the parser") names nothing. At most 120
-    characters, and a name that needs more than that is summarizing the
-    body instead of naming it.
+    @param title
 
     content: ONE fact, and what a reader needs to use it -- what holds,
     where it holds, what it rules out. Retrieval ranks whole memories, so a
@@ -402,35 +463,15 @@ def note(title: str, content: str, domain: str = "", also: str = "", tags: str =
     graph do not see it until link_memories() creates one. Past a couple of
     thousand characters, a body is usually several memories written as one.
 
-    domain: the subject this belongs to, as a path from the outermost
-    scope in ('acme/x100/p200'). File it as deep as the fact is specific
-    -- a note about one routine goes on the routine, and still comes back
-    when someone asks about the module or the product above it.
+    @param domain
 
-    also: other domain paths this belongs to, comma-separated. `domain` is
-    where the memory LIVES -- one path, one parent chain. `also` is for the
-    subjects that cut ACROSS that tree: the same routine belongs to the
-    module it runs in and to the end-to-end flow it is one step of, and
-    neither of those is the other's ancestor. Every read scoped to any of
-    those paths returns it. A path that `domain` already sits under is
-    dropped as redundant -- the result echoes what was stored.
+    @param also
 
-    tags: comma-separated keywords and synonyms. Retrieval is BM25 over
-    content, tags and domain paths, and tags weigh second only to the body,
-    so they are where a memory becomes findable by words its own text never
-    uses -- the identifier, the symbol, the error string, the plain-language
-    phrasing someone will actually type. A memory with none is reachable
-    only by quoting itself.
+    @param tags
 
-    review_after: when this stops being safe to trust unchecked, as a date
-    ('2026-11-01') or a span from today ('90d'). pulse() counts what is
-    overdue in a scope as `scope.stale` and optimize_scan lists it. Leave
-    it empty for anything that does not go stale -- most facts do not, and
-    a date nobody meant is worse than none.
+    @param review_after
 
-    source_ref: what the fact came FROM -- a path, a URL, a table name --
-    so a later pass can check the claim against the thing itself instead
-    of inferring what to check from the wording.
+    @param source_ref
     """
     with db.connect() as conn:
         domain, warning = _coerce_domain(conn, domain)
@@ -464,19 +505,13 @@ def checkpoint(
     every session pays for whatever was parked in these fields. Stored as
     type='checkpoint'.
 
-    title: one line naming what this memory is about, in the words someone
-    would look for it by. It is what a list shows instead of the opening of
-    the body, and it outweighs every other field in search, so a title that
-    repeats the type ("note about the parser") names nothing. At most 120
-    characters, and a name that needs more than that is summarizing the
-    body instead of naming it.
+    @param title
 
-    also: other domain paths this belongs to, comma-separated -- the
-    cross-cutting subjects beside the one it is filed under. See note().
+    @param domain_brief
 
-    `tags` carries the synonyms the body never uses: retrieval is BM25 over
-    content and tags, so a memory with none is reachable only by quoting
-    itself. See note() for what belongs there.
+    @param also_brief
+
+    @param tags_brief
     """
     content = sections.render(TYPE_CHECKPOINT, {
         "intent": intent, "established": established,
@@ -507,16 +542,11 @@ def anti_pattern(
     its own anti_pattern(), connected with link_memories(). See note() on
     what a body holds and when it is two memories.
 
-    title: one line naming what this memory is about, in the words someone
-    would look for it by. It is what a list shows instead of the opening of
-    the body, and it outweighs every other field in search, so a title that
-    repeats the type ("note about the parser") names nothing. At most 120
-    characters, and a name that needs more than that is summarizing the
-    body instead of naming it.
+    @param title
 
-    `tags` carries the synonyms the body never uses: retrieval is BM25 over
-    content and tags, so a memory with none is reachable only by quoting
-    itself. See note() for what belongs there.
+    @param domain_brief
+
+    @param tags_brief
     """
     content = sections.render(TYPE_ANTI_PATTERN, {
         "pattern": pattern, "why_wrong": why_wrong, "instead": instead})
@@ -553,12 +583,9 @@ def reasoning(
     in the same session is its own reasoning(). See note() on what a body
     holds and when it is two memories.
 
-    title: one line naming what this memory is about, in the words someone
-    would look for it by. It is what a list shows instead of the opening of
-    the body, and it outweighs every other field in search, so a title that
-    repeats the type ("note about the parser") names nothing. At most 120
-    characters, and a name that needs more than that is summarizing the
-    body instead of naming it.
+    @param title
+
+    @param domain_brief
 
     hypothesis: what you believed going in, as a claim that could be wrong.
     reasoning: how you tested it -- what you read, ran or compared.
@@ -569,9 +596,7 @@ def reasoning(
 
     `also`, `review_after` and `source_ref` behave as in note().
 
-    `tags` carries the synonyms the body never uses: retrieval is BM25 over
-    content and tags, so a memory with none is reachable only by quoting
-    itself. See note() for what belongs there.
+    @param tags_brief
     """
     content = sections.render(TYPE_REASONING, {
         "hypothesis": hypothesis, "reasoning": reasoning, "result": result,
@@ -601,6 +626,8 @@ def task(title: str, goal: str, items: str, domain: str = "", also: str = "",
     title: one line naming what this task delivers, in the words someone
     would look for it by. At most 120 characters.
 
+    @param domain_brief
+
     goal: the brief an agent with none of this session's context works from:
     what the work is and why, where it lives, the decisions and constraints
     that bind it, and what done looks like. Short, but complete enough to act
@@ -612,8 +639,7 @@ def task(title: str, goal: str, items: str, domain: str = "", also: str = "",
     items of 300 characters each. Each gets a key (i1, i2, ...) that
     task_item() takes back.
 
-    also: other domain paths this belongs to, comma-separated -- the
-    cross-cutting subjects beside the one it is filed under. See note().
+    @param also_brief
 
     `tags` carries the synonyms the body never uses. The type name is not
     added for you: a word every task carries ranks no task above another.
@@ -744,6 +770,8 @@ def diagram(
     more. The reasoning, caveats and history belong in that node's
     `note`, where they explain without cluttering the flow.
 
+    @param title
+
     nodes: [{"key": "load", "label": "Read the export window",
              "shape": "step", "note": "optional long explanation"}]
     edges: [{"from": "load", "to": "check", "label": "optional branch"}]
@@ -759,6 +787,8 @@ def diagram(
     process without any of them being the parent of the others. Cross-list
     each into that process's path and asking about it returns all of them,
     instead of hoping one search phrasing reaches every one.
+
+    @param tags_brief
 
     `review_after` and `source_ref` behave as in note(), and a flow is
     exactly the kind of memory they are for: it describes code, and the
