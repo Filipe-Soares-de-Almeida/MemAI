@@ -154,7 +154,13 @@ describe('the in-progress arc', () => {
 });
 
 describe('task notes', () => {
-  const note = (id, title, items = []) => ({ id, title, body: `${title} body`, items, updated_at: '' });
+  const note = (id, title, items = [], body = `${title} body`) =>
+    ({ id, title, body, items, updated_at: '', body_links: {} });
+  const type = (host, field, value) => {
+    const box = host.querySelector(`[data-note-field="${field}"]`);
+    box.value = value;
+    box.dispatchEvent(new Event('input', { bubbles: true }));
+  };
 
   it('shows task-level notes above the items and an item\'s notes in its panel', () => {
     const notes = [note(1, 'Bench rules'), note(2, 'Header pinout', ['i1'])];
@@ -166,6 +172,35 @@ describe('task notes', () => {
     expect(host.querySelector('.tk-panel').textContent).toContain('Header pinout');
   });
 
+  it('draws a note body as rich text, as a record body is drawn', () => {
+    const notes = [note(1, 'Bench rules', [], 'Use `flux` first.\n\n1. Heat\n2. Solder')];
+    const { host } = mount(taskOf([item('i1', 'Solder the header')], { notes }));
+    const body = host.querySelector('.tk-note .rf-body');
+    expect(body.querySelector('code').textContent).toBe('flux');
+    expect(body.querySelectorAll('ol li')).toHaveLength(2);
+  });
+
+  it('shows a lone note open, and several shut with their opening line', () => {
+    const notes = [note(1, 'Bench rules'), note(2, 'Parts list')];
+    const { host } = mount(taskOf([item('i1', 'Solder the header')], { notes }));
+    expect(host.querySelectorAll('.tk-note .rf-body')).toHaveLength(0);
+    expect(host.querySelector('.tk-note-peek').textContent).toBe('Bench rules body');
+    host.querySelector('[data-note-open="1"]').click();
+    expect(host.querySelector('[data-note-open="1"]').getAttribute('aria-expanded')).toBe('true');
+    expect(host.querySelectorAll('.tk-note .rf-body')).toHaveLength(1);
+  });
+
+  it('keeps save off until the note has a title and a body', () => {
+    const { host } = mount(taskOf([item('i1', 'Solder the header')]));
+    host.querySelector('[data-note-add=""]').click();
+    const save = () => host.querySelector('[data-note-save]');
+    expect(save().disabled).toBe(true);
+    type(host, 'title', 'Bench rules');
+    expect(save().disabled).toBe(true);
+    type(host, 'body', 'Flux first.');
+    expect(save().disabled).toBe(false);
+  });
+
   it('writes a new note on the item whose panel it was added from', async () => {
     let written = [];
     serveApi((path, { body }) => {
@@ -175,11 +210,36 @@ describe('task notes', () => {
     const { host, uid } = mount(taskOf([item('i1', 'Solder the header')]));
     host.querySelector('[data-toggle="i1"]').click();
     host.querySelector('.tk-panel [data-note-add="i1"]').click();
-    host.querySelector('[data-note-field="title"]').value = 'Header pinout';
-    host.querySelector('[data-note-field="body"]').value = 'Pin 1 is square.';
+    expect(host.querySelector('[data-note-scope="i1"]').checked).toBe(true);
+    type(host, 'title', 'Header pinout');
+    type(host, 'body', 'Pin 1 is square.');
     host.querySelector('[data-note-save]').click();
     await until(() => host.querySelector('.tk-panel .tk-note-title'));
     expect(calls.at(-1)).toEqual({ path: `/api/tasks/${uid}/note`, method: 'POST',
       body: { title: 'Header pinout', body: 'Pin 1 is square.', items: ['i1'] } });
+  });
+
+  it('moves a note to the whole task when its last item is unpicked', async () => {
+    serveApi(() => ({ task: taskOf([item('i1', 'Solder the header')], { notes: [note(3, 'Pinout')] }),
+                      status: 'active' }));
+    const { host, uid } = mount(taskOf([item('i1', 'Solder the header')], { notes: [note(3, 'Pinout', ['i1'])] }));
+    host.querySelector('[data-toggle="i1"]').click();
+    host.querySelector('[data-note-edit="3"]').click();
+    host.querySelector('[data-note-scope="i1"]').click();
+    expect(host.querySelector('[data-note-scope-sum]').textContent).toBe(en['task.note.scope.all']);
+    host.querySelector('[data-note-save]').click();
+    await until(() => calls.length && calls.at(-1).path === `/api/tasks/${uid}/note`);
+    expect(calls.at(-1).body).toEqual({ id: 3, title: 'Pinout', body: 'Pinout body', items: [] });
+  });
+
+  it('keeps a draft through a repaint and drops it on Escape', () => {
+    const { host } = mount(taskOf([item('i1', 'Solder the header')]));
+    host.querySelector('[data-note-add=""]').click();
+    type(host, 'title', 'Bench rules');
+    host.querySelector('[data-toggle="i1"]').click();
+    expect(host.querySelector('[data-note-field="title"]').value).toBe('Bench rules');
+    host.querySelector('[data-note-field="title"]')
+      .dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    expect(host.querySelector('[data-note-form]')).toBeNull();
   });
 });

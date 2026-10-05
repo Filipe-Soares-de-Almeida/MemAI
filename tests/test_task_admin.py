@@ -461,3 +461,13 @@ def test_the_record_carries_every_task_note(client):
     client.post(f"/api/tasks/{uid}/note", json={"title": "On i1", "body": "b", "items": ["i1"]})
     record = client.get(f"/api/memories/{uid}").json()
     assert [n["title"] for n in record["task"]["notes"]] == ["Top", "On i1"]
+
+
+def test_task_notes_carry_what_their_wikilinks_point_at(client):
+    uid = _task(client)
+    fact = _note(client)
+    answer = client.post(f"/api/tasks/{uid}/note",
+                         json={"title": "Chart rules", "body": f"See [[{fact}]].", "items": []}).json()
+    assert answer["task"]["notes"][0]["body_links"][fact]["type"] == "note"
+    shown = client.get(f"/api/memories/{uid}").json()
+    assert fact in shown["task"]["notes"][0]["body_links"]

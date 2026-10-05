@@ -657,7 +657,7 @@ def memory_detail(request, payload) -> dict:
         if result.get("superseded_by"):
             result["superseded_by_peer"] = _peer_card(conn, result["superseded_by"])
         if row["type"] == db.TASK_TYPE:
-            result["task"] = tasks.get_task(conn, uid)
+            result["task"] = _task_view(conn, uid)
         if row["type"] == db.DIAGRAM_TYPE:
             result["diagram"] = _diagram_json(conn, uid)
         else:
@@ -723,9 +723,17 @@ def _lines(value) -> list[str]:
     return []
 
 
+def _task_view(conn: sqlite3.Connection, uid: str) -> dict | None:
+    """The task, each note carrying what its [[uid]] links point at, as a record body does."""
+    task = tasks.get_task(conn, uid)
+    for note in (task or {}).get("notes", []):
+        note["body_links"] = db.body_links(conn, uid, note["body"])
+    return task
+
+
 def _task_answer(conn: sqlite3.Connection, uid: str) -> dict:
     """The task and its memory status after a write, so a view re-renders from one answer."""
-    return {"task": tasks.get_task(conn, uid), "status": db.memory_row(conn, uid)["status"]}
+    return {"task": _task_view(conn, uid), "status": db.memory_row(conn, uid)["status"]}
 
 
 # A ValueError from tasks.* can arrive after rows were written, so each handler

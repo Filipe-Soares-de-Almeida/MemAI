@@ -250,6 +250,11 @@ const ICONS = {
     body: `<path d="M2.6 7.6V3.3a.8.8 0 01.8-.8h4.3l5.8 5.8a.8.8 0 010 1.1l-3.5 3.5a.8.8 0 01-1.1 0z"/>
            <circle cx="5.5" cy="5.5" r="1"/>`,
   },
+  /* a task note: a sheet with its corner folded, not the tag that `label` draws */
+  'note': {
+    viewBox: '0 0 16 16',
+    body: `<path d="M3.5 2.5h6l3 3v8h-9z"/><path d="M9.5 2.5v3h3M5.6 8.4h4.8M5.6 10.8h3.2"/>`,
+  },
 };
 
 /* every name icon() and data-icon accept */
