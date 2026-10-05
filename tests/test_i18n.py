@@ -17,6 +17,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
+from conftest import webui_constants
 
 ROOT = Path(__file__).resolve().parents[1]
 CASES = ROOT / "tools" / "i18n-cases.mjs"
@@ -204,17 +205,10 @@ def test_a_day_key_reads_back_as_the_same_day(en):
     assert en["from-key-month"] == "8"              # September, zero-based
 
 
-RELS = ROOT / "src" / "memai" / "webui" / "core" / "shared.js"
-
-
 def _suggested_rel_types() -> set[str]:
-    """The relation types the two pickers offer, read from the module."""
-    body = RELS.read_text(encoding="utf-8")
-    found = set()
-    for name in ("REL_SUGGEST", "DG_REL_SUGGEST"):
-        match = re.search(rf"export const {name} = \[(.*?)\]", body, re.S)
-        assert match, f"{name} is not where this test expects it"
-        found |= set(re.findall(r"'([a-z_]+)'", match.group(1)))
+    """The relation types the two pickers offer, as core/vocab.js exports them."""
+    vocab = webui_constants()
+    found = set(vocab["relSuggest"]) | set(vocab["diagramRelSuggest"])
     assert found, "expected the pickers to offer some relation types"
     return found
 

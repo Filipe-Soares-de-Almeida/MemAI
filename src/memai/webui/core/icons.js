@@ -291,6 +291,9 @@ const ICONS = {
   },
 };
 
+/* every name icon() and data-icon accept */
+export const ICON_NAMES = Object.keys(ICONS);
+
 
 
 /* Markup for a template string.

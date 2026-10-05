@@ -12,8 +12,9 @@ import { icon } from './icons.js';
 import { fixedItems, pickerFor, wirePicker } from './pick.js';
 import { t } from '../i18n.js';
 import { copyUid } from './ui.js';
+import { TYPE_ORDER } from './vocab.js';
 
-export const TYPE_ORDER = ['note', 'checkpoint', 'anti_pattern', 'reasoning', 'handoff', 'diagram', 'task'];
+export { TYPE_ORDER, REL_SUGGEST, DG_REL_SUGGEST } from './vocab.js';
 
 export const TYPES = Object.fromEntries(
   TYPE_ORDER.map(tp => [tp, { color: cssVar(`--t-${tp}`) || '#9e9e9e' }]));
@@ -42,14 +43,7 @@ export const pinMark = pin => PIN[pin]
        aria-label="${esc(PIN[pin].label)}">${icon(PIN[pin].icon)}</span>`
   : '';
 
-/* Relation vocabularies. Two, because they name different things: a
-   relation between memories is not the same statement as the tie from a
-   diagram step to the memory that explains it. Both stay OPEN -- the API
-   accepts any string, and relations predating either list have to remain
-   editable -- which is what the "other…" escape below is for. */
-export const REL_SUGGEST = ['relates_to', 'supersedes', 'contradicts', 'duplicates', 'links_to'];
-export const DG_REL_SUGGEST = ['explains', 'contradicts', 'relates_to'];
-
+/* the relation picker's entry for a type outside the suggestions: it opens a text field */
 const REL_OTHER = '__other';
 
 /* What a relation type is CALLED, wherever one is shown.

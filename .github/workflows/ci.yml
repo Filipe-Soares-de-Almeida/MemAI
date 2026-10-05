@@ -42,6 +42,10 @@ jobs:
           npm ci
           npm run build
 
+      # The dashboard's behaviour tests, in happy-dom (vitest.config.js).
+      - name: Test the dashboard
+        run: npm test
+
       # The same two steps install.bat runs: the hashed lock, then the
       # checkout itself, which --require-hashes refuses as an editable.
       - name: Install
@@ -67,6 +71,9 @@ jobs:
         run: |
           npm ci
           npm run build
+
+      - name: Test the dashboard
+        run: npm test
 
       - name: Check the routing golden still matches the canvas
         run: node tools/route-parity.mjs
