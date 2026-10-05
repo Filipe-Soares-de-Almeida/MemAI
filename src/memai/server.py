@@ -803,15 +803,10 @@ def task_note(uid: str, title: str = "", body: str = "", items: str = "", note_i
               delete: bool = False) -> dict:
     """Write a note owned by a task: an item's brief, a rule its items share.
 
-    Not a memory: search, recall, pulse and must_read never see it; only
-    task_read() does. Use note() for knowledge that stands on its own.
-
-    note_id=0 creates (title and body required). With a note_id it edits
-    in place, with no history: an empty title or body keeps the stored
-    one, `items` replaces its item set, "-" moves it to the whole task.
-    delete=True with a note_id removes it. items: comma-separated keys
-    ("i3,i7"); empty on create means the whole task. Title at most 120
-    characters, body at most 4000.
+    Not a memory: only task_read() returns it. note_id=0 creates; a
+    note_id edits in place (empty fields keep theirs) or, with delete,
+    removes it. items: keys such as "i3,i7"; empty or "-" means the whole
+    task. Title up to 120 characters, body up to 4000.
     """
     keys = [k.strip() for k in items.split(",") if k.strip() and k.strip() != "-"]
     try:
@@ -1028,9 +1023,7 @@ def get_diagram(uid: str, format: str = "mermaid", offset: int = 0) -> dict:
     point where it matters: when the user asked to SEE the flow, reading the
     file and emitting it inline is the work, not a cost to avoid.
 
-    mermaid, text and json come back as `body`; one longer than a response
-    holds is paged, and so is the SVG formats' step index: call again with
-    offset=next_offset until it is absent.
+    A long `body`, and the SVG step index, page through `offset`.
     """
     if format not in _DIAGRAM_FORMATS:
         return _errors([f"unknown format {format!r}; use "
@@ -1603,8 +1596,8 @@ def pulse(domain: str = "", offset: int = 0) -> dict:
     present only when non-zero, so a store that never cross-lists never
     sees the field.
 
-    A checkpoint over 12000 characters comes back cut, `next` naming the
-    rest; `subdomains_next_offset` pages `scope.subdomains` via `offset`.
+    A long checkpoint is cut (`next` names the rest); `offset` pages
+    `scope.subdomains`.
     """
     if error := _offset_error(offset):
         return _errors([error])
@@ -1698,18 +1691,13 @@ def _paged(uid: str, part: str, records: list, offset: int) -> dict:
 
 @tool("core")
 def get_memory(uid: str, edits_offset: int = -1, content_offset: int = -1) -> dict:
-    """Fetch one memory: its fields and the size of everything linked to it.
+    """Fetch one memory: its fields, and counts of what is linked to it.
 
-    `relation_count` and `referenced_by_diagrams` are counts that
-    get_relations() pages. A diagram adds its mermaid source; its graph is
-    get_diagram(format='json'). A task comes back as a head: goal, state,
-    progress, counts, and `next` naming the task_read() calls.
-
-    `edit_count` counts the edits; edits_offset=0 pages them, oldest
-    first, each body cut to 4000 characters (`prev_chars`/`new_chars`
-    give the full length). A body too long for one response comes back
-    cut, with `content_chars` and `next.content_offset`: page it with
-    content_offset, following `next_offset`.
+    `next` names the call that pages each part: get_relations() for
+    relations and diagrams, get_diagram() for a diagram's graph,
+    task_read() for a task's items, notes and comments, edits_offset for
+    the edit history (bodies cut to 4000 characters) and content_offset
+    for a body too long for one response.
     """
     try:
         with db.connect() as conn:
@@ -1895,8 +1883,8 @@ def link_memories(from_uid: str, to_uid: str, relation_type: str, note: str = ""
 def get_relations(uid: str, part: str = "relations", offset: int = 0) -> dict:
     """List a memory's links, one page at a time.
 
-    part: 'relations' (typed edges, both ways) or 'diagrams' (flows that
-    point a step at it). Follow `next_offset` until it is absent.
+    part: 'relations' (edges, both ways) or 'diagrams' (flows pointing at
+    it); follow `next_offset`.
     """
     if part not in ("relations", "diagrams"):
         return _errors([f"{part!r} is not a part; use 'relations' or 'diagrams'"])
