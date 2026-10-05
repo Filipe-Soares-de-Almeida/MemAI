@@ -33,7 +33,9 @@ carry a per-process `session` stamp unless one is passed.
 
 from __future__ import annotations
 
+import functools
 import json
+import logging
 import os
 import re
 
@@ -165,6 +167,7 @@ def _instructions() -> str:
     return "\n\n".join([INSTRUCTIONS, *(note for note in notes if note)])
 
 
+log = logging.getLogger(__name__)
 mcp = MCPServer("memai", instructions=_instructions())
 
 
@@ -263,17 +266,29 @@ def _expand_params(doc: str | None) -> str | None:
 def tool(group: str):
     """Register a tool with the MCP server when its group is active.
 
-    Always returns the plain function, so the module-level name stays
-    callable from the admin surface and the tests whether or not the schema
-    was published. Shared parameter text is expanded into `__doc__` first,
+    Always returns the function, wrapped so a result over the output
+    ceiling becomes an error, so the module-level name stays callable from
+    the admin surface and the tests whether or not the schema was published. Shared parameter text is expanded into `__doc__` first,
     so FastMCP publishes the full description.
     """
     def wrap(fn):
         fn.__doc__ = _expand_params(fn.__doc__)
+
+        @functools.wraps(fn)
+        def bounded(*args, **kwargs):
+            result = fn(*args, **kwargs)
+            size = budget.result_chars(result)
+            if size <= budget.MCP_RESULT_MAX_CHARS:
+                return result
+            log.error("%s produced %d characters, over the %d budget",
+                      fn.__name__, size, budget.MCP_RESULT_MAX_CHARS)
+            return _errors([f"{fn.__name__} produced {size} characters, over the "
+                            f"{budget.MCP_RESULT_MAX_CHARS} budget; this is a memai bug"])
+
         _GROUP_OF[fn.__name__] = group
         if group in _ACTIVE_SETS:
-            mcp.tool()(fn)
-        return fn
+            mcp.tool()(bounded)
+        return bounded
     return wrap
 
 
