@@ -1,12 +1,5 @@
-/* MemAI admin i18n runtime.
-   String catalogs live in public/i18n/<locale>.json — one file per language,
-   copied verbatim into the build and fetched from /static/i18n at runtime.
-   Adding a language = drop public/i18n/<code>.json + add one LOCALES entry.
-   Only English (the fallback) and the active locale are fetched.
-   The user's choice persists in localStorage and a switch reloads the
-   page, so module-level constants in app.js can bake translations at
-   load time. Convention: strings that end up in innerHTML may carry
-   markup; callers esc() any user-provided value BEFORE interpolating. */
+/* i18n runtime: catalogs in public/i18n/<locale>.json, English and the active locale fetched. A
+   switch reloads the page; strings bound for innerHTML may carry markup, so callers esc() values. */
 
 'use strict';
 
@@ -34,16 +27,8 @@ if (locale !== 'en') {
   catch (err) { console.error(err); /* fall back to English rather than break the UI */ }
 }
 
-/* `{count?one:many}` -- the word that has to agree with a number.
-   "Archives {n} {n?memory:memories}" reads correctly at one and at three,
-   which "{n} memories" does not. The branch is chosen by the NUMBER in
-   `vars`, not by the interpolated text: callers pass counts through fmtInt,
-   which inserts the locale's group separator, and a bare Number() reads
-   "1.000" as one. The digits are taken out of the value first, so every
-   grouped count agrees with the count. Anything that is not exactly one
-   takes `many`, zero included -- English and Portuguese both say
-   "0 memories". A count the caller did not pass takes `many` as well,
-   rather than silently reading as singular. */
+/* `{count?one:many}`: the branch follows the NUMBER in `vars` with group separators stripped;
+   anything but exactly one, a missing count included, takes `many`. */
 const PLURAL = /\{(\w+)\?([^{}:]*):([^{}]*)\}/g;
 const DIGITS = /[^0-9-]/g;
 
@@ -70,18 +55,12 @@ const applyStatic = () => {
   document.querySelectorAll('[data-i18n-placeholder]').forEach(el => { el.placeholder = t(el.dataset.i18nPlaceholder); });
   document.querySelectorAll('[data-i18n-title]').forEach(el => { el.title = t(el.dataset.i18nTitle); });
   document.querySelectorAll('[data-i18n-aria]').forEach(el => el.setAttribute('aria-label', t(el.dataset.i18nAria)));
-  /* The language control is built and wired in app.js, NOT here: it is a
-     picker now (core/pick.js, which imports this module for its own strings)
-     and switching reloads the page, so it has to ask first -- which means the
-     modal machinery, which imports this module too. This layer owns the
-     catalogs and the registry below; who draws the switch is not its call. */
+  /* The language picker lives in app.js: switching reloads the page and needs the modal machinery,
+     which imports this module. */
 };
 
-/* month names, weekday names and the number locale fall back per-key like
-   strings do: a new catalog that ships `strings` and forgets `months`
-   degrades to English month names instead of rendering every date as
-   undefined. `weekdays` is Monday-first -- the calendar on Health reads
-   that way, and so does every locale this dashboard ships. */
+/* months, weekdays and the number locale fall back per key like strings; `weekdays` is
+   Monday-first. */
 const I18N = {
   t, set, applyStatic, locale, locales: LOCALES,
   months: active.months || en.months,

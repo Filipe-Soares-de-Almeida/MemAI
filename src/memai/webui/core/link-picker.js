@@ -1,24 +1,5 @@
-/* Choosing which memories to point at, as a form of its own.
-
-   This replaces a one-line lookup field that sat inside whatever form
-   needed it. That field worked and was still the wrong shape for the job:
-
-     * one pick per open. Attaching four notes to one step meant four
-       rounds of search, type, pick, submit.
-     * a 280-character snippet was the whole of what you got to judge by.
-       Two checkpoints from the same ticket open with the same sentence,
-       so the thing that tells them apart is often past the truncation.
-     * nothing said what was about to be linked except the text left in
-       the field -- which looked exactly like text somebody had typed.
-
-   So: a dialog. Results on the left, the FULL memory on the right, and
-   what has been chosen in a tray that is impossible to miss. Nothing is
-   written until Link is pressed, and the caller gets a list of uids --
-   what to do with them (a relation, a node link, a jump) stays the
-   caller's business.
-
-   Opened over the form that raised it, never instead of it: see the
-   modal stack in core/ui.js. */
+/* Choosing memories to point at, as a dialog over the form that raised it: results, the full
+   memory, and a tray of picks. Resolves uids; what they become is the caller's business. */
 
 import { esc, fmtDate, fmtInt, debounce } from './dom.js';
 import { api, seg } from './api.js';
@@ -30,10 +11,7 @@ import { pickerFor, setPickerValue, wirePicker, fixedItems } from './pick.js';
 import { domainPickerHTML, wireDomainPicker } from './domain-picker.js';
 import { t } from '../i18n.js';
 
-/* Records already fetched for the preview pane. Arrowing down a list of
-   twenty re-reads the same rows on the way back up, and a memory does not
-   change while a dialog is open over it -- but it certainly can between two
-   dialogs, so this is emptied every time one opens. */
+/* Records fetched for the preview pane, emptied each time a dialog opens. */
 const previews = new Map();
 
 const previewOf = async uid => {
@@ -46,9 +24,7 @@ const previewOf = async uid => {
 const scoreTitle = it =>
   it.fts_rank != null ? `bm25 ${Number(it.fts_rank).toFixed(2)}` : '';
 
-/* One result. A real button, so the keyboard reaches it; `aria-pressed`
-   rather than a checkbox because pressing it is what selects, and a
-   separate box to tick would be a second target for one decision. */
+/* One result: a button with aria-pressed, since pressing it is what selects. */
 const rowHTML = (it, { picked, linked }) => {
   const meta = [
     it.domain ? `<span class="picker-domain">${esc(it.domain)}</span>` : '',
@@ -88,26 +64,8 @@ const previewHTML = m => `
   </div>
   <pre class="content-pre content-prose lp-prev-body">${esc(m.content || '')}</pre>`;
 
-/**
- * Pick memories to link to. Resolves to `{uids, relation, note}`, or null
- * when the dialog was dismissed. `uids` is never empty on a resolve --
- * confirming is disabled until something is chosen.
- *
- * title       dialog heading
- * exclude     a uid that must not be pickable (the record being edited)
- * linked      uids already tied to this thing -- listed, not pickable twice
- * multi       several at once (the default) or exactly one
- * type        lock the type filter, e.g. 'diagram' for a jump target
- * okLabel     verb on the confirm button; the caller knows what it means
- * relOptions  suggested relation types; omit for a tie that has no type
- * relValue    which of them starts selected
- * withNote    offer a note to store on the tie
- *
- * The relation type and the note live HERE rather than on the form behind
- * this one: they are part of the same decision as which memory, and split
- * across two surfaces they were being filled in before the thing they
- * describe had been chosen.
- */
+/* Resolves `{uids, relation, note}` (uids never empty) or null when dismissed. The relation and
+   note are picked here because they belong to the same decision as the memory. */
 export function pickMemories({
   title, exclude = '', linked = [], multi = true, type = '', okLabel,
   relOptions = null, relValue = '', withNote = false,
@@ -172,9 +130,7 @@ export function pickMemories({
     const okBtn = mq('[data-ok]');
     const input = mq('#lpQ');
 
-    /* The domain list arrives after the dialog does, so the picker is wired
-       once it lands -- unfiltered until then rather than absent, which is the
-       same bargain the select version made with its empty <option>. */
+    /* The domain list lands after the dialog; the picker is unfiltered until then. */
     getDomains().then(ds => {
       wireDomainPicker(modal, { id: 'lpFDomain', domains: ds, onPick: domain => {
         filters.domain = domain;
@@ -276,9 +232,7 @@ export function pickMemories({
 
       listEl.querySelectorAll('[data-uid]').forEach(b => {
         b.addEventListener('click', () => toggle(b.dataset.uid));
-        /* the preview follows attention, not selection: reading a candidate
-           is how you decide, and having to pick it first to read it would
-           make every rejected candidate an undo */
+        /* the preview follows focus and hover, not selection, so reading a candidate needs no undo */
         b.addEventListener('focus', () => showPreview(b.dataset.uid));
         b.addEventListener('pointerenter', () => showPreview(b.dataset.uid));
       });
@@ -346,9 +300,7 @@ export function pickMemories({
     mq('[data-x]').onclick = () => { closeModal(); resolve(null); };
     okBtn.onclick = () => {
       const relation = readRel();
-      /* "other…" with nothing typed after it is not a relation type. Left to
-         the caller it becomes a silent fall back to that caller's default --
-         a tie stored under a name the operator did not choose. */
+      /* "other…" with nothing typed is not a relation type; refuse rather than store a default. */
       if (relOptions && !relation) {
         const bad = mq('#lpRelCustom').hidden ? mq('#lpRel') : mq('#lpRelCustom');
         bad.setAttribute('aria-invalid', 'true');

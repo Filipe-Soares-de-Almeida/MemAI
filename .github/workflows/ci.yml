@@ -20,10 +20,6 @@ jobs:
       run:
         shell: bash
     steps:
-      # The bundled model2vec weights under src/memai/models/ are committed
-      # as ordinary blobs -- .gitattributes marks *.safetensors binary and
-      # declares no filter -- so a plain checkout has the real files and
-      # needs no lfs: true.
       - uses: actions/checkout@v7
 
       - uses: actions/setup-python@v7
@@ -105,14 +101,7 @@ jobs:
         with:
           node-version: "24"
 
-      # webui/diagram-engine.js routes diagram edges for the canvas and
-      # memai/diagram_svg.py routes them for the SVG export, from constants
-      # that exist in both languages. This runs the shared fixture through
-      # the canvas and compares the routed polylines against
-      # tests/fixtures/route-golden.json, which tests/test_diagram_svg.py
-      # holds the Python side to. Without --write it re-records nothing and
-      # exits non-zero once the two have drifted apart, so editing one
-      # renderer and not the other fails here instead of silently drawing a
-      # flow the user did not arrange.
+      # diagram-engine.js and diagram_svg.py must route edges alike: this runs the shared fixture
+      # through the canvas and fails when it drifts from tests/fixtures/route-golden.json.
       - name: Check the routing golden still matches the canvas
         run: node tools/route-parity.mjs

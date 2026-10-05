@@ -1,19 +1,5 @@
-/* The domain filter: core/pick.js with the tree drawn into its rows.
-
-   A domain is a path, so the choice is a TREE -- and this is the control that
-   made a popover worth building at all. An <option> renders as text, which
-   leaves a native select two ways to say so and no third. Plain indentation
-   says how DEEP a row is and not what it hangs off, which is the whole
-   question in a store where forty siblings share a parent. Box-drawing
-   characters say it, but they need a monospaced face to line up at all and
-   still read as ASCII art wedged into a native control -- that shipped once
-   and came straight back out.
-
-   So the rows carry the same CSS rails as the Domains table, off the same
-   shape function, and the two cannot come to disagree about the tree. The
-   filter field is always on rather than at pick.js's own threshold: sixty
-   domains under one parent is the normal case here, and typing is what
-   actually finds one -- no amount of drawing would have. */
+/* The domain filter: core/pick.js with the Domains table's CSS rails drawn from the same shape
+   function, and the filter field always on. */
 
 import { esc } from './dom.js';
 import { closePicker, pickerHTML, wirePicker } from './pick.js';
@@ -23,9 +9,8 @@ import { t } from '../i18n.js';
 
 export { closePicker as closeDomainPicker };
 
-/* `anyLabel` is what the empty value says. It is "All domains" for a filter
-   and something else wherever '' does not mean "no filter" -- the bulk
-   re-home field, where it means "leave each memory where it is". */
+/* `anyLabel` is what the empty value says: "All domains" for a filter, something else where ''
+   means otherwise (the bulk re-home field: "leave each memory where it is"). */
 export const domainPickerHTML = ({ id, value = '', ariaLabel, anyLabel = '', cls = '' }) => {
   const none = anyLabel || t('common.allDomains');
   return pickerHTML({
@@ -50,10 +35,7 @@ export function wireDomainPicker(root, { id, domains, onPick, anyLabel = '' }) {
   });
 }
 
-/* Typing narrows the list, and a match brings its ancestors along: they are
-   the branch it hangs off, and a child drawn with no parent above it is a
-   rail pointing at nothing. They stay selectable -- an ancestor is a real
-   scope, and one that just proved it holds what was searched for. */
+/* Typing narrows the list; a match brings its ancestors, which stay selectable scopes. */
 function matching(domains, query) {
   const list = domains.slice().sort(byDomainPath);
   const needle = query.trim().toLowerCase();
@@ -68,11 +50,8 @@ function matching(domains, query) {
   return list.filter(d => keep.has(d.domain));
 }
 
-/* No twist slot here, unlike the table: nothing in this panel expands, so a
-   column reserved for a control that never comes would push every row -- a
-   root first of all -- in from the edge of its own list. Which means a column
-   of the rail is anchored on the NAME of the level above it rather than on
-   that level's twist, and .pick-row.dom-row says so with --dom-line. */
+/* No twist slot, since nothing here expands: rails anchor on the name of the level above, which
+   .pick-row.dom-row declares with --dom-line. */
 function rows(domains, query, anyLabel = '') {
   const shown = matching(domains, query);
   const guides = domainGuides(shown);

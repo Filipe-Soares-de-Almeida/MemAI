@@ -1,33 +1,8 @@
-/* Every icon in the UI, in one place.
-
-   There is no icon library and no icon font -- these are hand-drawn paths,
-   which is why they read as one set. Adding one:
-
-     1. Pick a name and add an entry below.
-     2. Draw on a 16x16 grid (the rail, buttons and inline uses all assume
-        it). Anything else needs its own viewBox, like brand-seal.
-     3. Write ONLY the shapes -- no <svg> wrapper. The wrapper, the
-        viewBox and aria-hidden come from icon()/paintIcons().
-     4. Leave stroke and fill alone. The consumer styles them, so the same
-        path can be a rail icon (stroke: currentColor, width 1.4, via
-        admin.css) or a button glyph. Set them inline ONLY to override
-        that -- see the filled dot in `memories`, or brand-seal, which is
-        not under a .nav a rule and so carries its own.
-
-   Two ways to use one:
-
-     · markup, for a template string   ->  icon('graph', { cls: 'x' })
-     · in place, for the static shell  ->  <svg data-icon="graph"></svg>
-
-   The second is why the HTML ships an EMPTY <svg> rather than a
-   placeholder div: admin.css sizes `svg` already, so the box is the right
-   size from first paint and filling it in cannot shift the layout. Same
-   trick, same reason, as data-i18n swapping text in place. */
+/* Every icon in the UI: hand-drawn shapes on a 16x16 grid unless an entry has its own viewBox,
+   with no <svg> wrapper and no stroke or fill unless overriding admin.css. */
 
 const ICONS = {
-  /* the diamond seal, also drawn by hand into the favicon in index.html --
-     the one deliberate copy, because a favicon has to be in the markup
-     before any module has loaded */
+  /* the diamond seal; the favicon in index.html is a hand copy, needed before any module loads */
   'brand-seal': {
     viewBox: '0 0 34 34',
     body: `<rect x="8" y="8" width="18" height="18" rx="2.5" transform="rotate(45 17 17)"
@@ -86,10 +61,7 @@ const ICONS = {
     body: `<circle cx="7" cy="7" r="4.6"/><path d="m10.6 10.6 3 3"/>`,
   },
 
-  /* An ACTION: dismiss this. Bare on purpose -- the three confidence
-     marks below are ringed, so a cross you can click never reads as a
-     cross that is telling you something. That collision is why this set
-     exists: both used to be the same character, U+2715. */
+  /* An action, dismiss: bare, so it never reads as one of the ringed confidence marks. */
   close: {
     viewBox: '0 0 16 16',
     body: `<path d="M4 4l8 8M12 4l-8 8"/>`,
@@ -104,9 +76,7 @@ const ICONS = {
     body: `<circle cx="8" cy="8" r="6.2"/><path d="M8 7.2v4"/>
            <circle cx="8" cy="4.9" r=".85" fill="currentColor" stroke="none"/>`,
   },
-  /* A bin, for the one control in a list row that cannot be undone. Not
-     `close`: dismissing a row and destroying what it names are different
-     acts, and the domain table offers both. */
+  /* Destroying what a row names, distinct from dismissing the row (`close`). */
   trash: {
     viewBox: '0 0 16 16',
     body: `<path d="M2.6 4.4h10.8"/>
@@ -121,11 +91,8 @@ const ICONS = {
            <path d="M2.4 10.4c1-1.5 2-1.5 3 0s2 1.5 3 0 2-1.5 3 0"/>`,
   },
 
-  /* ── confidence marks ──────────────────────────────────────────────
-     All three are RINGED, which is the identity: a ring says "this is a
-     state of the record", never "press me". The ring is also what keeps
-     them apart from `close` and from each other at 12px, where the inner
-     shape alone is nearly nothing. */
+  /* ── confidence marks: all RINGED, meaning a record state, not a control; the ring also keeps
+     them distinct at 12px. */
 
   confirmed: {
     viewBox: '0 0 16 16',
@@ -140,9 +107,7 @@ const ICONS = {
     body: `<circle cx="8" cy="8" r="6.2"/><path d="M5.8 5.8l4.4 4.4M10.2 5.8l-4.4 4.4"/>`,
   },
 
-  /* ── direction ──────────────────────────────────────────────────────
-     One drawing, rotated, so an inbound and an outbound relation cannot
-     drift into different arrowheads. */
+  /* ── direction: one drawing, rotated, so inbound and outbound arrowheads match. */
 
   'arrow-right': {
     viewBox: '0 0 16 16',
@@ -156,10 +121,8 @@ const ICONS = {
     viewBox: '0 0 16 16',
     body: `<path d="M8 2.5v11M4.1 9.4L8 13.5l3.9-4.1"/>`,
   },
-  /* ── line samples, for the canvas legend ────────────────────────────
-     Wide and flat rather than 16x16 (see .ico-line), because they stand
-     for a stroke and not for a thing. Each one repeats what the canvas
-     actually draws, so drawEdge and these have to change together. */
+  /* ── line samples for the canvas legend (.ico-line): each repeats what drawEdge draws, so
+     the two change together. */
 
   'line-plain': {
     viewBox: '0 0 22 7',
@@ -276,9 +239,7 @@ const ICONS = {
            <path d="M5.2 6.4h5.6M5.2 8.6h5.6M5.2 10.8h3.4"/>`,
   },
 
-  /* the relations graph's two show toggles: one relation, and one name.
-     Two dots joined is the line the toggle hides; the tag is what a title
-     sits on. */
+  /* the relations graph's show toggles: a relation and a name */
   'relation': {
     viewBox: '0 0 16 16',
     body: `<circle cx="3.6" cy="8" r="2"/><circle cx="12.4" cy="8" r="2"/>
@@ -296,15 +257,8 @@ export const ICON_NAMES = Object.keys(ICONS);
 
 
 
-/* Markup for a template string.
-
-   Every icon carries `.ico`, which is where admin.css says how these are
-   drawn (stroke, caps, and a --ico size custom property). A caller adds
-   its own class for anything beyond that; it does not restate the stroke.
-
-   Decorative by default: an icon in this UI sits next to its own label,
-   so announcing it twice is noise. Pass `title` only when the icon is the
-   ONLY thing naming its control -- an icon-only button. */
+/* Markup for a template string; `.ico` gets its stroke and size from admin.css. Decorative by
+   default: pass `title` only for an icon-only control. */
 export function icon(name, { cls = '', title = '' } = {}) {
   const it = ICONS[name];
   if (!it) {

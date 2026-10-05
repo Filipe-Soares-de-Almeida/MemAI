@@ -1,13 +1,8 @@
-/* A scalar field over points and the isolines that turn it into terrain.
+/* A scalar field over points and its isolines: the atlas draws a domain's density grid as a
+   coastline, on a coarse grid so the territory reads, not each dot. */
 
-   The atlas arrangement accumulates a domain's memories into a density grid,
-   traces the level sets with marching squares and draws the result as a
-   coastline. The grid is coarse: a contour that follows every dot is a blob
-   per dot, and what has to read is the territory. */
-
-/* Accumulate a Gaussian kernel per point onto a grid. `cell` is the grid step
-   in world units, `sigma` the kernel radius; a point's `w` is its weight,
-   defaulting to 1. Returns the grid with its origin, size and maximum. */
+/* Accumulate a Gaussian kernel per point (weight `w`, default 1) onto a grid of step `cell`;
+   returns the grid with its origin, size and maximum. */
 export function density(points, box, cell, sigma) {
   const cols = Math.max(2, Math.ceil((box.x1 - box.x0) / cell) + 1);
   const rows = Math.max(2, Math.ceil((box.y1 - box.y0) / cell) + 1);
@@ -69,15 +64,8 @@ export function isolines(f, level) {
   return stitch(segs);
 }
 
-/* Join loose segments end to end into polylines.
-
-   Marching squares emits each segment in whatever order its case table
-   produced, so a chain has to be followed through EITHER endpoint: indexing
-   only the start point leaves most of a contour in fragments, and a fragment
-   closed with closePath fills as a crescent.
-
-   A cell edge is shared by exactly two cells, so equal endpoints come out of
-   the same arithmetic; rounding the key absorbs the last bit of it. */
+/* Join marching-squares segments into polylines, following chains through either endpoint;
+   rounded keys absorb float noise on shared cell edges. */
 function stitch(segs) {
   const key = p => `${Math.round(p.x * 16)},${Math.round(p.y * 16)}`;
   const ends = new Map();
