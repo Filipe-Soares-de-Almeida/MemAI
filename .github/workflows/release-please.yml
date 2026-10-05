@@ -26,7 +26,7 @@ jobs:
       release_created: ${{ steps.release.outputs.release_created }}
       tag_name: ${{ steps.release.outputs.tag_name }}
     steps:
-      - uses: googleapis/release-please-action@v4
+      - uses: googleapis/release-please-action@v5
         id: release
         with:
           token: ${{ secrets.RELEASE_PLEASE_TOKEN }}
@@ -36,7 +36,7 @@ jobs:
 
       # The fast-forward is a step of this job, so one place carries the push
       # that moves main; no workflow listens for the release event.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         if: ${{ steps.release.outputs.release_created }}
         with:
           fetch-depth: 0
@@ -57,11 +57,11 @@ jobs:
       GH_TOKEN: ${{ github.token }}
     steps:
       # Built from the tagged commit, so the asset matches the release's sources.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ env.TAG }}
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: "24"
           cache: npm
