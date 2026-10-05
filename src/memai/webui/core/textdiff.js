@@ -1,35 +1,22 @@
-/* A word-level diff between two bodies, and the marks that show it.
+/* A word-level diff between two bodies and its marks. Offsets index RENDERED text, so markPair()
+   takes both diff and marks from the same two elements. */
 
-   Offsets are into RENDERED text -- the text nodes of a pane, concatenated
-   in document order -- and not into the markup the renderer consumed. A
-   caller computing them from source and painting them onto rendered markup
-   marks the wrong words. markPair() takes both from the same two elements,
-   so the two always agree. */
-
-/* A word, a run of whitespace, or one punctuation mark. Splitting on the
-   boundary rather than on spaces keeps a mark off the comma that survived
-   next to the word that did not. */
+/* A word, a whitespace run, or one punctuation mark, so a surviving comma is not marked. */
 const TOKEN = /[\p{L}\p{N}_]+|\s+|[^\p{L}\p{N}_\s]/gu;
 
-/* Tokens per side, after the shared head and tail are removed, that the
-   LCS table is still built for. Past it the changed middle is marked whole.
-   The table is (n+1)(m+1) Uint16 entries, so this is a 4.5MB ceiling. */
+/* Tokens per side, after the shared head and tail, that get an LCS table ((n+1)(m+1) Uint16,
+   4.5MB at most); past it the changed middle is marked whole. */
 const CAP = 1500;
 
 const tokenize = text => text.match(TOKEN) || [];
 
 const WS = /^\s*$/;
 
-/* Characters of UNCHANGED text between two changed ranges that are absorbed
-   into one mark. A word diff matches the short words that turn up in every
-   sentence -- "the", "a", "and" -- so a rewritten clause comes back as a
-   dozen fragments with those between them. Below this width the survivor is
-   marked along with its neighbours and the clause reads as one change. */
+/* Unchanged characters between two changes that get absorbed into one mark, so a rewritten
+   clause reads as one change and not as fragments around "the" and "and". */
 const BRIDGE = 12;
 
-/* Ranges that hug the words they cover: the whitespace at either end is
-   given back, an all-whitespace range is dropped, and two ranges close
-   enough to be one change become one. */
+/* Ranges trimmed of edge whitespace, all-whitespace ones dropped, near neighbours merged. */
 function tidy(text, ranges) {
   const out = [];
   for (const r of ranges) {
@@ -44,11 +31,8 @@ function tidy(text, ranges) {
   return out;
 }
 
-/* What one text drops and the other adds, as character ranges into each.
-
-   Returns {del, ins}: del indexes `before`, ins indexes `after`, both
-   sorted and non-overlapping. Two identical texts return two empty
-   lists. */
+/* What one text drops and the other adds: {del, ins} as sorted, non-overlapping ranges into
+   `before` and `after`; identical texts give two empty lists. */
 export function diffRanges(before, after) {
   const a = String(before ?? ''), b = String(after ?? '');
   if (a === b) return { del: [], ins: [] };
@@ -111,9 +95,7 @@ const textNodes = el => {
   return out;
 };
 
-/* Wraps every range in its own <mark>. Cuts are collected before any of
-   them is made, then applied back to front, so an earlier cut still lands
-   on the offsets it was measured at. */
+/* Wraps each range in a <mark>, cutting back to front so earlier offsets stay valid. */
 function paint(nodes, ranges, cls) {
   if (!ranges.length) return;
   const cuts = [];
@@ -138,10 +120,8 @@ function paint(nodes, ranges, cls) {
   }
 }
 
-/* Marks what changed, in place, inside the two panes of a before/after.
-
-   Both panes must already hold their final markup: the diff is taken from
-   what they render, so marking them twice would diff the marks. */
+/* Marks changes in place in a before/after pair, whose final markup must already be in place;
+   marking twice would diff the marks. */
 export function markPair(beforeEl, afterEl) {
   if (!beforeEl || !afterEl) return;
   const a = textNodes(beforeEl), b = textNodes(afterEl);

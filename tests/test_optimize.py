@@ -16,7 +16,7 @@ from pathlib import Path
 import pytest
 from starlette.testclient import TestClient
 
-from conftest import shaped
+from conftest import shaped, webui_constants
 from memai import admin, db, sections, tasks
 
 
@@ -1701,26 +1701,20 @@ def test_api_apply_all_and_discard(client):
 
 # ------------------------------------- the dashboard renders every staged kind
 
-OPTIMIZATION_JS = (Path(__file__).resolve().parents[1]
-                   / "src" / "memai" / "webui" / "views" / "optimization.js")
-
 # The kinds optCard routes away from the before/after pair, because they are
 # about a pair of memories rather than a field: link and merge print two peer
 # cards, distill prints its sources.
 RELATIONAL = {"link", "merge", "distill"}
 
 
-def _kind_set(name: str) -> set[str]:
-    """One of optimization.js's kind sets, read from the file."""
-    body = OPTIMIZATION_JS.read_text(encoding="utf-8")
-    match = re.search(rf"const {name} = new Set\(\[(.*?)\]\)", body, re.S)
-    assert match, f"{name} is not where this test expects it"
-    return set(re.findall(r"'([a-z_]+)'", match.group(1)))
+def _kinds() -> dict[str, set[str]]:
+    """The kind sets core/suggestion-kinds.js exports."""
+    return {name: set(kinds) for name, kinds in webui_constants()["kinds"].items()}
 
 
 def _diff_kinds() -> set[str]:
-    """The kinds optimization.js gives a before/after pair, read from the file."""
-    return _kind_set("DIFF_KINDS")
+    """The kinds the optimization view gives a before/after pair."""
+    return _kinds()["diff"]
 
 
 def test_every_staged_kind_reaches_a_renderer():
@@ -1741,8 +1735,8 @@ def test_every_diff_kind_is_claimed_by_exactly_one_pane():
     itself names the field it lost it from. A kind in DIFF_KINDS that no set
     claims falls through to the raw payload dump.
     """
-    groups = {name: _kind_set(name) for name in
-              ("CONTENT_KINDS", "FLAG_KINDS", "SET_KINDS", "LINE_KINDS", "TEXT_KINDS")}
+    groups = {name: kinds for name, kinds in _kinds().items()
+              if name in ("content", "flag", "set", "line", "text")}
     union: set[str] = set()
     for name, kinds in groups.items():
         assert not (union & kinds), f"{name} claims a kind another pane already draws"
@@ -1751,7 +1745,7 @@ def test_every_diff_kind_is_claimed_by_exactly_one_pane():
 
 
 def _catalogs():
-    i18n = OPTIMIZATION_JS.parents[1] / "public" / "i18n"
+    i18n = Path(__file__).resolve().parents[1] / "src" / "memai" / "webui" / "public" / "i18n"
     return {loc: json.loads((i18n / f"{loc}.json").read_text(encoding="utf-8"))["strings"]
             for loc in ("en", "pt-BR")}
 
@@ -1786,10 +1780,7 @@ def test_every_kind_has_a_name_in_every_catalog():
 
 def test_the_mixed_variants_exist_for_the_kinds_that_ask_for_one():
     """A batch with several destinations picks `<kind>Mixed`; it has to be there."""
-    body = OPTIMIZATION_JS.read_text(encoding="utf-8")
-    match = re.search(r"const WHAT_MIXED = \{(.*?)\}", body, re.S)
-    assert match, "WHAT_MIXED is not where this test expects it"
-    kinds = re.findall(r"(\w+):", match.group(1))
+    kinds = webui_constants()["whatMixed"]
     assert kinds, "expected at least one kind with a mixed-batch sentence"
     for loc, strings in _catalogs().items():
         for kind in kinds:

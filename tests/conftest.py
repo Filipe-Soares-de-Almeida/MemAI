@@ -2,6 +2,12 @@
 
 from __future__ import annotations
 
+import functools
+import json
+import shutil
+import subprocess
+from pathlib import Path
+
 import pytest
 
 from memai import db, sections, update
@@ -49,3 +55,16 @@ def unmigrated(conn) -> None:
                            content=shaped(type_, "a body from before the spec"))
     conn.execute("DELETE FROM memory_sections WHERE memory_uid = ?", (uid,))
     conn.execute("DELETE FROM section_migration WHERE memory_uid = ?", (uid,))
+
+
+@functools.cache
+def webui_constants() -> dict:
+    """The dashboard's vocabularies as its modules export them, printed by
+    tools/webui-constants.mjs under node. Skips the caller where node is absent."""
+    if shutil.which("node") is None:
+        pytest.skip("node not installed")
+    root = Path(__file__).resolve().parents[1]
+    out = subprocess.run(["node", str(root / "tools" / "webui-constants.mjs")], cwd=root,
+                         capture_output=True, text=True, encoding="utf-8", timeout=60)
+    assert out.returncode == 0, out.stderr
+    return json.loads(out.stdout)

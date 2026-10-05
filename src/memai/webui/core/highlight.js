@@ -1,19 +1,5 @@
-/* Syntax highlighting for the fenced code blocks a memory's body carries.
-
-   The engine is highlight.js, an npm dependency, imported whole: every
-   language it ships is registered, so a body written in any of the 193
-   colours without a list to keep anywhere. The engine resolves each
-   grammar's own aliases too, which is how a fence tagged `rs`, `c#` or
-   `golang` finds its language.
-
-   The import is dynamic, so the engine arrives with the first highlighted
-   block and a page with no code block never loads it. It is one chunk, read
-   from loopback.
-
-   A language the engine does not know leaves the block plain monospace,
-   which is also what happens when the load fails. The text is already on
-   screen by then, escaped, so the worst case is colourless -- never empty,
-   never mangled. */
+/* Syntax highlighting for fenced code blocks, with highlight.js loaded whole on the first block.
+   An unknown language or a failed load leaves the escaped text plain, never empty. */
 
 /* Names no grammar answers to, plus `shell`: highlight.js reads that as a
    terminal session, and a fence tagged that way here is a script. */
@@ -42,11 +28,8 @@ const engine = () => {
   return enginePromise;
 };
 
-/* Colour every code block under `root` that names a language the engine has.
-
-   Idempotent: a block is marked once it has been through, so re-rendering a
-   record does not highlight the same text twice. Blocks are read before the
-   await, so a dialog that closes mid-load simply updates nothing. */
+/* Colour every code block under `root` whose language the engine knows. Idempotent; blocks are
+   read before the await, so a dialog closed mid-load updates nothing. */
 export async function highlightIn(root) {
   const blocks = [...root.querySelectorAll('code[data-lang]:not([data-hl])')];
   if (!blocks.length) return;

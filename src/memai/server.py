@@ -35,17 +35,15 @@ from __future__ import annotations
 
 import json
 import os
+import re
 
 from mcp.server.mcpserver import MCPServer
 
-from memai import (autostart, brief, db, diagram_svg, hook_install, pending as pending_lists,
-                   portable, sections, tasks, update)
+from memai import autostart, brief, db, diagram_svg, hook_install, portable, sections, tasks, update
+from memai import pending as pending_lists
 
-# Sent to the host in the initialize handshake, and injected into the
-# model's context by the hosts that support it. Kept to a paragraph on
-# purpose: it is paid on every request, exactly like a tool schema, and
-# what it has to buy is the first call -- an agent that never calls pulse()
-# has a memory server and no memory. The rest is in the tool descriptions.
+# Sent in the initialize handshake and injected into context by hosts that support it. One
+# paragraph: it is paid on every request, and its job is to get the first pulse() call.
 INSTRUCTIONS = """\
 Long-term memory that survives between sessions. Read before working:
 pulse(domain) for the state of a subject, recall(query) or search(query)
@@ -67,10 +65,8 @@ A domain is a path ('acme/x100/p200') and every read covers its
 subdomains, so the same call asks about a product or one routine depending
 on how much of the path it gives."""
 
-# Appended to INSTRUCTIONS while the user's settings register no memai hook.
-# `{command}` is filled with the absolute path to this environment's
-# memai-hook: the name alone is on PATH only for a shell with the environment
-# activated, which a host's shell is not.
+# Appended to INSTRUCTIONS while the user's settings register no memai hook. `{command}` is the
+# absolute memai-hook path: a host's shell has no activated environment to put it on PATH.
 HOOKS_MISSING = """\
 NOTE: no memai hook is registered in the user's settings, so nothing puts the
 store in front of this session -- memai is read only when you call it, and a
@@ -86,10 +82,8 @@ domains a session names, which scopes the task ask at Stop. `--check` reports
 what is registered, `--print` shows the block without writing it."""
 
 
-# Appended to INSTRUCTIONS while memai is registered for this session but part
-# of what was installed is out of date. `{findings}` and `{commands}` are
-# rendered by _stale_note; the command is absolute for the same reason as
-# above.
+# Appended while memai is registered but part of the install is out of date; _stale_note fills
+# `{findings}` and `{commands}`, with absolute commands for the same reason.
 INSTALL_STALE = """\
 NOTE: memai is registered for this session, but part of the installation is out
 of date -- an install does not keep itself current, so a hook or a skill copied
@@ -191,14 +185,8 @@ def _new_session_id() -> str:
 SESSION = _new_session_id()
 
 
-# Which tools this process offers. A tool's schema -- name, description,
-# argument types -- is sent with EVERY request for the whole session, so the
-# full set is a fixed tax on every context window whether or not a session
-# ever documents a flow or runs a curation pass. Naming the groups lets a
-# session pay for what it uses.
-#
-# 'full' stays the default: dropping a tool an existing setup calls is not
-# something to do to somebody quietly.
+# Tool groups this process offers: every schema rides on every request, so groups let a session
+# pay for what it uses. 'full' stays the default so no existing setup loses a tool quietly.
 TOOL_SETS = ("core", "diagrams", "curation")
 _ACTIVE_SETS = frozenset(
     TOOL_SETS if (raw := os.environ.get("MEMAI_TOOLS", "full").strip().lower()) in ("", "full")
@@ -208,15 +196,80 @@ _ACTIVE_SETS = frozenset(
 
 _GROUP_OF: dict[str, str] = {}
 
+# Parameter text several writer tools share. A docstring line holding only
+# `@param <key>` is replaced by the entry, at that line's indentation.
+PARAM_DOCS: dict[str, str] = {
+    "title": """\
+title: one line naming what this memory is about, in the words someone
+would look for it by. It is what a list shows instead of the opening of
+the body, and it outweighs every other field in search, so a title that
+repeats the type ("note about the parser") names nothing. At most 120
+characters, and a name that needs more than that is summarizing the
+body instead of naming it.""",
+    "domain": """\
+domain: the subject this belongs to, as a path from the outermost
+scope in ('acme/x100/p200'). File it as deep as the fact is specific
+-- a note about one routine goes on the routine, and still comes back
+when someone asks about the module or the product above it.""",
+    "domain_brief": """\
+domain: the subject path this is filed under, outermost scope first
+('acme/x100/p200'). See note().""",
+    "also": """\
+also: other domain paths this belongs to, comma-separated. `domain` is
+where the memory LIVES -- one path, one parent chain. `also` is for the
+subjects that cut ACROSS that tree: the same routine belongs to the
+module it runs in and to the end-to-end flow it is one step of, and
+neither of those is the other's ancestor. Every read scoped to any of
+those paths returns it. A path that `domain` already sits under is
+dropped as redundant -- the result echoes what was stored.""",
+    "also_brief": """\
+also: other domain paths this belongs to, comma-separated -- the
+cross-cutting subjects beside the one it is filed under. See note().""",
+    "tags": """\
+tags: comma-separated keywords and synonyms. Retrieval is BM25 over
+content, tags and domain paths, and tags weigh second only to the body,
+so they are where a memory becomes findable by words its own text never
+uses -- the identifier, the symbol, the error string, the plain-language
+phrasing someone will actually type. A memory with none is reachable
+only by quoting itself.""",
+    "tags_brief": """\
+`tags` carries the synonyms the body never uses: retrieval is BM25 over
+content and tags, so a memory with none is reachable only by quoting
+itself. See note() for what belongs there.""",
+    "review_after": """\
+review_after: when this stops being safe to trust unchecked, as a date
+('2026-11-01') or a span from today ('90d'). pulse() counts what is
+overdue in a scope as `scope.stale` and optimize_scan lists it. Leave
+it empty for anything that does not go stale -- most facts do not, and
+a date nobody meant is worse than none.""",
+    "source_ref": """\
+source_ref: what the fact came FROM -- a path, a URL, a table name --
+so a later pass can check the claim against the thing itself instead
+of inferring what to check from the wording.""",
+}
+
+_PARAM_LINE = re.compile(r"^([ \t]*)@param (\w+)[ \t]*$", re.M)
+
+
+def _expand_params(doc: str | None) -> str | None:
+    """`doc` with every `@param <key>` line replaced by PARAM_DOCS[key]."""
+    if not doc:
+        return doc
+    return _PARAM_LINE.sub(
+        lambda m: "\n".join(m[1] + line if line else line
+                            for line in PARAM_DOCS[m[2]].splitlines()), doc)
+
 
 def tool(group: str):
     """Register a tool with the MCP server when its group is active.
 
     Always returns the plain function, so the module-level name stays
     callable from the admin surface and the tests whether or not the schema
-    was published.
+    was published. Shared parameter text is expanded into `__doc__` first,
+    so FastMCP publishes the full description.
     """
     def wrap(fn):
+        fn.__doc__ = _expand_params(fn.__doc__)
         _GROUP_OF[fn.__name__] = group
         if group in _ACTIVE_SETS:
             mcp.tool()(fn)
@@ -249,9 +302,8 @@ SNIPPET_LIMIT = 400
 
 LIST_STATUSES = ("active", "archived", "all")
 
-# Memory type tag per writer -- the retrieval tools filter on these exact
-# strings (search/recall/list_*(type=...)). Each writer tool is named
-# after the type it stores, so tool name and stored type cannot drift.
+# Memory type per writer, the exact strings the retrieval tools filter on; each writer is named
+# after its type, so tool name and stored type cannot drift.
 TYPE_NOTE = "note"                  # note()
 TYPE_CHECKPOINT = "checkpoint"      # checkpoint()
 TYPE_ANTI_PATTERN = "anti_pattern"  # anti_pattern()
@@ -372,10 +424,9 @@ def _write_result(conn, uid: str, warning: dict | None, also: str,
     Present only when something crossed the threshold -- a store with no
     collision never sees the field, and the write is never blocked by one.
     """
-    # the project as well as the uid: the active project is switched from the
-    # dashboard and a running server follows on its next call, so this is
-    # where a writer learns which file its memory landed in
-    result = {"uid": uid, "project": db.active_project()}
+    # the project too: the dashboard switches it under a running server, so this is where a
+    # writer learns which file its memory landed in
+    result: dict[str, object] = {"uid": uid, "project": db.active_project()}
     # the count is the feedback: a writer sees what it indexed while it
     # still holds the context that would supply the missing words
     result["tags_indexed"] = len([t for t in tags.split(",") if t.strip()])
@@ -401,12 +452,7 @@ def note(title: str, content: str, domain: str = "", also: str = "", tags: str =
     back with recall() (or search(type='note')); must_read(type='note') lists
     the most recent ones as headers.
 
-    title: one line naming what this memory is about, in the words someone
-    would look for it by. It is what a list shows instead of the opening of
-    the body, and it outweighs every other field in search, so a title that
-    repeats the type ("note about the parser") names nothing. At most 120
-    characters, and a name that needs more than that is summarizing the
-    body instead of naming it.
+    @param title
 
     content: ONE fact, and what a reader needs to use it -- what holds,
     where it holds, what it rules out. Retrieval ranks whole memories, so a
@@ -417,35 +463,15 @@ def note(title: str, content: str, domain: str = "", also: str = "", tags: str =
     graph do not see it until link_memories() creates one. Past a couple of
     thousand characters, a body is usually several memories written as one.
 
-    domain: the subject this belongs to, as a path from the outermost
-    scope in ('acme/x100/p200'). File it as deep as the fact is specific
-    -- a note about one routine goes on the routine, and still comes back
-    when someone asks about the module or the product above it.
+    @param domain
 
-    also: other domain paths this belongs to, comma-separated. `domain` is
-    where the memory LIVES -- one path, one parent chain. `also` is for the
-    subjects that cut ACROSS that tree: the same routine belongs to the
-    module it runs in and to the end-to-end flow it is one step of, and
-    neither of those is the other's ancestor. Every read scoped to any of
-    those paths returns it. A path that `domain` already sits under is
-    dropped as redundant -- the result echoes what was stored.
+    @param also
 
-    tags: comma-separated keywords and synonyms. Retrieval is BM25 over
-    content, tags and domain paths, and tags weigh second only to the body,
-    so they are where a memory becomes findable by words its own text never
-    uses -- the identifier, the symbol, the error string, the plain-language
-    phrasing someone will actually type. A memory with none is reachable
-    only by quoting itself.
+    @param tags
 
-    review_after: when this stops being safe to trust unchecked, as a date
-    ('2026-11-01') or a span from today ('90d'). pulse() counts what is
-    overdue in a scope as `scope.stale` and optimize_scan lists it. Leave
-    it empty for anything that does not go stale -- most facts do not, and
-    a date nobody meant is worse than none.
+    @param review_after
 
-    source_ref: what the fact came FROM -- a path, a URL, a table name --
-    so a later pass can check the claim against the thing itself instead
-    of inferring what to check from the wording.
+    @param source_ref
     """
     with db.connect() as conn:
         domain, warning = _coerce_domain(conn, domain)
@@ -479,19 +505,13 @@ def checkpoint(
     every session pays for whatever was parked in these fields. Stored as
     type='checkpoint'.
 
-    title: one line naming what this memory is about, in the words someone
-    would look for it by. It is what a list shows instead of the opening of
-    the body, and it outweighs every other field in search, so a title that
-    repeats the type ("note about the parser") names nothing. At most 120
-    characters, and a name that needs more than that is summarizing the
-    body instead of naming it.
+    @param title
 
-    also: other domain paths this belongs to, comma-separated -- the
-    cross-cutting subjects beside the one it is filed under. See note().
+    @param domain_brief
 
-    `tags` carries the synonyms the body never uses: retrieval is BM25 over
-    content and tags, so a memory with none is reachable only by quoting
-    itself. See note() for what belongs there.
+    @param also_brief
+
+    @param tags_brief
     """
     content = sections.render(TYPE_CHECKPOINT, {
         "intent": intent, "established": established,
@@ -522,16 +542,11 @@ def anti_pattern(
     its own anti_pattern(), connected with link_memories(). See note() on
     what a body holds and when it is two memories.
 
-    title: one line naming what this memory is about, in the words someone
-    would look for it by. It is what a list shows instead of the opening of
-    the body, and it outweighs every other field in search, so a title that
-    repeats the type ("note about the parser") names nothing. At most 120
-    characters, and a name that needs more than that is summarizing the
-    body instead of naming it.
+    @param title
 
-    `tags` carries the synonyms the body never uses: retrieval is BM25 over
-    content and tags, so a memory with none is reachable only by quoting
-    itself. See note() for what belongs there.
+    @param domain_brief
+
+    @param tags_brief
     """
     content = sections.render(TYPE_ANTI_PATTERN, {
         "pattern": pattern, "why_wrong": why_wrong, "instead": instead})
@@ -568,12 +583,9 @@ def reasoning(
     in the same session is its own reasoning(). See note() on what a body
     holds and when it is two memories.
 
-    title: one line naming what this memory is about, in the words someone
-    would look for it by. It is what a list shows instead of the opening of
-    the body, and it outweighs every other field in search, so a title that
-    repeats the type ("note about the parser") names nothing. At most 120
-    characters, and a name that needs more than that is summarizing the
-    body instead of naming it.
+    @param title
+
+    @param domain_brief
 
     hypothesis: what you believed going in, as a claim that could be wrong.
     reasoning: how you tested it -- what you read, ran or compared.
@@ -584,9 +596,7 @@ def reasoning(
 
     `also`, `review_after` and `source_ref` behave as in note().
 
-    `tags` carries the synonyms the body never uses: retrieval is BM25 over
-    content and tags, so a memory with none is reachable only by quoting
-    itself. See note() for what belongs there.
+    @param tags_brief
     """
     content = sections.render(TYPE_REASONING, {
         "hypothesis": hypothesis, "reasoning": reasoning, "result": result,
@@ -616,6 +626,8 @@ def task(title: str, goal: str, items: str, domain: str = "", also: str = "",
     title: one line naming what this task delivers, in the words someone
     would look for it by. At most 120 characters.
 
+    @param domain_brief
+
     goal: the brief an agent with none of this session's context works from:
     what the work is and why, where it lives, the decisions and constraints
     that bind it, and what done looks like. Short, but complete enough to act
@@ -627,8 +639,7 @@ def task(title: str, goal: str, items: str, domain: str = "", also: str = "",
     items of 300 characters each. Each gets a key (i1, i2, ...) that
     task_item() takes back.
 
-    also: other domain paths this belongs to, comma-separated -- the
-    cross-cutting subjects beside the one it is filed under. See note().
+    @param also_brief
 
     `tags` carries the synonyms the body never uses. The type name is not
     added for you: a word every task carries ranks no task above another.
@@ -686,7 +697,7 @@ def task_item(uid: str, item: str, state: str = "", comment: str = "",
             result = {
                 "uid": uid, "item": key, "state": current,
                 "progress": tasks.progress(conn, uid), "task_state": head["state"],
-                "archived": db.get_memory(conn, uid)["status"] == "archived",
+                "archived": db.memory_row(conn, uid)["status"] == "archived",
             }
     except ValueError as exc:
         return _errors([str(exc)])
@@ -759,6 +770,8 @@ def diagram(
     more. The reasoning, caveats and history belong in that node's
     `note`, where they explain without cluttering the flow.
 
+    @param title
+
     nodes: [{"key": "load", "label": "Read the export window",
              "shape": "step", "note": "optional long explanation"}]
     edges: [{"from": "load", "to": "check", "label": "optional branch"}]
@@ -775,6 +788,8 @@ def diagram(
     each into that process's path and asking about it returns all of them,
     instead of hoping one search phrasing reaches every one.
 
+    @param tags_brief
+
     `review_after` and `source_ref` behave as in note(), and a flow is
     exactly the kind of memory they are for: it describes code, and the
     code moves.
@@ -790,7 +805,7 @@ def diagram(
             kind=kind, domain=domain, also=also, session=session or SESSION, tags=tags,
             review_after=review_after, source_ref=source_ref,
         )
-        if errors:
+        if errors or uid is None:
             return _errors(errors)
         return _write_result(conn, uid, warning, also, tags)
 
@@ -945,10 +960,8 @@ def get_diagram(uid: str, format: str = "mermaid") -> dict:
     out = {"uid": uid, "title": data["title"], "format": format,
            "body": _capped(body)}
     if format == "mermaid":
-        # Said here as well as in the docstring, because by now the docstring
-        # is behind the caller and this is what it is looking at. A request
-        # to "render the diagram" answered with mermaid silently swaps the
-        # user's arrangement for a fresh layout.
+        # Repeated from the docstring because the caller is reading this now: answering "render
+        # the diagram" with mermaid would silently swap the user's arrangement for a fresh layout.
         out["note"] = (
             "mermaid re-lays out the flow and discards the stored positions. "
             "To show the arrangement the user actually made, call again with "
@@ -966,13 +979,8 @@ def _write_render(conn, uid: str, data: dict, format: str) -> dict:
     interactive = format == "svg-interactive"
     inline_target = None
     if interactive:
-        # TWO files, because the two uses genuinely differ. Opening a file
-        # needs a document -- doctype, charset, a body whose background is
-        # not white behind a dark diagram. Embedding in a reply needs the
-        # opposite: no doctype and no body, which most inline renderers
-        # reject, and no styling that would reach the host page. Writing one
-        # and telling the caller which part to cut out is the version of
-        # this that breaks quietly.
+        # Two files: opening one needs a full document (doctype, charset, a dark-safe body), while
+        # inline embedding needs no doctype, no body and no styling that leaks into the host page.
         markup = diagram_svg.render_interactive(data, standalone=True)
         viewbox = diagram_svg.render_svg(data)[1]
         inline_target = db.renders_dir() / f"diagram-{uid}.inline.html"
@@ -991,10 +999,8 @@ def _write_render(conn, uid: str, data: dict, format: str) -> dict:
         "title": data["title"],
         "format": format,
         "path": str(target),
-        # The payload cannot be drawn from -- that is the point of writing the
-        # file -- so it says what to do with it instead. Without this, a
-        # caller that has the path and a way to render inline still has to
-        # infer that reading the file is the intended next step.
+        # The payload cannot be drawn from, so it names the next step instead of leaving the
+        # caller to infer that reading the file is it.
         **({"inline_path": str(inline_target)} if inline_target else {}),
         "next_step": (
             "read `inline_path` and put its contents in your reply -- that "
@@ -1229,7 +1235,7 @@ def timeline(
                 return _errors([f"no memory matches query: {query}"])
             # Re-read as a record: a search hit carries retrieval annotations
             # (match_source, ranks) that are not part of the memory.
-            anchor = db.get_memory(conn, hits[0]["uid"])
+            anchor = db.memory_row(conn, hits[0]["uid"])
         older, newer = db.timeline_neighbours(
             conn, anchor, before=before, after=after, domain=domain, type=type)
         _read(conn, [anchor, *older, *newer])
@@ -1542,9 +1548,7 @@ def get_memory(uid: str) -> dict:
     with db.connect() as conn:
         row = db.get_memory(conn, uid)
         if row is None:
-            # Not {}: an empty dict reads as "the record is empty" and sends a
-            # caller looking for content that was never there, when what
-            # happened is that the uid does not name a memory at all.
+            # Not {}: an empty dict reads as an empty record, when the uid names no memory at all.
             return _errors([f"no memory {uid}"])
         _read(conn, [row])
         edits = db.get_edit_history(conn, uid)
@@ -1963,13 +1967,8 @@ assert set(_TOOLS) == set(_GROUP_OF), (
 
 
 def main() -> None:
-    # Before mcp.run(), deliberately: the last moment on the main thread
-    # with no event loop and no stdio reader threads running, and the only
-    # place a few tens of milliseconds cost nothing. A lifespan hook would
-    # look tidier and be worse: the SDK enters it before the session
-    # exists, putting this on the initialize path.
-    # Does nothing unless MEMAI_ADMIN_AUTOSTART says otherwise, and
-    # cannot raise -- see autostart.ensure_admin_running.
+    # Before mcp.run(): the main thread has no event loop or stdio readers yet, and a lifespan
+    # hook would sit on the initialize path. A no-op unless MEMAI_ADMIN_AUTOSTART; never raises.
     autostart.ensure_admin_running()
     mcp.run()
 

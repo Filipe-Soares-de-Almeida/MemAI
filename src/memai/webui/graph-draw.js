@@ -1,14 +1,5 @@
-/* The canvas kit the graph arrangements draw with, written for the frame.
-
-   Fills are BATCHED: one path per colour-and-alpha with every dot of that
-   pair in it, then one fill. Ten thousand dots in six colours cost six fills.
-   Below a pixel and a half a dot is drawn as a RECT -- an arc that small
-   antialiases into the same grey square and the rect is several times
-   cheaper.
-
-   Everything here takes SCREEN coordinates: the camera has already been
-   applied, so a radius is in CSS pixels and a stroke width is the width it
-   will read as. */
+/* The canvas kit for the graph arrangements, in SCREEN coordinates. Fills are batched per colour
+   and alpha, and dots under 1.5px are drawn as rects. */
 
 /* `hex` at alpha `a`. An `rgb(...)` or `rgba(...)` string is handed back
    unchanged, since it carries its own alpha. */
@@ -48,9 +39,7 @@ export function dots(ctx, items, alpha = 1) {
   ctx.globalAlpha = 1;
 }
 
-/* `color` at alpha `a`, whichever notation it arrived in: a hex from this
-   file's own palette or an `rgba()` from a CSS custom property. The alpha
-   REPLACES whatever the colour carried. */
+/* `color` (hex or rgba()) at alpha `a`, which replaces any alpha it carried. */
 export function withAlpha(color, a) {
   const s = String(color || '').trim();
   const m = s.match(/^rgba?\(([^)]+)\)$/i);
@@ -61,9 +50,8 @@ export function withAlpha(color, a) {
   return hexA(s, a);
 }
 
-/* One relation, faint at the end it leaves and bright at the end it points
-   to. It costs a gradient per line, so it is for the few under the pointer
-   and never for the whole store. */
+/* One relation, faint at its source and bright at its target; a gradient per line, so only
+   for the few under the pointer. */
 export function gradLine(ctx, a, b, color, width) {
   const g = ctx.createLinearGradient(a.x, a.y, b.x, b.y);
   g.addColorStop(0, withAlpha(color, 0.12));
@@ -118,10 +106,8 @@ export function bounds(items, pad = 0, key = 'r') {
   return { x0: x0 - pad, y0: y0 - pad, x1: x1 + pad, y1: y1 + pad };
 }
 
-/* The box holding MOST of an arrangement: `q` of each axis is cut off either
-   end. A force layout flings the odd loose memory far out, and the absolute
-   box of that frames the store as a thumbnail in one corner. The outlier is
-   still drawn, outside the initial frame. */
+/* The box holding most of an arrangement, `q` cut from each axis end, so a flung outlier does not
+   shrink the store to a thumbnail; it is still drawn. */
 export function robustBounds(items, pad = 0, q = 0.012) {
   if (items.length < 20) return bounds(items, pad);
   const xs = items.map(i => i.x).sort((a, b) => a - b);
@@ -163,12 +149,8 @@ export class Picker {
 
 const CELL = 48;
 
-/* Labels that do not land on each other or under the floating chrome.
-
-   Candidates arrive in priority order and any that would collide with
-   something already placed is refused. The chrome rectangles come from the
-   page: where a panel sits is a stylesheet's decision, and no drawing can
-   work it out. */
+/* Labels placed in priority order, refusing any that collide with one already placed or with
+   the chrome rectangles the page supplies. */
 export class LabelBoard {
   constructor(ctx) {
     this.ctx = ctx;

@@ -1,4 +1,4 @@
-"""Rebuild the dashboard when its build no longer matches its sources.
+"""Rebuild the dashboard when its build stops matching its sources.
 
 memai.admin serves webui/dist, which `npm run build` writes from the sources
 in webui/. The build carries dist/build.json, the version and a hash of the
@@ -91,6 +91,8 @@ def _fetch_prebuilt(root: Path, version: str) -> str | None:
         return "tools/install-webui.py is missing"
     try:
         spec = importlib.util.spec_from_file_location("memai_install_webui", script)
+        if spec is None or spec.loader is None:
+            return "tools/install-webui.py cannot be loaded"
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
         return module.download(version, _dist(root))

@@ -1,16 +1,5 @@
-/* The relations graph, drawn on a 2D canvas.
-
-   This file owns the camera, the frame loop, the pointer, the selection and
-   the show toggles; graph-arrange.js owns where things are and how each of
-   the three arrangements is drawn. Nothing here touches the DOM outside
-   its own canvas -- hovering, selecting, travelling and link mode are
-   reported to the view through callbacks, and the view owns the card, the
-   tip, the legend and the toolbar.
-
-   The arrangement settles on the main thread, a slice per frame, so the graph
-   answers the pointer while it is still condensing. A settle that reaches
-   SETTLE_MAX_MS is stopped where it stands: an arrangement good enough to
-   read arrives long before the polishing does. */
+/* The relations graph on a 2D canvas: camera, frame loop, pointer, selection and toggles, reported
+   through callbacks. The arrangement settles a slice per frame and stops at SETTLE_MAX_MS. */
 
 import { cssVar } from './core/dom.js';
 import { motionOn } from './core/motion.js';
@@ -29,10 +18,7 @@ const FIT_PAD = 46;
    to reach it is readable long before the arrangement stops moving. */
 const SETTLE_MAX_MS = 20000;
 
-/* What a memory fades to. The spotlight pushes a miss all the way back,
-   because a search is a question about every memory at once; a selection only
-   pushes the rest into context, because the shape of the store is still the
-   thing being read. */
+/* What a memory fades to: a spotlight miss all the way back, a selection's context less so. */
 const DIM = 0.16;
 const FOCUS_DIM = 0.3;
 
@@ -47,15 +33,12 @@ class Cam {
     this.min = 0.02; this.max = 40;
     this.w = 1; this.h = 1;
     this.tween = null;
-    /* whether the reader has moved the camera since the last fit: what
-       decides if a resize may reframe the arrangement or has to keep where
-       they are */
+    /* whether the reader moved the camera since the last fit, so a resize may not reframe */
     this.touched = false;
   }
 
-  /* The world point at the middle of the frame stays at the middle of it: x
-     and y are an absolute translation, so a frame that changes size around
-     them slides the whole drawing by half the difference. */
+  /* Keeps the world point at the frame's centre: x and y are absolute, so a resize shifts them
+     by half the difference. */
   resize(w, h) {
     this.x += (w - this.w) / 2;
     this.y += (h - this.h) / 2;
@@ -139,21 +122,8 @@ class Cam {
 /* ---------------------------------------------------------------- engine */
 
 export class GraphCanvas {
-  /* `nodes` and `edges` are the /api/graph payload and `colorOf(type)` hands
-     back the CSS colour of a memory type.
-
-     The callbacks are the whole outward surface: onSelect(node) when the
-     selection changes, onSelectDomain({domain, count}) when a DOMAIN is the
-     selection instead, onOpen(node) when the reader asks for the record,
-     onHover(target, x, y) for the tip -- a memory carries `uid`, a domain body
-     carries `domain` and no uid -- onLink(kind, a, b) for link mode ('from' or
-     'pair'), onSettle(progress, done, error) for the arrangement, and
-     obstacles() for the boxes the chrome occupies in canvas coordinates, so no
-     name is drawn where a panel covers it.
-
-     `mode` is the arrangement to open on; `show` is what the drawing carries
-     -- `links` the relations, `domains` the place names, `names` the titles
-     of the memories themselves. */
+  /* `nodes` and `edges` are the /api/graph payload; `colorOf(type)` gives a type's CSS colour.
+     Callbacks: onSelect, onSelectDomain, onOpen, onHover, onLink, onSettle, obstacles(). */
   /* read from the root's data-motion, so a change of setting applies at once */
   get motion() { return motionOn(); }
 
@@ -191,9 +161,7 @@ export class GraphCanvas {
     };
     this.hover = null; this.selected = null; this.cameFrom = null;
     this.selectedDomain = null;
-    /* The selection's set, which everything outside fades behind, and the
-       hover's, which is brighter still. One is a decision and the other is a
-       pointer, so they are two sets and not one. */
+    /* The selection's set and the brighter hover set, kept apart. */
     this.focusSet = null;
     this.lit = null;
     this.linkMode = false; this.linkFrom = null;
@@ -210,10 +178,8 @@ export class GraphCanvas {
 
     this._loop = this._loop.bind(this);
 
-    /* The frame changes size without the window resizing -- the rail
-       collapses, a scrollbar appears -- and a window-only listener misses it:
-       the backing store then keeps its old size and the pointer arrives in a
-       coordinate space the camera is not in. */
+    /* The frame can change size without a window resize (rail collapse, scrollbar), so the
+       backing store and pointer space follow the element too. */
     this._resize = () => this.resize();
     addEventListener('resize', this._resize);
     if (typeof ResizeObserver === 'function') {
@@ -251,9 +217,8 @@ export class GraphCanvas {
 
   /* ----------------------------------------------------------- the modes */
 
-  /* Build an arrangement and hand the camera to it. The selection, the
-     spotlight and the toggles survive the switch: they are the reader's
-     state, not the drawing's. */
+  /* Build an arrangement and frame it; selection, spotlight and toggles are the reader's state
+     and survive. */
   setMode(id, { fit = true } = {}) {
     this.hover = null;
     this.lit = null;
@@ -287,9 +252,7 @@ export class GraphCanvas {
     this.cv.height = Math.round(this.h * dpr);
     this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     this.cam.resize(this.w, this.h);
-    /* A frame that changes size by a lot -- a phone turned, the rail
-       collapsing -- leaves an untouched arrangement framed for the old one.
-       Reframe it; a camera the reader has moved is theirs and stays put. */
+    /* A big size change reframes an untouched arrangement; a camera the reader moved stays put. */
     if (this.arr && !this.cam.touched) this.cam.frame(this.arr.box());
     this.dirty = true;
     this._wake();
@@ -310,9 +273,7 @@ export class GraphCanvas {
     return v;
   }
 
-  /* What every arrangement is handed: the store, the frame, the reader's
-     state and the palette. Rebuilt per frame -- it is a dozen fields, and a
-     cached one is a state the drawing can read after it has changed. */
+  /* What every arrangement is handed, rebuilt per frame so it is never stale. */
   env() {
     const marks = [];
     if (this.hover && this.hover !== this.selected)
@@ -328,9 +289,7 @@ export class GraphCanvas {
       W: this.w, H: this.h,
       cam: this.cam,
       palette: this.palette,
-      /* No name is drawn while the arrangement is still moving: the board
-         would place each one against a frame that is already out of date,
-         and a store's worth of text redrawn per frame reads as flicker. */
+      /* No names while the arrangement moves: they would be placed against a stale frame. */
       show: {
         ...this.show,
         domains: this.show.domains && this.settled,
@@ -344,12 +303,8 @@ export class GraphCanvas {
       taken: this._taken(),
       colorOf: this.colorOf,
       fade: uid => this.fade(uid),
-      /* Whether a domain path is the one in scope, under it, or on the way
-         down to it. In scope is the SELECTED domain, or the hovered one while
-         there is no selection: a domain drawn at full strength while the
-         memories around it fade reads as lit, so every domain staying full
-         through a hover lit all of them at once. The ancestors stay legible,
-         or the branch in scope is a bright patch with no path to read it by. */
+      /* Whether a path is in scope (selected domain, else hovered), under it, or an ancestor;
+         ancestors stay legible so the lit branch can be read. */
       inScope: path => {
         const at = this.selectedDomain
           || (this.hover && !this.hover.uid ? this.hover.domain : null);
@@ -479,9 +434,7 @@ export class GraphCanvas {
           && found.domain === this.hover.domain);
     if (!same) {
       this.hover = found;
-      /* computed on the change and not per frame: a domain's set is a pass
-         over every memory, and a pointer crossing a hub would put the store's
-         size on the cost of moving the mouse */
+      /* computed on change, not per frame: a domain's set is a pass over every memory */
       this.lit = this._around(found);
       this.dirty = true;
       this._wake();
@@ -567,9 +520,7 @@ export class GraphCanvas {
     this.cb.onSelect(this.selected);
   }
 
-  /* Select a DOMAIN: everything filed in it or under it holds its strength and
-     the rest of the store falls back, the same way a memory's neighbourhood
-     does. Passing null clears it. */
+/* Select a domain: what is filed in or under it keeps its strength; null clears it. */
   selectDomain(path) {
     if (this.selected) {
       this.selected = null;
@@ -584,9 +535,8 @@ export class GraphCanvas {
       path ? { domain: path, count: this.focusSet.size } : null);
   }
 
-  /* Every memory filed AT `path` or under it. The filed domain only: a
-     memory's `also` paths cut across the tree, and a scope that followed them
-     would light half the store from a leaf. */
+  /* Every memory filed at `path` or under it; `also` paths are ignored, or a leaf would light
+     half the store. */
   inDomain(path) {
     const under = `${path}/`;
     const out = new Set();
@@ -625,9 +575,7 @@ export class GraphCanvas {
     this._wake();
   }
 
-  /* Step to the next memory along the selection's relations, and select it.
-     `cameFrom` is where the last step arrived from, so the same key again
-     carries on outward instead of bouncing between two memories. */
+  /* Step along the selection's relations; `cameFrom` keeps a repeated key moving outward. */
   hop(step) {
     const from = this.selected;
     if (!from) return null;
@@ -714,9 +662,7 @@ function readPalette() {
     tree: 'rgba(255, 255, 255, .055)',
     treeHi: 'rgba(255, 255, 255, .16)',
     treeHot: 'rgba(255, 255, 255, .38)',
-    /* a name sits on its own colour with the page's ground stroked behind it:
-       over the middle of a large store there is no ink dark enough to read
-       against without one */
+    /* names get a halo of the page ground, readable over a dense store */
     halo: haloFrom(cssVar('--bg') || '#121212'),
     font: cssVar('--font-ui') || 'Roboto, sans-serif',
     mono: cssVar('--font-m') || 'Roboto Mono, monospace',

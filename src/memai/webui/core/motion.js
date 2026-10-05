@@ -1,7 +1,5 @@
-/* The dashboard's motion setting: `system` follows the OS, `always` and `never`
-   decide for themselves. The result is one attribute on the root element,
-   data-motion="full" | "reduce", and every reduced-motion rule in admin.css keys
-   off it. The choice is stored per browser; a storage failure reads as `system`. */
+/* The motion setting (`system`, `always`, `never`) as data-motion on the root, which admin.css
+   keys reduced motion off; stored per browser, and a storage failure reads as `system`. */
 
 export const MOTION_MODES = ['system', 'always', 'never'];
 const STORAGE_KEY = 'memai.motion';

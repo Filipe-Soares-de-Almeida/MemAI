@@ -19,8 +19,7 @@ from pathlib import Path
 FILENAME = "CHANGELOG.md"
 
 # `## [0.1.1](https://…/compare/v0.1.0...v0.1.1) (2026-09-12)`, and the same
-# heading without a link. The date is optional: a hand-written entry can carry
-# none, and a version with no date is still a version.
+# heading without a link; the date is optional.
 _HEADING = re.compile(
     r"^##\s+\[?v?(?P<version>\d[^\]\s]*)\]?"
     r"(?:\((?P<url>[^)]*)\))?"
@@ -38,8 +37,8 @@ def flatten(line: object) -> str:
     """One line of generated markdown as plain text.
 
     `[text](url)` reads as `text`, bold loses its asterisks, and the trailing
-    `(#1042)` / `(a1b2c3d)` references go -- they name a page nothing here can
-    open.
+    pull request and commit-hash references go -- they name a page nothing
+    here can open.
     """
     return _REFERENCE.sub("", _LINK.sub(r"\1", str(line or ""))).replace("**", "").strip()
 

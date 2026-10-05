@@ -460,7 +460,7 @@ def test_purging_a_linked_memory_removes_the_item_link(conn):
 def _shape(task):
     return {
         "goal": task["goal"], "state": task["state"],
-        "items": [(i["key"], i["text"], i["state"], [l["uid"] for l in i["links"]])
+        "items": [(i["key"], i["text"], i["state"], [link["uid"] for link in i["links"]])
                   for i in task["items"]],
         "comments": [(c["body"], c["author"], c["item"]) for c in task["comments"]],
     }
@@ -581,7 +581,7 @@ def test_restore_task_skips_a_link_whose_target_is_missing(conn):
                    "created_at": "2026-01-01T00:00:00+00:00"}],
         "comments": [],
     })
-    assert [l["uid"] for l in tasks.get_task(conn, "aaaaaaaaaaaaaaaa")["items"][0]["links"]] == [note]
+    assert [link["uid"] for link in tasks.get_task(conn, "aaaaaaaaaaaaaaaa")["items"][0]["links"]] == [note]
 
 
 def test_tasks_are_not_dedup_or_similar_candidates(conn):
@@ -734,7 +734,7 @@ def test_delete_item_removes_the_item_its_comments_and_its_links(conn):
     assert result["task_state"] == "open" and result["archived"] is False
     task = tasks.get_task(conn, uid)
     assert [i["key"] for i in task["items"]] == ["i1", "i3"]
-    assert [l["uid"] for i in task["items"] for l in i["links"]] == [note]
+    assert [link["uid"] for i in task["items"] for link in i["links"]] == [note]
     assert [c["body"] for c in task["comments"]] == ["about the parser", "about the whole task"]
     assert db.get_memory(conn, uid)["content"] == (
         "GOAL: Parse every config file\n[ ] i1 read the spec\n[ ] i3 write the parser")
@@ -861,9 +861,8 @@ def test_a_refusal_after_the_rows_changed_rolls_them_back(tmp_path, monkeypatch)
     def refuse(conn, uid, note):
         raise ValueError("refused after the rows changed")
     monkeypatch.setattr(tasks, "_regenerate", refuse)
-    with pytest.raises(ValueError):
-        with db.connect(path) as c:
-            tasks.delete_item(c, uid, "i3")
+    with pytest.raises(ValueError), db.connect(path) as c:
+        tasks.delete_item(c, uid, "i3")
     with db.connect(path) as c:
         task = tasks.get_task(c, uid)
         assert [i["key"] for i in task["items"]] == ["i1", "i2", "i3"]

@@ -19,12 +19,8 @@ async function licenceOf(dir) {
   return (await readFile(new URL(found, dir), 'utf8')).trim();
 }
 
-/* Writes the licence of every bundled dependency into the build.
-
-   The wheel ships dist/ and the bundle carries those packages' code, so their
-   notices travel with it. The text is read out of node_modules at build time,
-   so it belongs to the version actually bundled. devDependencies are left
-   out: none of them reaches the browser. */
+/* Writes the licence of every bundled runtime dependency into the build, read from node_modules
+   so it matches the bundled version; devDependencies never reach the browser. */
 function thirdPartyNotices() {
   return {
     name: 'memai:third-party-notices',
@@ -86,9 +82,7 @@ export default defineConfig({
     chunkSizeWarningLimit: 1200,
   },
   server: {
-    /* The API and the generated /fonts.css come from memai.admin. Proxying
-       them keeps every request same-origin, which its SameOriginMiddleware
-       needs to let a write through. */
+    /* Proxy the API and /fonts.css to memai.admin so writes stay same-origin (SameOriginMiddleware). */
     proxy: {
       '/api': admin,
       '/fonts.css': admin,

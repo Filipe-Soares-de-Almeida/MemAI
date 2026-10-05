@@ -30,8 +30,8 @@ import tempfile
 import urllib.error
 import urllib.request
 import zipfile
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable
 
 ROOT = Path(__file__).resolve().parent.parent
 DIST = ROOT / "src" / "memai" / "webui" / "dist"

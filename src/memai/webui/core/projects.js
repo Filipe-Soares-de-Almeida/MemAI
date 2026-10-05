@@ -1,15 +1,5 @@
-/* The project switch in the app bar, and the dialog that sends memories to
-   another project.
-
-   A project is one SQLite file holding a whole memory. The dashboard reads
-   and writes the one the home's `active` file names, and so does every MCP
-   server on this machine from its next call on. The switch lists the
-   projects, changes the active one and offers to create a new one. A switch
-   re-runs the current route: every view fetches what it shows, so
-   re-rendering it IS reading the other project.
-
-   It refuses to switch while a dialog is open, for the reason the language
-   switch does: the form on screen belongs to the project it was opened on. */
+/* The project switch in the app bar and the move-to-project dialog. A switch re-runs the route,
+   which re-reads the new project; it is refused while a dialog is open. */
 
 import { $, esc, fmtInt, debounce } from './dom.js';
 import { api } from './api.js';
@@ -85,21 +75,13 @@ async function create() {
   } catch (err) { failed('err.project', err); }
 }
 
-/* The view repaints against the project that is active now, and every view
-   fetches what it shows -- so re-rendering it IS reading the other
-   project. */
+/* Every view fetches what it shows, so re-rendering reads the newly active project. */
 function reread() {
   route();
 }
 
-/* ─── sending memories to another project ────────────────────────────────
-   Offered from the bulk bar (a selection) and from the Domains view (a
-   subtree). The dialog asks the server for a dry run as soon as a target is
-   named and shows what would move and what the copy cannot carry -- the
-   relations, diagram links and jumps, supersedes marks and [[uid]]
-   references that cross the edge of the selection -- before the button is
-   live. The move is the same request with dry_run off. Resolves to whether
-   anything moved. */
+/* ─── moving memories to another project, from a selection or a subtree: a dry run shows what
+   moves and which cross-edge links the copy loses before the button is live. */
 
 export async function moveToProjectModal({ uids = [], domain = '' }) {
   let data;

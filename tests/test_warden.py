@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 import os
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -39,14 +39,14 @@ def test_marking_an_ask_satisfies_the_interval(store):
 def test_the_ask_returns_once_the_interval_has_passed(store):
     """The interval is a floor on the cost, so it reopens after it elapses."""
     warden.mark("session-1")
-    later = datetime.now(timezone.utc) + timedelta(minutes=db.WARDEN_MINUTES_DEFAULT + 1)
+    later = datetime.now(UTC) + timedelta(minutes=db.WARDEN_MINUTES_DEFAULT + 1)
     assert warden.due("session-1", now=later) is True
 
 
 def test_the_interval_is_the_caller_s_to_set(store):
     """--warden-minutes reaches here as `minutes`."""
     warden.mark("session-1")
-    later = datetime.now(timezone.utc) + timedelta(minutes=5)
+    later = datetime.now(UTC) + timedelta(minutes=5)
     assert warden.due("session-1", 60, now=later) is False
     assert warden.due("session-1", 4, now=later) is True
 
@@ -119,7 +119,7 @@ def test_an_unparseable_stamp_counts_as_never_asked(store):
 
 def test_a_naive_stamp_is_read_as_utc(store):
     """A stamp written without an offset still compares against `now`."""
-    naive = (datetime.now(timezone.utc) - timedelta(minutes=1)).replace(
+    naive = (datetime.now(UTC) - timedelta(minutes=1)).replace(
         tzinfo=None).isoformat()
     warden.state_path("session-1").write_text(
         json.dumps({"asked_at": naive}), encoding="utf-8")
@@ -241,9 +241,8 @@ def test_the_interval_survives_the_switch(store):
 
 @pytest.mark.parametrize("bad", [0, -5, 481, "", "soon", None, 3.7])
 def test_an_interval_outside_the_range_is_refused(store, bad):
-    with db.connect() as conn:
-        with pytest.raises(ValueError):
-            db.set_warden_minutes(conn, bad)
+    with db.connect() as conn, pytest.raises(ValueError):
+        db.set_warden_minutes(conn, bad)
 
 
 def test_a_stored_interval_out_of_range_reads_as_the_default(store):
@@ -266,7 +265,7 @@ def test_a_session_never_asked_about_tasks_is_owed_the_ask(store):
 def test_marking_the_task_ask_satisfies_its_interval(store):
     warden.mark_tasks("session-1")
     assert warden.task_due("session-1", 30) is False
-    later = datetime.now(timezone.utc) + timedelta(minutes=31)
+    later = datetime.now(UTC) + timedelta(minutes=31)
     assert warden.task_due("session-1", 30, now=later) is True
 
 
@@ -320,9 +319,8 @@ def test_the_task_switch_takes_a_bool_or_what_a_form_sends(store, given, expecte
 
 @pytest.mark.parametrize("bad", [0, -5, 481, "", "soon", None, 3.7])
 def test_a_task_interval_outside_the_range_is_refused(store, bad):
-    with db.connect() as conn:
-        with pytest.raises(ValueError):
-            db.set_task_ask_minutes(conn, bad)
+    with db.connect() as conn, pytest.raises(ValueError):
+        db.set_task_ask_minutes(conn, bad)
 
 
 def test_the_task_interval_round_trips_apart_from_the_warden_s(store):

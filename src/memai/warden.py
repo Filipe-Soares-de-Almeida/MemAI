@@ -21,29 +21,24 @@ import json
 import os
 import re
 import tempfile
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from memai import lite
 
-# How far an agent file may postdate a session start and still count as
-# something the host had. Covers two clocks disagreeing by microseconds, and
-# nothing longer: the case it must NOT swallow is an install into a session
-# already under way, which is minutes old at the very least. See `loaded`.
+# Clock skew allowed between an agent file and a session start. An install into a running session
+# is minutes old and must fall outside it. See `loaded`.
 GRACE = timedelta(seconds=2)
 
-# The subagent this asks for: the name a host launches it by, and the file
-# `install --agents` copies. Both spellings appear in text a session reads,
-# so they are written once.
+# The subagent's launch name and the file `install --agents` copies; text a session reads spells
+# both, so they are written once.
 AGENT = "memai-warden"
 AGENT_FILE = f"{AGENT}.md"
 
 # How many domains a session's state remembers; the oldest drops off.
 DOMAINS_MAX = 20
 
-# Session ids the state directory will hold a file for. The host's own ids
-# are hex and dashes; this also allows the underscores and dots a different
-# host might use, and nothing else -- no separators, no `..`.
+# Session ids that get a state file: letters, digits, dashes, underscores, dots; no separators, no `..`.
 _ID = re.compile(r"^[A-Za-z0-9._-]{1,128}$")
 
 _DIRNAME = "warden"
@@ -198,11 +193,11 @@ def loaded(session_id: str, agent: Path) -> bool:
         return False
     try:
         at = datetime.fromisoformat(started)
-        installed = datetime.fromtimestamp(agent.stat().st_mtime, timezone.utc)
+        installed = datetime.fromtimestamp(agent.stat().st_mtime, UTC)
     except (ValueError, OSError):
         return False
     if at.tzinfo is None:
-        at = at.replace(tzinfo=timezone.utc)
+        at = at.replace(tzinfo=UTC)
     return installed <= at + GRACE
 
 
@@ -217,8 +212,8 @@ def _elapsed(session_id: str, field: str, minutes: int, now: datetime | None) ->
     except ValueError:
         return True
     if stamp.tzinfo is None:
-        stamp = stamp.replace(tzinfo=timezone.utc)
-    at = now or datetime.now(timezone.utc)
+        stamp = stamp.replace(tzinfo=UTC)
+    at = now or datetime.now(UTC)
     return at - stamp >= timedelta(minutes=minutes)
 
 
@@ -248,7 +243,7 @@ def prune(days: int = 14) -> int:
 
     A session's state outlives the session, and nothing else removes it.
     """
-    cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).timestamp()
+    cutoff = (datetime.now(UTC) - timedelta(days=days)).timestamp()
     gone = 0
     try:
         entries = [*state_dir().glob("*.json"), *state_dir().glob("*.tmp")]

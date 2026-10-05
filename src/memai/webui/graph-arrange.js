@@ -1,26 +1,5 @@
-/* The three arrangements of the relations graph, behind one interface.
-
-   An arrangement owns where things ARE and how they are drawn; the engine
-   (graph-2d.js) owns the camera, the pointer, the selection and the show
-   toggles, and hands all of it over in `env` on every frame. The interface is:
-
-     new Arrangement(env)     build, from the derived store in env.D
-     step(env) -> boolean     one frame's share of the work, true while busy
-     progress                 0..1, what the settle bar reports
-     halt()                   stop arranging where it stands
-     box()                    the world box the camera frames
-     locate(uid)              {x, y, r} of one memory, or null
-     draw(ctx, cam, env)      screen-space drawing, camera already resolved
-     hit(x, y, cam)           what is at a WORLD point, or null
-     click(hit, env)          optional camera move on a click, true if it moved
-
-   A hit is either an engine node (it carries `uid`) or a domain body, which
-   carries `domain` and no uid. The engine tells them apart that way.
-
-   The three read the same store differently: `hubs` makes every domain a node
-   and hangs its memories off it, `pack` nests each domain inside its parent as
-   a circle, `atlas` gives every root a fixed seat and draws the density of
-   what sits in it as a coastline. */
+/* The relations graph's three arrangements (hubs, pack, atlas) behind one interface: constructor,
+   step, progress, halt, box, locate, draw, hit, click. A hit carries `uid` or `domain`. */
 
 import { clamp, packSiblings } from './graph-geom.js';
 import { Sim, spiral } from './graph-force.js';
@@ -28,14 +7,11 @@ import { density, isolines, smooth } from './graph-field.js';
 import { dots, lines, ring, gradLine, hexA, robustBounds, Picker, LabelBoard }
   from './graph-draw.js';
 
-/* One frame's share of a settle, in milliseconds. What is left of a 16ms
-   frame after the drawing, so the graph keeps answering the pointer while it
-   condenses. */
+/* One frame's share of a settle, in ms: what a 16ms frame leaves after drawing. */
 const SLICE_MS = 11;
 
-/* Thirteen hues that hold apart on the dashboard's ground, and a neutral for
-   the tail. No palette separates thirty domains, so rank decides: the biggest
-   get a hue and the rest share the blue-grey. */
+/* Thirteen hues that hold apart on the ground, given to the biggest domains; the rest share the
+   neutral blue-grey. */
 const DOMAIN_HUES = [
   '#64b5f6', '#ffb74d', '#81c784', '#e57373', '#ba68c8', '#4dd0e1',
   '#fff176', '#f06292', '#aed581', '#9575cd', '#4db6ac', '#ff8a65', '#a1887f',
@@ -45,10 +21,8 @@ const DOMAIN_TAIL = '#78909c';
 export const seg = d => (d ? String(d).split('/') : []);
 export const topOf = d => (d ? String(d).split('/')[0] : '');
 
-/* The domain tree: one node per path segment that exists, with memories hung
-   off the exact path they are FILED at -- `also` paths cross the tree and
-   would double-count every memory that carries one. `count` is the subtree
-   total, which is what every area-based arrangement divides space by. */
+/* The domain tree, memories hung off their FILED path only (`also` would double-count); `count`
+   is the subtree total that area-based arrangements divide by. */
 export function buildTree(nodes) {
   const root = { name: '', path: '', depth: 0, kids: [], kidMap: new Map(), mems: [], count: 0 };
   for (const n of nodes) {
@@ -97,9 +71,7 @@ export function deriveStore(nodes, edges) {
   return { nodes, edges: live, byUid, adj, degree, tree, domainOf, domColor, hueOf };
 }
 
-/* The relation colours. Nearly every relation in a store is `relates_to`, so
-   it takes the neutral line colour and the other three are the ones that read
-   as something. */
+/* Relation colours: `relates_to`, nearly every relation, takes the neutral line colour. */
 const relColor = (palette, type) => palette.rel[type] || palette.rel.relates_to;
 
 /* Whether a point is inside a set of closed loops, even-odd -- a territory
@@ -117,15 +89,8 @@ function insideLoops(loops, x, y) {
 
 /* ------------------------------------------------------------------ hubs */
 
-/* Every domain that holds more than one thing is a node; a memory hangs off
-   the nearest surviving ancestor of the domain it is filed at. A domain
-   holding one memory and nothing else is COLLAPSED -- a hub with a single
-   leaf is a node that says nothing, and a store filed deeply is mostly those.
-
-   Roots are seeded from a circle packing sized by count, never from one
-   global spiral: the physics would have to transport every subtree across the
-   field and alpha runs out mid-transit, which freezes the arrangement with
-   one root ejected and the rest in a knot. */
+/* A domain holding more than one thing is a node; one holding a single memory collapses into its
+   ancestor. Roots seed from a circle packing, so physics never has to haul subtrees across. */
 const HUBS = {
   charge: 900, linkK: 0.1, linkLen: 40, center: 14,
 };
@@ -240,9 +205,7 @@ class Hubs {
     const lit = env.lit;
     const sc = b => cam.toScreen(b.x, b.y);
 
-    /* The tree, the quietest thing on screen: it is the scaffolding the
-       arrangement stands on, not a relation. What the pointer is lighting
-       draws its own, brighter: in this arrangement a domain IS those lines. */
+    /* The tree is the quietest layer; what the pointer lights draws its own, brighter. */
     const leafLines = [], hubLines = [], hotTree = [];
     for (const b of this.mems) {
       if (!b.up) continue;
@@ -264,10 +227,8 @@ class Hubs {
         lines(ctx, segs, relColor(palette, type), type === 'relates_to' ? 1 : 1.6,
               lit ? 0.25 : 1);
     }
-    /* The hovered MEMORY's own relations, each drawn faint at the end it
-       leaves: which way a relation points is only ever asked about one. A
-       hovered DOMAIN lights what is filed in it and no relation -- what joins
-       it to those memories is the tree above. */
+    /* A hovered memory's relations, faint at the end they leave; a hovered domain lights its
+       memories, not relations. */
     if (lit && env.hover && env.hover.uid) {
       for (const r of this.rel) {
         if (!lit.has(r.a.uid) || !lit.has(r.b.uid)) continue;
@@ -340,14 +301,8 @@ class Hubs {
 
 /* ------------------------------------------------------------------ pack */
 
-/* The domain tree packed as tangent circles: a domain is a body holding its
-   children and its own memories, sized by count. Two domains cannot overlap,
-   so telling them apart is geometry rather than tuning.
-
-   Nothing is drawn below a screen radius: a domain too small to open draws
-   once, as a disc carrying its count and the mix of types inside it. That is
-   what makes the first frame cost the same at six hundred memories and at ten
-   thousand. */
+/* The domain tree as tangent circles sized by count. A domain below a screen radius draws once as
+   a disc with its count and type mix, so the first frame costs the same at any store size. */
 const PACK = { gap: 2, pad: 5, memR: 3, degR: 1.5, minPx: 18 };
 
 function packDomain(d, D) {
@@ -499,9 +454,7 @@ class Pack {
                alpha: env.fade(l.mem.uid) * (lit && !lit.has(l.mem.uid) ? 0.4 : 1) };
     }), 0.95);
 
-    /* Relations, only for what the pointer is on. Drawing all of them over
-       nested circles is the tangle this arrangement exists to avoid, so the
-       toggle cannot turn them all on -- what it hides is this highlight. */
+    /* Relations only for what the pointer is on; the toggle hides this highlight. */
     /* a domain under the pointer is not asking about the relations among
        what it holds: what joins it to them is the circle they sit in */
     const at = env.hover && env.hover.uid ? env.hover : env.selected;
@@ -584,14 +537,8 @@ class Pack {
 
 /* ----------------------------------------------------------------- atlas */
 
-/* Every root domain gets a FIXED seat, so a territory does not move when the
-   store grows and the map can be learned. The seats come from packing one
-   circle per root sized by count: evenly spaced seats put a root of a hundred
-   and fifty memories the same distance from its neighbour as a root of one,
-   and the large ones then overlap in the middle.
-
-   The coastline is a level set of the domain's own density, so a territory
-   has a shape rather than a radius, and it grows on its own. */
+/* Every root gets a FIXED seat from a count-sized circle packing, so territories stay put as the
+   store grows; the coastline is a level set of the domain's own density. */
 const ATLAS = { charge: 950, seatK: 14, level: 0.2, sigma: 34, area: 74 };
 
 class Atlas {
@@ -640,10 +587,8 @@ class Atlas {
     return 0.9 + 0.1 * ((total - left) / total);
   }
 
-  /* Busy stays true through the pass that settles the physics, and then
-     through one territory per frame: tracing every coast in a single pass is a
-     60ms frame at thirty roots, which is a dropped one. Each is drawn as it
-     lands, so the land appears rather than arriving all at once. */
+  /* Busy through the physics settle, then one territory traced per frame so frames are not
+     dropped; each appears as it lands. */
   step() {
     if (!this.sim.settled) {
       this.sim.run(SLICE_MS);
@@ -662,9 +607,7 @@ class Atlas {
     return true;
   }
 
-  /* The settle ceiling stops the PHYSICS, which is the part that could spin
-     forever. What is left of the tracing is finite work and it runs here: a
-     territory with no coastline is dots on nothing. */
+  /* The settle ceiling stops the physics; the finite tracing left still runs here. */
   halt() {
     this.sim.halt();
     if (!this.coasts) { this.queue = this.roots.slice(); this.coasts = []; }
@@ -726,9 +669,8 @@ class Atlas {
       }
     }
 
-    /* A road between two territories is bowed off the straight line, so two
-       roads between the same pair do not lie on top of each other; a road
-       inside one stays a short straight thing. */
+    /* A road between territories is bowed so parallel roads do not overlap; one inside a
+       territory stays straight. */
     if (show.links) {
       const local = [], trunk = new Map();
       for (const l of this.links) {

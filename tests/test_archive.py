@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import os
 import zipfile
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 from pathlib import Path
 
 import pytest
@@ -122,7 +122,7 @@ def test_deleting_an_archive_reports_what_went_with_it(client):
 
 def _taken(path: Path, when: datetime) -> None:
     """Stamp a shelved file with the moment its backup was taken (UTC)."""
-    stamp = when.replace(tzinfo=timezone.utc).timestamp()
+    stamp = when.replace(tzinfo=UTC).timestamp()
     os.utime(path, (stamp, stamp))
 
 
@@ -146,7 +146,7 @@ def test_grouping_by_week_splits_on_the_iso_week(client):
     _taken(mon, datetime(2026, 9, 28, 9))
     _taken(sun, datetime(2026, 10, 4, 21))
     _taken(nxt, datetime(2026, 10, 5, 9))
-    week = lambda d: "General-%d-W%02d.zip" % d.isocalendar()[:2]
+    week = lambda d: "General-{}-W{:02d}.zip".format(*d.isocalendar()[:2])
 
     made = db.archive_grouped("General", [mon.name, sun.name, nxt.name], "week")
 

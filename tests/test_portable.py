@@ -68,7 +68,7 @@ def _roundtrip(source, target) -> dict:
 def test_the_export_is_one_json_object_per_line(source):
     _populate(source)
     lines = portable.to_jsonl(portable.export_records(source)).strip().splitlines()
-    kinds = [json.loads(l)["record"] for l in lines]
+    kinds = [json.loads(line)["record"] for line in lines]
     assert kinds[0] == "meta"
     assert kinds.count("memory") == 3 and "diagram" in kinds and "relation" in kinds
 
@@ -154,7 +154,7 @@ def test_a_node_link_survives(source, target):
     ids = _populate(source)
     _roundtrip(source, target)
     links = db.get_node_links(target, ids["flow"])
-    assert [(l["node_key"], l["target_uid"]) for l in links] == [("check", ids["note"])]
+    assert [(link["node_key"], link["target_uid"]) for link in links] == [("check", ids["note"])]
 
 
 def test_usage_counts_come_along(source, target):

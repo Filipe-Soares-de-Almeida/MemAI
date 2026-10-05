@@ -1,12 +1,5 @@
-/* Formatting and DOM helpers shared by every view.
-
-   Nothing here talks to the API or owns state -- if a helper needs
-   either, it belongs in api.js, ui.js or shared.js instead.
-
-   Note on naming: `t` is the i18n translator, imported all over this
-   codebase. Locals are never called `t` -- a timer is `timer`, a memory
-   type is `tp` -- because shadowing the translator inside a helper
-   breaks the next person who reaches for t() in that scope. */
+/* Formatting and DOM helpers with no API access and no state. Locals are never named `t`, which
+   would shadow the i18n translator. */
 
 import { I18N } from '../i18n.js';
 

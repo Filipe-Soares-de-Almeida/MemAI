@@ -48,7 +48,7 @@ def _chunks(items: list, size: int = _CHUNK):
 # --------------------------------------------------------------- exporting
 
 def _memory_record(conn, row, usage: dict) -> dict:
-    out = {"record": "memory"}
+    out: dict[str, object] = {"record": "memory"}
     for col in ("uid", "type", "domain", "session", "tags", "title", "content",
                 "status", "confidence", "superseded_by", "created_at", "updated_at",
                 "review_after", "source_ref", "pin"):
@@ -125,9 +125,9 @@ def export_records(conn, *, domain: str = "", uids=None, include_archived: bool 
             # the drawing, not about the flow
             "nodes": graph["nodes"],
             "edges": [{k: v for k, v in e.items() if k != "loops"} for e in graph["edges"]],
-            "links": [{"node_key": l["node_key"], "target_uid": l["target_uid"],
-                       "relation_type": l["relation_type"], "created_at": l["created_at"]}
-                      for l in graph["links"]],
+            "links": [{"node_key": link["node_key"], "target_uid": link["target_uid"],
+                       "relation_type": link["relation_type"], "created_at": link["created_at"]}
+                      for link in graph["links"]],
             "jumps": [{"direction": j["direction"], "node_key": j["node_key"],
                        "peer_uid": j["peer_uid"], "peer_node": j["peer_node"],
                        "label": j["label"], "created_at": j["created_at"]}
@@ -196,7 +196,7 @@ def to_markdown(records) -> str:
     diagrams = {r["uid"]: r for r in records if r["record"] == "diagram"}
     relations = [r for r in records if r["record"] == "relation"]
 
-    out = [f"# MemAI export", "",
+    out = ["# MemAI export", "",
            f"{meta.get('count', len(memories))} memories, "
            f"exported {meta.get('exported_at', '')[:19]}"
            + (f", scoped to `{meta['domain']}`" if meta.get("domain") else ""), ""]

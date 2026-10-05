@@ -1,24 +1,5 @@
-/* A memory's body, drawn as what it is rather than as one block of text.
-
-   The store is written by agents, and what they write is marked up: four in
-   ten bodies carry code spans, four in ten carry paragraphs, one in six
-   carries a list or a link to another memory. A <pre> shows all of that as
-   characters.
-
-   What is drawn here is the subset the store actually uses -- headings,
-   paragraphs, lists, GFM tables, code spans, bold, links, and the [[uid]]
-   that points at another memory. Nothing else is invented: a line this does
-   not recognise keeps its whitespace and comes out as it went in, so a shape
-   nobody taught it still reads the way it was typed.
-
-   Rendering is READ-ONLY. The body is the record and the editor stays plain
-   text -- converting back on save is where text goes missing.
-
-   Everything is escaped BEFORE any tag is added, and the only tags that
-   reach the output are the ones built here. `renderRich` returns an HTML
-   string; `resolveLinks` maps a uid to what the server said it points at,
-   and a uid it has nothing for is drawn as a dead link rather than as a
-   button that fails when pressed. */
+/* A memory body drawn read-only as headings, paragraphs, lists, GFM tables, code, bold and [[uid]]
+   links; unknown lines keep their whitespace. Everything is escaped before any tag is added. */
 
 import { esc } from './dom.js';
 import { icon } from './icons.js';
@@ -26,9 +7,7 @@ import { t } from '../i18n.js';
 
 const UID = /^[0-9a-f]{16}$/;
 
-/* A row of a GFM table and the line under it that makes it one. Without the
-   second, a run of pipes is just text that happens to line up, so it keeps
-   its spacing instead of becoming a grid. */
+/* A GFM table row plus the separator line that makes it one; without it, pipes stay plain text. */
 const isPipeRow = ln => {
   const t = ln.trim();
   return t.startsWith('|') && t.endsWith('|') && t.length > 2;
@@ -66,9 +45,7 @@ function inline(raw, links) {
 
   text = text.replace(/\[\[([^\]\n]+)\]\]/g, (whole, target) => {
     if (!UID.test(target)) {
-      /* a name, not a uid: an older store filed memories by slug and those
-         references outlived it. Nothing resolves them, so nothing pretends
-         to. */
+      /* a name, not a uid: slug references nothing resolves, so nothing pretends to */
       return `<span class="rt-link-plain" title="${esc(whole)}">${target}</span>`;
     }
     const found = links && links[target];
@@ -118,16 +95,12 @@ function list(lines, at, links) {
      from 1 -- the browser counts, but only from where it is told to start */
   const from = ordered ? parseInt(opener[2], 10) : 1;
   let loose = false;
-  /* an item is kept open until the run moves past it: a deeper list belongs
-     INSIDE the <li> above it, and appending to a closed one would make it a
-     sibling of the item it is under */
+  /* an item stays open until the run moves past it, so a deeper list nests INSIDE its <li> */
   const items = [];
   let i = at;
   while (i < lines.length) {
-    /* A blank line does not end the run. Items with a gap between them are
-       one list -- the gap is how a writer spaces a long list out, and
-       closing it there restarted the numbering at every item. The run ends
-       where the next thing is not an item of this list. */
+    /* A blank line does not end the run, so spaced-out items stay one list and keep their
+       numbering; it ends at the next line that is not an item. */
     if (!lines[i].trim()) {
       let ahead = i;
       while (ahead < lines.length && !lines[ahead].trim()) ahead += 1;
@@ -166,10 +139,8 @@ function list(lines, at, links) {
   };
 }
 
-/* The headings a body opens, in the order renderRich emits them as
-   `<h4 class="rt-h">`. A caller that lists them and then scrolls to the
-   nth `.rt-h` relies on that order, and on this reading the same lines the
-   renderer does -- both match against HEADING. */
+/* The headings a body opens, in renderRich's `<h4 class="rt-h">` order; both read HEADING, so a
+   caller can scroll to the nth `.rt-h`. */
 export function headings(body) {
   return String(body ?? '').split('\n')
     .map(line => HEADING.exec(line)?.[1].trim())
@@ -191,10 +162,7 @@ export function renderRich(body, links) {
   while (i < lines.length) {
     const line = lines[i];
 
-    /* A fenced block is verbatim: nothing inside it is markup, which is the
-       point of fencing it. An opening fence with no closing one runs to the
-       end of the body rather than showing its own backticks -- what the
-       writer meant is plain either way. */
+    /* A fenced block is verbatim; an unclosed fence runs to the end of the body. */
     const fence = FENCE.exec(line);
     if (fence) {
       flush();
@@ -203,10 +171,8 @@ export function renderRich(body, links) {
       while (i < lines.length && !FENCE.test(lines[i])) { body.push(lines[i]); i += 1; }
       i += 1;   // past the closing fence, or past the end
       const lang = fence[1].toLowerCase();
-      /* The language sits in a bar of its own rather than over the code: as
-         generated content on the <pre> it overlapped the first line, and a
-         block wide enough to scroll slid under it. The bar earns its height
-         anyway -- it is where the copy button goes. */
+      /* The language gets its own bar, which also holds the copy button, so it never overlaps
+         the code. */
       out.push(`<div class="rt-code-block">`
         + `<div class="rt-code-head">`
         + `<span class="rt-code-lang">${esc(lang)}</span>`
@@ -254,9 +220,7 @@ export function renderRich(body, links) {
   return out.join('');
 }
 
-/* Make what was drawn work: every [[uid]] opens its record, every code block
-   copies. `copy` takes the block's text -- core/ui.js owns the clipboard and
-   what to say when there is none. */
+/* Wire what was drawn: [[uid]] opens its record, code blocks copy through `copy` (core/ui.js). */
 export function wireRich(root, { open, copy }) {
   root.querySelectorAll('.rt-link').forEach(
     b => b.addEventListener('click', e => { e.stopPropagation(); open(b.dataset.uid); }));

@@ -261,7 +261,7 @@ function symptomsPanel(symptoms, active) {
 /* ─── open tasks ──────────────────────────────────────────────────────────
    Work left for the next session; not a defect, and absent at zero. */
 
-function tasksPanel(n) {
+export function tasksPanel(n) {
   if (!n) return '';
   const open = fmtInt(n);
   return `<div class="panel hx-tasks">

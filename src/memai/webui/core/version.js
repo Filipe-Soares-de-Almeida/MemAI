@@ -1,14 +1,5 @@
-/* The version mark in the app bar.
-
-   It says which version of MemAI this dashboard is running, and it is the
-   way into the releases. When the release check has seen newer versions it
-   takes the update icon; how many there are is in the tooltip, because the
-   bar has one thing to say here and it is that an update exists. The check
-   is made by a hook process and cached (memai/update.py), so this reads a
-   file and never waits on a network.
-
-   A request that fails leaves the bar as it was: the version is context, and
-   a broken one is not worth an error where the app's identity sits. */
+/* The version mark in the app bar, linking to the releases; it shows the update icon when the
+   cached release check (memai/update.py) has seen newer versions. A failed request changes nothing. */
 
 import { $, esc } from './dom.js';
 import { api } from './api.js';

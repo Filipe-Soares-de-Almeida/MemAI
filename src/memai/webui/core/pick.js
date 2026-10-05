@@ -1,25 +1,5 @@
-/* A <select> replacement: a button, and a listbox in a popover.
-
-   Not for the sake of a different widget. A native <option> renders as text
-   and nothing else -- it takes no mark, no second line, no rail -- so every
-   choice this app offers that is more than a word had to be flattened into
-   one: a domain lost the tree it is, a memory type lost the colour the rest
-   of the UI identifies it by, a confidence lost its ring. The popup was also
-   the one surface in the app the stylesheet could not reach, so it arrived in
-   the browser's own idea of a dark theme next to controls that were not.
-
-   So the shell lives here -- button, panel, placement, the caret, the keys,
-   dismissal -- and a caller supplies only what goes INSIDE a row. Nothing
-   about a domain, a type or a shape is known at this level; see
-   core/domain-picker.js for the row shape that made this worth extracting.
-
-   ARIA follows the combobox pattern: the button owns aria-expanded, the
-   panel is a listbox of options, and the caret is aria-activedescendant on
-   whichever element has focus -- never focus itself, which has to stay in the
-   filter field while the caret moves.
-
-   One panel at a time, parented to <body> (a toolbar clips, a modal stacks)
-   and dismissed by whatever you do next. */
+/* A <select> replacement whose rows can carry marks and rails: a button and a listbox popover.
+   Combobox ARIA with aria-activedescendant; one panel at a time, on <body>, dismissed on next act. */
 
 import { esc } from './dom.js';
 import { onTeardown } from './lifecycle.js';
@@ -42,12 +22,8 @@ export function closePicker() {
   btn.classList.remove('drop-below', 'drop-above', 'drop-right');
 }
 
-/* The control. `value` is what it currently means and rides on the button as
-   data-v: the panel opens onto it, and a form reads it back with pickerValue
-   -- by then the caller's own state object is long out of reach.
-
-   `label` is what that value looks like, `html` the same thing with markup
-   (a type dot, a confidence ring) for the callers whose rows carry one. */
+/* The control. `value` rides on the button as data-v for pickerValue; `label` is its text and
+   `html` the same with markup. */
 export const pickerHTML = ({ id, value = '', label = '', html = '', ariaLabel = '',
                              cls = '', disabled = false, title = '' }) => `
   <button type="button" class="pick${cls ? ` ${cls}` : ''}" id="${id}" data-v="${esc(value)}"
@@ -56,9 +32,7 @@ export const pickerHTML = ({ id, value = '', label = '', html = '', ariaLabel = 
     <span class="pick-value">${html || esc(label)}</span>
   </button>`;
 
-/* The button for a value out of a fixed list: the control opens already
-   showing the row it is about to highlight, mark and all, instead of the
-   caller restating that row's face a second time and getting it half right. */
+/* A button for a value from a fixed list, showing that row's face, mark included. */
 export const pickerFor = ({ id, value = '', items, ariaLabel = '', cls = '',
                             disabled = false }) => {
   const it = items.find(x => x.value === value) || items[0] || {};
@@ -79,28 +53,8 @@ export function setPickerValue(btn, { value, label = '', html = '', title = '' }
   btn.querySelector('.pick-value').innerHTML = html || esc(label);
 }
 
-/* `items` is a function of the filter text, not an array: what a query leaves
-   is the caller's business -- the domain picker keeps the ancestors of a match
-   so its rails still have something to hang off, which no generic filter would
-   have thought to do.
-
-   Each item: { value, label, html?, cls?, style?, title? }. `label` is the
-   text the filter matches and what the button shows once it is picked; `html`
-   is the row's insides when they are more than that text.
-
-   `search` defaults to a row count -- see SEARCH_FROM. `onPick` gets the
-   value; a picker that stands for a form field also repaints the button,
-   which is why the item is handed over with it.
-
-   `anchor` is a selector for an ANCESTOR of the button, and the panel is then
-   measured and placed against that element instead of the button: a control
-   that is only the right-hand half of a row opens over the whole row, at the
-   row's width. It is resolved when the panel opens, so a repaint of the row
-   leaves no stale element behind.
-
-   `align` is the edge the panel lines up with, 'left' (default) or 'right' --
-   the right edge for a control that sits at the end of a bar, or whose own
-   label is right-aligned inside its box. */
+/* `items(query)` returns { value, label, html?, cls?, style?, title? } rows; `onPick` gets the
+   value and item. `anchor` places the panel against an ancestor; `align` is 'left' or 'right'. */
 export function wirePicker(root, { id, items, onPick, search = 'auto',
                                    minWidth = 180, panelCls = '', keepLabel = false,
                                    anchor = '', align = 'left' }) {
@@ -180,9 +134,7 @@ function openPanel(btn, { items, onPick, search, minWidth, panelCls, keepLabel, 
   const pick = it => {
     if (!it) return;
     closePicker();
-    /* A picker standing for a form field says what it now holds; one that
-       stands for an action ("Set confidence…") keeps its own wording, because
-       the row was a verb and not a state. */
+    /* A form-field picker shows its new value; an action picker (`keepLabel`) keeps its verb. */
     if (!keepLabel) setPickerValue(btn, it);
     btn.focus();
     onPick(it.value, it);
@@ -214,19 +166,8 @@ function openPanel(btn, { items, onPick, search, minWidth, panelCls, keepLabel, 
   });
   q?.addEventListener('input', paint);
 
-  /* Placed after it is in the document and measured, then clamped both ends
-     -- the same reason the tip and the context menu do it that way. Below the
-     button unless it does not fit and there is more room above.
-
-     The panel starts ON the edge it hangs off, with nothing between them, and
-     says so: drop-below / drop-above square the corner the two share and drop
-     the line along that edge (see admin.css), which is what makes the list
-     read as this control's own drop. A clamp that moves the panel off the
-     button takes the mark with it -- a squared corner against nothing reads as
-     a panel with a piece cut out of it.
-
-     Vertical only: the panel is at least as wide as what it is measured
-     against, so a horizontal clamp slides it along the seam and never off it. */
+  /* Placed, measured, then clamped vertically, below unless more room is above. drop-below /
+     drop-above square the shared corner (admin.css) only while the panel touches the button. */
   const place = () => {
     const r = ((anchor && btn.closest(anchor)) || btn).getBoundingClientRect();
     panel.style.width = `${Math.min(Math.max(r.width, minWidth), innerWidth - 16)}px`;
@@ -243,9 +184,7 @@ function openPanel(btn, { items, onPick, search, minWidth, panelCls, keepLabel, 
     panel.classList.toggle('drop-below', joined && below);
     panel.classList.toggle('drop-above', joined && !below);
     panel.classList.toggle('drop-right', align === 'right');
-    /* The button's own half of the seam -- but only when the panel was
-       measured against the button itself: with an `anchor` the seam is the
-       row's edge and the button is somewhere inside it. */
+    /* The button's half of the seam, only when measured against the button and not an `anchor`. */
     btn.classList.toggle('drop-below', joined && below && !anchor);
     btn.classList.toggle('drop-above', joined && !below && !anchor);
     btn.classList.toggle('drop-right', align === 'right');
@@ -275,9 +214,7 @@ function openPanel(btn, { items, onPick, search, minWidth, panelCls, keepLabel, 
   keyHost.focus();
 }
 
-/* The common case: a fixed list of {value, label, html?} and a plain
-   substring filter over the labels. Callers with nothing special to say
-   about filtering should reach for this rather than write the closure. */
+/* The common case: a fixed list with a plain substring filter over the labels. */
 export const fixedItems = list => query => {
   const needle = query.trim().toLowerCase();
   return needle

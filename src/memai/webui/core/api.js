@@ -1,13 +1,5 @@
-/* The one door to the JSON API in memai/admin.py.
-
-   Every path is built here rather than by callers, so uids go through
-   encodeURIComponent in one place: a uid is 16 hex chars today, but a
-   path segment interpolated raw is a trap waiting for the day it is not.
-
-   The admin server requires application/json on a body (see its
-   SameOriginMiddleware) -- that content type is what forces a browser
-   preflight, which is what keeps another page in the browser from
-   POSTing to the loopback port. Do not "simplify" it away. */
+/* The JSON API client for memai/admin.py. The application/json content type forces a preflight,
+   which keeps other pages from POSTing to the loopback port (SameOriginMiddleware); keep it. */
 
 export async function api(path, opts = {}) {
   if (opts.body !== undefined) {

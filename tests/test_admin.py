@@ -851,7 +851,7 @@ def test_a_uid_answers_past_the_filters(client):
 
 
 def test_a_uid_appears_once_even_when_the_search_also_found_it(client):
-    target = _create(client, content=f"a body naming its own uid")
+    target = _create(client, content="a body naming its own uid")
     client.post(f"/api/memories/{target}/content",
                 json={"content": f"this body contains [[{target}]] itself"})
 

@@ -8,7 +8,7 @@ a change to an axis definition fails on the axis and not on a total.
 from __future__ import annotations
 
 import sqlite3
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from starlette.testclient import TestClient
@@ -24,7 +24,7 @@ def client(tmp_path, monkeypatch):
 
 
 def _ago(days: int) -> str:
-    return (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+    return (datetime.now(UTC) - timedelta(days=days)).isoformat()
 
 
 def _add(conn, **kw) -> str:
@@ -124,7 +124,7 @@ def test_no_delta_until_a_snapshot_that_old_exists(client):
 def test_delta_is_measured_against_the_older_snapshot(client):
     with db.connect() as conn:
         _add(conn, confidence="unverified")
-        old = (datetime.now(timezone.utc)
+        old = (datetime.now(UTC)
                - timedelta(days=admin.HEALTH_DELTA_DAYS + 1)).date().isoformat()
         db.health_snapshot(conn, {"score": 40, "axes": dict.fromkeys(
             ("curation", "connectivity", "freshness", "organization"), 40)}, day=old)
