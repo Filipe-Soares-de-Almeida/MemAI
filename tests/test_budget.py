@@ -61,3 +61,22 @@ def test_clip_cuts_at_a_line_break_and_appends_the_tail():
 
 def test_clip_leaves_short_text_alone():
     assert budget.clip("short", 100, "tail") == "short"
+
+
+def test_text_chunk_walks_a_long_text_in_pieces_that_fit_once_escaped():
+    text = ('"quoted"\n' * 3000) + "tail"
+    pieces, offset = [], 0
+    while offset is not None:
+        chunk, offset = budget.text_chunk(text, offset, max_chars=5000)
+        assert len(budget.text_of({"text": chunk})) <= 5000 + 20
+        pieces.append(chunk)
+    assert "".join(pieces) == text and len(pieces) > 1
+
+
+def test_text_chunk_of_a_short_text_is_the_text():
+    assert budget.text_chunk("short", 0) == ("short", None)
+
+
+def test_text_chunk_refuses_a_bad_offset():
+    with pytest.raises(ValueError):
+        budget.text_chunk("abc", -1)

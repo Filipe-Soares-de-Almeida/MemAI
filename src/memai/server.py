@@ -39,7 +39,7 @@ import re
 
 from mcp.server.mcpserver import MCPServer
 
-from memai import autostart, brief, db, diagram_svg, hook_install, portable, sections, tasks, update
+from memai import autostart, brief, budget, db, diagram_svg, hook_install, portable, sections, tasks, update
 from memai import pending as pending_lists
 
 # Sent in the initialize handshake and injected into context by hosts that support it. One
@@ -732,6 +732,57 @@ def task_comment(uid: str, body: str, item: str = "") -> dict:
     except ValueError as exc:
         return _errors([str(exc)])
     return {"uid": uid, "comment_id": comment_id}
+
+
+@tool("core")
+def task_read(uid: str, part: str, item: str = "", offset: int = 0) -> dict:
+    """Read one collection of a task, one page at a time.
+
+    part: `items` (every item with its state and its counts of notes,
+    comments and links), `notes` (the task's own notes; with `item`, that
+    item's), `comments` (the task's own comments; with `item`, that
+    item's) or `links` (the memories linked to `item`, as headers).
+    Returns {"total", "records", "next_offset"}; call again with
+    offset=next_offset until it is absent.
+    """
+    try:
+        with db.connect() as conn:
+            return tasks.read_part(conn, uid, part, item, offset)
+    except ValueError as exc:
+        return _errors([str(exc)])
+
+
+@tool("core")
+def task_note(uid: str, title: str = "", body: str = "", items: str = "", note_id: int = 0,
+              delete: bool = False) -> dict:
+    """Write a note owned by a task: an item's brief, a rule its items share.
+
+    Not a memory: search, recall, pulse and must_read never see it; only
+    task_read() does. Use note() for knowledge that stands on its own.
+
+    note_id=0 creates (title and body required). With a note_id it edits
+    in place, with no history: an empty title or body keeps the stored
+    one, `items` replaces its item set, "-" moves it to the whole task.
+    delete=True with a note_id removes it. items: comma-separated keys
+    ("i3,i7"); empty on create means the whole task. Title at most 120
+    characters, body at most 4000.
+    """
+    keys = [k.strip() for k in items.split(",") if k.strip() and k.strip() != "-"]
+    try:
+        with db.connect() as conn:
+            if delete:
+                tasks.delete_note(conn, uid, note_id)
+                return {"uid": uid, "note_id": note_id, "deleted": True}
+            if note_id:
+                tasks.edit_note(conn, uid, note_id, title=title, body=body,
+                                items=keys if items.strip() else None)
+            else:
+                note_id = tasks.add_note(conn, uid, title=title, body=body, items=keys,
+                                         session=SESSION)
+            on = tasks.note(conn, uid, note_id)["items"]
+    except ValueError as exc:
+        return _errors([str(exc)])
+    return {"uid": uid, "note_id": note_id, "items": on}
 
 
 def _capped(body: str) -> str:
@@ -1534,37 +1585,98 @@ def warm_up(domain: str = "") -> str:
     return text or "The memai store is empty -- nothing to warm up from yet."
 
 
-@tool("core")
-def get_memory(uid: str) -> dict:
-    """Fetch a single memory's full record, including its edit history and relations.
+# An edit body longer than this is cut in an edits page; the memory's current body reads in full.
+EDIT_BODY_SHOWN = 4_000
 
-    A diagram also comes back with its mermaid source, its per-node links
-    and its jumps to and from other flows; any other memory comes back
-    with `referenced_by_diagrams`, the flows that point a step at it -- so
-    a note tells you which processes depend on it without a second lookup.
-    A task also comes back with a `task` block: its goal, state, items (each
-    with the memories linked to it) and comments, oldest first.
+
+def _edit_record(row) -> dict:
+    record = _row_to_dict(row)
+    record.pop("memory_uid", None)
+    cut = False
+    for field in ("prev_content", "new_content"):
+        body = record.get(field) or ""
+        record[field.replace("content", "chars")] = len(body)
+        if len(body) > EDIT_BODY_SHOWN:
+            record[field] = body[:EDIT_BODY_SHOWN]
+            cut = True
+    record["truncated"] = cut
+    return record
+
+
+def _paged(uid: str, part: str, records: list, offset: int) -> dict:
+    rows, nxt = budget.page(records, offset)
+    out = {"uid": uid, "part": part, "total": len(records), "offset": offset, "records": rows}
+    if nxt is not None:
+        out["next_offset"] = nxt
+    return out
+
+
+@tool("core")
+def get_memory(uid: str, edits_offset: int = -1, content_offset: int = -1) -> dict:
+    """Fetch one memory: its fields, relations and how much edit history it has.
+
+    A diagram also comes back with its mermaid source, node links and
+    jumps; any other memory with `referenced_by_diagrams`, the flows that
+    point a step at it.
+
+    A task comes back as a head: `task` holds goal, state, progress and
+    counts, and `next` names the task_read() call for its items, notes
+    and comments.
+
+    `edit_count` counts the edits; edits_offset=0 pages them, oldest
+    first, each body cut to 4000 characters (`prev_chars`/`new_chars`
+    give the full length). A body too long for one response comes back
+    cut, with `content_chars` and `next.content_offset`: call
+    content_offset with it and follow `next_offset` until it is absent.
     """
-    with db.connect() as conn:
-        row = db.get_memory(conn, uid)
-        if row is None:
-            # Not {}: an empty dict reads as an empty record, when the uid names no memory at all.
-            return _errors([f"no memory {uid}"])
-        _read(conn, [row])
-        edits = db.get_edit_history(conn, uid)
-        rels = db.get_relations(conn, uid)
-        result = _row_to_dict(row)
-        if row["type"] == TYPE_DIAGRAM:
-            result["mermaid"] = _capped(db.render_diagram_mermaid(conn, uid))
-            result["node_links"] = [_row_to_dict(r) for r in db.get_node_links(conn, uid)]
-            result["jumps"] = db.get_diagram_jumps(conn, uid)
-        else:
-            result["referenced_by_diagrams"] = [
-                _row_to_dict(r) for r in db.diagrams_referencing(conn, uid)
-            ]
-        if row["type"] == TYPE_TASK:
-            result["task"] = tasks.get_task(conn, uid)
-    result["edit_history"] = [_row_to_dict(e) for e in edits]
+    try:
+        with db.connect() as conn:
+            row = db.get_memory(conn, uid)
+            if row is None:
+                # Not {}: an empty dict reads as an empty record, when the uid names no memory at all.
+                return _errors([f"no memory {uid}"])
+            if edits_offset != -1:
+                edits = [_edit_record(e) for e in db.get_edit_history(conn, uid)]
+                return _paged(uid, "edits", edits, edits_offset)
+            if content_offset != -1:
+                text, nxt = budget.text_chunk(row["content"], content_offset)
+                out = {"uid": uid, "part": "content", "offset": content_offset,
+                       "content_chars": len(row["content"]), "text": text}
+                if nxt is not None:
+                    out["next_offset"] = nxt
+                return out
+            _read(conn, [row])
+            count = db.edit_count(conn, uid)
+            rels = db.get_relations(conn, uid)
+            result = _row_to_dict(row)
+            if row["type"] == TYPE_DIAGRAM:
+                result["mermaid"] = _capped(db.render_diagram_mermaid(conn, uid))
+                result["node_links"] = [_row_to_dict(r) for r in db.get_node_links(conn, uid)]
+                result["jumps"] = db.get_diagram_jumps(conn, uid)
+            else:
+                result["referenced_by_diagrams"] = [
+                    _row_to_dict(r) for r in db.diagrams_referencing(conn, uid)
+                ]
+            if row["type"] == TYPE_TASK:
+                result.pop("content", None)
+                head = tasks.head(conn, uid)
+                head["next"] = {p: f"task_read(uid='{uid}', part='{p}')"
+                                for p in ("items", "notes", "comments")}
+                result["task"] = head
+    except ValueError as exc:
+        return _errors([str(exc)])
+    nxt: dict = {}
+    if "content" in result:
+        text, more = budget.text_chunk(result["content"], 0)
+        if more is not None:
+            result["content"] = text
+            result["content_chars"] = len(row["content"])
+            nxt["content_offset"] = more
+    result["edit_count"] = count
+    if count:
+        nxt["edits"] = f"get_memory(uid='{uid}', edits_offset=0)"
+    if nxt:
+        result["next"] = nxt
     result["relations"] = [_row_to_dict(r) for r in rels]
     return result
 
@@ -1924,6 +2036,8 @@ _TOOLS = {
     "task_item": task_item,
     "task_add": task_add,
     "task_comment": task_comment,
+    "task_read": task_read,
+    "task_note": task_note,
     "diagram": diagram,
     "diagram_node": diagram_node,
     "diagram_edge": diagram_edge,

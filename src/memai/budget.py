@@ -48,6 +48,15 @@ def page(records: list, offset: int, max_chars: int = PAGE_MAX_CHARS) -> tuple[l
     return taken, (end if end < len(records) else None)
 
 
+def text_chunk(text: str, offset: int, max_chars: int = PAGE_MAX_CHARS) -> tuple[str, int | None]:
+    """The piece of `text` from `offset` whose JSON-escaped form fits `max_chars`, and the next offset."""
+    start = _offset(offset)
+    end = min(len(text), start + max_chars)
+    while end > start + 1 and len(json.dumps(text[start:end], ensure_ascii=False)) > max_chars:
+        end = start + (end - start) * 3 // 4
+    return text[start:end], (end if end < len(text) else None)
+
+
 def clip(text: str, max_chars: int, tail: str) -> str:
     """`text` cut at the last line break within `max_chars`, with `tail` on its own line."""
     if len(text) <= max_chars:

@@ -205,7 +205,7 @@ def test_repointing_leaves_the_body_alone_and_says_where_it_moved(store):
     server.edit_memory(uid, source_ref="src/acme/x100/export.py", note="the file moved")
     row = server.get_memory(uid)
     assert row["content"] == "the export window is inclusive"
-    assert row["edit_history"][-1]["note"] == (
+    assert server.get_memory(uid, edits_offset=0)["records"][-1]["note"] == (
         "meta: source_ref 'src/acme/x100/old.py' -> 'src/acme/x100/export.py' "
         "(the file moved)")
 
