@@ -21,6 +21,11 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest]
         python: ["3.12", "3.14"]
+    # bash runs each step with -e on both systems; Windows' default pwsh
+    # reports only a step's last command, so an earlier failure passes.
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@v4
 
