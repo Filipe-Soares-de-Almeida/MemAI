@@ -1621,8 +1621,8 @@ def pulse(domain: str = "", offset: int = 0) -> dict:
             _with_est_tokens(checkpoint_dict)
             text, more = budget.text_chunk(checkpoint_dict["content"], 0, PULSE_CHECKPOINT_CHARS)
             if more is not None:
+                checkpoint_dict["content_chars"] = len(checkpoint_dict["content"])
                 checkpoint_dict["content"] = text
-                checkpoint_dict["content_chars"] = len(latest_checkpoint["content"])
                 checkpoint_dict["next"] = (f"get_memory(uid='{checkpoint_dict['uid']}', "
                                            f"content_offset={more})")
             checkpoint_dict["relation_count"] = len(db.get_relations(conn, checkpoint_dict["uid"]))
@@ -1721,11 +1721,11 @@ def get_memory(uid: str, edits_offset: int = -1, content_offset: int = -1) -> di
                 edits = [_edit_record(e) for e in db.get_edit_history(conn, uid)]
                 return _paged(uid, "edits", edits, edits_offset)
             if content_offset != -1:
-                text, nxt = budget.text_chunk(row["content"], content_offset)
+                text, more = budget.text_chunk(row["content"], content_offset)
                 out = {"uid": uid, "part": "content", "offset": content_offset,
                        "content_chars": len(row["content"]), "text": text}
-                if nxt is not None:
-                    out["next_offset"] = nxt
+                if more is not None:
+                    out["next_offset"] = more
                 return out
             _read(conn, [row])
             count = db.edit_count(conn, uid)

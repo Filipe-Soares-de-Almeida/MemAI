@@ -503,8 +503,8 @@ def adopt(task_uid: str, uids: list[str], *, dry_run: bool = True) -> dict:
                 "SELECT l.item_key FROM task_item_links l JOIN task_items t "
                 "ON t.memory_uid = l.memory_uid AND t.item_key = l.item_key "
                 "WHERE l.memory_uid = ? AND l.target_uid = ? ORDER BY t.seq", (task_uid, uid))]
-            if reason := _adopt_refusal(conn, row, keys):
-                refused.append({"uid": uid, "reason": reason})
+            if row is None or (reason := _adopt_refusal(conn, row, keys)):
+                refused.append({"uid": uid, "reason": reason if row else "not linked to this task"})
                 continue
             whole = set(keys) == set(all_keys)
             plan.append({"uid": uid, "title": row["title"], "body": row["content"],

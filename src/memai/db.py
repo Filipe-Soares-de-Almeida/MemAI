@@ -2146,7 +2146,7 @@ def update_memory_content(
 
 def set_generated_content(conn: sqlite3.Connection, uid: str, content: str) -> None:
     """Rewrite a body generated from other rows, recording no edit: those rows are the history."""
-    row = get_memory(conn, uid)
+    row = memory_row(conn, uid)
     conn.execute("UPDATE memories SET content = ?, updated_at = ? WHERE uid = ?",
                  (content, now_iso(), uid))
     _write_sections(conn, uid, row["type"], content)
