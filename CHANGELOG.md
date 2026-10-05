@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.9.1](https://github.com/Filipe-Soares-de-Almeida/MemAI/compare/v0.9.0...v0.9.1) (2026-10-05)
+
+
+### Bug Fixes
+
+* **webui:** draw and edit task notes as record fields ([#80](https://github.com/Filipe-Soares-de-Almeida/MemAI/issues/80)) ([0fa4fbf](https://github.com/Filipe-Soares-de-Almeida/MemAI/commit/0fa4fbf38c7d67024a62b4920ba027d8e9cc755f))
+
 ## [0.9.0](https://github.com/Filipe-Soares-de-Almeida/MemAI/compare/v0.8.0...v0.9.0) (2026-10-05)
 
 
