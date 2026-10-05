@@ -278,7 +278,9 @@ def commands(root: Path | None = None) -> list[str]:
         return [f'"{root / "update.bat"}"']
     pull = f'git -C "{root}" pull --ff-only'
     pip = f'"{sys.executable}" -m pip install'
-    return [pull, f'cd "{root}" && {pip} --require-hashes -r requirements-dev.txt '
+    # memai leaves first: pip checks the lock against the installed one's pins.
+    drop = f'"{sys.executable}" -m pip uninstall -y -q memai'
+    return [pull, f'cd "{root}" && {drop} && {pip} --require-hashes -r requirements-dev.txt '
                   f'&& {pip} --no-deps -e . && "{sys.executable}" tools/install-webui.py']
 
 
