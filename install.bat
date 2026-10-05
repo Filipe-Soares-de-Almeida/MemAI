@@ -25,17 +25,15 @@ if /i "%~1"=="--webui-zip" (
 if errorlevel 1 exit /b 1
 
 call .venv\Scripts\activate.bat
-rem The lock pins every package CI tested, by hash. pip refuses an editable
-rem project under --require-hashes, so the checkout goes in on its own after it.
-rem The installed memai goes first: pip checks the lock against its old pins.
-python -m pip show -q memai >nul 2>nul && python -m pip uninstall -y -q memai
-python -m pip install --require-hashes -r requirements-dev.txt
+rem pip refuses an editable under --require-hashes, so the checkout goes in alone and
+rem first: pip checks the hashed lock against the installed memai's pins.
+pip install --no-deps -e .
 if errorlevel 1 (
     echo.
     echo Install failed.
     exit /b 1
 )
-pip install --no-deps -e .
+python -m pip install --require-hashes -r requirements-dev.txt
 if errorlevel 1 (
     echo.
     echo Install failed.
