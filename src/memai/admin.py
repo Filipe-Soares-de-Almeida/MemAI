@@ -781,6 +781,27 @@ def task_comment(request, payload) -> dict:
         return _task_answer(conn, uid)
 
 
+def task_note(request, payload) -> dict:
+    uid = request.path_params["uid"]
+    items = [str(k) for k in payload.get("items") or []]
+    with db.connect() as conn:
+        if payload.get("id"):
+            tasks.edit_note(conn, uid, int(payload["id"]), title=payload.get("title") or "",
+                            body=payload.get("body") or "",
+                            items=items if "items" in payload else None)
+        else:
+            tasks.add_note(conn, uid, title=payload.get("title") or "",
+                           body=payload.get("body") or "", items=items)
+        return _task_answer(conn, uid)
+
+
+def task_delete_note(request, payload) -> dict:
+    uid = request.path_params["uid"]
+    with db.connect() as conn:
+        tasks.delete_note(conn, uid, int(payload.get("id") or 0))
+        return _task_answer(conn, uid)
+
+
 def _targets(value) -> list[str]:
     """A link target given as one uid or as a list of them."""
     return [str(v) for v in value] if isinstance(value, (list, tuple)) else [str(value or "")]
@@ -2765,6 +2786,8 @@ routes = [
     Route("/api/tasks/{uid}/items", api(task_add_items), methods=["POST"]),
     Route("/api/tasks/{uid}/goal", api(task_goal), methods=["POST"]),
     Route("/api/tasks/{uid}/comment", api(task_comment), methods=["POST"]),
+    Route("/api/tasks/{uid}/note", api(task_note), methods=["POST"]),
+    Route("/api/tasks/{uid}/note", api(task_delete_note), methods=["DELETE"]),
     Route("/api/tasks/{uid}/link", api(task_link), methods=["POST"]),
     Route("/api/tasks/{uid}/link", api(task_unlink), methods=["DELETE"]),
     Route("/api/bulk", api(bulk), methods=["POST"]),

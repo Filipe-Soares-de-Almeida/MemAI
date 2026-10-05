@@ -5,8 +5,8 @@ description: >
   store, BM25 keyword search) — which tool
   family to call when: pulse/must_read/search/recall/list_by_domain/list_recent/
   list_domains/get_memory to read; note, reasoning, anti_pattern,
-  checkpoint, task, diagram to write; task_item/task_add/task_comment to work a
-  task; diagram_*/get_diagram for flows;
+  checkpoint, task, diagram to write; task_item/task_add/task_comment/task_note
+  to work a task and task_read to read one; diagram_*/get_diagram for flows;
   edit_memory/link_memories/set_confidence/also_domain/forget/purge_memory to
   curate — plus the session/domain/tags convention, with domains as nested
   PATHS and cross-listing (also), and review_after/source_ref for a memory
@@ -309,6 +309,17 @@ When the session-start hook fires, or when resuming work:
 
 ## 3.1 Getting back what you wrote (which tool to call)
 
+**Every response fits one tool result.** A collection that can grow comes
+back one page at a time: the page carries `total` and, when more remain,
+`next_offset` — call again with `offset=next_offset` until it is absent.
+`list_domains()` pages `domains`, `get_relations(uid, part)` pages
+`records` (`relations`, or `diagrams` for the flows pointing at it),
+`dedup_scan` pages `pairs`, `optimize_runs` pages `runs` and
+`optimize_status` pages `suggestions`; `search`, `recall`, `list_by_domain`
+and `list_recent` take an `offset` inside their `limit`. `get_memory` returns
+counts with the call that pages each part (`next`), and a body too long for
+one result comes back cut, with `next.content_offset`.
+
 Every writer stores a **fixed `type`**, and the writer is **named after the
 type**. To bring it back, filter on that `type`.
 
@@ -418,7 +429,7 @@ and copying their `LABEL: text` shape only makes it look like one. Each item get
 and a key is never reused: an item that stops applying is `dropped`, never
 deleted. A tool takes `i3` or `3` for the third item. The task's content is
 generated from the goal and the items (`[ ]` todo, `[~]` doing, `[x]` done,
-`[-]` dropped), and every change to it is one entry in the edit history.
+`[-]` dropped); only a goal edit enters the edit history.
 
 Work it with:
 
@@ -432,9 +443,18 @@ Work it with:
 - **`task_comment(uid, body, item)`** — a comment on the task, or on one item
   when `item` names a key. A comment never edits the content, so it carries
   what a checklist cannot: why an item is blocked, what a review said.
-- **`get_memory(uid)`** returns a `task` block beside the usual record: the
-  goal, the state, every item with its linked memories, and the comments,
-  oldest first.
+- **`task_note(uid, title, body, items, note_id, delete)`** — a note the task
+  owns: an item's brief, a recipe or a rule several items share. It is not a
+  memory, so search, recall, pulse and must_read never return it; write with
+  `note()` only what stands on its own outside the task. `items` puts it on
+  those items, empty puts it on the whole task; a `note_id` edits it in place.
+- **`get_memory(uid)`** returns the task's head: goal, state, progress and the
+  count of items, task notes and task comments, with `next` naming the
+  `task_read` call for each. It lists no items.
+- **`task_read(uid, part, item, offset)`** — one page of one collection:
+  `items` (each with its counts), `notes` and `comments` (the task's own, or
+  with `item` that item's), `links` (an item's linked memories). Follow
+  `next_offset` until it is absent.
 
 **Lifecycle.** A task is `open` while any item is `todo` or `doing`. The
 write that leaves every item `done` or `dropped` closes it itself: at least one
@@ -626,9 +646,9 @@ always published, `diagrams` and `curation` only when named (or under the
 | `list_recent(type, domain, limit, subtree)` | Recency-ordered, global unless a `type`/`domain` narrows it | core |
 | | The four above return `{"results": [...], "est_tokens": N}` — index into `results` | |
 | `timeline(uid, query, before, after, domain, type)` | The records created immediately before and after one anchor, oldest first: `{"anchored_by", "anchor", "before", "after"}` | core |
-| `list_domains()` | The domain **tree**: `parent`/`depth`/`count`/`subtree`/`children`/`implicit` + `also`/`subtree_also` and latest activity — how to find the exact string | core |
-| `get_memory(uid)` | Full record + edit history + relations (+ the diagrams whose steps point at it; a task's goal, items, linked memories and comments) | core |
-| `get_relations(uid)` | A memory's relations, incoming and outgoing | core |
+| `list_domains(offset)` | The domain **tree**, paged: `parent`/`depth`/`count`/`subtree`/`children`/`implicit` + `also`/`subtree_also` and latest activity — how to find the exact string | core |
+| `get_memory(uid, edits_offset, content_offset)` | One record + relations + edit count (+ the diagrams whose steps point at it; a task's head); edits and a long body page through the offsets | core |
+| `get_relations(uid, part, offset)` | A memory's relations, incoming and outgoing, or the diagrams pointing at it; paged | core |
 | `get_diagram(uid, format)` | Read a flow back: `json` · `text` · `svg-interactive` · `svg` · `mermaid` | core |
 
 | Writing | | group |
@@ -641,6 +661,8 @@ always published, `diagrams` and `curation` only when named (or under the
 | `task_item(uid, item, state, comment, related)` | One item's state (`todo` \| `doing` \| `done` \| `dropped`), a comment on it, memories linked to it; the last close archives the task | core |
 | `task_add(uid, items)` | Append items to a task, one per line; a closed task reopens | core |
 | `task_comment(uid, body, item)` | A comment on a task, or on one item | core |
+| `task_note(uid, title, body, items, note_id, delete)` | A note owned by the task, on items or the whole task; never a memory | core |
+| `task_read(uid, part, item, offset)` | One page of a task's items, notes, comments or an item's links | core |
 | `diagram(title, nodes, edges, summary, domain, also, session, tags, kind, review_after, source_ref)` | A routine as a flow/graph → `type='diagram'` | diagrams |
 | `diagram_node` / `diagram_edge` / `diagram_link` / `diagram_jump` / `diagram_relayout` | One step / one arrow / a memory on a step / a jump into another flow / rebuild positions | diagrams |
 
@@ -656,11 +678,11 @@ always published, `diagrams` and `curation` only when named (or under the
 
 | Curation pass | | group |
 |---|---|---|
-| `dedup_scan(domain, type, threshold, limit)` | Likely duplicate/contradictory **pairs** to review; no merge | curation |
+| `dedup_scan(domain, type, threshold, limit, offset)` | Likely duplicate/contradictory **pairs** to review, paged; no merge | curation |
 | `optimize_scan(domain, type, since, include_archived, limit, offset, full)` | Dump the corpus compactly to plan a pass: curation fields, relation edges, dedup and domain hints, recall counts, and per-memory `anchors` (URLs, paths, identifiers) to check against live facts. `due: true` is the store saying a `review_after` has passed | curation |
 | | A low `recalls` count means **unproven, not useless** — a memory about a rare subject looks exactly like one nobody wants. Judge the store by the aggregate; never archive a row for being unread | |
 | `optimize_stage(suggestions, note)` | Stage a batch for human review; **nothing is applied here** | curation |
-| `optimize_runs()` / `optimize_status(run_id)` | What was staged, and what the human applied or rejected | curation |
+| `optimize_runs(offset)` / `optimize_status(run_id, offset)` | What was staged, and what the human applied or rejected; paged | curation |
 
 **`optimize_stage` accepts 11 suggestion kinds:** `compact` and `reword`
 (`{"new_content"}`), `retag` (`{"tags"}`), `redomain` (`{"domain"}`),

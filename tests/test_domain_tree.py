@@ -181,7 +181,7 @@ def test_list_domains_orders_parents_with_their_liveliest_child(conn):
 def test_mcp_list_domains_returns_the_tree(monkeypatch, tmp_path):
     monkeypatch.setenv("MEMAI_HOME", str(tmp_path))
     server.note("fixture title", content="x", domain="acme/x100/p200")
-    by_path = {d["domain"]: d for d in server.list_domains()}
+    by_path = {d["domain"]: d for d in server.list_domains()["domains"]}
     assert by_path["acme"]["subtree"] == 1 and by_path["acme"]["implicit"] is True
 
 

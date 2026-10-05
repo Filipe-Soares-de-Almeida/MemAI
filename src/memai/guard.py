@@ -47,6 +47,8 @@ GUARDED: dict[str, tuple[str, ...]] = {
     "task_item": ("uid", "item"),
     "task_add": ("uid", "items"),
     "task_comment": ("uid", "body"),
+    "task_read": ("uid", "part"),
+    "task_note": ("uid",),
     **{tool: ("title", *(s.key for s in spec))
        for tool, spec in sections.SECTION_SPEC.items()},
 }

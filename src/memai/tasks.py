@@ -7,7 +7,7 @@ goal and items, the way a diagram's content is generated from its graph.
 import re
 import sqlite3
 
-from . import db
+from . import budget, db
 
 ITEM_STATES = ("todo", "doing", "done", "dropped")
 TASK_STATES = ("open", "completed", "cancelled")
@@ -16,6 +16,7 @@ GOAL_MAX = 2000
 ITEM_MAX = 300
 ITEMS_MAX = 50
 COMMENT_MAX = 2000
+NOTE_MAX = 4000
 
 MARKS = {"todo": "[ ]", "doing": "[~]", "done": "[x]", "dropped": "[-]"}
 
@@ -104,7 +105,7 @@ def is_task(conn: sqlite3.Connection, uid: str) -> bool:
 
 
 def get_task(conn: sqlite3.Connection, uid: str) -> dict | None:
-    """The task's goal, state, items (with linked memories) and comments, or None."""
+    """The task's goal, state, items (with linked memories), comments and notes, or None."""
     head = conn.execute("SELECT * FROM tasks WHERE memory_uid = ?", (uid,)).fetchone()
     if head is None:
         return None
@@ -137,9 +138,12 @@ def get_task(conn: sqlite3.Connection, uid: str) -> dict | None:
             "SELECT * FROM task_comments WHERE memory_uid = ? ORDER BY created_at, id", (uid,)
         )
     ]
+    keys = _note_item_map(conn, uid)
+    notes = [_note_dict(r, keys) for r in conn.execute(
+        "SELECT * FROM task_notes WHERE memory_uid = ? ORDER BY created_at, id", (uid,))]
     return {
         "goal": head["goal"], "state": head["state"], "completed_at": head["completed_at"],
-        "items": items, "comments": comments,
+        "items": items, "comments": comments, "notes": notes,
     }
 
 
@@ -181,12 +185,16 @@ def _require_item(conn: sqlite3.Connection, uid: str, item: str) -> str:
     return key
 
 
-def _regenerate(conn: sqlite3.Connection, uid: str, note: str) -> None:
+def _regenerate(conn: sqlite3.Connection, uid: str, note: str, *, record_edit: bool) -> None:
     """Rewrite the memory's content from the goal and items when it changed."""
     goal = conn.execute("SELECT goal FROM tasks WHERE memory_uid = ?", (uid,)).fetchone()["goal"]
     content = render(goal, _items(conn, uid))
-    if content != db.memory_row(conn, uid)["content"]:
+    if content == db.memory_row(conn, uid)["content"]:
+        return
+    if record_edit:
         db.update_memory_content(conn, uid, content, note=note)
+    else:
+        db.set_generated_content(conn, uid, content)
 
 
 def _settle(conn: sqlite3.Connection, uid: str) -> None:
@@ -243,7 +251,7 @@ def set_item_state(
                WHERE memory_uid = ? AND item_key = ?""",
             (state, db.now_iso(), session, uid, key),
         )
-        _regenerate(conn, uid, f"item {key}: {old} -> {state}")
+        _regenerate(conn, uid, f"item {key}: {old} -> {state}", record_edit=False)
         _settle(conn, uid)
     return {"uid": uid, "item": key, "state": state, "changed": changed, **_outcome(conn, uid)}
 
@@ -274,7 +282,7 @@ def add_items(conn: sqlite3.Connection, uid: str, items: list[str], *, session: 
         [(uid, k, last + n, t, stamp, session) for n, (k, t) in enumerate(zip(keys, items, strict=True), start=1)],
     )
     note = f"item {keys[0]} added" if len(keys) == 1 else f"items {', '.join(keys)} added"
-    _regenerate(conn, uid, note)
+    _regenerate(conn, uid, note, record_edit=False)
     _settle(conn, uid)
     return {"uid": uid, "keys": keys, **_outcome(conn, uid)}
 
@@ -298,10 +306,13 @@ def delete_item(conn: sqlite3.Connection, uid: str, item: str, *, session: str =
     conn.execute(
         "UPDATE tasks SET item_seq = MAX(item_seq, ?) WHERE memory_uid = ?", (gone["seq"], uid)
     )
+    conn.execute(
+        "DELETE FROM task_note_items WHERE item_key = ? AND note_id IN "
+        "(SELECT id FROM task_notes WHERE memory_uid = ?)", (key, uid))
     for table in ("task_comments", "task_item_links"):
         conn.execute(f"DELETE FROM {table} WHERE memory_uid = ? AND item_key = ?", (uid, key))
     conn.execute("DELETE FROM task_items WHERE memory_uid = ? AND item_key = ?", (uid, key))
-    _regenerate(conn, uid, f"item {key} deleted: {gone['text']}")
+    _regenerate(conn, uid, f"item {key} deleted: {gone['text']}", record_edit=False)
     state = conn.execute("SELECT state FROM tasks WHERE memory_uid = ?", (uid,)).fetchone()["state"]
     if state == "open":
         _settle(conn, uid)
@@ -317,7 +328,7 @@ def set_goal(conn: sqlite3.Connection, uid: str, goal: str) -> None:
         raise ValueError(f"goal is {len(goal)} characters; the limit is {GOAL_MAX}")
     _lock(conn, uid)
     conn.execute("UPDATE tasks SET goal = ? WHERE memory_uid = ?", (goal, uid))
-    _regenerate(conn, uid, "goal edited")
+    _regenerate(conn, uid, "goal edited", record_edit=True)
 
 
 def add_comment(
@@ -380,6 +391,114 @@ def unlink_item(conn: sqlite3.Connection, uid: str, item: str, target: str) -> b
     return cur.rowcount > 0
 
 
+def _note_fields(title: str, body: str) -> tuple[str, str]:
+    title, body = str(title).strip(), str(body).strip()
+    if not title or not body:
+        raise ValueError("a task note needs a title and a body")
+    if len(title) > db.TITLE_MAX:
+        raise ValueError(f"title is {len(title)} characters; the limit is {db.TITLE_MAX}")
+    if len(body) > NOTE_MAX:
+        raise ValueError(f"body is {len(body)} characters; the limit is {NOTE_MAX}")
+    db._refuse_leak(db.TASK_TYPE, f"{title}\n{body}")
+    return title, body
+
+
+def _note_keys(conn: sqlite3.Connection, uid: str, items: list[str]) -> list[str]:
+    return list(dict.fromkeys(_require_item(conn, uid, i) for i in items if str(i).strip()))
+
+
+def _require_note(conn: sqlite3.Connection, uid: str, note_id: int) -> int:
+    found = conn.execute(
+        "SELECT id FROM task_notes WHERE id = ? AND memory_uid = ?", (int(note_id), uid)
+    ).fetchone()
+    if found is None:
+        raise ValueError(f"task {uid} has no note {note_id}")
+    return found["id"]
+
+
+def _set_note_items(conn: sqlite3.Connection, note_id: int, keys: list[str]) -> None:
+    conn.execute("DELETE FROM task_note_items WHERE note_id = ?", (note_id,))
+    conn.executemany("INSERT INTO task_note_items (note_id, item_key) VALUES (?, ?)",
+                     [(note_id, k) for k in keys])
+
+
+def _note_item_map(conn: sqlite3.Connection, uid: str) -> dict[int, list[str]]:
+    """Each note's item keys, in item order."""
+    keys: dict[int, list[str]] = {}
+    for r in conn.execute(
+        """SELECT i.note_id, i.item_key FROM task_note_items i
+           JOIN task_notes n ON n.id = i.note_id
+           JOIN task_items t ON t.memory_uid = n.memory_uid AND t.item_key = i.item_key
+           WHERE n.memory_uid = ? ORDER BY t.seq""", (uid,)):
+        keys.setdefault(r["note_id"], []).append(r["item_key"])
+    return keys
+
+
+def _note_dict(row: sqlite3.Row, keys: dict[int, list[str]]) -> dict:
+    return {"id": row["id"], "title": row["title"], "body": row["body"],
+            "items": keys.get(row["id"], []), "updated_at": row["updated_at"]}
+
+
+def add_note(conn: sqlite3.Connection, uid: str, *, title: str, body: str,
+             items: list[str], session: str = "") -> int:
+    """A note owned by the task, on `items` or, with none, on the task as a whole; returns its id."""
+    title, body = _note_fields(title, body)
+    _lock(conn, uid)
+    keys = _note_keys(conn, uid, items)
+    stamp = db.now_iso()
+    cur = conn.execute(
+        """INSERT INTO task_notes (memory_uid, title, body, session, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?)""", (uid, title, body, session, stamp, stamp))
+    note_id = cur.lastrowid or 0
+    _set_note_items(conn, note_id, keys)
+    return note_id
+
+
+def edit_note(conn: sqlite3.Connection, uid: str, note_id: int, *, title: str = "",
+              body: str = "", items: list[str] | None = None) -> None:
+    """Overwrite a note; an empty title or body keeps the stored one, items=None keeps the set."""
+    _lock(conn, uid)
+    note_id = _require_note(conn, uid, note_id)
+    row = conn.execute("SELECT title, body FROM task_notes WHERE id = ?", (note_id,)).fetchone()
+    title, body = _note_fields(title or row["title"], body or row["body"])
+    keys = None if items is None else _note_keys(conn, uid, items)
+    conn.execute("UPDATE task_notes SET title = ?, body = ?, updated_at = ? WHERE id = ?",
+                 (title, body, db.now_iso(), note_id))
+    if keys is not None:
+        _set_note_items(conn, note_id, keys)
+
+
+def delete_note(conn: sqlite3.Connection, uid: str, note_id: int) -> None:
+    _lock(conn, uid)
+    note_id = _require_note(conn, uid, note_id)
+    conn.execute("DELETE FROM task_note_items WHERE note_id = ?", (note_id,))
+    conn.execute("DELETE FROM task_notes WHERE id = ?", (note_id,))
+
+
+def note(conn: sqlite3.Connection, uid: str, note_id: int) -> dict:
+    """One note of the task, shaped like a notes() entry."""
+    note_id = _require_note(conn, uid, note_id)
+    row = conn.execute("SELECT * FROM task_notes WHERE id = ?", (note_id,)).fetchone()
+    return _note_dict(row, _note_item_map(conn, uid))
+
+
+def notes(conn: sqlite3.Connection, uid: str, item: str = "") -> list[dict]:
+    """The task-level notes, or with `item` the notes on that item, oldest first."""
+    if str(item).strip():
+        key = _require_item(conn, uid, item)
+        rows = conn.execute(
+            """SELECT n.* FROM task_notes n JOIN task_note_items i ON i.note_id = n.id
+               WHERE n.memory_uid = ? AND i.item_key = ? ORDER BY n.created_at, n.id""",
+            (uid, key)).fetchall()
+    else:
+        rows = conn.execute(
+            """SELECT * FROM task_notes n WHERE memory_uid = ? AND NOT EXISTS
+               (SELECT 1 FROM task_note_items i WHERE i.note_id = n.id)
+               ORDER BY created_at, id""", (uid,)).fetchall()
+    keys = _note_item_map(conn, uid)
+    return [_note_dict(r, keys) for r in rows]
+
+
 def restore_task(conn: sqlite3.Connection, record: dict) -> None:
     """Write a task's rows from an export record, under an already-restored memory.
 
@@ -432,3 +551,94 @@ def restore_task(conn: sqlite3.Connection, record: dict) -> None:
             for c in record.get("comments") or []
         ],
     )
+    known = {i["key"] for i in record.get("items") or []}
+    for n in record.get("notes") or []:
+        cur = conn.execute(
+            """INSERT INTO task_notes (memory_uid, title, body, session, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (uid, n["title"], n["body"], n.get("session", ""),
+             n.get("created_at") or db.now_iso(), n.get("updated_at") or db.now_iso()))
+        _set_note_items(conn, cur.lastrowid or 0, [k for k in n.get("items") or [] if k in known])
+
+
+PARTS = ("items", "notes", "comments", "links")
+
+
+def _require_task(conn: sqlite3.Connection, uid: str) -> sqlite3.Row:
+    row = conn.execute("SELECT * FROM tasks WHERE memory_uid = ?", (uid,)).fetchone()
+    if row is None:
+        raise ValueError(f"no task {uid}")
+    return row
+
+
+def _count(conn: sqlite3.Connection, sql: str, *args) -> int:
+    return conn.execute(sql, args).fetchone()[0]
+
+
+def _item_counts(conn: sqlite3.Connection, uid: str, key: str) -> dict:
+    return {
+        "notes": _count(conn, "SELECT COUNT(*) FROM task_note_items i JOIN task_notes n "
+                              "ON n.id = i.note_id WHERE n.memory_uid = ? AND i.item_key = ?",
+                        uid, key),
+        "comments": _count(conn, "SELECT COUNT(*) FROM task_comments "
+                                 "WHERE memory_uid = ? AND item_key = ?", uid, key),
+        "links": _count(conn, "SELECT COUNT(*) FROM task_item_links "
+                              "WHERE memory_uid = ? AND item_key = ?", uid, key),
+    }
+
+
+def head(conn: sqlite3.Connection, uid: str) -> dict:
+    """Goal, state, progress and the size of each task-level collection; no records."""
+    row = _require_task(conn, uid)
+    return {
+        "goal": row["goal"], "state": row["state"], "progress": progress(conn, uid),
+        "counts": {
+            "items": _count(conn, "SELECT COUNT(*) FROM task_items WHERE memory_uid = ?", uid),
+            "notes": _count(conn, "SELECT COUNT(*) FROM task_notes n WHERE memory_uid = ? AND "
+                                  "NOT EXISTS (SELECT 1 FROM task_note_items i "
+                                  "WHERE i.note_id = n.id)", uid),
+            "comments": _count(conn, "SELECT COUNT(*) FROM task_comments "
+                                     "WHERE memory_uid = ? AND item_key = ''", uid),
+        },
+    }
+
+
+def _records(conn: sqlite3.Connection, uid: str, part: str, key: str) -> list[dict]:
+    if part == "items":
+        return [{"key": i["key"], "state": i["state"], "text": i["text"],
+                 "counts": _item_counts(conn, uid, i["key"])} for i in _items(conn, uid)]
+    if part == "notes":
+        return notes(conn, uid, key)
+    if part == "comments":
+        return [{"id": r["id"], "item": r["item_key"], "body": r["body"], "author": r["author"],
+                 "created_at": r["created_at"]}
+                for r in conn.execute(
+                    "SELECT * FROM task_comments WHERE memory_uid = ? AND item_key = ? "
+                    "ORDER BY created_at, id", (uid, key))]
+    return [{"uid": r["target_uid"], "type": r["type"], "title": r["title"],
+             "est_tokens": db.est_tokens(r["n"])}
+            for r in conn.execute(
+                """SELECT l.target_uid, m.type, m.title, LENGTH(m.content) AS n
+                   FROM task_item_links l JOIN memories m ON m.uid = l.target_uid
+                   WHERE l.memory_uid = ? AND l.item_key = ?
+                   ORDER BY l.created_at, l.target_uid""", (uid, key))]
+
+
+def read_part(conn: sqlite3.Connection, uid: str, part: str, item: str = "",
+              offset: int = 0) -> dict:
+    """One page of one collection of the task; `next_offset` is absent on the last page."""
+    _require_task(conn, uid)
+    if part not in PARTS:
+        raise ValueError(f"{part!r} is not a part; use one of {', '.join(PARTS)}")
+    key = _require_item(conn, uid, item) if str(item).strip() else ""
+    if part == "items" and key:
+        raise ValueError("part='items' lists every item; leave item empty")
+    if part == "links" and not key:
+        raise ValueError("part='links' needs an item")
+    records = _records(conn, uid, part, key)
+    rows, nxt = budget.page(records, offset)
+    out = {"uid": uid, "part": part, "item": key, "total": len(records),
+           "offset": offset, "records": rows}
+    if nxt is not None:
+        out["next_offset"] = nxt
+    return out

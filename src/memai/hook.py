@@ -53,7 +53,7 @@ from pathlib import Path
 
 # `guard` runs in front of every tool call, so the module loads only what it
 # needs: the store, the brief, the release check and the installer load per event.
-from memai import guard, warden
+from memai import budget, guard, warden
 
 # Minutes after the last write a Stop hook assumes the session recorded what it learned: covers
 # reading and discussion after a note, while a session that wrote nothing still gets asked.
@@ -77,6 +77,9 @@ def _payload() -> dict:
     return data if isinstance(data, dict) else {}
 
 
+_CLIP_TAIL = "[cut to fit the hook output limit: read the rest with pulse() or must_read()]"
+
+
 def _emit(event: str, context: str, *, system: str = "") -> None:
     """One hook result on stdout. Silence when there is nothing to add.
 
@@ -89,9 +92,10 @@ def _emit(event: str, context: str, *, system: str = "") -> None:
     """
     if not context:
         return
+    context = budget.clip(context, budget.HOOK_MAX_CHARS, _CLIP_TAIL)
     out: dict = {"hookSpecificOutput": {"hookEventName": event, "additionalContext": context}}
     if system:
-        out["systemMessage"] = system
+        out["systemMessage"] = budget.clip(system, budget.HOOK_MAX_CHARS, _CLIP_TAIL)
     sys.stdout.buffer.write(json.dumps(out, ensure_ascii=False).encode("utf-8"))
     sys.stdout.buffer.flush()
 
@@ -101,7 +105,7 @@ def _block(reason: str) -> None:
 
     Bytes rather than sys.stdout for the reason given in _emit.
     """
-    out = {"decision": "block", "reason": reason}
+    out = {"decision": "block", "reason": budget.clip(reason, budget.HOOK_MAX_CHARS, _CLIP_TAIL)}
     sys.stdout.buffer.write(json.dumps(out, ensure_ascii=False).encode("utf-8"))
     sys.stdout.buffer.flush()
 

@@ -33,13 +33,26 @@ carry a per-process `session` stamp unless one is passed.
 
 from __future__ import annotations
 
+import functools
 import json
+import logging
 import os
 import re
 
 from mcp.server.mcpserver import MCPServer
 
-from memai import autostart, brief, db, diagram_svg, hook_install, portable, sections, tasks, update
+from memai import (
+    autostart,
+    brief,
+    budget,
+    db,
+    diagram_svg,
+    hook_install,
+    portable,
+    sections,
+    tasks,
+    update,
+)
 from memai import pending as pending_lists
 
 # Sent in the initialize handshake and injected into context by hosts that support it. One
@@ -165,6 +178,7 @@ def _instructions() -> str:
     return "\n\n".join([INSTRUCTIONS, *(note for note in notes if note)])
 
 
+log = logging.getLogger(__name__)
 mcp = MCPServer("memai", instructions=_instructions())
 
 
@@ -199,6 +213,8 @@ _GROUP_OF: dict[str, str] = {}
 # Parameter text several writer tools share. A docstring line holding only
 # `@param <key>` is replaced by the entry, at that line's indentation.
 PARAM_DOCS: dict[str, str] = {
+    "offset_page": """\
+offset: where the page starts; `next_offset`, when present, starts the next.""",
     "title": """\
 title: one line naming what this memory is about, in the words someone
 would look for it by. It is what a list shows instead of the opening of
@@ -263,17 +279,29 @@ def _expand_params(doc: str | None) -> str | None:
 def tool(group: str):
     """Register a tool with the MCP server when its group is active.
 
-    Always returns the plain function, so the module-level name stays
-    callable from the admin surface and the tests whether or not the schema
-    was published. Shared parameter text is expanded into `__doc__` first,
+    Always returns the function, wrapped so a result over the output
+    ceiling becomes an error, so the module-level name stays callable from
+    the admin surface and the tests whether or not the schema was published. Shared parameter text is expanded into `__doc__` first,
     so FastMCP publishes the full description.
     """
     def wrap(fn):
         fn.__doc__ = _expand_params(fn.__doc__)
+
+        @functools.wraps(fn)
+        def bounded(*args, **kwargs):
+            result = fn(*args, **kwargs)
+            size = budget.result_chars(result)
+            if size <= budget.MCP_RESULT_MAX_CHARS:
+                return result
+            log.error("%s produced %d characters, over the %d budget",
+                      fn.__name__, size, budget.MCP_RESULT_MAX_CHARS)
+            return _errors([f"{fn.__name__} produced {size} characters, over the "
+                            f"{budget.MCP_RESULT_MAX_CHARS} budget; this is a memai bug"])
+
         _GROUP_OF[fn.__name__] = group
         if group in _ACTIVE_SETS:
-            mcp.tool()(fn)
-        return fn
+            mcp.tool()(bounded)
+        return bounded
     return wrap
 
 
@@ -338,15 +366,36 @@ def _snippet_dict(d: dict) -> dict:
     return d
 
 
-def _listing(rows) -> dict:
+def _offset_error(*offsets) -> str:
+    for value in offsets:
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            return f"offset must be a whole number of 0 or more, got {value!r}"
+    return ""
+
+
+def _page(records: list, offset: int, key: str = "records", **head) -> dict:
+    """One page of `records` under `key`, with `total` and, unless it is the last, `next_offset`."""
+    rows, nxt = budget.page(records, offset)
+    out = {**head, "total": len(records), "offset": offset, key: rows}
+    if nxt is not None:
+        out["next_offset"] = nxt
+    return out
+
+
+def _listing(conn, rows, offset: int = 0) -> dict:
     """Rows as a list result: {"results": [...], "est_tokens": N}.
 
     Each result is snippet-truncated and carries its own `est_tokens`; the
     top-level one is their sum -- what opening everything this response
     returned would cost.
     """
-    results = [_snippet_dict(_row_to_dict(r)) for r in rows]
-    return {"results": results, "est_tokens": sum(r["est_tokens"] for r in results)}
+    rows = list(rows)[offset:]
+    results, nxt = budget.page([_snippet_dict(_row_to_dict(r)) for r in rows], 0)
+    _read(conn, rows[:len(results)])
+    out = {"results": results, "est_tokens": sum(r["est_tokens"] for r in results)}
+    if nxt is not None:
+        out["next_offset"] = offset + nxt
+    return out
 
 
 def _read(conn, rows):
@@ -734,14 +783,47 @@ def task_comment(uid: str, body: str, item: str = "") -> dict:
     return {"uid": uid, "comment_id": comment_id}
 
 
-def _capped(body: str) -> str:
-    """Keep one rendered diagram from eating a whole context window."""
-    budget = db.DIAGRAM_BODY_BUDGET
-    if len(body) <= budget:
-        return body
-    return body[:budget].rstrip() + (
-        f"\n... [+{len(body) - budget} chars; open the admin dashboard for the full diagram]"
-    )
+@tool("core")
+def task_read(uid: str, part: str, item: str = "", offset: int = 0) -> dict:
+    """Read one collection of a task, one page at a time.
+
+    part: `items` (each with its state and counts), `notes` and `comments`
+    (the task's own; with `item`, that item's) or `links` (the memories
+    linked to `item`). Follow `next_offset` until it is absent.
+    """
+    try:
+        with db.connect() as conn:
+            return tasks.read_part(conn, uid, part, item, offset)
+    except ValueError as exc:
+        return _errors([str(exc)])
+
+
+@tool("core")
+def task_note(uid: str, title: str = "", body: str = "", items: str = "", note_id: int = 0,
+              delete: bool = False) -> dict:
+    """Write a note owned by a task: an item's brief, a rule its items share.
+
+    Not a memory: only task_read() returns it. note_id=0 creates; a
+    note_id edits in place (empty fields keep theirs) or, with delete,
+    removes it. items: keys such as "i3,i7"; empty or "-" means the whole
+    task. Title up to 120 characters, body up to 4000.
+    """
+    keys = [k.strip() for k in items.split(",") if k.strip() and k.strip() != "-"]
+    try:
+        with db.connect() as conn:
+            if delete:
+                tasks.delete_note(conn, uid, note_id)
+                return {"uid": uid, "note_id": note_id, "deleted": True}
+            if note_id:
+                tasks.edit_note(conn, uid, note_id, title=title, body=body,
+                                items=keys if items.strip() else None)
+            else:
+                note_id = tasks.add_note(conn, uid, title=title, body=body, items=keys,
+                                         session=SESSION)
+            on = tasks.note(conn, uid, note_id)["items"]
+    except ValueError as exc:
+        return _errors([str(exc)])
+    return {"uid": uid, "note_id": note_id, "items": on}
 
 
 @tool("diagrams")
@@ -925,7 +1007,7 @@ _DIAGRAM_FORMATS = ("mermaid", "text", "json", "svg", "svg-interactive")
 
 
 @tool("core")
-def get_diagram(uid: str, format: str = "mermaid") -> dict:
+def get_diagram(uid: str, format: str = "mermaid", offset: int = 0) -> dict:
     """Read a diagram back: format='svg-interactive' to show it, 'json' to reason about it.
 
     Formats: 'svg-interactive' (canvas drawing in a pan/zoom shell -- the one
@@ -940,25 +1022,31 @@ def get_diagram(uid: str, format: str = "mermaid") -> dict:
     from. The returned `next_step` says what to do with the path, at the
     point where it matters: when the user asked to SEE the flow, reading the
     file and emitting it inline is the work, not a cost to avoid.
+
+    A long `body`, and the SVG step index, page through `offset`.
     """
     if format not in _DIAGRAM_FORMATS:
         return _errors([f"unknown format {format!r}; use "
                         f"{', '.join(repr(f) for f in _DIAGRAM_FORMATS)}"])
+    if error := _offset_error(offset):
+        return _errors([error])
     with db.connect() as conn:
         data = db.get_diagram(conn, uid)
         if data is None:
             return _errors([f"{uid} is not a diagram"])
         db.record_recall(conn, [uid])
-        if format == "json":
-            return {"format": "json", **data}
         if format in ("svg", "svg-interactive"):
-            return _write_render(conn, uid, data, format)
+            return _write_render(conn, uid, data, format, offset)
         body = (
-            db.render_diagram_text(conn, uid) if format == "text"
+            json.dumps(data, ensure_ascii=False, indent=1) if format == "json"
+            else db.render_diagram_text(conn, uid) if format == "text"
             else db.render_diagram_mermaid(conn, uid)
         )
-    out = {"uid": uid, "title": data["title"], "format": format,
-           "body": _capped(body)}
+    text, nxt = budget.text_chunk(body, offset)
+    out = {"uid": uid, "title": data["title"], "format": format, "offset": offset,
+           "chars": len(body), "body": text}
+    if nxt is not None:
+        out["next_offset"] = nxt
     if format == "mermaid":
         # Repeated from the docstring because the caller is reading this now: answering "render
         # the diagram" with mermaid would silently swap the user's arrangement for a fresh layout.
@@ -969,7 +1057,7 @@ def get_diagram(uid: str, format: str = "mermaid") -> dict:
     return out
 
 
-def _write_render(conn, uid: str, data: dict, format: str) -> dict:
+def _write_render(conn, uid: str, data: dict, format: str, offset: int = 0) -> dict:
     """Draw, write, sweep, and report -- without the markup in the payload.
 
     The index of steps IS the payload: labels and link targets, so the
@@ -1017,19 +1105,18 @@ def _write_render(conn, uid: str, data: dict, format: str) -> dict:
             "rather than to download; read it only if you need the markup"),
         "bytes": len(markup.encode("utf-8")),
         "viewbox": [round(v) for v in viewbox],
-        "nodes": [
-            {"key": n["key"], "label": n["label"], "shape": n["shape"],
-             **({"links": links[n["key"]]} if n["key"] in links else {})}
-            for n in data["nodes"]
-        ],
         "edges": len(data["edges"]),
         "retention": swept["mode"],
         "pruned": swept["pruned"],
-    }
+    } | _page([
+        {"key": n["key"], "label": n["label"], "shape": n["shape"],
+         **({"links": links[n["key"]]} if n["key"] in links else {})}
+        for n in data["nodes"]
+    ], offset, key="nodes")
 
 
 @tool("core")
-def search(query: str, domain: str = "", type: str = "", limit: int = 10) -> dict:
+def search(query: str, domain: str = "", type: str = "", limit: int = 10, offset: int = 0) -> dict:
     """Keyword search over memory content+tags+domain: FTS5 BM25.
 
     Each result is annotated with match_source ("fts", or "uid" for the row
@@ -1078,17 +1165,18 @@ def search(query: str, domain: str = "", type: str = "", limit: int = 10) -> dic
     narrow it. A domain naming only the deep end of a path ('p200') is
     resolved to the branches it sits in -- every result carries its real
     `domain`, which is where to read what the filter actually covered.
+
+    @param offset_page
     """
-    if error := db.type_error(type):
+    if error := db.type_error(type) or _offset_error(offset):
         return _errors([error])
     with db.connect() as conn:
-        results = _read(conn, db.search_ranked(conn, query, domain=domain, type=type,
-                                              limit=limit, collapse=True))
-    return _listing(results)
+        return _listing(conn, db.search_ranked(conn, query, domain=domain, type=type,
+                                               limit=limit, collapse=True), offset)
 
 
 @tool("core")
-def recall(query: str, domain: str = "", limit: int = 10) -> dict:
+def recall(query: str, domain: str = "", limit: int = 10, offset: int = 0) -> dict:
     """Recall long-term knowledge saved with note() (type='note').
 
     The dedicated verb for "bring back what I noted": a BM25 search scoped
@@ -1104,17 +1192,20 @@ def recall(query: str, domain: str = "", limit: int = 10) -> dict:
     domain scopes to a path and everything nested under it, and resolves a
     bare deep segment the same way search() does. Results carry the same
     `succeeded_by` / `collapsed` annotations search() explains.
+
+    @param offset_page
     """
+    if error := _offset_error(offset):
+        return _errors([error])
     with db.connect() as conn:
-        results = _read(conn, db.search_ranked(conn, query, domain=domain, type=TYPE_NOTE,
-                                              limit=limit, collapse=True))
-    return _listing(results)
+        return _listing(conn, db.search_ranked(conn, query, domain=domain, type=TYPE_NOTE,
+                                               limit=limit, collapse=True), offset)
 
 
 @tool("core")
 def list_by_domain(
     domain: str, type: str = "", limit: int = 50, subtree: bool = True,
-    status: str = "active",
+    status: str = "active", offset: int = 0,
 ) -> dict:
     """List memories for a domain and its subdomains, most recent first.
 
@@ -1140,16 +1231,18 @@ def list_by_domain(
     snippet-truncated per result -- call get_memory(uid) for the full
     record; a result's `est_tokens` estimates what that full record costs,
     and the top-level `est_tokens` is the sum over the results.
+
+    @param offset_page
     """
     if error := db.type_error(type):
         return _errors([error])
     if status not in LIST_STATUSES:
         return _errors([f"{status!r} is not a status; use one of {', '.join(LIST_STATUSES)}"])
     with db.connect() as conn:
-        rows = _read(conn, db.list_by_domain(
+        rows = db.list_by_domain(
             conn, domain, type=type, status="" if status == "all" else status,
-            limit=limit, subtree=subtree))
-        listing = _listing(rows)
+            limit=limit, subtree=subtree)
+        listing = _listing(conn, rows, offset)
         for result in listing["results"]:
             if result["type"] == db.TASK_TYPE:
                 state = pending_lists.task_state(conn, result["uid"])
@@ -1161,7 +1254,7 @@ def list_by_domain(
 
 @tool("core")
 def list_recent(
-    type: str = "", domain: str = "", limit: int = 20, subtree: bool = True
+    type: str = "", domain: str = "", limit: int = 20, subtree: bool = True, offset: int = 0
 ) -> dict:
     """List the most recent active memories, optionally filtered by type/domain.
 
@@ -1173,13 +1266,15 @@ def list_recent(
     snippet-truncated per result -- call get_memory(uid) for the full
     record; a result's `est_tokens` estimates what that full record costs,
     and the top-level `est_tokens` is the sum over the results.
+
+    @param offset_page
     """
     if error := db.type_error(type):
         return _errors([error])
     with db.connect() as conn:
-        rows = _read(conn, db.list_recent(conn, type=type, domain=domain, limit=limit,
-                                         subtree=subtree))
-    return _listing(rows)
+        rows = db.list_recent(conn, type=type, domain=domain, limit=limit,
+                                         subtree=subtree)
+        return _listing(conn, rows, offset)
 
 
 @tool("core")
@@ -1238,13 +1333,21 @@ def timeline(
             anchor = db.memory_row(conn, hits[0]["uid"])
         older, newer = db.timeline_neighbours(
             conn, anchor, before=before, after=after, domain=domain, type=type)
-        _read(conn, [anchor, *older, *newer])
-    return {
+        # Each side keeps the records nearest the anchor that fit half a page.
+        near_old, _ = budget.page([_snippet_dict(_row_to_dict(r)) for r in reversed(older)], 0,
+                                  budget.PAGE_MAX_CHARS // 2)
+        near_new, _ = budget.page([_snippet_dict(_row_to_dict(r)) for r in newer], 0,
+                                  budget.PAGE_MAX_CHARS // 2)
+        _read(conn, [anchor, *older[len(older) - len(near_old):], *newer[:len(near_new)]])
+    out = {
         "anchored_by": anchored_by,
         "anchor": _snippet_dict(_row_to_dict(anchor)),
-        "before": [_snippet_dict(_row_to_dict(r)) for r in older],
-        "after": [_snippet_dict(_row_to_dict(r)) for r in newer],
+        "before": list(reversed(near_old)),
+        "after": near_new,
     }
+    if len(near_old) < len(older) or len(near_new) < len(newer):
+        out["trimmed"] = {"before": len(older) - len(near_old), "after": len(newer) - len(near_new)}
+    return out
 
 
 @tool("core")
@@ -1266,7 +1369,7 @@ def list_projects() -> dict:
 
 
 @tool("core")
-def list_domains() -> list[dict]:
+def list_domains(offset: int = 0) -> dict:
     """List the domain tree: every path with its counts and latest activity.
 
     Warm-up discovery. domain is free text and drifts over time (e.g.
@@ -1289,9 +1392,13 @@ def list_domains() -> list[dict]:
 
     Casing may be enforced store-wide -- call get_domain_case() to see
     the active policy before coining a new domain.
+
+    @param offset_page
     """
+    if error := _offset_error(offset):
+        return _errors([error])
     with db.connect() as conn:
-        return db.list_domains(conn)
+        return _page(db.list_domains(conn), offset, key="domains")
 
 
 @tool("core")
@@ -1438,7 +1545,7 @@ def _read_next(domain: str, categories: list[dict], pinned: list[dict]) -> str:
 
 
 @tool("core")
-def pulse(domain: str = "") -> dict:
+def pulse(domain: str = "", offset: int = 0) -> dict:
     """Session warm-up: the latest checkpoint, what is pending, and what to read next.
 
     Returns {project, latest_checkpoint, must_read, pinned, read_next, scope}.
@@ -1488,7 +1595,12 @@ def pulse(domain: str = "") -> dict:
     brief arrived that way, and a subdomain carries its own `also` --
     present only when non-zero, so a store that never cross-lists never
     sees the field.
+
+    A long checkpoint is cut (`next` names the rest); `offset` pages
+    `scope.subdomains`.
     """
+    if error := _offset_error(offset):
+        return _errors([error])
     with db.connect() as conn:
         census = db.domain_census(conn, domain)
         latest_checkpoint = db.latest_by_type(conn, TYPE_CHECKPOINT, domain=domain,
@@ -1497,10 +1609,16 @@ def pulse(domain: str = "") -> dict:
         pins = pending_lists.pinned_counts(conn, domain)
         checkpoint_dict = _row_to_dict(latest_checkpoint)
         if checkpoint_dict:
-            # Returned whole, so its est_tokens is what this response spent
-            # on it rather than what a fetch would cost.
+            # Returned whole up to one piece of a page, so its est_tokens is what this response
+            # spent on it rather than what a fetch would cost.
             _with_est_tokens(checkpoint_dict)
-            checkpoint_dict["relations"] = [_row_to_dict(r) for r in db.get_relations(conn, checkpoint_dict["uid"])]
+            text, more = budget.text_chunk(checkpoint_dict["content"], 0, PULSE_CHECKPOINT_CHARS)
+            if more is not None:
+                checkpoint_dict["content_chars"] = len(checkpoint_dict["content"])
+                checkpoint_dict["content"] = text
+                checkpoint_dict["next"] = (f"get_memory(uid='{checkpoint_dict['uid']}', "
+                                           f"content_offset={more})")
+            checkpoint_dict["relation_count"] = len(db.get_relations(conn, checkpoint_dict["uid"]))
             _read(conn, [latest_checkpoint])
     return {
         "project": db.active_project(),
@@ -1515,9 +1633,20 @@ def pulse(domain: str = "") -> dict:
             **({"also": census["also"]} if census.get("also") else {}),
             **({"stale": census["stale"]} if census.get("stale") else {}),
             "by_type": census["by_type"],
-            "subdomains": census["children"],
+            **_subdomains(census["children"], offset),
         },
     }
+
+
+PULSE_CHECKPOINT_CHARS = 12_000
+
+
+def _subdomains(children: list, offset: int) -> dict:
+    rows, nxt = budget.page(children, offset, budget.PAGE_MAX_CHARS // 2)
+    page = {"subdomains": rows, "subdomains_total": len(children)}
+    if nxt is not None:
+        page["subdomains_next_offset"] = nxt
+    return page
 
 
 @mcp.prompt()
@@ -1534,38 +1663,100 @@ def warm_up(domain: str = "") -> str:
     return text or "The memai store is empty -- nothing to warm up from yet."
 
 
-@tool("core")
-def get_memory(uid: str) -> dict:
-    """Fetch a single memory's full record, including its edit history and relations.
+# An edit body longer than this is cut in an edits page; the memory's current body reads in full.
+EDIT_BODY_SHOWN = 4_000
 
-    A diagram also comes back with its mermaid source, its per-node links
-    and its jumps to and from other flows; any other memory comes back
-    with `referenced_by_diagrams`, the flows that point a step at it -- so
-    a note tells you which processes depend on it without a second lookup.
-    A task also comes back with a `task` block: its goal, state, items (each
-    with the memories linked to it) and comments, oldest first.
+
+def _edit_record(row) -> dict:
+    record = _row_to_dict(row)
+    record.pop("memory_uid", None)
+    cut = False
+    for field in ("prev_content", "new_content"):
+        body = record.get(field) or ""
+        record[field.replace("content", "chars")] = len(body)
+        if len(body) > EDIT_BODY_SHOWN:
+            record[field] = body[:EDIT_BODY_SHOWN]
+            cut = True
+    record["truncated"] = cut
+    return record
+
+
+def _paged(uid: str, part: str, records: list, offset: int) -> dict:
+    rows, nxt = budget.page(records, offset)
+    out = {"uid": uid, "part": part, "total": len(records), "offset": offset, "records": rows}
+    if nxt is not None:
+        out["next_offset"] = nxt
+    return out
+
+
+@tool("core")
+def get_memory(uid: str, edits_offset: int = -1, content_offset: int = -1) -> dict:
+    """Fetch one memory: its fields, and counts of what is linked to it.
+
+    `next` names the call that pages each part: get_relations() for
+    relations and diagrams, get_diagram() for a diagram's graph,
+    task_read() for a task's items, notes and comments, edits_offset for
+    the edit history (bodies cut to 4000 characters) and content_offset
+    for a body too long for one response.
     """
-    with db.connect() as conn:
-        row = db.get_memory(conn, uid)
-        if row is None:
-            # Not {}: an empty dict reads as an empty record, when the uid names no memory at all.
-            return _errors([f"no memory {uid}"])
-        _read(conn, [row])
-        edits = db.get_edit_history(conn, uid)
-        rels = db.get_relations(conn, uid)
-        result = _row_to_dict(row)
-        if row["type"] == TYPE_DIAGRAM:
-            result["mermaid"] = _capped(db.render_diagram_mermaid(conn, uid))
-            result["node_links"] = [_row_to_dict(r) for r in db.get_node_links(conn, uid)]
-            result["jumps"] = db.get_diagram_jumps(conn, uid)
-        else:
-            result["referenced_by_diagrams"] = [
-                _row_to_dict(r) for r in db.diagrams_referencing(conn, uid)
-            ]
-        if row["type"] == TYPE_TASK:
-            result["task"] = tasks.get_task(conn, uid)
-    result["edit_history"] = [_row_to_dict(e) for e in edits]
-    result["relations"] = [_row_to_dict(r) for r in rels]
+    try:
+        with db.connect() as conn:
+            row = db.get_memory(conn, uid)
+            if row is None:
+                # Not {}: an empty dict reads as an empty record, when the uid names no memory at all.
+                return _errors([f"no memory {uid}"])
+            if edits_offset != -1:
+                edits = [_edit_record(e) for e in db.get_edit_history(conn, uid)]
+                return _paged(uid, "edits", edits, edits_offset)
+            if content_offset != -1:
+                text, more = budget.text_chunk(row["content"], content_offset)
+                out = {"uid": uid, "part": "content", "offset": content_offset,
+                       "content_chars": len(row["content"]), "text": text}
+                if more is not None:
+                    out["next_offset"] = more
+                return out
+            _read(conn, [row])
+            count = db.edit_count(conn, uid)
+            relation_count = len(db.get_relations(conn, uid))
+            result = _row_to_dict(row)
+            nxt: dict = {}
+            if row["type"] == TYPE_DIAGRAM:
+                result.pop("content", None)
+                mermaid, more = budget.text_chunk(db.render_diagram_mermaid(conn, uid), 0,
+                                                  db.DIAGRAM_BODY_BUDGET)
+                result["mermaid"] = mermaid
+                result["node_link_count"] = len(db.get_node_links(conn, uid))
+                result["jump_count"] = len(db.get_diagram_jumps(conn, uid))
+                nxt["diagram"] = f"get_diagram(uid='{uid}', format='json')"
+                if more is not None:
+                    nxt["mermaid"] = f"get_diagram(uid='{uid}', format='mermaid', offset={more})"
+            else:
+                diagrams = len(db.diagrams_referencing(conn, uid))
+                result["referenced_by_diagrams"] = diagrams
+                if diagrams:
+                    nxt["diagrams"] = f"get_relations(uid='{uid}', part='diagrams')"
+            if row["type"] == TYPE_TASK:
+                result.pop("content", None)
+                head = tasks.head(conn, uid)
+                head["next"] = {p: f"task_read(uid='{uid}', part='{p}')"
+                                for p in ("items", "notes", "comments")}
+                result["task"] = head
+    except ValueError as exc:
+        return _errors([str(exc)])
+    if "content" in result:
+        text, more = budget.text_chunk(result["content"], 0)
+        if more is not None:
+            result["content"] = text
+            result["content_chars"] = len(row["content"])
+            nxt["content_offset"] = more
+    result["edit_count"] = count
+    if count:
+        nxt["edits"] = f"get_memory(uid='{uid}', edits_offset=0)"
+    result["relation_count"] = relation_count
+    if relation_count:
+        nxt["relations"] = f"get_relations(uid='{uid}')"
+    if nxt:
+        result["next"] = nxt
     return result
 
 
@@ -1689,11 +1880,20 @@ def link_memories(from_uid: str, to_uid: str, relation_type: str, note: str = ""
 
 
 @tool("core")
-def get_relations(uid: str) -> list[dict]:
-    """List all relations (incoming and outgoing) for a memory."""
+def get_relations(uid: str, part: str = "relations", offset: int = 0) -> dict:
+    """List a memory's links, one page at a time.
+
+    part: 'relations' (edges, both ways) or 'diagrams' (flows pointing at
+    it); follow `next_offset`.
+    """
+    if part not in ("relations", "diagrams"):
+        return _errors([f"{part!r} is not a part; use 'relations' or 'diagrams'"])
+    if error := _offset_error(offset):
+        return _errors([error])
     with db.connect() as conn:
-        rows = db.get_relations(conn, uid)
-    return [_row_to_dict(r) for r in rows]
+        rows = (db.get_relations(conn, uid) if part == "relations"
+                else db.diagrams_referencing(conn, uid))
+    return _page([_row_to_dict(r) for r in rows], offset, uid=uid, part=part)
 
 
 @tool("core")
@@ -1767,7 +1967,8 @@ def move_to_project(target: str, uids: str = "", domain: str = "", dry_run: bool
 
 
 @tool("curation")
-def dedup_scan(domain: str = "", type: str = "", threshold: float = 0.6, limit: int = 20) -> list[dict]:
+def dedup_scan(domain: str = "", type: str = "", threshold: float = 0.6, limit: int = 20,
+               offset: int = 0) -> dict:
     """Surface likely-duplicate/contradictory memory pairs.
 
     Lexical overlap over near-identical text -- each pair carries its
@@ -1782,13 +1983,20 @@ def dedup_scan(domain: str = "", type: str = "", threshold: float = 0.6, limit: 
     domain scans a path and everything nested under it, which is usually
     what you want: near-duplicates collect between a module and its own
     routines.
+
+    @param offset_page
     """
+    if error := _offset_error(offset):
+        return _errors([error])
     with db.connect() as conn:
-        pairs = db.dedup_candidates(conn, domain=domain, type=type, threshold=threshold, limit=limit)
-    return [
-        {"a": _row_to_dict(a), "b": _row_to_dict(b), "ratio": round(score, 3), "method": method}
+        pairs = db.dedup_candidates(conn, domain=domain, type=type, threshold=threshold,
+                                    limit=limit)
+    records = [
+        {"a": _snippet_dict(_row_to_dict(a)), "b": _snippet_dict(_row_to_dict(b)),
+         "ratio": round(score, 3), "method": method}
         for a, b, score, method in pairs
     ]
+    return _page(records, offset, key="pairs")
 
 
 @tool("curation")
@@ -1874,7 +2082,7 @@ def optimize_stage(suggestions: list[dict], note: str = "") -> dict:
 
 
 @tool("curation")
-def optimize_runs() -> list[dict]:
+def optimize_runs(offset: int = 0) -> dict:
     """List optimization runs with their review progress.
 
     Read-only companion to optimize_stage: after staging, use this to see
@@ -1883,14 +2091,18 @@ def optimize_runs() -> list[dict]:
     its note, and the safety-backup path once the first apply happened.
     Applying/rejecting stays in the dashboard by design -- the agent
     proposes, the human disposes.
+
+    @param offset_page
     """
+    if error := _offset_error(offset):
+        return _errors([error])
     with db.connect() as conn:
         rows = db.list_optimization_runs(conn)
-    return [dict(r) for r in rows]
+    return _page([dict(r) for r in rows], offset, key="runs")
 
 
 @tool("curation")
-def optimize_status(run_id: int) -> dict:
+def optimize_status(run_id: int, offset: int = 0) -> dict:
     """Inspect one optimization run: every suggestion and its decision.
 
     Read-only. Returns the run header plus each suggestion's kind,
@@ -1898,19 +2110,18 @@ def optimize_status(run_id: int) -> dict:
     (pending/applied/rejected) and decided_at -- so you can tell which
     proposals landed, follow up on rejected ones, or build on applied
     ones in a later pass.
+
+    @param offset_page
     """
+    if error := _offset_error(offset):
+        return _errors([error])
     with db.connect() as conn:
         run = db.get_optimization_run(conn, run_id)
         if run is None:
             return {"error": f"unknown run: {run_id}"}
         sugs = db.get_optimization_suggestions(conn, run_id)
-    return {
-        "run": dict(run),
-        "suggestions": [
-            {**dict(s), "payload": json.loads(s["payload"]) if s["payload"] else {}}
-            for s in sugs
-        ],
-    }
+    return _page([{**dict(s), "payload": json.loads(s["payload"]) if s["payload"] else {}}
+                  for s in sugs], offset, key="suggestions", run=dict(run))
 
 
 # Every tool this module defines, by name, whether or not its group is
@@ -1924,6 +2135,8 @@ _TOOLS = {
     "task_item": task_item,
     "task_add": task_add,
     "task_comment": task_comment,
+    "task_read": task_read,
+    "task_note": task_note,
     "diagram": diagram,
     "diagram_node": diagram_node,
     "diagram_edge": diagram_edge,
