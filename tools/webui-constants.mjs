@@ -1,5 +1,5 @@
 /* Prints the dashboard vocabularies the server has to agree with, as JSON.
-   tests/test_webui_vocab.py compares them with memai's own constants. */
+   tests/conftest.py (webui_constants) hands them to the pytest checks. */
 
 import { TYPE_ORDER, REL_SUGGEST, DG_REL_SUGGEST } from '../src/memai/webui/core/vocab.js';
 import { DIFF_KINDS, SET_KINDS, FLAG_KINDS, LINE_KINDS, TEXT_KINDS, CONTENT_KINDS,
