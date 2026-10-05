@@ -28,13 +28,20 @@ import secrets
 import sqlite3
 import zipfile
 from contextlib import contextmanager
-from datetime import date, datetime, timedelta, timezone
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
+from typing import Any
 
 from memai import guard, sections
-from memai.lite import (DOMAIN_SEP, TASK_ASK_MINUTES_DEFAULT,  # noqa: F401
-                        WARDEN_MINUTES_DEFAULT, home, normalize_domain, now_iso,
-                        split_domain)
+from memai.lite import (  # noqa: F401
+    DOMAIN_SEP,
+    TASK_ASK_MINUTES_DEFAULT,
+    WARDEN_MINUTES_DEFAULT,
+    home,
+    normalize_domain,
+    now_iso,
+    split_domain,
+)
 
 # Domain-casing policy, stored in `meta` under DOMAIN_CASE_KEY and enforced on every domain write:
 # 'preserve' keeps the casing written, 'lower'/'upper' coerce it.
@@ -594,7 +601,7 @@ def backups_dir(project: str = GENERAL_PROJECT) -> Path:
 def backup_name(project: str, kind: str = "") -> str:
     """`<project>-[<kind>-]<UTC stamp>.db`: the file a backup of `project` is
     written as."""
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+    stamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
     return f"{project}-{kind}-{stamp}.db" if kind else f"{project}-{stamp}.db"
 
 
@@ -692,7 +699,7 @@ def archive_name(project: str, when: date | None = None) -> str:
     """`<project>-<YYYY-MM>.zip`: the archive a backup taken in that month
     joins. One per month per project, so archiving twice in September adds to
     the same file rather than making a second one."""
-    stamp = (when or datetime.now(timezone.utc).date()).strftime("%Y-%m")
+    stamp = (when or datetime.now(UTC).date()).strftime("%Y-%m")
     return f"{project}-{stamp}.zip"
 
 
@@ -713,8 +720,7 @@ def archive_label(label: str) -> str:
     label = (label or "").strip()
     if not label or len(label) > ARCHIVE_LABEL_MAX or not _ARCHIVE_LABEL.fullmatch(label):
         raise ValueError(
-            "zip name must be 1-%d letters, digits, spaces, '_', '-' or '.'"
-            % ARCHIVE_LABEL_MAX)
+            f"zip name must be 1-{ARCHIVE_LABEL_MAX} letters, digits, spaces, '_', '-' or '.'")
     return label
 
 
@@ -836,7 +842,7 @@ def _group_buckets(project: str, names: list[str], group: str) -> dict[Path, lis
     archives = archives_dir(project)
     buckets: dict[Path, list[Path]] = {}
     for src in _shelf_sources(project, names):
-        taken = datetime.fromtimestamp(src.stat().st_mtime, tz=timezone.utc)
+        taken = datetime.fromtimestamp(src.stat().st_mtime, tz=UTC)
         buckets.setdefault(archives / archive_group_name(project, group, taken), []).append(src)
     return buckets
 
@@ -1050,9 +1056,9 @@ def set_warden_minutes(conn: sqlite3.Connection, minutes: object) -> int:
     low, high = WARDEN_MINUTES_RANGE
     try:
         value = int(str(minutes).strip())
-    except (TypeError, ValueError):
+    except (TypeError, ValueError) as exc:
         raise ValueError(f"warden_minutes must be a whole number of minutes "
-                         f"between {low} and {high}")
+                         f"between {low} and {high}") from exc
     if not low <= value <= high:
         raise ValueError(f"warden_minutes must be between {low} and {high}")
     _set_meta(conn, WARDEN_MINUTES_KEY, str(value))
@@ -1099,9 +1105,9 @@ def set_task_ask_minutes(conn: sqlite3.Connection, minutes: object) -> int:
     low, high = TASK_ASK_MINUTES_RANGE
     try:
         value = int(str(minutes).strip())
-    except (TypeError, ValueError):
+    except (TypeError, ValueError) as exc:
         raise ValueError(f"task_ask_minutes must be a whole number of minutes "
-                         f"between {low} and {high}")
+                         f"between {low} and {high}") from exc
     if not low <= value <= high:
         raise ValueError(f"task_ask_minutes must be between {low} and {high}")
     _set_meta(conn, TASK_ASK_MINUTES_KEY, str(value))
@@ -1165,7 +1171,7 @@ def prune_renders(mode: str, *, keep: Path | None = None) -> dict:
     days = _RETENTION_DAYS.get(mode)
     if days is None:
         return {"pruned": 0, "bytes": 0, "mode": mode}
-    cutoff = datetime.now(timezone.utc).timestamp() - days * 86400
+    cutoff = datetime.now(UTC).timestamp() - days * 86400
     swept = _sweep_renders(lambda stat: stat.st_mtime < cutoff, keep=keep)
     return {**swept, "mode": mode}
 
@@ -1199,9 +1205,10 @@ def normalize_review_after(value: str, *, today: str | None = None) -> str:
                 + timedelta(days=int(rel.group(1)))).isoformat()
     try:
         return date.fromisoformat(v[:10]).isoformat()
-    except ValueError:
+    except ValueError as exc:
         raise ValueError(
-            f"review_after must be a date ('2026-11-01') or a span ('90d'); got {value!r}")
+            f"review_after must be a date ('2026-11-01') or a span ('90d'); got {value!r}"
+        ) from exc
 
 
 def _due_clause(at: str | None = None) -> tuple[str, list]:
@@ -2047,9 +2054,9 @@ def restore_diagram_refs(conn: sqlite3.Connection, record: dict) -> None:
     conn.executemany(
         "INSERT OR IGNORE INTO diagram_node_links "
         "(memory_uid, node_key, target_uid, relation_type, created_at) VALUES (?, ?, ?, ?, ?)",
-        [(uid, l["node_key"], l["target_uid"], l.get("relation_type", "explains"),
-          l.get("created_at") or ts)
-         for l in (record.get("links") or []) if known(l["target_uid"])])
+        [(uid, link["node_key"], link["target_uid"], link.get("relation_type", "explains"),
+          link.get("created_at") or ts)
+         for link in (record.get("links") or []) if known(link["target_uid"])])
     # only the outgoing side: a jump is stored once and read from both ends,
     # so restoring both would write the same row twice
     conn.executemany(
@@ -2073,6 +2080,14 @@ def restore_edit(conn: sqlite3.Connection, record: dict) -> None:
 
 def get_memory(conn: sqlite3.Connection, uid: str) -> sqlite3.Row | None:
     return conn.execute("SELECT * FROM memories WHERE uid = ?", (uid,)).fetchone()
+
+
+def memory_row(conn: sqlite3.Connection, uid: str | None) -> sqlite3.Row:
+    """The memory `uid` names; ValueError when it names none."""
+    row = get_memory(conn, uid) if uid else None
+    if row is None:
+        raise ValueError(f"no memory {uid!r}")
+    return row
 
 
 def update_memory_content(
@@ -2469,7 +2484,7 @@ def add_relation(
         "INSERT INTO relations (from_uid, to_uid, relation_type, note, created_at) VALUES (?, ?, ?, ?, ?)",
         (from_uid, to_uid, relation_type, note, now_iso()),
     )
-    return cur.lastrowid
+    return cur.lastrowid or 0
 
 
 def get_relations(conn: sqlite3.Connection, uid: str) -> list[sqlite3.Row]:
@@ -2904,14 +2919,14 @@ def _font_scale(conn: sqlite3.Connection, uid: str) -> float:
     return float((row["font_scale"] if row is not None else 1) or 1)
 
 
-def is_diagram(conn: sqlite3.Connection, uid: str) -> bool:
+def is_diagram(conn: sqlite3.Connection, uid: str | None) -> bool:
     """True for a diagram memory.
 
     The guard the free-text content editors use: hand-editing a diagram's
     content would desync it from the graph that generates it, so they
     refuse and point at the diagram writers instead.
     """
-    row = get_memory(conn, uid)
+    row = get_memory(conn, uid) if uid else None
     return row is not None and row["type"] == DIAGRAM_TYPE
 
 
@@ -3255,7 +3270,8 @@ def set_node_positions(conn: sqlite3.Connection, uid: str, positions: object) ->
     written = 0
     for key, raw in (positions or {}).items():  # type: ignore[union-attr]
         try:
-            pair = (raw.get("x"), raw.get("y")) if isinstance(raw, dict) else (raw[0], raw[1])
+            pair: tuple[Any, Any] = ((raw.get("x"), raw.get("y")) if isinstance(raw, dict)
+                                     else (raw[0], raw[1]))
             x, y = float(pair[0]), float(pair[1])
         except (TypeError, ValueError, IndexError, KeyError):
             continue
@@ -5313,7 +5329,7 @@ def _validate_suggestion(conn: sqlite3.Connection, s: object) -> tuple[dict | No
         if not str(payload.get("new_content", "")).strip():
             return None, "payload.new_content required"
         # checked at staging, so nothing in the human's queue is waiting to fail on apply
-        row = get_memory(conn, target_uid)
+        row = memory_row(conn, target_uid)
         err = section_error(conn, row["type"], str(payload["new_content"]))
         if err:
             return None, err
@@ -5329,7 +5345,7 @@ def _validate_suggestion(conn: sqlite3.Connection, s: object) -> tuple[dict | No
             err = _generated_content_error(conn, target_uid)
             if err:
                 return None, err
-        row = get_memory(conn, target_uid)
+        row = memory_row(conn, target_uid)
         text = row[field] or ""
         if not guard.leak_marks(row["type"], text):
             return None, f"nothing leaked in {field} of {target_uid}: no marks to remove"
@@ -5393,7 +5409,7 @@ def _validate_suggestion(conn: sqlite3.Connection, s: object) -> tuple[dict | No
             return None, "payload.also required"
         # the whole set is REPLACED, so staging runs the apply's policy (casing, path shape, dropping
         # a path the own domain covers) and the panel shows what will hold
-        row = get_memory(conn, target_uid)
+        row = memory_row(conn, target_uid)
         given = parse_domains(payload["also"])
         want = apply_link_policy(conn, given, row["domain"])
         # an empty list is a legitimate suggestion, but a non-empty one that empties would apply as
@@ -5464,7 +5480,7 @@ def _validate_suggestion(conn: sqlite3.Connection, s: object) -> tuple[dict | No
             if is_diagram(conn, u):
                 return None, (f"{u} is a diagram: distill archives its sources. "
                               "Use archive to retire a flow on its own.")
-            if get_memory(conn, u)["type"] == TASK_TYPE:
+            if memory_row(conn, u)["type"] == TASK_TYPE:
                 return None, (f"{u} is a task: distill archives its sources, and a task "
                               "closes through its own items.")
         if payload.get("new_type") not in DISTILL_TYPES:
@@ -5612,7 +5628,7 @@ def _update_meta_field(conn: sqlite3.Connection, uid: str, field: str, value: st
     """
     if field == "domain":
         value = apply_domain_policy(conn, value)
-    row = get_memory(conn, uid)
+    row = memory_row(conn, uid)
     conn.execute(
         f"UPDATE memories SET {field} = ?, updated_at = ? WHERE uid = ?",
         (value, now_iso(), uid),
@@ -5626,67 +5642,77 @@ def _update_meta_field(conn: sqlite3.Connection, uid: str, field: str, value: st
         set_domain_links(conn, uid, get_domain_links(conn, uid))
 
 
+def _target(kind: str, target_uid: str | None) -> str:
+    """The uid a suggestion acts on; link, merge and distill name theirs in the payload."""
+    if target_uid:
+        return target_uid
+    if kind in ("link", "merge", "distill"):
+        return ""
+    raise ValueError(f"{kind} needs a target_uid")
+
+
 def _apply_kind(conn: sqlite3.Connection, kind: str, target_uid: str | None, payload: dict) -> dict:
     """Execute one suggestion and return the prev_state dict for undo."""
+    uid = _target(kind, target_uid)
     if kind in ("compact", "reword"):
         # staging refuses these on a diagram or task, but a staged run may still
         # hold one; applying it would write over the projection
-        err = _generated_content_error(conn, target_uid)
+        err = _generated_content_error(conn, uid)
         if err:
             raise ValueError(err)
-        row = get_memory(conn, target_uid)
+        row = memory_row(conn, uid)
         prev = {"content": row["content"]}
-        update_memory_content(conn, target_uid, payload["new_content"], note=f"optimize:{kind}")
+        update_memory_content(conn, uid, payload["new_content"], note=f"optimize:{kind}")
         return prev
     if kind == "unleak":
         field = str(payload.get("field", "")).strip() or LEAK_FIELDS[0]
         if field == "content":
-            err = _generated_content_error(conn, target_uid)
+            err = _generated_content_error(conn, uid)
             if err:
                 raise ValueError(err)
-        row = get_memory(conn, target_uid)
+        row = memory_row(conn, uid)
         prev = {field: row[field]}
         text = str(payload["new_text"])
         if field == "content":
-            update_memory_content(conn, target_uid, text, note=f"optimize:{kind}")
+            update_memory_content(conn, uid, text, note=f"optimize:{kind}")
         else:
-            _update_meta_field(conn, target_uid, field, text)
+            _update_meta_field(conn, uid, field, text)
         return prev
     if kind == "retag":
-        row = get_memory(conn, target_uid)
+        row = memory_row(conn, uid)
         prev = {"tags": row["tags"]}
-        _update_meta_field(conn, target_uid, "tags", str(payload["tags"]).strip())
+        _update_meta_field(conn, uid, "tags", str(payload["tags"]).strip())
         return prev
     if kind == "retitle":
-        row = get_memory(conn, target_uid)
+        row = memory_row(conn, uid)
         prev = {"title": row["title"]}
-        _update_meta_field(conn, target_uid, "title", str(payload["title"]).strip())
+        _update_meta_field(conn, uid, "title", str(payload["title"]).strip())
         return prev
     if kind == "review":
-        row = get_memory(conn, target_uid)
+        row = memory_row(conn, uid)
         prev = {"review_after": row["review_after"]}
-        set_review_after(conn, target_uid, str(payload["review_after"]))
+        set_review_after(conn, uid, str(payload["review_after"]))
         return prev
     if kind == "redomain":
-        row = get_memory(conn, target_uid)
+        row = memory_row(conn, uid)
         prev = {"domain": row["domain"]}
-        _update_meta_field(conn, target_uid, "domain", str(payload["domain"]).strip())
+        _update_meta_field(conn, uid, "domain", str(payload["domain"]).strip())
         return prev
     if kind == "crosslist":
         # the whole set, not an addition: undo restores exactly this list
-        prev = {"also": get_domain_links(conn, target_uid)}
-        set_domain_links(conn, target_uid, payload["also"], note=f"optimize:{kind}")
+        prev = {"also": get_domain_links(conn, uid)}
+        set_domain_links(conn, uid, payload["also"], note=f"optimize:{kind}")
         return prev
     if kind == "set_confidence":
-        row = get_memory(conn, target_uid)
+        row = memory_row(conn, uid)
         prev = {"confidence": row["confidence"]}
-        set_confidence(conn, target_uid, payload["confidence"])
+        set_confidence(conn, uid, payload["confidence"])
         return prev
     if kind == "archive":
-        row = get_memory(conn, target_uid)
+        row = memory_row(conn, uid)
         prev = {"status": row["status"], "superseded_by": row["superseded_by"]}
         reason = str(payload.get("reason", "")).strip() or "optimize: archived"
-        set_status(conn, target_uid, "archived", note=reason)
+        set_status(conn, uid, "archived", note=reason)
         return prev
     if kind == "link":
         rid = add_relation(
@@ -5696,7 +5722,7 @@ def _apply_kind(conn: sqlite3.Connection, kind: str, target_uid: str | None, pay
         return {"relation_id": rid}
     if kind == "merge":
         keep, drop = payload["keep_uid"].strip(), payload["drop_uid"].strip()
-        drow = get_memory(conn, drop)
+        drow = memory_row(conn, drop)
         prev = {"drop_status": drow["status"], "drop_superseded_by": drow["superseded_by"]}
         rid = add_relation(conn, keep, drop, "supersedes", str(payload.get("note", "")).strip())
         prev["relation_id"] = rid
@@ -5713,7 +5739,7 @@ def _apply_kind(conn: sqlite3.Connection, kind: str, target_uid: str | None, pay
         )
         prev = {"new_uid": new_uid, "relation_ids": [], "sources": []}
         for u in payload["source_uids"]:
-            row = get_memory(conn, u)
+            row = memory_row(conn, u)
             prev["sources"].append(
                 {"uid": u, "status": row["status"], "superseded_by": row["superseded_by"]})
             prev["relation_ids"].append(
@@ -5727,31 +5753,32 @@ def _apply_kind(conn: sqlite3.Connection, kind: str, target_uid: str | None, pay
 def _revert_kind(
     conn: sqlite3.Connection, kind: str, target_uid: str | None, payload: dict, prev: dict
 ) -> None:
+    uid = _target(kind, target_uid)
     if kind in ("compact", "reword"):
-        update_memory_content(conn, target_uid, prev["content"], note=f"optimize:undo {kind}")
+        update_memory_content(conn, uid, prev["content"], note=f"optimize:undo {kind}")
     elif kind == "unleak":
         field = str(payload.get("field", "")).strip() or LEAK_FIELDS[0]
         if field == "content":
             # restores a leaked body that writers are refused: an undo puts back what was there
-            update_memory_content(conn, target_uid, prev["content"],
+            update_memory_content(conn, uid, prev["content"],
                                   note=f"optimize:undo {kind}", leaked_ok=True)
         else:
-            _update_meta_field(conn, target_uid, field, prev[field])
+            _update_meta_field(conn, uid, field, prev[field])
     elif kind == "retag":
-        _update_meta_field(conn, target_uid, "tags", prev["tags"])
+        _update_meta_field(conn, uid, "tags", prev["tags"])
     elif kind == "retitle":
-        _update_meta_field(conn, target_uid, "title", prev["title"])
+        _update_meta_field(conn, uid, "title", prev["title"])
     elif kind == "review":
-        set_review_after(conn, target_uid, prev["review_after"])
+        set_review_after(conn, uid, prev["review_after"])
     elif kind == "redomain":
-        _update_meta_field(conn, target_uid, "domain", prev["domain"])
+        _update_meta_field(conn, uid, "domain", prev["domain"])
     elif kind == "crosslist":
-        set_domain_links(conn, target_uid, prev["also"], coerce=False,
+        set_domain_links(conn, uid, prev["also"], coerce=False,
                          note="optimize:undo crosslist")
     elif kind == "set_confidence":
-        set_confidence(conn, target_uid, prev["confidence"])
+        set_confidence(conn, uid, prev["confidence"])
     elif kind == "archive":
-        set_status(conn, target_uid, prev["status"],
+        set_status(conn, uid, prev["status"],
                    superseded_by=prev.get("superseded_by"), note="optimize: undo archive")
     elif kind == "link":
         conn.execute("DELETE FROM relations WHERE id = ?", (prev["relation_id"],))

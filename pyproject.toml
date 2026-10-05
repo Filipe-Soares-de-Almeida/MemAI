@@ -17,7 +17,7 @@ dependencies = [
 [project.optional-dependencies]
 # starlette.testclient wants httpx2; without it the import falls back to
 # httpx and warns.
-dev = ["pytest>=9.1,<10", "httpx2>=2.12,<3"]
+dev = ["pytest>=9.1,<10", "httpx2>=2.12,<3", "ruff>=0.16,<0.17", "pyright>=1.1.414,<1.2"]
 
 [project.scripts]
 memai-mcp = "memai.server:main"
@@ -36,6 +36,22 @@ force-include = { "CHANGELOG.md" = "memai/CHANGELOG.md" }
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+src = ["src", "tests", "tools"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "SIM"]
+# E501: line length is left to a formatting pass of its own. SIM105 and E731:
+# try/except/pass and lambda fakes in tests are the house style.
+ignore = ["E501", "SIM105", "E731"]
+
+[tool.pyright]
+include = ["src/memai"]
+pythonVersion = "3.12"
+typeCheckingMode = "basic"
 
 [tool.hatch.version]
 path = "src/memai/__init__.py"

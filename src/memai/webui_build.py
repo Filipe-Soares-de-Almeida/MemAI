@@ -91,6 +91,8 @@ def _fetch_prebuilt(root: Path, version: str) -> str | None:
         return "tools/install-webui.py is missing"
     try:
         spec = importlib.util.spec_from_file_location("memai_install_webui", script)
+        if spec is None or spec.loader is None:
+            return "tools/install-webui.py cannot be loaded"
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
         return module.download(version, _dist(root))

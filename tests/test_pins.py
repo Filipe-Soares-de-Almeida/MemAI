@@ -7,6 +7,7 @@ Every test runs against a store under tmp_path (MEMAI_HOME), never the real
 from __future__ import annotations
 
 import sqlite3
+from pathlib import Path
 
 import pytest
 
@@ -282,8 +283,6 @@ def test_the_brief_keeps_the_pin_line_under_a_tight_budget(store):
 
 
 # ---------------------------------------------------------------- dashboard
-
-from pathlib import Path
 
 WEBUI = Path(db.__file__).parent / "webui"
 

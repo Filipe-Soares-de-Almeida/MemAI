@@ -141,7 +141,7 @@ def test_a_move_carries_everything_and_then_removes_the_originals(home):
         assert [r["to_uid"] for r in db.get_relations(dst, ids["note"])] == [ids["old"]]
         assert dst.execute("SELECT COUNT(*) FROM edits").fetchone()[0] == edits
         assert [n["key"] for n in db.get_diagram(dst, ids["flow"])["nodes"]] == ["start", "done"]
-        assert [l["target_uid"] for l in db.get_node_links(dst, ids["flow"])] == [ids["note"]]
+        assert [link["target_uid"] for link in db.get_node_links(dst, ids["flow"])] == [ids["note"]]
         assert db.usage_for(dst, [ids["note"]])[ids["note"]]["recalls"] == 1
         assert ids["note"] in {r["uid"] for r in db.search_memories(dst, "drain retry settle")}
 

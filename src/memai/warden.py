@@ -21,7 +21,7 @@ import json
 import os
 import re
 import tempfile
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from memai import lite
@@ -193,11 +193,11 @@ def loaded(session_id: str, agent: Path) -> bool:
         return False
     try:
         at = datetime.fromisoformat(started)
-        installed = datetime.fromtimestamp(agent.stat().st_mtime, timezone.utc)
+        installed = datetime.fromtimestamp(agent.stat().st_mtime, UTC)
     except (ValueError, OSError):
         return False
     if at.tzinfo is None:
-        at = at.replace(tzinfo=timezone.utc)
+        at = at.replace(tzinfo=UTC)
     return installed <= at + GRACE
 
 
@@ -212,8 +212,8 @@ def _elapsed(session_id: str, field: str, minutes: int, now: datetime | None) ->
     except ValueError:
         return True
     if stamp.tzinfo is None:
-        stamp = stamp.replace(tzinfo=timezone.utc)
-    at = now or datetime.now(timezone.utc)
+        stamp = stamp.replace(tzinfo=UTC)
+    at = now or datetime.now(UTC)
     return at - stamp >= timedelta(minutes=minutes)
 
 
@@ -243,7 +243,7 @@ def prune(days: int = 14) -> int:
 
     A session's state outlives the session, and nothing else removes it.
     """
-    cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).timestamp()
+    cutoff = (datetime.now(UTC) - timedelta(days=days)).timestamp()
     gone = 0
     try:
         entries = [*state_dir().glob("*.json"), *state_dir().glob("*.tmp")]

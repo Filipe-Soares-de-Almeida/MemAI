@@ -38,8 +38,9 @@ import signal
 import socket
 import sqlite3
 import sys
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Any
 from urllib.parse import urlsplit
 
 import uvicorn
@@ -51,7 +52,17 @@ from starlette.responses import FileResponse, JSONResponse, Response
 from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 
-from memai import __version__, autostart, changelog, db, portable, sections, tasks, update, webui_build
+from memai import (
+    __version__,
+    autostart,
+    changelog,
+    db,
+    portable,
+    sections,
+    tasks,
+    update,
+    webui_build,
+)
 
 # Windows' registry-derived mimetypes map serves .js as text/plain, which
 # browsers refuse to execute as an ES module. Force the correct types.
@@ -714,7 +725,7 @@ def _lines(value) -> list[str]:
 
 def _task_answer(conn: sqlite3.Connection, uid: str) -> dict:
     """The task and its memory status after a write, so a view re-renders from one answer."""
-    return {"task": tasks.get_task(conn, uid), "status": db.get_memory(conn, uid)["status"]}
+    return {"task": tasks.get_task(conn, uid), "status": db.memory_row(conn, uid)["status"]}
 
 
 # A ValueError from tasks.* can arrive after rows were written, so each handler
@@ -868,7 +879,7 @@ def edit_meta(request, payload) -> dict:
                 raise ValueError(error)
         if "domain" in updates:
             updates["domain"] = db.apply_domain_policy(conn, updates["domain"])
-        changed = {k: v for k, v in updates.items() if v != row[k]}
+        changed: dict[str, object] = {k: v for k, v in updates.items() if v != row[k]}
         if changed:
             sets = ", ".join(f"{k} = ?" for k in changed)
             conn.execute(
@@ -877,7 +888,7 @@ def edit_meta(request, payload) -> dict:
             if "type" in changed:
                 # the body did not move, but which fields it is supposed to
                 # hold just did: re-read it under the type it now has
-                db._write_sections(conn, uid, changed["type"], row["content"])
+                db._write_sections(conn, uid, str(changed["type"]), row["content"])
             note = "meta: " + "; ".join(f"{k} '{row[k]}' → '{v}'" for k, v in changed.items())
             conn.execute(
                 "INSERT INTO edits (memory_uid, edited_at, prev_content, new_content, note) VALUES (?, ?, ?, ?, ?)",
@@ -886,7 +897,7 @@ def edit_meta(request, payload) -> dict:
         # membership the old one needed (db.apply_link_policy)
         before = db.get_domain_links(conn, uid)
         if "also" in payload or ("domain" in changed and before):
-            want = payload["also"] if "also" in payload else before
+            want = payload.get("also", before)
             if db.set_domain_links(conn, uid, want) != before:
                 changed["also"] = True
         result = {"ok": True, "changed": list(changed)}
@@ -1096,7 +1107,7 @@ def graph(request, payload) -> dict:
 
 # ---------------------------------------------------------------- diagrams
 
-def _require(result: tuple) -> object:
+def _require(result: tuple) -> Any:
     """The db diagram writers return (value, errors); an error becomes a 400.
 
     Keeps every handler below down to one line of real work, and routes
@@ -1675,7 +1686,7 @@ def health(request, payload) -> dict:
     # the active project's own backups; another project's are listed when it is
     backups = [
         {"name": p.name, "size": _file_size(p),
-         "mtime": datetime.fromtimestamp(p.stat().st_mtime, tz=timezone.utc).isoformat()}
+         "mtime": datetime.fromtimestamp(p.stat().st_mtime, tz=UTC).isoformat()}
         for p in db.backup_files(project)]
     return {
         "project": project,
@@ -1798,7 +1809,7 @@ def backup(request, payload) -> dict:
 def _shelf_row(path, meta: dict | None = None) -> dict:
     row = {"name": path.name, "size": _file_size(path),
            "mtime": datetime.fromtimestamp(path.stat().st_mtime,
-                                           tz=timezone.utc).isoformat()}
+                                           tz=UTC).isoformat()}
     for key in ("label", "pinned"):
         value = (meta or {}).get(key)
         if value:
@@ -2078,7 +2089,7 @@ def _suggestion_json(conn, row) -> dict:
     if row["target_uid"]:
         target = _peer_card(conn, row["target_uid"])
         if target is not None:
-            trow = db.get_memory(conn, row["target_uid"])
+            trow = db.memory_row(conn, row["target_uid"])
             target["tags"] = trow["tags"]
             target["review_after"] = trow["review_after"]
             # Before is the whole body: a cut snippet against a full After would read as removed
@@ -2171,15 +2182,15 @@ def optimization_suggestions(request, payload) -> dict:
     if runs_param:
         try:
             run_ids = [int(p) for p in runs_param.split(",") if p.strip()]
-        except ValueError:
-            raise ValueError("runs must be a comma-separated list of ints")
+        except ValueError as exc:
+            raise ValueError("runs must be a comma-separated list of ints") from exc
         if not run_ids:
             raise ValueError("runs was empty")
     else:
         try:
             run_ids = [int(request.query_params.get("run", ""))]
-        except (TypeError, ValueError):
-            raise ValueError("run (int) or runs (comma-separated ints) required")
+        except (TypeError, ValueError) as exc:
+            raise ValueError("run (int) or runs (comma-separated ints) required") from exc
     status = request.query_params.get("status", "")
     # one kind at a time, as the dashboard pages them, so a run's other bodies are not fetched
     kind = request.query_params.get("kind", "")
@@ -2268,14 +2279,14 @@ def _group_facts(conn: sqlite3.Connection, kind: str, rows: list) -> dict:
     payloads = [json.loads(r["payload"]) if r["payload"] else {} for r in rows]
     if kind in _CONTENT_KINDS:
         chars = 0
-        for row, payload in zip(rows, payloads):
+        for row, payload in zip(rows, payloads, strict=True):
             trow = db.get_memory(conn, row["target_uid"]) if row["target_uid"] else None
             if trow is not None:
                 chars += len(payload.get("new_content", "")) - len(trow["content"])
         return {"chars": chars}
     if kind == "unleak":
         chars = 0
-        for row, payload in zip(rows, payloads):
+        for row, payload in zip(rows, payloads, strict=True):
             trow = db.get_memory(conn, row["target_uid"]) if row["target_uid"] else None
             field = str(payload.get("field", db.LEAK_FIELDS[0]))
             if trow is not None and field in db.LEAK_FIELDS:
@@ -2283,7 +2294,7 @@ def _group_facts(conn: sqlite3.Connection, kind: str, rows: list) -> dict:
         return {"chars": chars}
     if kind == "retag":
         terms = 0
-        for row, payload in zip(rows, payloads):
+        for row, payload in zip(rows, payloads, strict=True):
             trow = db.get_memory(conn, row["target_uid"]) if row["target_uid"] else None
             before = _tag_terms(trow["tags"]) if trow is not None else set()
             terms += len(_tag_terms(payload.get("tags", "")) - before)
@@ -2316,8 +2327,8 @@ def optimization_summary(request, payload) -> dict:
     """
     try:
         run_id = int(request.query_params.get("run", ""))
-    except (TypeError, ValueError):
-        raise ValueError("run query param (int) required")
+    except (TypeError, ValueError) as exc:
+        raise ValueError("run query param (int) required") from exc
     with db.connect() as conn:
         run = db.get_optimization_run(conn, run_id)
         if run is None:
@@ -2446,7 +2457,7 @@ def optimization_apply_all(request, payload) -> dict:
         run = db.get_optimization_run(conn, run_ids[0])
     if not pending:
         return {"ok": True, "applied": 0, "failed": [],
-                "backup": run["backup_path"], "backups": []}
+                "backup": run["backup_path"] if run else None, "backups": []}
     by_run: dict[int, list] = {}
     for s in pending:
         by_run.setdefault(s["run_id"], []).append(s)

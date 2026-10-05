@@ -64,6 +64,32 @@ jobs:
       - name: Check the comments the change adds
         run: python3 tools/comment-lint.py --base origin/${{ github.base_ref || 'dev' }}
 
+  static-checks:
+    name: ruff and pyright
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      # the pyright package runs the npm release of the checker on this Node
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+
+      - name: Install
+        run: |
+          python -m pip install --no-deps -e .
+          python -m pip install --require-hashes -r requirements-dev.txt
+
+      - name: Lint
+        run: ruff check src tests tools
+
+      - name: Type check
+        run: pyright
+
   node-floor:
     name: dashboard build on the Node floor (22.18)
     runs-on: ubuntu-latest

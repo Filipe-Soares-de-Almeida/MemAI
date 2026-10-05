@@ -39,8 +39,8 @@ import re
 
 from mcp.server.mcpserver import MCPServer
 
-from memai import (autostart, brief, db, diagram_svg, hook_install, pending as pending_lists,
-                   portable, sections, tasks, update)
+from memai import autostart, brief, db, diagram_svg, hook_install, portable, sections, tasks, update
+from memai import pending as pending_lists
 
 # Sent in the initialize handshake and injected into context by hosts that support it. One
 # paragraph: it is paid on every request, and its job is to get the first pulse() call.
@@ -426,7 +426,7 @@ def _write_result(conn, uid: str, warning: dict | None, also: str,
     """
     # the project too: the dashboard switches it under a running server, so this is where a
     # writer learns which file its memory landed in
-    result = {"uid": uid, "project": db.active_project()}
+    result: dict[str, object] = {"uid": uid, "project": db.active_project()}
     # the count is the feedback: a writer sees what it indexed while it
     # still holds the context that would supply the missing words
     result["tags_indexed"] = len([t for t in tags.split(",") if t.strip()])
@@ -697,7 +697,7 @@ def task_item(uid: str, item: str, state: str = "", comment: str = "",
             result = {
                 "uid": uid, "item": key, "state": current,
                 "progress": tasks.progress(conn, uid), "task_state": head["state"],
-                "archived": db.get_memory(conn, uid)["status"] == "archived",
+                "archived": db.memory_row(conn, uid)["status"] == "archived",
             }
     except ValueError as exc:
         return _errors([str(exc)])
@@ -805,7 +805,7 @@ def diagram(
             kind=kind, domain=domain, also=also, session=session or SESSION, tags=tags,
             review_after=review_after, source_ref=source_ref,
         )
-        if errors:
+        if errors or uid is None:
             return _errors(errors)
         return _write_result(conn, uid, warning, also, tags)
 
@@ -1235,7 +1235,7 @@ def timeline(
                 return _errors([f"no memory matches query: {query}"])
             # Re-read as a record: a search hit carries retrieval annotations
             # (match_source, ranks) that are not part of the memory.
-            anchor = db.get_memory(conn, hits[0]["uid"])
+            anchor = db.memory_row(conn, hits[0]["uid"])
         older, newer = db.timeline_neighbours(
             conn, anchor, before=before, after=after, domain=domain, type=type)
         _read(conn, [anchor, *older, *newer])

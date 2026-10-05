@@ -17,6 +17,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
+
 from conftest import webui_constants
 
 ROOT = Path(__file__).resolve().parents[1]

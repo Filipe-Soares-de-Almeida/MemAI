@@ -185,7 +185,7 @@ def _regenerate(conn: sqlite3.Connection, uid: str, note: str) -> None:
     """Rewrite the memory's content from the goal and items when it changed."""
     goal = conn.execute("SELECT goal FROM tasks WHERE memory_uid = ?", (uid,)).fetchone()["goal"]
     content = render(goal, _items(conn, uid))
-    if content != db.get_memory(conn, uid)["content"]:
+    if content != db.memory_row(conn, uid)["content"]:
         db.update_memory_content(conn, uid, content, note=note)
 
 
@@ -217,7 +217,7 @@ def _outcome(conn: sqlite3.Connection, uid: str) -> dict:
     return {
         "progress": progress(conn, uid),
         "task_state": state,
-        "archived": db.get_memory(conn, uid)["status"] == "archived",
+        "archived": db.memory_row(conn, uid)["status"] == "archived",
     }
 
 
@@ -271,7 +271,7 @@ def add_items(conn: sqlite3.Connection, uid: str, items: list[str], *, session: 
         """INSERT INTO task_items
            (memory_uid, item_key, seq, text, state, updated_at, updated_session)
            VALUES (?, ?, ?, ?, 'todo', ?, ?)""",
-        [(uid, k, last + n, t, stamp, session) for n, (k, t) in enumerate(zip(keys, items), start=1)],
+        [(uid, k, last + n, t, stamp, session) for n, (k, t) in enumerate(zip(keys, items, strict=True), start=1)],
     )
     note = f"item {keys[0]} added" if len(keys) == 1 else f"items {', '.join(keys)} added"
     _regenerate(conn, uid, note)
@@ -343,7 +343,7 @@ def add_comment(
            VALUES (?, ?, ?, ?, ?, ?)""",
         (uid, key, body, author, session, db.now_iso()),
     )
-    return cur.lastrowid
+    return cur.lastrowid or 0
 
 
 def link_item(conn: sqlite3.Connection, uid: str, item: str, targets: list[str]) -> list[str]:
@@ -418,9 +418,9 @@ def restore_task(conn: sqlite3.Connection, record: dict) -> None:
         """INSERT OR IGNORE INTO task_item_links (memory_uid, item_key, target_uid, created_at)
            VALUES (?, ?, ?, ?)""",
         [
-            (uid, l["item_key"], l["target_uid"], l.get("created_at") or db.now_iso())
-            for l in record.get("links") or []
-            if db.get_memory(conn, l["target_uid"]) is not None
+            (uid, link["item_key"], link["target_uid"], link.get("created_at") or db.now_iso())
+            for link in record.get("links") or []
+            if db.get_memory(conn, link["target_uid"]) is not None
         ],
     )
     conn.executemany(

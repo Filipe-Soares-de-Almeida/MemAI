@@ -18,7 +18,6 @@ import pytest
 from conftest import shaped
 from memai import db, guard, hook, hook_install, warden
 
-
 SESSION = "session-1"
 
 

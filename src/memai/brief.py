@@ -178,7 +178,7 @@ def _fit(parts: list[str], budget: int, *, tail: str) -> str:
     the top rather than being the first thing a tight budget throws away.
     """
     room = max(budget - len(tail) - 1, 0)
-    fitted = [_cap(p, s) for p, s in zip(parts, _shares([len(p) for p in parts], room))]
+    fitted = [_cap(p, s) for p, s in zip(parts, _shares([len(p) for p in parts], room), strict=True)]
 
     # The share is a floor: what the short sections leave unspent goes back to the dropped ones,
     # earliest first.

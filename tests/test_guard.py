@@ -25,7 +25,6 @@ from starlette.testclient import TestClient
 
 from memai import admin, db, guard, hook, hook_install, server, tasks, warden
 
-
 # What a leaked call looks like once it is one parameter's text: the closing
 # tag of the field it was written under, and the fields after it as prose.
 LEAKED = ("a cache warmup runs twice on a cold queue</content>\n"

@@ -48,7 +48,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import sys
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 # `guard` runs in front of every tool call, so the module loads only what it
@@ -154,7 +154,7 @@ def _pre_compact(args, payload) -> None:
 
 
 def _wrote_recently(conn, minutes: int) -> bool:
-    cutoff = (datetime.now(timezone.utc) - timedelta(minutes=minutes)).isoformat()
+    cutoff = (datetime.now(UTC) - timedelta(minutes=minutes)).isoformat()
     row = conn.execute(
         "SELECT 1 FROM memories WHERE created_at >= ? LIMIT 1", (cutoff,)).fetchone()
     return row is not None
@@ -334,8 +334,8 @@ def _age(iso: str, *, now: datetime | None = None) -> str:
     """
     stamp = datetime.fromisoformat(iso)
     if stamp.tzinfo is None:
-        stamp = stamp.replace(tzinfo=timezone.utc)
-    seconds = max((now or datetime.now(timezone.utc)) - stamp, timedelta(0)).total_seconds()
+        stamp = stamp.replace(tzinfo=UTC)
+    seconds = max((now or datetime.now(UTC)) - stamp, timedelta(0)).total_seconds()
     if seconds < 3600:
         return f"{int(seconds // 60)}m"
     if seconds < 86400:

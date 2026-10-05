@@ -44,6 +44,7 @@ import subprocess
 import sys
 import sysconfig
 from pathlib import Path
+from typing import Any
 
 from memai import db
 
@@ -227,7 +228,7 @@ def _spawn_admin(host: str, port: int) -> None:
 
     # No CREATE_BREAKAWAY_FROM_JOB: in a job without BREAKAWAY_OK, CreateProcess fails outright.
     # Each host process measured here runs in a job with SILENT_BREAKAWAY_OK, so these flags suffice.
-    flags = {"creationflags": _CREATE_NO_WINDOW} if sys.platform == "win32" \
+    flags: dict[str, Any] = {"creationflags": _CREATE_NO_WINDOW} if sys.platform == "win32" \
         else {"start_new_session": True}
 
     log = None

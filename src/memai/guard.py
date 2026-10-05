@@ -162,7 +162,7 @@ def fields(tool: str) -> tuple[str, ...]:
     return GUARDED.get(tool, ()) + OPTIONAL.get(tool, ())
 
 
-@functools.lru_cache(maxsize=None)
+@functools.cache
 def _closing(names: tuple[str, ...]) -> re.Pattern[str]:
     """Matches a closing tag naming one of `names`, with or without the prefix."""
     return re.compile(rf"</(?:antml:)?(?:{'|'.join(names)})>")

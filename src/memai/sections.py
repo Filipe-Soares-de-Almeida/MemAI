@@ -89,7 +89,7 @@ def is_sectioned(type: str) -> bool:
     return type in SECTION_SPEC
 
 
-@functools.lru_cache(maxsize=None)
+@functools.cache
 def _opener(label: str) -> re.Pattern[str]:
     """Matches `label` at the head of a line, plus the space after the colon."""
     return re.compile(rf"^{re.escape(label)}:[ \t]?", re.M)

@@ -29,7 +29,7 @@ import os
 import re
 import sys
 import urllib.request
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from memai import __version__, changelog, db
@@ -209,7 +209,7 @@ def _due(record: dict, *, hours: int, now: datetime) -> bool:
     except (KeyError, TypeError, ValueError):
         return True
     if checked.tzinfo is None:
-        checked = checked.replace(tzinfo=timezone.utc)
+        checked = checked.replace(tzinfo=UTC)
     return now - checked >= timedelta(hours=hours)
 
 
@@ -228,7 +228,7 @@ def refresh(*, unseen_only: bool = False, force: bool = False,
     record = cached()
     if not enabled():
         return record
-    moment = now or datetime.now(timezone.utc)
+    moment = now or datetime.now(UTC)
     hours = interval() if hours is None else hours
     window = min(hours, RETRY_HOURS) if record.get("failed") else hours
     due = force or (not record if unseen_only else _due(record, hours=window, now=moment))

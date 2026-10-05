@@ -185,8 +185,8 @@ def test_collapse_is_off_by_default(conn):
 
 def test_two_takes_on_one_subject_are_not_copies(conn):
     """Collapsing merely RELATED memories would be deciding relevance."""
-    a = db.insert_memory(conn, type="note", content="cache warmup runs nightly")
-    b = db.insert_memory(conn, type="note", content="cache warmup is skipped on holidays")
+    db.insert_memory(conn, type="note", content="cache warmup runs nightly")
+    db.insert_memory(conn, type="note", content="cache warmup is skipped on holidays")
     assert len(db.search_ranked(conn, "cache warmup", collapse=True)) == 2
 
 
