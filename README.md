@@ -107,8 +107,8 @@ status="archived")` lists the completed and cancelled ones.
 
 ```sh
 python -m venv .venv
-.venv/Scripts/pip install --require-hashes -r requirements-dev.txt   # .venv/bin/pip off Windows
-.venv/Scripts/pip install --no-deps -e .
+.venv/Scripts/pip install --no-deps -e .   # .venv/bin/pip off Windows
+.venv/Scripts/pip install --require-hashes -r requirements-dev.txt
 npm ci && npm run build                 # the admin dashboard
 .venv/Scripts/python -m pytest
 ```
