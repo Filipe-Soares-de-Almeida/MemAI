@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.7.0](https://github.com/Filipe-Soares-de-Almeida/MemAI/compare/v0.6.0...v0.7.0) (2026-10-04)
+
+
+### ⚠ BREAKING CHANGES
+
+* `npm ci` and install.bat refuse Node below 22.18.
+* **server:** the MCP tool help() is removed, and each MEMAI_TOOLS set publishes one tool fewer (full 41, core 26).
+* **server:** the MCP tool pending() is now must_read(), with no alias, and pulse() returns `must_read` in place of `pending`. Update the server and rerun `memai-hook install` together, or the guard holds a session waiting for a tool its server does not publish.
+
+### Features
+
+* **server:** remove help() and describe task goals as free-prose briefs ([#66](https://github.com/Filipe-Soares-de-Almeida/MemAI/issues/66)) ([eca2e80](https://github.com/Filipe-Soares-de-Almeida/MemAI/commit/eca2e80d9a745b2028b39cee7949a0df15c601cd))
+* **server:** the tool that lists what a scope still holds to read is must_read() ([#64](https://github.com/Filipe-Soares-de-Almeida/MemAI/issues/64)) ([9c58708](https://github.com/Filipe-Soares-de-Almeida/MemAI/commit/9c587081c885dd5513f6ab5eabdd55c45e1a7788))
+
+
+### Build System
+
+* lock dependencies, require Node 22.18 and ship a prebuilt dashboard ([#67](https://github.com/Filipe-Soares-de-Almeida/MemAI/issues/67)) ([73b533c](https://github.com/Filipe-Soares-de-Almeida/MemAI/commit/73b533c2a5aafbd2c753dcefb64f083f0bce77b5))
+
 ## [0.6.0](https://github.com/Filipe-Soares-de-Almeida/MemAI/compare/v0.5.0...v0.6.0) (2026-10-03)
 
 
