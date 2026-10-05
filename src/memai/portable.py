@@ -149,7 +149,7 @@ def export_records(conn, *, domain: str = "", uids=None, include_archived: bool 
 
 
 def _task_record(conn, uid: str) -> dict | None:
-    """A task's goal, items, item links and comments, or None when it has no rows."""
+    """A task's goal, items, item links, comments and notes, or None when it has no rows."""
     head = conn.execute("SELECT * FROM tasks WHERE memory_uid = ?", (uid,)).fetchone()
     if head is None:
         return None
@@ -162,6 +162,10 @@ def _task_record(conn, uid: str) -> dict | None:
     comments = conn.execute(
         "SELECT item_key, body, author, session, created_at FROM task_comments "
         "WHERE memory_uid = ? ORDER BY created_at, id", (uid,)).fetchall()
+    notes = conn.execute(
+        "SELECT id, title, body, session, created_at, updated_at FROM task_notes "
+        "WHERE memory_uid = ? ORDER BY created_at, id", (uid,)).fetchall()
+    note_items = tasks._note_item_map(conn, uid)
     return {
         "record": "task", "uid": uid, "goal": head["goal"], "state": head["state"],
         "completed_at": head["completed_at"], "item_seq": head["item_seq"],
@@ -169,6 +173,9 @@ def _task_record(conn, uid: str) -> dict | None:
             "seq", "text", "state", "updated_at", "updated_session")}} for r in items],
         "links": [dict(r) for r in links],
         "comments": [dict(r) for r in comments],
+        "notes": [{"title": r["title"], "body": r["body"], "items": note_items.get(r["id"], []),
+                   "session": r["session"], "created_at": r["created_at"],
+                   "updated_at": r["updated_at"]} for r in notes],
     }
 
 

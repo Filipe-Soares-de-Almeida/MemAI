@@ -336,6 +336,24 @@ CREATE TABLE IF NOT EXISTS task_comments (
 
 CREATE INDEX IF NOT EXISTS idx_task_comments_mem ON task_comments(memory_uid);
 
+CREATE TABLE IF NOT EXISTS task_notes (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    memory_uid TEXT NOT NULL REFERENCES memories(uid),
+    title      TEXT NOT NULL,
+    body       TEXT NOT NULL,
+    session    TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_task_notes_mem ON task_notes(memory_uid);
+
+CREATE TABLE IF NOT EXISTS task_note_items (
+    note_id  INTEGER NOT NULL REFERENCES task_notes(id),
+    item_key TEXT NOT NULL,
+    PRIMARY KEY (note_id, item_key)
+);
+
 CREATE TABLE IF NOT EXISTS meta (
     key    TEXT PRIMARY KEY,
     value  TEXT NOT NULL
@@ -2126,6 +2144,18 @@ def update_memory_content(
     return True
 
 
+def set_generated_content(conn: sqlite3.Connection, uid: str, content: str) -> None:
+    """Rewrite a body generated from other rows, recording no edit: those rows are the history."""
+    row = get_memory(conn, uid)
+    conn.execute("UPDATE memories SET content = ?, updated_at = ? WHERE uid = ?",
+                 (content, now_iso(), uid))
+    _write_sections(conn, uid, row["type"], content)
+
+
+def edit_count(conn: sqlite3.Connection, uid: str) -> int:
+    return conn.execute("SELECT COUNT(*) FROM edits WHERE memory_uid = ?", (uid,)).fetchone()[0]
+
+
 def get_edit_history(conn: sqlite3.Connection, uid: str) -> list[sqlite3.Row]:
     return conn.execute(
         "SELECT * FROM edits WHERE memory_uid = ? ORDER BY edited_at ASC", (uid,)
@@ -2361,6 +2391,10 @@ def purge_memory(conn: sqlite3.Connection, uid: str) -> bool:
     conn.execute("DELETE FROM diagram_nodes WHERE memory_uid = ?", (uid,))
     conn.execute("DELETE FROM diagram_edges WHERE memory_uid = ?", (uid,))
     conn.execute("DELETE FROM diagrams WHERE memory_uid = ?", (uid,))
+    conn.execute(
+        "DELETE FROM task_note_items WHERE note_id IN "
+        "(SELECT id FROM task_notes WHERE memory_uid = ?)", (uid,))
+    conn.execute("DELETE FROM task_notes WHERE memory_uid = ?", (uid,))
     conn.execute("DELETE FROM task_comments WHERE memory_uid = ?", (uid,))
     conn.execute(
         "DELETE FROM task_item_links WHERE memory_uid = ? OR target_uid = ?", (uid, uid)

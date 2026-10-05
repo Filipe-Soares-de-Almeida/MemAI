@@ -157,14 +157,14 @@ def _close_both(conn, uid):
     return tasks.set_item_state(conn, uid, "i2", "done")
 
 
-def test_marking_an_item_regenerates_the_content_with_an_audited_note(conn):
+def test_marking_an_item_regenerates_the_content_without_an_edit(conn):
     uid = _make(conn)
     result = tasks.set_item_state(conn, uid, "1", "doing")
     assert result["item"] == "i1" and result["state"] == "doing" and result["changed"] is True
     assert result["progress"] == {"done": 0, "dropped": 0, "total": 2}
     assert result["task_state"] == "open" and result["archived"] is False
     assert db.get_memory(conn, uid)["content"].splitlines()[1] == "[~] i1 read the spec"
-    assert _notes(conn, uid)[-1] == "item i1: todo -> doing"
+    assert _notes(conn, uid) == []
 
 
 def test_the_last_item_done_completes_and_archives_the_task(conn):
@@ -212,7 +212,7 @@ def test_adding_an_item_reopens_a_completed_task(conn):
     assert db.get_memory(conn, uid)["status"] == "active"
     assert db.get_memory(conn, uid)["content"].splitlines()[-1] == "[ ] i3 ship it"
     notes = _notes(conn, uid)
-    assert "item i3 added" in notes and notes[-1] == "reopened"
+    assert "item i3 added" not in notes and notes[-1] == "reopened"
 
 
 def test_keys_are_never_reused(conn):
@@ -220,7 +220,7 @@ def test_keys_are_never_reused(conn):
     assert tasks.add_items(conn, uid, ["third"])["keys"] == ["i3"]
     assert tasks.add_items(conn, uid, ["fourth"])["keys"] == ["i4"]
     assert tasks.add_items(conn, uid, ["fifth", "sixth"])["keys"] == ["i5", "i6"]
-    assert "items i5, i6 added" in _notes(conn, uid)
+    assert _notes(conn, uid) == []
 
 
 def test_add_items_refuses_bad_input_and_writes_nothing(conn):
@@ -738,7 +738,7 @@ def test_delete_item_removes_the_item_its_comments_and_its_links(conn):
     assert [c["body"] for c in task["comments"]] == ["about the parser", "about the whole task"]
     assert db.get_memory(conn, uid)["content"] == (
         "GOAL: Parse every config file\n[ ] i1 read the spec\n[ ] i3 write the parser")
-    assert _notes(conn, uid)[-1] == "item i2 deleted: write the lexer"
+    assert _notes(conn, uid) == []
 
 
 def test_the_only_item_cannot_be_deleted(conn):
@@ -810,7 +810,7 @@ def test_deleting_the_last_open_item_completes_the_task(conn):
     assert result["task_state"] == "completed" and result["archived"] is True
     assert db.get_memory(conn, uid)["status"] == "archived"
     assert tasks.get_task(conn, uid)["completed_at"] != ""
-    assert _notes(conn, uid)[-2:] == ["item i3 deleted: write the parser", "completed"]
+    assert _notes(conn, uid) == ["completed"]
 
 
 def test_deleting_the_last_open_item_of_an_all_dropped_task_cancels_it(conn):
@@ -858,7 +858,7 @@ def test_a_refusal_after_the_rows_changed_rolls_them_back(tmp_path, monkeypatch)
         tasks.link_item(c, uid, "i3", [note])
         tasks.add_comment(c, uid, "about the parser", item="i3")
 
-    def refuse(conn, uid, note):
+    def refuse(conn, uid, note, *, record_edit):
         raise ValueError("refused after the rows changed")
     monkeypatch.setattr(tasks, "_regenerate", refuse)
     with pytest.raises(ValueError), db.connect(path) as c:

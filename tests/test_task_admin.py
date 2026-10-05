@@ -139,7 +139,7 @@ def test_a_refusal_after_rows_changed_rolls_them_back(client, monkeypatch):
     uid = _task(client)
     before = _snapshot(uid)
 
-    def refuse(conn, uid, note):
+    def refuse(conn, uid, note, *, record_edit):
         raise ValueError("refused after the item row changed")
 
     monkeypatch.setattr(tasks, "_regenerate", refuse)
@@ -370,7 +370,7 @@ def test_a_delete_item_refusal_after_rows_changed_rolls_them_back(client, monkey
     uid = _task(client)
     before = _snapshot(uid)
 
-    def refuse(conn, uid, note):
+    def refuse(conn, uid, note, *, record_edit):
         raise ValueError("refused after the item row was deleted")
 
     monkeypatch.setattr(tasks, "_regenerate", refuse)
