@@ -57,9 +57,7 @@ from memai import __version__, autostart, changelog, db, portable, sections, tas
 # browsers refuse to execute as an ES module. Force the correct types.
 mimetypes.add_type("text/javascript", ".js")
 mimetypes.add_type("text/css", ".css")
-# Not in the registry map at all, so the bundled faces went out as
-# application/octet-stream. Browsers sniff woff2 and render it anyway,
-# but there is no reason to describe a file wrongly.
+# The registry map has no woff2 entry, so the bundled faces would go out as octet-stream.
 mimetypes.add_type("font/woff2", ".woff2")
 
 # The dashboard as served: the Vite build output, not its sources. `npm run
@@ -76,25 +74,18 @@ CREATABLE_TYPES = tuple(
 CONFIDENCES = ("unverified", "confirmed", "contradicted")
 STATUSES = ("active", "archived")
 
-# How many uids one /api/bulk call carries. Also the cap on the uid list a
-# scope-wide archive echoes back for its Undo -- an Undo that came back longer
-# than bulk accepts would be a button that cannot work.
+# uids per /api/bulk call, and the cap on the uid list a scope-wide archive echoes for its Undo:
+# an Undo longer than bulk accepts could not work.
 BULK_MAX = 500
 
-# The relations graph hands over the whole scope. The layout settles in a
-# worker and the drawing is one instanced GPU pass, so the node count costs
-# the graphics card rather than the main thread. `limit` still cuts on
-# request -- most-connected first, because a graph of unconnected dots is
-# the useless half of a big store -- and the ceiling is only there so a
-# hand-typed number cannot ask SQLite for a row count it has to think about.
+# The graph gets the whole scope (layout in a worker, one instanced GPU pass). `limit` cuts most-
+# connected first; the ceiling only keeps a hand-typed number from straining SQLite.
 GRAPH_LIMIT_MAX = 200_000
 
 LOOPBACK_HOSTS = {"localhost", "127.0.0.1", "::1", "[::1]"}
 
-# How far back the health index compares itself. The store keeps no history
-# of a confidence or a relation, so the comparison is against a SNAPSHOT the
-# dashboard wrote on an earlier day (db.health_daily) -- and there is no
-# delta at all until one that old exists.
+# How far back the health index compares itself, against a db.health_daily snapshot; there is no
+# delta until a snapshot that old exists.
 HEALTH_DELTA_DAYS = 30
 
 
@@ -106,9 +97,8 @@ def _snip(text: str, limit: int = SNIPPET_LIMIT) -> str:
     return text[:limit].rstrip() + "…"
 
 
-# The markup a body carries, as the renderer reads it (webui/core/richtext.js):
-# a heading between rules of '=', bold between '**', a code span between
-# backticks, a fence line, and a [[uid]] reference.
+# Body markup as webui/core/richtext.js reads it: a heading between '=' rules, '**' bold, a
+# backtick code span, a fence line, and a [[uid]] reference.
 _MARKUP = (
     (re.compile(r"^\s*={2,}\s+(.+?)\s+={2,}\s*$", re.M), r"\1"),   # heading
     (re.compile(r"^\s*```[A-Za-z0-9_+#-]*\s*$", re.M), ""),        # fence line
@@ -136,9 +126,8 @@ def _plain(text: str) -> str:
         out = pattern.sub(repl, out)
     # a bullet is structure, and structure does not survive one line
     out = re.sub(r"^\s*[-*+]\s+", "", out, flags=re.M)
-    # An opener nothing closed is markup too, and the pairs above leave it.
-    # A run of two or more asterisks is bold by construction; a single one is
-    # not, and `SELECT *` has to survive a preview intact.
+    # Unclosed openers go too. Two or more asterisks are bold by construction; a single one is
+    # kept, so `SELECT *` survives a preview.
     out = re.sub(r"\*{2,}", "", out).replace("`", "")
     return " ".join(out.split())
 
@@ -169,11 +158,8 @@ def _summary(row, limit: int = SNIPPET_LIMIT) -> dict:
     return d
 
 
-# What a memory list may be ordered by. 'recalls' is how often an agent was
-# handed it (db.memory_usage). Sorting by it is a way to LOOK; it is not a
-# verdict. A rarely-read memory is usually about a rarely-needed subject,
-# which is not the same as dead weight -- and nothing in retrieval reads
-# this column, deliberately (see the schema comment on memory_usage).
+# What a memory list may be ordered by. 'recalls' (db.memory_usage) is a way to look, not a
+# verdict, and retrieval never reads it (see the schema comment on memory_usage).
 _MEMORY_SORTS = {
     "created_at": "created_at",
     "updated_at": "updated_at",
@@ -221,11 +207,8 @@ def _peer_card(conn: sqlite3.Connection, uid: str) -> dict | None:
     row = db.get_memory(conn, uid)
     if row is None:
         return None
-    # `title` is what a peer is CALLED, and every view that previews one
-    # names it by that and keeps the body as the fallback and the tooltip
-    # (see shared.peerName). Without it here, the relation rail, the
-    # diagram's links and the optimization panes had only the body to show
-    # -- so a named memory was previewed by its opening line.
+    # `title` is what a peer is called; views name it by that, with the body as fallback and
+    # tooltip (shared.peerName).
     return {
         "uid": row["uid"], "type": row["type"], "domain": row["domain"],
         "title": row["title"],
@@ -324,11 +307,8 @@ def api(handler):
 
 # ---------------------------------------------------------------- overview
 
-# What pulls the health index down, as one countable defect each. `where` is
-# the predicate over active memories; `params` is the memory-list filter that
-# shows exactly those rows, so the number on the dashboard and the list the
-# button opens are the same set by construction. Order is the order they are
-# shown in: worst first, then by how much of the store each one covers.
+# One countable defect each. `where` selects active memories and `params` is the list filter for
+# the same rows, so count and list match by construction. Ordered worst first, then by coverage.
 _SYMPTOMS: tuple[tuple[str, str, str, dict], ...] = (
     ("contradicted", "bad",
      "confidence = 'contradicted' AND (superseded_by IS NULL OR superseded_by = '')",
@@ -345,9 +325,7 @@ _SYMPTOMS: tuple[tuple[str, str, str, dict], ...] = (
     ("untitled", "info",
      "TRIM(title) = ''",
      {"untitled": "1"}),
-    # A row whose tags are empty, or are nothing but the type every read
-    # already filters on: either way it carries no synonym, and BM25 can
-    # only reach it by quoting its own wording.
+    # Tags empty or only the type: no synonym, so BM25 reaches the row only by its own wording.
     ("untagged", "info",
      "TRIM(tags) = '' OR TRIM(tags) = type",
      {"untagged": "1"}),
@@ -376,19 +354,15 @@ def _symptoms(conn: sqlite3.Connection, active: int) -> list[dict]:
             "share": round(count / active, 4) if active else 0.0,
             "params": {"status": "active", **params},
         })
-    # A flow whose shape is broken is a defect of the same kind, counted in
-    # diagrams rather than in memories -- so it carries its own denominator
-    # and no share of the store.
+    # A broken flow counts in diagrams, not memories: its own denominator, no share of the store.
     flows = db.diagram_overview(conn)
     broken = sum(1 for d in flows if d["issues"])
     out.append({
         "key": "diagrams", "severity": "info", "count": broken,
         "of": len(flows), "share": 0.0, "params": {},
     })
-    # Same shape, over the relations table: an edge whose endpoint no longer
-    # exists. There is no memory list to open -- both its endpoints are the
-    # problem -- so it carries an empty filter, and the view sends its
-    # button to the operation that clears them.
+    # An edge whose endpoint does not exist. No list to open, so an empty filter; the view sends
+    # its button to the operation that clears them.
     total_rels = conn.execute("SELECT COUNT(*) FROM relations").fetchone()[0]
     orphans = conn.execute(
         """SELECT COUNT(*) FROM relations
@@ -448,9 +422,7 @@ def overview(request, payload) -> dict:
             "relations": relations,
             "edits": edits,
             "sessions": sessions,
-            # written-to paths only: an ancestor that exists because
-            # something deeper is filed under it is a level of the tree,
-            # not a domain anybody named
+            # written-to paths only: an implicit ancestor is a level of the tree, not a named domain
             "domains": sum(1 for d in domains if not d["implicit"]),
         },
         "by_type": by_type,
@@ -601,11 +573,8 @@ def list_memories(request, payload) -> dict:
                 keep = {r[0] for r in conn.execute(
                     "SELECT uid FROM memories WHERE 1=1 " + _PIN_FILTERS[pin])}
                 hits = [h for h in hits if h["uid"] in keep]
-            # A pasted uid names one row, and nothing in the keyword index
-            # matches on it: a uid appears in OTHER bodies as [[uid]], so the
-            # search answers "what points at this" and never "this". Both are
-            # worth having, so the named row is pinned above its referrers --
-            # past every filter, the way the link picker treats one.
+            # A pasted uid matches only [[uid]] references in other bodies, so the named row is
+            # pinned above its referrers, past every filter, as the link picker does.
             exact = db.get_memory(conn, q)
             if exact is not None:
                 pinned = dict(exact)
@@ -636,9 +605,8 @@ def list_memories(request, payload) -> dict:
         params.extend(defect_params)
         clause = " ".join(where)
         total = conn.execute(f"SELECT COUNT(*) FROM memories WHERE {clause}", params).fetchone()[0]
-        # The join is what makes 'recalls' sortable; the filters above name
-        # bare columns, which stay unambiguous because memory_usage shares
-        # none of them. NULLs sort as never-recalled, which is the truth.
+        # The join makes 'recalls' sortable; memory_usage shares no column with the filters
+        # above, and NULL sorts as never-recalled.
         rows = conn.execute(
             f"""SELECT m.*, COALESCE(u.recall_count, 0) AS recalls,
                        u.last_recalled_at AS last_recall
@@ -660,9 +628,8 @@ def memory_detail(request, payload) -> dict:
         result["recalls"] = usage["recalls"] if usage else 0
         result["last_recall"] = usage["last_recall"] if usage else None
         result["edit_history"] = [dict(e) for e in db.get_edit_history(conn, uid)]
-        # `spec` is what the type is SUPPOSED to hold and `sections` what was
-        # read out of the body, so a view can show a field that came out
-        # missing instead of leaving a gap where it should be
+        # `spec` is what the type should hold and `sections` what the body yielded, so a view
+        # can show a missing field instead of a gap
         result["spec"] = [_section_spec(s) for s in sections.spec_for(row["type"])]
         result["sections"] = db.get_sections(conn, uid)
         result["section_problem"] = db.section_problem(conn, uid)
@@ -861,9 +828,7 @@ def edit_meta(request, payload) -> dict:
     if not updates and "also" not in payload:
         raise ValueError(f"nothing to update (fields: {(*allowed, 'also')})")
     if "review_after" in updates:
-        # normalized here so the stored value is a date whatever was typed,
-        # and rejected loudly rather than silently kept as free text -- an
-        # unparseable date would just never come due
+        # normalized to a date or rejected loudly: free text would never come due
         updates["review_after"] = db.normalize_review_after(updates["review_after"])
     if "type" in updates and not updates["type"]:
         raise ValueError("type cannot be empty")
@@ -917,9 +882,8 @@ def edit_meta(request, payload) -> dict:
             conn.execute(
                 "INSERT INTO edits (memory_uid, edited_at, prev_content, new_content, note) VALUES (?, ?, ?, ?, ?)",
                 (uid, db.now_iso(), row["content"], row["content"], note))
-        # a domain change with no `also` in the request still re-runs the
-        # link policy: the new path may already cover a membership the old
-        # one needed (db.apply_link_policy)
+        # a domain change re-runs the link policy even without `also`: the new path may cover a
+        # membership the old one needed (db.apply_link_policy)
         before = db.get_domain_links(conn, uid)
         if "also" in payload or ("domain" in changed and before):
             want = payload["also"] if "also" in payload else before
@@ -1037,9 +1001,7 @@ def bulk(request, payload) -> dict:
                     conn, uid, "active",
                     note=f"restored: {reason}" if reason else "") else 0
             elif action == "tag":
-                # ADDS. Replacing the field over a selection would wipe every
-                # synonym those rows already carry, which is the half of the
-                # index a keyword search runs on.
+                # ADDS: replacing would wipe the synonyms keyword search runs on.
                 row = db.get_memory(conn, uid)
                 if row is None:
                     continue
@@ -1096,9 +1058,8 @@ def graph(request, payload) -> dict:
                 params.append(value)
         total = conn.execute(
             f"SELECT COUNT(*) FROM memories WHERE {' '.join(where)}", params).fetchone()[0]
-        # `deg` orders the cut, not the payload: the degree reported per
-        # node below counts only edges between nodes that made it in, so
-        # what the legend says matches what is drawn.
+        # `deg` orders the cut; the degree reported below counts only edges between included
+        # nodes, so the legend matches the drawing.
         rows = conn.execute(
             f"SELECT uid, type, domain, also_domains, status, confidence, title, content, "
             f"       tags, created_at, (SELECT COUNT(*) FROM relations r "
@@ -1116,14 +1077,8 @@ def graph(request, payload) -> dict:
     for e in edges:
         degree[e["from_uid"]] = degree.get(e["from_uid"], 0) + 1
         degree[e["to_uid"]] = degree.get(e["to_uid"], 0) + 1
-    # `tags` and `also` are here for the graph's spotlight filter, which
-    # matches on what a human would type to find a node again: its name, a
-    # domain it belongs to, or a tag. Everything else is already drawn.
-    #
-    # `title` and `label` both travel, and both have a job. A node is NAMED by
-    # its title and falls back to `label` -- the opening line of the body --
-    # the way a memory row is. The spotlight reads both, so a store whose
-    # titles name and whose bodies carry the detail is findable by either.
+    # `tags` and `also` feed the spotlight filter. A node is named by `title`, falling back to
+    # `label` (the body's opening line); the spotlight reads both.
     nodes = [_paths({
         "uid": r["uid"], "type": r["type"], "domain": r["domain"],
         "also_domains": r["also_domains"],
@@ -1333,9 +1288,8 @@ def diagram_jump(request, payload) -> dict:
     if not peer_uid:
         raise ValueError("peer_uid is required")
     delete = bool(payload.get("delete"))
-    # An empty node_key on THIS side means the whole diagram, which only
-    # happens on the receiving end of a jump -- and that end has to be able
-    # to cut it. Creating one still names the step it leaves from.
+    # An empty node_key on this side means the whole diagram, which only a jump's receiving end
+    # has, and it must be able to cut it; creating one still names the step it leaves from.
     if not (node_key or delete):
         raise ValueError("node_key is required")
     with db.connect() as conn:
@@ -1428,9 +1382,8 @@ def domains(request, payload) -> dict:
         if d["parent"]:
             agg[d["parent"]]["children"] += 1
 
-    # Spelling variants are compared per level, not per whole path: two
-    # siblings called 'Cache' and 'cache' are the drift worth merging,
-    # while the same word at two different depths is two different scopes.
+    # Spelling variants compared per level: 'Cache' beside 'cache' is drift to merge, the same
+    # word at two depths is two scopes.
     by_sibling: dict[tuple[str, str], list[str]] = {}
     for path, d in agg.items():
         if d["implicit"]:
@@ -1497,7 +1450,7 @@ def rename_domain(request, payload) -> dict:
 
     Cross-listings into the renamed scope follow it (`also_affected`), so a
     memory that merely belongs to the subject is not left pointing at a path
-    that no longer exists. It is not moved: where it is filed is untouched.
+    that does not exist. It is not moved: where it is filed is untouched.
     """
     src = (payload.get("from") or "").strip()
     dst = (payload.get("to") or "").strip()
@@ -2090,9 +2043,7 @@ def lookup(request, payload) -> dict:
             rows = [dict(r) for r in db.list_recent(
                 conn, type=type_, domain=domain, tag=tag, status=status, limit=fetch)]
         else:
-            # A pasted uid is an explicit request for one memory, so it
-            # answers past every filter including status -- the operator
-            # named the row, there is nothing left to narrow.
+            # A pasted uid names one memory, so it answers past every filter, status included.
             exact = db.get_memory(conn, q)
             # the one row in the list that did not match a word
             rows = [{**dict(exact), "match_source": "uid"}] if exact is not None else \
@@ -2130,15 +2081,8 @@ def _suggestion_json(conn, row) -> dict:
             trow = db.get_memory(conn, row["target_uid"])
             target["tags"] = trow["tags"]
             target["review_after"] = trow["review_after"]
-            # A rewrite is read as a pair, so Before has to be the whole body:
-            # `snippet` is cut to a preview, and against a complete After that
-            # reads as text the suggestion removes. The lengths come with it
-            # because neither pane can be counted from what it shows.
-            #
-            # Once it is applied the memory HOLDS the new body, so the row is
-            # no longer the Before of anything -- prev_state is. Reading the
-            # memory then puts the same string in both panes, and the pair
-            # says the rewrite changed nothing.
+            # Before is the whole body: a cut snippet against a full After would read as removed
+            # text. Once applied, prev_state is the Before, or both panes would show the same.
             if row["kind"] in _CONTENT_KINDS:
                 before = trow["content"]
                 if row["status"] == "applied" and row["prev_state"]:
@@ -2146,9 +2090,7 @@ def _suggestion_json(conn, row) -> dict:
                 d["content_before"] = before
                 d["chars_before"] = len(before)
                 d["chars_after"] = len(d["payload"].get("new_content", ""))
-            # An unleak is read as a pair too, but of ONE field the payload
-            # names -- a body, a tag list, a source reference -- so the
-            # Before pane is that field rather than the content.
+            # An unleak pair is of the one field the payload names, not of the content.
             if row["kind"] == "unleak":
                 field = str(d["payload"].get("field", db.LEAK_FIELDS[0]))
                 before = trow[field] if field in db.LEAK_FIELDS else ""
@@ -2160,11 +2102,8 @@ def _suggestion_json(conn, row) -> dict:
             # a crosslist suggestion replaces the whole set, so the Before
             # pane needs the whole set, not only the filed path
             target["also"] = db.get_domain_links(conn, row["target_uid"])
-            # Once a suggestion is applied the memory HOLDS what it proposed,
-            # so the target row is no longer the Before of anything --
-            # prev_state is. `_revert_kind` names its keys after the fields
-            # this card carries, so the overlay is the same one for every
-            # kind; a key the card does not carry is ignored.
+            # Applied: prev_state is the Before. `_revert_kind` keys match this card's fields, so
+            # one overlay serves every kind; keys the card lacks are ignored.
             if row["status"] == "applied" and row["prev_state"]:
                 prev = json.loads(row["prev_state"])
                 for field in ("tags", "title", "domain", "also", "confidence",
@@ -2186,11 +2125,8 @@ def _suggestion_json(conn, row) -> dict:
         ]
         if row["status"] == "applied" and row["prev_state"]:
             d["new_uid"] = json.loads(row["prev_state"]).get("new_uid")
-    # What each [[uid]] written in this card's prose points at. The bodies and
-    # the rationale are memory text, drawn by the same renderer the record
-    # uses, and that renderer needs the targets resolved to draw a link
-    # instead of the brackets somebody typed. One map for the whole card,
-    # because the three are read together.
+    # One map of what each [[uid]] in this card's prose points at, so the renderer draws links
+    # across the bodies and rationale read together.
     prose = "\n".join(p for p in (
         d["rationale"], d.get("content_before", ""),
         str(d["payload"].get("new_content", "")),
@@ -2245,9 +2181,7 @@ def optimization_suggestions(request, payload) -> dict:
         except (TypeError, ValueError):
             raise ValueError("run (int) or runs (comma-separated ints) required")
     status = request.query_params.get("status", "")
-    # one kind at a time, because that is how the dashboard reviews them:
-    # a group is its own page, and pulling the other kinds' bodies with it
-    # would fetch every rewritten body in the run to show one of them
+    # one kind at a time, as the dashboard pages them, so a run's other bodies are not fetched
     kind = request.query_params.get("kind", "")
     items, runs = [], []
     with db.connect() as conn:
@@ -2609,9 +2543,7 @@ def update_state(request=None, payload=None) -> dict:
             "failed": bool(record.get("failed")),
             "enabled": update.enabled(),
             "interval_hours": update.interval(),
-            # The dashboard runs on the machine these would run on, so it can
-            # show them. It never runs them: they rewrite the environment the
-            # servers around it are running from.
+            # Shown, never run: they rewrite the environment the servers around it run from.
             "commands": update.commands()}
 
 
@@ -2919,9 +2851,7 @@ def _bind(host: str, port: int) -> socket.socket | None:
     """
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     if sys.platform != "win32":
-        # What asyncio would have done for us. Not on Windows, where
-        # SO_REUSEADDR means "steal a live socket" rather than "reuse a
-        # dead one" -- a different and unwanted thing.
+        # Not on Windows, where SO_REUSEADDR steals a live socket rather than reusing a dead one.
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     try:
         sock.bind((host, port))
@@ -3034,9 +2964,7 @@ def main() -> None:
 
     sock = _bind(args.host, args.port)
     if sock is None:
-        # Losing this race is the normal way a duplicate autostart ends:
-        # several MCP servers start at once, all of them see no dashboard,
-        # and the kernel picks one. Only the operator gets told.
+        # Losing this race is how a duplicate autostart normally ends; only the operator is told.
         if args.autostarted:
             raise SystemExit(0)
         print(f"memai admin: port {args.port} is already in use "

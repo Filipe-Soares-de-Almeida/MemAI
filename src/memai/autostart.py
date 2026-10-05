@@ -52,16 +52,14 @@ LOOPBACK = "127.0.0.1"
 REGISTRY_NAME = "admin.json"
 LOG_NAME = "admin.log"
 
-# Long enough for a loopback connect that is going to succeed (measured
-# well under a millisecond), short enough that a port black-holing SYNs
-# cannot stall an MCP server's startup.
+# Ample for a loopback connect that will succeed (well under 1 ms), short enough that a port
+# black-holing SYNs cannot stall MCP server startup.
 PROBE_TIMEOUT = 0.5
 
 _TRUE = {"1", "true", "yes", "on"}
 
-# Windows: the child gets a console of its own that is never put on
-# screen. Its own, so console control events sent to this process's group
-# do not reach it.
+# Windows: the child gets its own hidden console, so console control events sent to this
+# process's group do not reach it.
 _CREATE_NO_WINDOW = 0x08000000
 
 
@@ -217,15 +215,8 @@ def _spawn_admin(host: str, port: int) -> None:
     """
     workdir = home()
     env = dict(os.environ)
-    # cwd is MEMAI_HOME, not whatever directory the agent was started in:
-    # on Windows a live process's cwd cannot be renamed or deleted, and an
-    # orphaned dashboard would pin the operator's project folder. That
-    # move is also why src/ is spelled out on PYTHONPATH.
-    #
-    # site-packages is spelled out because interpreter() returns the base
-    # interpreter, which resolves nothing from this venv. PYTHONPATH is
-    # not scanned for .pth files, so a dependency that reaches the
-    # dashboard only through one is not on this path.
+    # cwd is MEMAI_HOME (Windows pins a live cwd), so src/ and site-packages go on PYTHONPATH:
+    # interpreter() is the base interpreter, and PYTHONPATH reads no .pth files.
     src_root = str(Path(__file__).resolve().parents[1])
     site_packages = sysconfig.get_paths()["purelib"]
     env["PYTHONPATH"] = os.pathsep.join(
@@ -234,12 +225,8 @@ def _spawn_admin(host: str, port: int) -> None:
     argv = [interpreter(), "-u", "-X", "utf8", "-m", "memai.admin",
             "--host", host, "--port", str(port), "--autostarted"]
 
-    # CREATE_BREAKAWAY_FROM_JOB is deliberately absent. It looks like
-    # insurance against a host that puts its children in a kill-on-close
-    # job, but on a job without BREAKAWAY_OK the CreateProcess call fails
-    # outright -- trading "the dashboard dies with the session" for "the
-    # MCP server does not start". Measured here: each host process gets
-    # its own job with SILENT_BREAKAWAY_OK, so the flag below is enough.
+    # No CREATE_BREAKAWAY_FROM_JOB: in a job without BREAKAWAY_OK, CreateProcess fails outright.
+    # Each host process measured here runs in a job with SILENT_BREAKAWAY_OK, so these flags suffice.
     flags = {"creationflags": _CREATE_NO_WINDOW} if sys.platform == "win32" \
         else {"start_new_session": True}
 
@@ -275,9 +262,7 @@ def ensure_admin_running() -> None:
 
         host = os.environ.get("MEMAI_ADMIN_HOST", LOOPBACK).strip() or LOOPBACK
         if host not in ("127.0.0.1", "::1", "localhost"):
-            # main() prints a warning for this and carries on, because a
-            # person typed it and can read the warning. Nobody reads the
-            # stderr of an autostarted process, so refuse instead.
+            # main() only warns, since a person typed it; nobody reads an autostart's stderr, so refuse.
             _log(f"refusing to autostart on {host}: the dashboard has no "
                  f"authentication, so autostart is loopback-only")
             return

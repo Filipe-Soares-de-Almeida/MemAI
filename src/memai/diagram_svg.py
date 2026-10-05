@@ -37,17 +37,8 @@ from pathlib import Path
 
 from . import db
 
-# ── mirrored constants ──────────────────────────────────────────────────
-# Every value in this block has a twin in webui/diagram-engine.js under
-# the same name (SCREAMING_CASE there too). The comments explaining WHY
-# each number is what it is live in that file, next to the drawing code
-# they govern; they are not repeated here, so that there is one place to
-# read the reasoning and no chance of two prose explanations drifting
-# apart. Box geometry is NOT here -- it comes from db (see below), which
-# is where the layout that produced the coordinates lives.
-#
-# Absent on purpose: HANDLE, SNAP_PX and EDGE_PICK_PX. Those are hit-test
-# tolerances for dragging and clicking, and nothing here is interactive.
+# ── mirrored constants: each has a same-named twin in webui/diagram-engine.js, whose comments
+# hold the reasoning. Box geometry comes from db; hit-test tolerances have no use here.
 
 LABEL_PX = 12.0          # node label size, world units, before font_scale
 LABEL_LH = 14.0          # and its line height
@@ -73,10 +64,8 @@ NODE_SHAPES = ("start", "step", "decision", "io", "end")
 
 _METRICS_FILE = Path(__file__).with_name("roboto_metrics.json")
 
-# ctx.measureText in the canvas asks the browser for the advance of the
-# actual face. Here it is summed from a table extracted from the same
-# woff2 files -- see tools/gen-roboto-metrics.py for why the table is
-# committed and the fonts are not.
+# The canvas measures text with ctx.measureText; here it is summed from a table extracted from
+# the same woff2 files (tools/gen-roboto-metrics.py).
 FACE_UI = "ui"
 FACE_MONO = "mono"
 
@@ -144,9 +133,8 @@ def wrap(text: str, max_width: float, max_lines: int, px: float,
     if len(lines) < max_lines and line:
         lines.append(line)
     if len(lines) == max_lines:
-        # Something was dropped, so the last line has to say so. Compared
-        # by length rather than by content because the words were
-        # re-joined with single spaces and the original may not have been.
+        # Something was dropped, so the last line says so. Compared by length, since the words
+        # were re-joined with single spaces.
         consumed = len(" ".join(lines))
         if consumed < len(str(text).strip()):
             lines[max_lines - 1] = clamp_line(
@@ -173,10 +161,8 @@ def short_label(text: str) -> str:
     return f"{_TRAILING_PUNCT.sub('', cut)}…"
 
 
-# ── geometry ────────────────────────────────────────────────────────────
-# Everything from here down is a transcription of the same-named function
-# in diagram-engine.js. Read it there for the reasoning; what is worth
-# saying HERE is only what the transcription itself risks getting wrong.
+# ── geometry: transcriptions of the same-named functions in diagram-engine.js, which explain
+# them; comments here cover only what the transcription risks getting wrong.
 
 def _clamp(value: float, lo: float, hi: float) -> float:
     return min(hi, max(lo, value))
@@ -221,9 +207,8 @@ def anchors(n: dict) -> dict[str, dict]:
 
 def sides(a: dict, b: dict, corridor_x: float | None = None,
           flank: bool = False) -> tuple[str, str]:
-    # `flank` sends a corridor edge out of the side that FACES the corridor
-    # instead of vertically into the row gap -- two corners instead of four.
-    # Only offered when that leg is clear; see the twin for the whole reason.
+    # `flank` leaves a corridor edge from the side facing the corridor, two corners instead of
+    # four; offered only when that leg is clear.
     dx, dy = b["x"] - a["x"], b["y"] - a["y"]
     if corridor_x is not None:
         if flank:
@@ -281,10 +266,8 @@ def offset(p: dict, side: str, by: float) -> dict:
 
 
 def half_width_at(n: dict, dy: float, grow: float = 0.0) -> float:
-    # `grow` measures the outline that many units OUTSIDE the shape, which is
-    # NOT hw + grow except on a rectangle -- see the twin. Nothing here draws
-    # the selection ring, but the badge is placed against it, so the growth
-    # rules have to exist on this side too.
+    # `grow` measures the outline that many units outside the shape, which is not hw + grow
+    # except on a rectangle; the badge is placed against that outline.
     hw0, hh0 = n["w"] / 2, n["h"] / 2
     if n["shape"] == "decision":
         k = 1 + grow * math.hypot(1 / hw0, 1 / hh0) if grow else 1.0
@@ -400,10 +383,8 @@ class DiagramLayout:
                 "sized": n.get("w") is not None or n.get("h") is not None,
             })
         self.by_key = {n["key"]: n for n in self.nodes}
-        # An edge with a missing end is dropped, exactly as the canvas
-        # drops it. Not cosmetic: the lane counter below walks the surviving
-        # edges in order, so counting a dangling one would put every
-        # corridor after it on the other side of the diagram.
+        # An edge with a missing end is dropped as the canvas drops it: the lane counter walks
+        # the surviving edges, so a dangling one would flip every later corridor.
         self.edges: list[dict] = [
             {"from": e["from"], "to": e["to"], "label": e.get("label") or "",
              "loops": bool(e.get("loops")),
@@ -416,9 +397,8 @@ class DiagramLayout:
         for link in data.get("links") or []:
             key = link.get("node_key")
             self.link_count[key] = self.link_count.get(key, 0) + 1
-        # Jumps counted per step the same way, both directions, exactly as
-        # setData does -- but an incoming jump aimed at the diagram as a
-        # whole carries no key, so it belongs to no card and is skipped.
+        # Jumps counted per step in both directions, as setData does; an incoming jump aimed at
+        # the whole diagram has no key and is skipped.
         self.jump_count: dict[str, int] = {}
         for jump in data.get("jumps") or []:
             key = jump.get("node_key")
@@ -488,9 +468,8 @@ class DiagramLayout:
 
         for e in self.edges:
             a, b = self.by_key[e["from"]], self.by_key[e["to"]]
-            # geometry, not graph: `back` says the line currently runs UP
-            # the page. `loops` says it closes a cycle. Only the second is
-            # drawn dashed.
+            # `back`: the line runs up the page (geometry). `loops`: it closes a cycle (graph),
+            # and only that one is dashed.
             e["back"] = b["y"] <= a["y"]
             if detours:
                 e["lane"] = 0
@@ -498,9 +477,8 @@ class DiagramLayout:
                 e["via"] = None
                 e["flank"] = False
 
-        # corridors already committed to, as (x, lo_y, hi_y). route_hits_a_box
-        # sees boxes, never another LINE, so without this an A->B / B->A pair
-        # runs both halves down the same x -- see the twin.
+        # Corridors already taken, as (x, lo_y, hi_y): route_hits_a_box sees only boxes, so an
+        # A->B / B->A pair would otherwise share one x.
         used_corridors: list[tuple[float, float, float]] = []
 
         def corridor_free(e: dict, x: float) -> bool:
@@ -522,9 +500,7 @@ class DiagramLayout:
                 if "corridor" in via and not corridor_free(e, via["corridor"]):
                     continue
                 e["via"] = via
-                # the side facing the corridor first: same corridor, two
-                # corners instead of four. detours() already filtered on
-                # corridor_clear, so there is nothing to re-check.
+                # The side facing the corridor first; detours() already checked corridor_clear.
                 if "corridor" in via:
                     e["flank"] = True
                     if not self.route_hits_a_box(e):
@@ -556,13 +532,9 @@ class DiagramLayout:
             self.lane_span = {"left": lane_left, "right": lane_right}
 
     def detours(self, e: dict) -> list[dict]:
-        # DEDUPLICATED -- see the twin. A column of stacked cards offers the
-        # same x once per card, and the slice below would spend its whole
-        # budget on that one value.
+        # Deduplicated: a column of stacked cards offers one x per card and would use up the slice.
         a, b = self.by_key[e["from"]], self.by_key[e["to"]]
-        # which crossbar can move depends on which way the Z runs -- along y
-        # for a vertical run, along x for a horizontal one. Only the matching
-        # kind is read by route(); see the twin.
+        # The movable crossbar follows the Z's run: along y when vertical, along x when horizontal.
         vertical = sides(a, b)[0] in ("top", "bottom")
         axis = "y" if vertical else "x"
         span = "h" if vertical else "w"
@@ -588,9 +560,8 @@ class DiagramLayout:
         def near(x: float) -> float:
             return min(abs(x - a["x"]), abs(x - b["x"]))
 
-        # a tuple key is the same ordering as the JS comparator's
-        # `over(u) - over(v) || near(u) - near(v)`, and both sorts are stable
-        # over an insertion order that is the node order on both sides
+        # The tuple key orders as the JS comparator `over(u) - over(v) || near(u) - near(v)`;
+        # both sorts are stable over the same node order.
         corridors = [{"corridor": x} for x in
                      sorted(corridor_x, key=lambda x: (over(x), near(x)))]
         return bars[:10] + corridors[:12]
@@ -649,10 +620,8 @@ class DiagramLayout:
             rank = 0
             for i, m in enumerate(members):
                 m["e"][f"fan_{m['end']}"] = (i - mid) * FAN_GAP
-                # strictly increasing, NOT symmetric: a symmetric depth
-                # gives the two members of a pair the same stub, which is
-                # the one case that needs them different. The kept member
-                # takes zero, so its route stays the unfanned one.
+                # Strictly increasing, not symmetric, so a pair's two members get different stubs;
+                # the kept member takes zero and keeps the unfanned route.
                 if keep < 0:
                     m["e"][f"stub_{m['end']}"] = i * FAN_STUB
                 elif i == keep:
@@ -776,17 +745,8 @@ class DiagramLayout:
         return done([{"x": q["x"], "y": p["y"]}])           # L: across, down
 
 
-# ── emitting SVG ────────────────────────────────────────────────────────
-# A third place the canvas has to be matched, and the one the route golden
-# CANNOT check: it records the polyline, so a bug in turning that polyline
-# into path data is invisible to it. Two such bugs were found by looking at
-# the output, and both are noted where they were fixed.
-#
-# The palette is the admin theme, resolved rather than referenced: the
-# canvas reads these from CSS custom properties (readTheme), but an SVG that
-# has to render outside the dashboard cannot. Values from webui/admin.css --
-# a fourth thing to keep in step, though these change far less often than
-# the geometry.
+# ── emitting SVG: matches the canvas where the route golden cannot look (polyline to path data).
+# The palette is admin.css resolved to values, since an SVG outside the dashboard has no CSS vars.
 
 BG = "#121212"           # --bg
 SURFACE = "#1e1e1e"      # --surface
@@ -799,25 +759,15 @@ WARN = "#ffd54f"         # --warn
 ARROW_LEN = 9.0          # drawEdge's `s` for a normal edge
 ARROW_FLARE = 0.45       # and its half-width factor
 
-# Below these the canvas draws no label at all (drawNode / drawEdge), which
-# an interactive shell has to reproduce or a zoomed-out flow turns into a
-# field of grey smears.
+# Below these scales the canvas draws no label (drawNode / drawEdge); the shell matches it so a
+# zoomed-out flow is not a field of grey smears.
 LABEL_MIN_SCALE = 0.3
 BADGE_MIN_SCALE = 0.45
 
 _XML_ESCAPES = {"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}
 
-# vector-effect is doing real work here. drawEdge sets lineWidth to
-# 1.7/this.scale and the dash to [5/scale, 4/scale]: both constant in SCREEN
-# pixels at any zoom. A plain stroke-width is in world units, so at the
-# scale a 34-step flow fits into, a 1.7-unit line renders around 0.15px and
-# vanishes -- while the arrowheads (world units in the engine too, so right
-# as they are) and the labels stay, leaving arrows and text floating with no
-# lines between them. non-scaling-stroke is the SVG spelling of /this.scale.
-#
-# Class names are prefixed because this markup can be injected into a page
-# whose stylesheet we do not control, and ".t"/".b"/".e" are exactly the
-# names a host theme also picks.
+# non-scaling-stroke is the SVG form of drawEdge's 1.7/this.scale: world-unit strokes vanish on a
+# long flow while arrows and labels stay. Prefixed classes keep clear of a host page's stylesheet.
 _CSS = (
     ".dg-e{{fill:none;stroke:{line};stroke-width:1.7;stroke-linejoin:round;"
     "marker-end:url(#dg-a);vector-effect:non-scaling-stroke}}"
@@ -1073,10 +1023,8 @@ def render_svg(data: dict, *, notes: bool = True) -> tuple[str, tuple]:
                        f'textLength="{_n(measure(line, px))}" '
                        f'lengthAdjust="spacingAndGlyphs">{esc(line)}</text>')
 
-        # OUTSIDE the card, hugging the OUTLINE rather than the bounding box
-        # -- see drawBadge() in the twin for both halves of why. The jump
-        # count takes the row BELOW the link one: two counts on one row read
-        # as a single two-digit number, and they say different things.
+        # Outside the card, hugging the outline (see drawBadge()); the jump count takes the row
+        # below the link count, since two counts on one row read as one number.
         badges = ((-1, layout.link_count.get(n["key"]), _link_mark),
                   (1, layout.jump_count.get(n["key"]), _jump_mark))
         for row, count, mark in badges:
@@ -1094,12 +1042,8 @@ def render_svg(data: dict, *, notes: bool = True) -> tuple[str, tuple]:
     return "".join(out), (x0, y0, vw, vh)
 
 
-# ── interactive shell ───────────────────────────────────────────────────
-# The static SVG above is the whole picture at one scale. For a 34-step
-# routine that is a choice between "readable" and "all of it": ~3000x6300
-# units scaled into a chat column puts a 12-unit label under 3px. So the
-# same markup also ships wrapped in pan and zoom, which is the only form of
-# it that is actually usable for a long flow.
+# ── interactive shell: the static SVG wrapped in pan and zoom, since a long flow fitted into a
+# chat column puts its labels under 3px.
 
 _SHELL_CSS = (
     ".dgw{{position:relative;height:{h}px;border:1px solid {line};"
@@ -1118,17 +1062,8 @@ _SHELL_CSS = (
     "clip:rect(0,0,0,0)}}"
 )
 
-# Two things here are easy to get wrong and were:
-#
-#  * getScreenCTM, not a width/height ratio, to turn client pixels into
-#    viewBox units. The ratio ignores the preserveAspectRatio letterbox,
-#    and on a 1:2 diagram in a wide box the letterbox is most of the width.
-#  * the zoom is clamped in EFFECTIVE terms -- what the viewer actually
-#    sees. Clamping the transform's own scale is meaningless, because what
-#    it buys depends on how the root fitted the viewBox, which depends on
-#    the size of the box. Opening at "scale 3" landed at 25% on screen,
-#    under the threshold where labels stop being drawn: a diagram that
-#    opened with no text on it.
+# Client pixels map to viewBox units through getScreenCTM, which honours the letterbox; the zoom
+# is clamped on the effective on-screen scale, not on the transform's own.
 _SHELL_JS = """
 (function(){
  var svg=document.getElementById('dg'),vp=document.getElementById('dg-vp'),
@@ -1258,9 +1193,7 @@ def render_interactive(data: dict, *, notes: bool = True,
         f'<button id="dg-out">−</button>'
         f'<button id="dg-st">start</button>'
         f'<button id="dg-all">all</button></div>'
-        # seeded with the no-script state, so an empty readout is never what
-        # a working page looks like: if it still says "fit" the shell did not
-        # run, which is worth being able to see at a glance
+        # Seeded with the no-script state: a readout still saying "fit" shows the shell did not run.
         f'<div class="dgz" id="dg-z">fit</div>'
         f'<div class="dgh">drag to pan &middot; scroll to zoom</div>'
         f"{svg}</div><script>{js}</script>"

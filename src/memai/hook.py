@@ -55,10 +55,8 @@ from pathlib import Path
 # needs: the store, the brief, the release check and the installer load per event.
 from memai import guard, warden
 
-# How long after the last write a Stop hook assumes the session already
-# recorded what it learned. Long enough to cover a stretch of reading and
-# discussion after the last note; short enough that a session which wrote
-# nothing at all still gets asked.
+# Minutes after the last write a Stop hook assumes the session recorded what it learned: covers
+# reading and discussion after a note, while a session that wrote nothing still gets asked.
 QUIET_MINUTES = 45
 
 # Characters the statusline may occupy. A host renders it on one row beside
@@ -116,17 +114,15 @@ def _session_start(args, payload) -> None:
     """
     from memai import brief, db, update
 
-    # Both before the brief and never at its expense. `began` is what later
-    # tells an agent the host loaded from one installed behind its back, and
-    # a warden state left by a session that ended is nobody else's to clean up.
+    # Before the brief, never at its expense: `began` lets a later check spot an install made
+    # mid-session, and a warden state left by an ended session is nobody else's to clean.
     try:
         warden.began(payload.get("session_id", ""))
         warden.prune()
     except Exception:
         pass
-    # The one request a session start makes, and only when nothing has ever
-    # been cached: every other refresh happens at the end of a turn, where
-    # nobody is waiting on it.
+    # The one request a session start makes, only when nothing is cached; other refreshes run at
+    # the end of a turn, where nobody waits.
     known = update.refresh(unseen_only=True)
     release = update.notice(known)
     project = db.active_project()
@@ -312,9 +308,8 @@ def _stop(args, payload) -> None:
         _block("\n\n".join([tasks_ask, *notes]))
     elif notes:
         _emit("Stop", "\n\n".join(notes), system="MemAI: " + "; ".join(systems) + ".")
-    # After the emit, and never part of it: the answer is for the next session
-    # to read, and this is the end of a turn, where the request costs nobody
-    # anything it has to wait for.
+    # After the emit, never part of it: the answer is for the next session, and at a turn's end
+    # nobody waits on the request.
     update.refresh()
 
 
@@ -379,10 +374,8 @@ def _statusline(args, payload) -> None:
                 if not args.domain or db.in_domain(d["domain"], args.domain)]
         checkpoint = db.latest_by_type(conn, "checkpoint", domain=args.domain,
                                        exclude_contradicted=True)
-    # Ranked on the memories naming the path itself -- filed there plus
-    # cross-listed there -- not on the subtree, so an implicit parent never
-    # outranks its child. list_domains orders by recency, so max() takes the
-    # most recent of equal scores.
+    # Ranked on memories filed or cross-listed on the path itself, so an implicit parent never
+    # outranks its child; list_domains is newest first, so max() keeps the newest tie.
     busiest = max(tree, key=lambda d: d["count"] + d["also"])["domain"] if tree else ""
     age = _age(checkpoint["created_at"]) if checkpoint is not None else ""
     _line(_status_text(census["total"], busiest, age))
@@ -685,9 +678,8 @@ def main(argv: list[str] | None = None) -> int:
                         help="install: print what it would write, write nothing")
     args = parser.parse_args(argv)
 
-    # `--check` and friends only mean anything to install, so they name it:
-    # the flags are visible in --help before the positional is, and reaching
-    # for them without it is the obvious reading.
+    # `--check` and friends belong to install, so they say so: --help lists them before the
+    # positional, and using them without it is the obvious mistake.
     if args.event is None:
         if not (args.check or args.print_only or args.settings or args.skills
                 or args.agents):
@@ -705,9 +697,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         _EVENTS[args.event](args, payload)
     except Exception:
-        # Deliberately silent, deliberately zero. A hook that cannot read the
-        # store has nothing to say; a hook that says so on stderr and exits
-        # non-zero interrupts a session over a memory server being absent.
+        # Silent and zero on purpose: a missing memory server must not interrupt a session.
         return 0
     return 0
 

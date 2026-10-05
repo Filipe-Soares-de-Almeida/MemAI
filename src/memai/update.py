@@ -37,9 +37,8 @@ from memai import __version__, changelog, db
 REPO = "Filipe-Soares-de-Almeida/MemAI"
 RELEASES_PAGE = f"https://github.com/{REPO}/releases/latest"
 
-# Releases asked for in one request, newest first. A machine that has skipped
-# a few versions still gets every one of them above its own; beyond this many
-# the note says how far behind it is and the page carries the rest.
+# Releases per request, newest first; past this many the note says how far behind the machine
+# is and the page carries the rest.
 PER_PAGE = 20
 RELEASES_API = f"https://api.github.com/repos/{REPO}/releases?per_page={PER_PAGE}"
 
@@ -49,10 +48,8 @@ CACHE_NAME = "update.json"
 # for the machine and not for whichever project is active.
 SETTINGS_NAME = "update-settings.json"
 
-# Hours an answer is used before another request is made, until a window is
-# chosen. The API allows 60 unauthenticated requests an hour per address,
-# shared with everything else running on it, so an hour is the floor; the
-# ceiling is a month.
+# Default hours a cached answer is reused, and the allowed range: the API allows 60
+# unauthenticated requests an hour per address, so an hour is the floor.
 TTL_HOURS = 24
 HOURS_RANGE = (1, 720)
 
@@ -67,10 +64,8 @@ TIMEOUT = 2.0
 # The same, for a check somebody asked for and is waiting on.
 MANUAL_TIMEOUT = 5.0
 
-# Characters of notes the cache keeps per release, and characters a note shows
-# across every release it covers. A session behind a release reads the digest
-# every time it starts, so what it gets is the shape of what changed and not
-# the changelog -- which the dashboard renders in full.
+# Note characters cached per release and shown across all releases. A session reads the digest at
+# every start, so it gets the shape of the change; the dashboard renders the full changelog.
 NOTES_STORED = 4000
 NOTES_SHOWN = 700
 
@@ -370,11 +365,8 @@ def digest(record: dict | None = None, *, local: str = __version__,
     return _cut(lines, limit)
 
 
-# The three pieces of the note, in the order notice() joins them: what
-# happened, what is in it when the release came with notes, and what to do
-# about it -- one form for a checkout, one for an install no command here
-# reaches. notice() indents the commands and the preview, which is what keeps
-# each a block to read as one.
+# The note's pieces in notice() order: what happened, the release notes when there are any, and
+# what to do, in one form for a checkout and one for an install no command here reaches.
 HEADLINE = ("NOTE: memai {latest} has been released and this session is "
             "running {local}.")
 

@@ -1,4 +1,4 @@
-"""Rebuild the dashboard when its build no longer matches its sources.
+"""Rebuild the dashboard when its build stops matching its sources.
 
 memai.admin serves webui/dist, which `npm run build` writes from the sources
 in webui/. The build carries dist/build.json, the version and a hash of the

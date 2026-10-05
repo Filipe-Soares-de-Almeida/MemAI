@@ -41,11 +41,8 @@ from mcp.server.mcpserver import MCPServer
 from memai import (autostart, brief, db, diagram_svg, hook_install, pending as pending_lists,
                    portable, sections, tasks, update)
 
-# Sent to the host in the initialize handshake, and injected into the
-# model's context by the hosts that support it. Kept to a paragraph on
-# purpose: it is paid on every request, exactly like a tool schema, and
-# what it has to buy is the first call -- an agent that never calls pulse()
-# has a memory server and no memory. The rest is in the tool descriptions.
+# Sent in the initialize handshake and injected into context by hosts that support it. One
+# paragraph: it is paid on every request, and its job is to get the first pulse() call.
 INSTRUCTIONS = """\
 Long-term memory that survives between sessions. Read before working:
 pulse(domain) for the state of a subject, recall(query) or search(query)
@@ -67,10 +64,8 @@ A domain is a path ('acme/x100/p200') and every read covers its
 subdomains, so the same call asks about a product or one routine depending
 on how much of the path it gives."""
 
-# Appended to INSTRUCTIONS while the user's settings register no memai hook.
-# `{command}` is filled with the absolute path to this environment's
-# memai-hook: the name alone is on PATH only for a shell with the environment
-# activated, which a host's shell is not.
+# Appended to INSTRUCTIONS while the user's settings register no memai hook. `{command}` is the
+# absolute memai-hook path: a host's shell has no activated environment to put it on PATH.
 HOOKS_MISSING = """\
 NOTE: no memai hook is registered in the user's settings, so nothing puts the
 store in front of this session -- memai is read only when you call it, and a
@@ -86,10 +81,8 @@ domains a session names, which scopes the task ask at Stop. `--check` reports
 what is registered, `--print` shows the block without writing it."""
 
 
-# Appended to INSTRUCTIONS while memai is registered for this session but part
-# of what was installed is out of date. `{findings}` and `{commands}` are
-# rendered by _stale_note; the command is absolute for the same reason as
-# above.
+# Appended while memai is registered but part of the install is out of date; _stale_note fills
+# `{findings}` and `{commands}`, with absolute commands for the same reason.
 INSTALL_STALE = """\
 NOTE: memai is registered for this session, but part of the installation is out
 of date -- an install does not keep itself current, so a hook or a skill copied
@@ -191,14 +184,8 @@ def _new_session_id() -> str:
 SESSION = _new_session_id()
 
 
-# Which tools this process offers. A tool's schema -- name, description,
-# argument types -- is sent with EVERY request for the whole session, so the
-# full set is a fixed tax on every context window whether or not a session
-# ever documents a flow or runs a curation pass. Naming the groups lets a
-# session pay for what it uses.
-#
-# 'full' stays the default: dropping a tool an existing setup calls is not
-# something to do to somebody quietly.
+# Tool groups this process offers: every schema rides on every request, so groups let a session
+# pay for what it uses. 'full' stays the default so no existing setup loses a tool quietly.
 TOOL_SETS = ("core", "diagrams", "curation")
 _ACTIVE_SETS = frozenset(
     TOOL_SETS if (raw := os.environ.get("MEMAI_TOOLS", "full").strip().lower()) in ("", "full")
@@ -249,9 +236,8 @@ SNIPPET_LIMIT = 400
 
 LIST_STATUSES = ("active", "archived", "all")
 
-# Memory type tag per writer -- the retrieval tools filter on these exact
-# strings (search/recall/list_*(type=...)). Each writer tool is named
-# after the type it stores, so tool name and stored type cannot drift.
+# Memory type per writer, the exact strings the retrieval tools filter on; each writer is named
+# after its type, so tool name and stored type cannot drift.
 TYPE_NOTE = "note"                  # note()
 TYPE_CHECKPOINT = "checkpoint"      # checkpoint()
 TYPE_ANTI_PATTERN = "anti_pattern"  # anti_pattern()
@@ -372,9 +358,8 @@ def _write_result(conn, uid: str, warning: dict | None, also: str,
     Present only when something crossed the threshold -- a store with no
     collision never sees the field, and the write is never blocked by one.
     """
-    # the project as well as the uid: the active project is switched from the
-    # dashboard and a running server follows on its next call, so this is
-    # where a writer learns which file its memory landed in
+    # the project too: the dashboard switches it under a running server, so this is where a
+    # writer learns which file its memory landed in
     result = {"uid": uid, "project": db.active_project()}
     # the count is the feedback: a writer sees what it indexed while it
     # still holds the context that would supply the missing words
@@ -945,10 +930,8 @@ def get_diagram(uid: str, format: str = "mermaid") -> dict:
     out = {"uid": uid, "title": data["title"], "format": format,
            "body": _capped(body)}
     if format == "mermaid":
-        # Said here as well as in the docstring, because by now the docstring
-        # is behind the caller and this is what it is looking at. A request
-        # to "render the diagram" answered with mermaid silently swaps the
-        # user's arrangement for a fresh layout.
+        # Repeated from the docstring because the caller is reading this now: answering "render
+        # the diagram" with mermaid would silently swap the user's arrangement for a fresh layout.
         out["note"] = (
             "mermaid re-lays out the flow and discards the stored positions. "
             "To show the arrangement the user actually made, call again with "
@@ -966,13 +949,8 @@ def _write_render(conn, uid: str, data: dict, format: str) -> dict:
     interactive = format == "svg-interactive"
     inline_target = None
     if interactive:
-        # TWO files, because the two uses genuinely differ. Opening a file
-        # needs a document -- doctype, charset, a body whose background is
-        # not white behind a dark diagram. Embedding in a reply needs the
-        # opposite: no doctype and no body, which most inline renderers
-        # reject, and no styling that would reach the host page. Writing one
-        # and telling the caller which part to cut out is the version of
-        # this that breaks quietly.
+        # Two files: opening one needs a full document (doctype, charset, a dark-safe body), while
+        # inline embedding needs no doctype, no body and no styling that leaks into the host page.
         markup = diagram_svg.render_interactive(data, standalone=True)
         viewbox = diagram_svg.render_svg(data)[1]
         inline_target = db.renders_dir() / f"diagram-{uid}.inline.html"
@@ -991,10 +969,8 @@ def _write_render(conn, uid: str, data: dict, format: str) -> dict:
         "title": data["title"],
         "format": format,
         "path": str(target),
-        # The payload cannot be drawn from -- that is the point of writing the
-        # file -- so it says what to do with it instead. Without this, a
-        # caller that has the path and a way to render inline still has to
-        # infer that reading the file is the intended next step.
+        # The payload cannot be drawn from, so it names the next step instead of leaving the
+        # caller to infer that reading the file is it.
         **({"inline_path": str(inline_target)} if inline_target else {}),
         "next_step": (
             "read `inline_path` and put its contents in your reply -- that "
@@ -1542,9 +1518,7 @@ def get_memory(uid: str) -> dict:
     with db.connect() as conn:
         row = db.get_memory(conn, uid)
         if row is None:
-            # Not {}: an empty dict reads as "the record is empty" and sends a
-            # caller looking for content that was never there, when what
-            # happened is that the uid does not name a memory at all.
+            # Not {}: an empty dict reads as an empty record, when the uid names no memory at all.
             return _errors([f"no memory {uid}"])
         _read(conn, [row])
         edits = db.get_edit_history(conn, uid)
@@ -1963,13 +1937,8 @@ assert set(_TOOLS) == set(_GROUP_OF), (
 
 
 def main() -> None:
-    # Before mcp.run(), deliberately: the last moment on the main thread
-    # with no event loop and no stdio reader threads running, and the only
-    # place a few tens of milliseconds cost nothing. A lifespan hook would
-    # look tidier and be worse: the SDK enters it before the session
-    # exists, putting this on the initialize path.
-    # Does nothing unless MEMAI_ADMIN_AUTOSTART says otherwise, and
-    # cannot raise -- see autostart.ensure_admin_running.
+    # Before mcp.run(): the main thread has no event loop or stdio readers yet, and a lifespan
+    # hook would sit on the initialize path. A no-op unless MEMAI_ADMIN_AUTOSTART; never raises.
     autostart.ensure_admin_running()
     mcp.run()
 

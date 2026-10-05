@@ -31,14 +31,8 @@ class Section(NamedTuple):
     max_len: int = 0  # characters this field holds; 0 for a field with no ceiling
 
 
-# The order here is the order the labels appear in a body, and the order the
-# writing tool takes them: tests/test_guard.py holds `key` against the tool
-# signature, so a rename here is a rename there.
-#
-# A ceiling belongs on a field that is meant to be read at a glance -- what
-# the work is for, what is being done next, what the mistake was. The fields
-# that carry the substance have none: capping ESTABLISHED would push what it
-# holds out of the memory rather than shorten it.
+# Body order, and the writing tool's parameter order: tests/test_guard.py holds `key` to its signature.
+# Only at-a-glance fields get a ceiling; capping ESTABLISHED would push substance out, not shorten it.
 SECTION_SPEC: dict[str, tuple[Section, ...]] = {
     "checkpoint": (
         Section("intent", "INTENT", 800),
@@ -60,14 +54,8 @@ SECTION_SPEC: dict[str, tuple[Section, ...]] = {
     ),
 }
 
-# Labels an older writer opened blocks with that no spec keeps. salvage()
-# drops the block each one runs, from its own line to the next known label.
-#
-# DOMAIN held a flat slug from before domains were paths, which the memory's
-# own domain column has since replaced. CONFIDENCE held a number between 0
-# and 1, beside a `confidence` column holding one of three words: two
-# different scales under one name, and a reader has no way to tell which
-# answer was meant.
+# Labels no spec keeps; salvage() drops each one's block up to the next known label. DOMAIN repeats
+# the domain column; CONFIDENCE is a 0-1 number that clashes with the `confidence` column.
 LEGACY_LABELS: dict[str, tuple[str, ...]] = {
     "reasoning": ("DOMAIN", "CONFIDENCE"),
 }

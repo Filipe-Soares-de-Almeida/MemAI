@@ -17,9 +17,7 @@ from __future__ import annotations
 
 from memai import db, pending
 
-# What a warm-up may cost. Generous next to a tool result and small next to
-# a context window -- this is paid once per session, and the alternative is
-# the agent spending a tool call to find out the store has nothing to say.
+# What a warm-up may cost: paid once per session, small next to a context window.
 DEFAULT_BUDGET = 2400
 SNIPPET = 220
 DOMAINS = 8
@@ -35,10 +33,8 @@ LABELS = {
     "reasoning": ("reasoning", "reasonings"),
 }
 
-# What the casing policy means for a caller writing a path. Under `lower`
-# and `upper` a domain is folded on the way in AND on the way through a
-# read, so any spelling finds the same rows; under `preserve` it is not, and
-# two spellings are two paths.
+# Under `lower` and `upper` a domain is folded on writes and on reads, so any spelling finds the
+# same rows; under `preserve` two spellings are two paths.
 CASING = {
     "lower": "Domain paths are stored lowercase here, and a path passed in any "
              "case is folded to it.",
@@ -57,9 +53,8 @@ WORK_EACH = "Call must_read(type=...) for each category before acting."
 PIN_LINE = ("Pinned, read every one before acting: {said} -- "
             "must_read({domain}type=..., pinned=true), then get_memory(uid) each.")
 
-# The tail of every brief. _fit reserves its room before dividing what is
-# left between the sections, so it is never the part that gets trimmed.
-# {casing} is filled from the store's active policy, never assumed.
+# The tail of every brief: _fit reserves its room first, so it is never trimmed. {casing} comes
+# from the store's active policy.
 CALL_TO_ACTION = (
     "REQUIRED FIRST STEP, whatever the prompt asks -- a question, a greeting, a "
     "one-line fix, a git command: before any other tool, call pulse(domain) for "
@@ -185,9 +180,8 @@ def _fit(parts: list[str], budget: int, *, tail: str) -> str:
     room = max(budget - len(tail) - 1, 0)
     fitted = [_cap(p, s) for p, s in zip(parts, _shares([len(p) for p in parts], room))]
 
-    # The share is a floor, not a ceiling. Whatever the short sections left
-    # unspent goes back to the dropped ones, earliest first, so a section a
-    # few characters over its share is not lost while the budget sits unused.
+    # The share is a floor: what the short sections leave unspent goes back to the dropped ones,
+    # earliest first.
     spare = room - sum(len(f) + 1 for f in fitted if f)
     for i, part in enumerate(parts):
         if spare <= 0:
