@@ -309,6 +309,17 @@ When the session-start hook fires, or when resuming work:
 
 ## 3.1 Getting back what you wrote (which tool to call)
 
+**Every response fits one tool result.** A collection that can grow comes
+back one page at a time: the page carries `total` and, when more remain,
+`next_offset` — call again with `offset=next_offset` until it is absent.
+`list_domains()` pages `domains`, `get_relations(uid, part)` pages
+`records` (`relations`, or `diagrams` for the flows pointing at it),
+`dedup_scan` pages `pairs`, `optimize_runs` pages `runs` and
+`optimize_status` pages `suggestions`; `search`, `recall`, `list_by_domain`
+and `list_recent` take an `offset` inside their `limit`. `get_memory` returns
+counts with the call that pages each part (`next`), and a body too long for
+one result comes back cut, with `next.content_offset`.
+
 Every writer stores a **fixed `type`**, and the writer is **named after the
 type**. To bring it back, filter on that `type`.
 
@@ -635,9 +646,9 @@ always published, `diagrams` and `curation` only when named (or under the
 | `list_recent(type, domain, limit, subtree)` | Recency-ordered, global unless a `type`/`domain` narrows it | core |
 | | The four above return `{"results": [...], "est_tokens": N}` — index into `results` | |
 | `timeline(uid, query, before, after, domain, type)` | The records created immediately before and after one anchor, oldest first: `{"anchored_by", "anchor", "before", "after"}` | core |
-| `list_domains()` | The domain **tree**: `parent`/`depth`/`count`/`subtree`/`children`/`implicit` + `also`/`subtree_also` and latest activity — how to find the exact string | core |
+| `list_domains(offset)` | The domain **tree**, paged: `parent`/`depth`/`count`/`subtree`/`children`/`implicit` + `also`/`subtree_also` and latest activity — how to find the exact string | core |
 | `get_memory(uid, edits_offset, content_offset)` | One record + relations + edit count (+ the diagrams whose steps point at it; a task's head); edits and a long body page through the offsets | core |
-| `get_relations(uid)` | A memory's relations, incoming and outgoing | core |
+| `get_relations(uid, part, offset)` | A memory's relations, incoming and outgoing, or the diagrams pointing at it; paged | core |
 | `get_diagram(uid, format)` | Read a flow back: `json` · `text` · `svg-interactive` · `svg` · `mermaid` | core |
 
 | Writing | | group |
@@ -667,11 +678,11 @@ always published, `diagrams` and `curation` only when named (or under the
 
 | Curation pass | | group |
 |---|---|---|
-| `dedup_scan(domain, type, threshold, limit)` | Likely duplicate/contradictory **pairs** to review; no merge | curation |
+| `dedup_scan(domain, type, threshold, limit, offset)` | Likely duplicate/contradictory **pairs** to review, paged; no merge | curation |
 | `optimize_scan(domain, type, since, include_archived, limit, offset, full)` | Dump the corpus compactly to plan a pass: curation fields, relation edges, dedup and domain hints, recall counts, and per-memory `anchors` (URLs, paths, identifiers) to check against live facts. `due: true` is the store saying a `review_after` has passed | curation |
 | | A low `recalls` count means **unproven, not useless** — a memory about a rare subject looks exactly like one nobody wants. Judge the store by the aggregate; never archive a row for being unread | |
 | `optimize_stage(suggestions, note)` | Stage a batch for human review; **nothing is applied here** | curation |
-| `optimize_runs()` / `optimize_status(run_id)` | What was staged, and what the human applied or rejected | curation |
+| `optimize_runs(offset)` / `optimize_status(run_id, offset)` | What was staged, and what the human applied or rejected; paged | curation |
 
 **`optimize_stage` accepts 11 suggestion kinds:** `compact` and `reword`
 (`{"new_content"}`), `retag` (`{"tags"}`), `redomain` (`{"domain"}`),

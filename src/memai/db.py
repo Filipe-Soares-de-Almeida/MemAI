@@ -3953,7 +3953,7 @@ def search_memories(
     if status:
         sql.append("AND m.status = ?")
         params.append(status)
-    sql.append("ORDER BY rank LIMIT ?")
+    sql.append("ORDER BY rank, m.rowid_pk LIMIT ?")
     params.append(limit)
     return conn.execute(" ".join(sql), params).fetchall()
 
@@ -4021,7 +4021,7 @@ def search_ranked(
 
     # Contradicted last, then by score (bm25 ascends): a known-wrong memory never leads one that holds.
     hits.sort(key=lambda d: (d.get("confidence") == CONFIDENCE_CONTRADICTED,
-                             d["fts_rank"]))
+                             d["fts_rank"], d.get("rowid_pk", 0)))
     results = (_collapse_near_copies(hits) if collapse else hits)[:limit]
     if pinned is not None:
         results = [pinned] + [r for r in results if r["uid"] != pinned["uid"]]
@@ -4944,6 +4944,8 @@ CORPUS_ANCHORS_CAP = 5
 # Per-page ceiling on the serialized listing (compact-JSON chars). Hosts cap output near 25k tokens
 # and dense JSON runs ~3 chars/token; 28k keeps the full response near 12k tokens.
 CORPUS_CHAR_BUDGET = 28_000
+# A full=True body longer than this is cut; get_memory(uid, content_offset=...) reads the rest.
+CORPUS_FULL_LEN = 8_000
 
 # Verifiable anchors an agent can go check against live facts: URLs,
 # file paths, table/field-style identifiers and SNAKE_CASE constants.
@@ -5132,7 +5134,7 @@ def optimization_corpus(
     one MCP response (the full-body version of a real 200-memory store was
     ~450KB; even snippet-only it overflowed on metadata alone):
       - content is a snippet with content_len alongside (full=True keeps
-        whole bodies; get_memory fetches one on demand)
+        bodies up to CORPUS_FULL_LEN; get_memory fetches one on demand)
       - tags longer than CORPUS_TAGS_LEN are cut, with tags_len alongside
       - empty/default fields are omitted (blank domain/session/tags, no
         cross-listings, null superseded_by, status matching the filter
@@ -5229,8 +5231,8 @@ def optimization_corpus(
         m["created_at"] = r["created_at"][:19]
         content = r["content"]
         m["content_len"] = len(content)
-        m["content"] = content if full or len(content) <= CORPUS_SNIPPET_LEN \
-            else content[: CORPUS_SNIPPET_LEN - 1] + "…"
+        cap = CORPUS_FULL_LEN if full else CORPUS_SNIPPET_LEN
+        m["content"] = content if len(content) <= cap else content[: cap - 1] + "…"
         anchors = _extract_anchors(content, cap=CORPUS_ANCHORS_CAP)
         if anchors:
             m["anchors"] = " ".join(anchors)
