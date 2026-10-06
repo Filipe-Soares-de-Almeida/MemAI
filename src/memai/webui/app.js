@@ -24,7 +24,7 @@ import { renderOptimization } from './views/optimization.js';
 import ChangelogView from './views/changelog/ChangelogView.vue';
 import { renderRecord } from './views/record/index.js';
 import { openRecord } from './core/nav.ts';
-import { openNewMemory } from './views/new-memory.js';
+import { openNewMemory } from './views/new-memory/index.ts';
 
 registerViews({
   overview: OverviewView,
