@@ -549,6 +549,12 @@ class Renders(RendersUsage):
     path: str
 
 
+class BackupFile(TypedDict):
+    name: str
+    size: int
+    mtime: str
+
+
 class StoreFile(TypedDict):
     path: str
     size: int
@@ -566,7 +572,7 @@ class Health(TypedDict):
     title: TitleCount
     renders: Renders
     file: StoreFile
-    backups: list[Row]
+    backups: list[BackupFile]
 
 
 class FtsRebuilt(TypedDict):
@@ -605,10 +611,27 @@ class BackupTaken(TypedDict):
     size: int
 
 
+class ShelfFile(BackupFile):
+    """A backup on the shelf, with what has been written about it."""
+    label: NotRequired[str]
+    pinned: NotRequired[bool]
+
+
+class ArchiveMember(BackupFile):
+    label: NotRequired[str]
+
+
+class ArchiveFile(BackupFile):
+    """A zip of backups: what it costs on disk, and `raw`, what it holds uncompressed."""
+    count: int
+    raw: int
+    members: list[ArchiveMember]
+
+
 class Backups(TypedDict):
     project: str
-    shelf: list[Row]
-    archives: list[Row]
+    shelf: list[ShelfFile]
+    archives: list[ArchiveFile]
 
 
 class ArchivePlanEntry(TypedDict):
@@ -622,10 +645,16 @@ class ArchivePlan(TypedDict):
     plan: list[ArchivePlanEntry]
 
 
+class ArchiveWritten(TypedDict):
+    name: str
+    added: int
+    size: int
+
+
 class Archived(TypedDict):
     ok: Literal[True]
     archive: str
-    archives: list[Row]
+    archives: list[ArchiveWritten]
     added: int
     raw: int
     size: int
@@ -672,8 +701,15 @@ class BackupRestored(TypedDict):
     kept: str
 
 
+class DedupPair(TypedDict):
+    a: MemorySummary
+    b: MemorySummary
+    ratio: float
+    method: str
+
+
 class DedupPairs(Scoped):
-    pairs: list[Row]
+    pairs: list[DedupPair]
     threshold: float
 
 
@@ -686,11 +722,21 @@ class Sectionized(TypedDict):
     needs_review: int
 
 
+class SectionQueueEntry(TypedDict):
+    uid: str
+    type: str
+    domain: str
+    status: str
+    detail: str
+    snippet: str
+    created_at: str
+
+
 class SectionQueue(TypedDict):
     ok: Literal[True]
     migrated: bool
     unread: int
-    queue: list[Row]
+    queue: list[SectionQueueEntry]
 
 
 # -------------------------------------------------------------- optimization
@@ -814,8 +860,21 @@ class RejectedAll(TypedDict):
 
 # ------------------------------------------------------------- audit, lookup
 
+class AuditEntry(TypedDict):
+    id: int
+    memory_uid: str
+    edited_at: str
+    note: str
+    prev_len: int | None
+    new_len: int | None
+    content_changed: int | None
+    type: str
+    domain: str
+    status: str
+
+
 class AuditLog(TypedDict):
-    entries: list[Row]
+    entries: list[AuditEntry]
 
 
 class Lookup(TypedDict):

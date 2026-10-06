@@ -558,6 +558,12 @@ export interface Renders {
   path: string;
 }
 
+export interface BackupFile {
+  name: string;
+  size: number;
+  mtime: string;
+}
+
 export interface StoreFile {
   path: string;
   size: number;
@@ -575,7 +581,7 @@ export interface Health {
   title: TitleCount;
   renders: Renders;
   file: StoreFile;
-  backups: Record<string, unknown>[];
+  backups: BackupFile[];
 }
 
 export interface FtsRebuilt {
@@ -614,10 +620,34 @@ export interface BackupTaken {
   size: number;
 }
 
+export interface ShelfFile {
+  name: string;
+  size: number;
+  mtime: string;
+  label?: string;
+  pinned?: boolean;
+}
+
+export interface ArchiveMember {
+  name: string;
+  size: number;
+  mtime: string;
+  label?: string;
+}
+
+export interface ArchiveFile {
+  name: string;
+  size: number;
+  mtime: string;
+  count: number;
+  raw: number;
+  members: ArchiveMember[];
+}
+
 export interface Backups {
   project: string;
-  shelf: Record<string, unknown>[];
-  archives: Record<string, unknown>[];
+  shelf: ShelfFile[];
+  archives: ArchiveFile[];
 }
 
 export interface ArchivePlanEntry {
@@ -631,10 +661,16 @@ export interface ArchivePlan {
   plan: ArchivePlanEntry[];
 }
 
+export interface ArchiveWritten {
+  name: string;
+  added: number;
+  size: number;
+}
+
 export interface Archived {
   ok: true;
   archive: string;
-  archives: Record<string, unknown>[];
+  archives: ArchiveWritten[];
   added: number;
   raw: number;
   size: number;
@@ -681,9 +717,16 @@ export interface BackupRestored {
   kept: string;
 }
 
+export interface DedupPair {
+  a: MemorySummary;
+  b: MemorySummary;
+  ratio: number;
+  method: string;
+}
+
 export interface DedupPairs {
   domain_scope?: string[];
-  pairs: Record<string, unknown>[];
+  pairs: DedupPair[];
   threshold: number;
 }
 
@@ -696,11 +739,21 @@ export interface Sectionized {
   needs_review: number;
 }
 
+export interface SectionQueueEntry {
+  uid: string;
+  type: string;
+  domain: string;
+  status: string;
+  detail: string;
+  snippet: string;
+  created_at: string;
+}
+
 export interface SectionQueue {
   ok: true;
   migrated: boolean;
   unread: number;
-  queue: Record<string, unknown>[];
+  queue: SectionQueueEntry[];
 }
 
 export interface OptimizationRun {
@@ -829,8 +882,21 @@ export interface RejectedAll {
   rejected: number;
 }
 
+export interface AuditEntry {
+  id: number;
+  memory_uid: string;
+  edited_at: string;
+  note: string;
+  prev_len: number | null;
+  new_len: number | null;
+  content_changed: number | null;
+  type: string;
+  domain: string;
+  status: string;
+}
+
 export interface AuditLog {
-  entries: Record<string, unknown>[];
+  entries: AuditEntry[];
 }
 
 export interface Lookup {

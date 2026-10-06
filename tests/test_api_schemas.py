@@ -109,7 +109,22 @@ def store(tmp_path_factory):
             {"kind": "distill", "rationale": "one fact",
              "payload": {"source_uids": [note, other], "new_type": "note", "title": "Lantern care",
                          "new_content": "Grade B oil, a centimetre of wick.", "domain": "acme/x100"}}])
+        db.insert_memory(conn, type="note", domain="acme/x200", title="Lantern oil",
+                         content="The lantern takes grade B oil only.", tags="lantern, oil")
+        brim = db.insert_memory(conn, type="anti_pattern", domain="acme/x100", title="Brimful lantern",
+                                content="TEMPTATION: fill to the brim\nWHY WRONG: the wick floods\n"
+                                        "INSTEAD: stop a finger below", tags="lantern")
+        conn.execute("UPDATE memories SET content = ? WHERE uid = ?",
+                     ("Filling a lantern to the brim floods the wick.", brim))
+        db.migrate_sections(conn)
+    project = db.active_project()
+    named, pinned, zipped = (db.backup_to(db.backups_dir(project) / db.backup_name(project, kind)).name
+                             for kind in ("", "pre-restore", "optimize-run1"))
     with TestClient(admin.app) as client:
+        client.post("/api/maintenance/backup-name", json={"name": named, "label": "before the refill"})
+        client.post("/api/maintenance/backup-pin", json={"name": pinned, "pinned": True})
+        client.post("/api/maintenance/archive", json={"names": [zipped], "group": "name",
+                                                      "label": "lamp checks"})
         yield {"client": client, "note": note, "task": task, "diagram": diagram,
                "run": run["run_id"]}
     patch.undo()
