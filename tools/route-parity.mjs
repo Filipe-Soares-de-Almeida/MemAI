@@ -1,23 +1,5 @@
-/* Keep the two edge-routing implementations honest about each other.
- *
- *     node tools/route-parity.mjs            check
- *     node tools/route-parity.mjs --write    re-record the golden
- *
- * webui/diagram-engine.js routes edges for the canvas; memai/diagram_svg.py
- * routes them for the SVG export. Neither derives from the other (see the
- * header of the Python module for why), so this script runs a shared
- * fixture through the JAVASCRIPT one and records the answer. The Python
- * test suite reads the same recording. Whichever side is edited alone, one
- * of the two goes red.
- *
- * The canvas is the reference, not the arbiter of taste: it is what a user
- * arranges a diagram against, so it is what the export has to match.
- *
- * The editor is constructed for real -- with a stub DOM -- rather than
- * having setData's work replicated here. Replicating it is how a parity
- * harness ends up agreeing with itself about something the browser does
- * differently.
- */
+/* Routes the shared fixture through the canvas engine and holds the answer to the golden the Python
+   SVG export is tested against: `node tools/route-parity.mjs` checks, `--write` re-records. */
 
 import { readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -26,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const FIXTURE = join(ROOT, 'tests', 'fixtures', 'route-fixture.json');
 const GOLDEN = join(ROOT, 'tests', 'fixtures', 'route-golden.json');
-const ENGINE = join(ROOT, 'src', 'memai', 'webui', 'diagram-engine.js');
+const ENGINE = join(ROOT, 'src', 'memai', 'webui', 'engines', 'diagram-engine.ts');
 
 /* ── the smallest DOM the editor will start against ──────────────────── */
 
@@ -115,7 +97,7 @@ const record = async data => {
 const main = async () => {
   const data = JSON.parse(readFileSync(FIXTURE, 'utf8'));
   const fresh = {
-    _: 'Recorded from webui/diagram-engine.js by tools/route-parity.mjs. Do not hand-edit.',
+    _: 'Recorded from webui/engines/diagram-engine.ts by tools/route-parity.mjs. Do not hand-edit.',
     ...await record(data),
   };
 

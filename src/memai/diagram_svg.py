@@ -1,7 +1,7 @@
 """Server-side SVG rendering of a diagram, pixel-for-pixel with the canvas.
 
 =========================================================================
-THIS FILE IS THE PYTHON TWIN OF webui/diagram-engine.js
+THIS FILE IS THE PYTHON TWIN OF webui/engines/diagram-engine.ts
 =========================================================================
 The admin dashboard draws a diagram on a <canvas> in JavaScript; this
 module draws the same diagram as SVG for readers with no browser -- a
@@ -162,7 +162,7 @@ def short_label(text: str) -> str:
     return f"{_TRAILING_PUNCT.sub('', cut)}…"
 
 
-# ── geometry: transcriptions of the same-named functions in diagram-engine.js, which explain
+# ── geometry: transcriptions of the same-named functions in diagram-engine.ts, which explain
 # them; comments here cover only what the transcription risks getting wrong.
 
 def _clamp(value: float, lo: float, hi: float) -> float:

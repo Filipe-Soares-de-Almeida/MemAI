@@ -29,7 +29,7 @@ import { openRecord, recordSequence } from '../../core/nav.ts';
 import { onTeardown } from '../../core/lifecycle.ts';
 import { renderRich, wireRich, headings } from '../../core/richtext.js';
 import { highlightIn } from '../../core/highlight.js';
-import { DiagramEditor } from '../../diagram-engine.js';
+import { DiagramEditor } from '../../engines/diagram-engine.ts';
 import { mountTask } from './task.js';
 import { t } from '../../i18n.ts';
 

@@ -1,17 +1,5 @@
-/* The relations graph: the view around the node field.
-
-   Everything drawn is in graph-2d.js and everything arranged is in
-   graph-arrange.js. This file owns the chrome -- the filters, the arrangement
-   picker, the two show toggles, the legend, the progress of the arrangement,
-   the card, the tip and the link dialog -- and talks to the engine through its
-   callbacks. The layout is computed in the browser and never stored, unlike
-   the diagram editor, whose coordinates come from the store; see diagram.js
-   for that contrast.
-
-   The arrangement and the show toggles are the reader's settings, not
-   filters: they ride in localStorage so the next session opens where this one
-   left off, and the arrangement also rides in the address so a link carries
-   it. A `mode` in the address wins over the stored one. */
+/* The relations graph view: the chrome around engines/graph-2d.ts. The arrangement and toggles are
+   the reader's settings, kept in localStorage; a `mode` in the address wins over the stored one. */
 
 import { $, esc, fmtInt, debounce } from '../core/dom.ts';
 import { api, query } from '../core/api.ts';
@@ -26,8 +14,8 @@ import { domainPickerHTML, wireDomainPicker } from '../core/domain-picker.js';
 import { go, refreshBehind, replaceParams } from '../core/router.ts';
 import { onTeardown } from '../core/lifecycle.ts';
 import { openRecord } from '../core/nav.ts';
-import { GraphCanvas } from '../graph-2d.js';
-import { ARRANGEMENTS, DEFAULT_MODE, arrangement } from '../graph-arrange.js';
+import { GraphCanvas } from '../engines/graph-2d.ts';
+import { ARRANGEMENTS, DEFAULT_MODE, arrangement } from '../engines/graph-arrange.ts';
 import { t } from '../i18n.ts';
 
 /* How many of a memory's relations the card offers as a journey before it

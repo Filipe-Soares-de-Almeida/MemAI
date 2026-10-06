@@ -1,7 +1,7 @@
 """The geometry the relations graph arranges itself with.
 
 The arrangements run under node, so these run them: tools/graph-cases.mjs
-feeds graph-geom.ts, graph-force.ts, graph-field.ts and graph-arrange.js a
+feeds engines/graph-geom, graph-force, graph-field and graph-arrange a
 synthetic store under node and prints what came back. The same arrangement as
 tests/test_richtext.py -- the browser's code is the code under test.
 

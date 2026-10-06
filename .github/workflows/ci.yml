@@ -130,7 +130,7 @@ jobs:
         with:
           node-version: "24"
 
-      # diagram-engine.js and diagram_svg.py must route edges alike: this runs the shared fixture
+      # engines/diagram-engine.ts and diagram_svg.py must route edges alike: this runs the shared fixture
       # through the canvas and fails when it drifts from tests/fixtures/route-golden.json.
       - name: Check the routing golden still matches the canvas
         run: node tools/route-parity.mjs

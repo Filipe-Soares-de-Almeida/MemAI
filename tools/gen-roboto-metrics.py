@@ -6,7 +6,7 @@ Run by hand, and only when the font files change:
     python tools/gen-roboto-metrics.py
 
 Why this exists. The admin canvas decides where a node label wraps by
-asking the browser to measure the text (diagram-engine.js, wrap()). The
+asking the browser to measure the text (engines/diagram-engine.ts, wrap()). The
 server-side SVG renderer has to reach the SAME decision without a canvas,
 or a diagram drawn in the chat breaks its lines in different places than
 the same diagram drawn in the dashboard -- which is the one thing the SVG
@@ -50,9 +50,8 @@ FACES = {
     "mono": ("roboto-mono-400.woff2", "Roboto Mono"),
 }
 
-# Regular weight only. Every label and badge the diagram draws is set at
-# 400 (see FONT_UI / FONT_MONO in diagram-engine.js); the 500/700 faces
-# fetch-fonts.py also downloads are used by chrome the canvas never draws.
+# Regular weight only: the diagram sets every label and badge at 400 (FONT_UI / FONT_MONO in
+# engines/diagram-engine.ts); the 500/700 faces fetch-fonts.py downloads are chrome-only.
 
 
 def _face_metrics(path: Path, family: str) -> dict:

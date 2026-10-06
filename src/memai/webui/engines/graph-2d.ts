@@ -1,10 +1,37 @@
 /* The relations graph on a 2D canvas: camera, frame loop, pointer, selection and toggles, reported
    through callbacks. The arrangement settles a slice per frame and stops at SETTLE_MAX_MS. */
 
-import { cssVar } from './core/dom.ts';
-import { motionOn } from './core/motion.ts';
+import { cssVar } from '../core/dom.ts';
+import { motionOn } from '../core/motion.ts';
 import { clamp } from './graph-geom.ts';
-import { deriveStore, arrangement, DEFAULT_MODE } from './graph-arrange.js';
+import { deriveStore, arrangement, DEFAULT_MODE } from './graph-arrange.ts';
+import type {
+  Arrangement, Env, GraphEdge, GraphNode, GraphNodeData, Hit, Mark, Palette, Show, Store,
+} from './graph-arrange.ts';
+import type { Box, Pt, Rect } from './graph-draw.ts';
+
+interface View { k: number; x: number; y: number }
+interface Tween { from: View; to: View; at: number; ms: number }
+
+type Obstacle = [number, number, number, number];
+
+export interface GraphCallbacks {
+  onSelect: (node: GraphNode | null) => void;
+  onSelectDomain: (hit: { domain: string; count: number } | null) => void;
+  onOpen: (node: GraphNode) => void;
+  onHover: (hit: Hit | null, x?: number, y?: number) => void;
+  onLink: (step: 'from' | 'pair', from: GraphNode, to?: GraphNode) => void;
+  onSettle: (progress: number, settled: boolean) => void;
+  obstacles: () => Obstacle[];
+}
+
+export interface GraphOptions extends Partial<GraphCallbacks> {
+  nodes: GraphNodeData[];
+  edges: GraphEdge[];
+  colorOf: (type: string) => string;
+  mode?: string;
+  show?: Partial<Show>;
+}
 
 /* the travel to one memory, and the pull-back that frames the whole graph */
 const FLY_MS = 620;
@@ -22,12 +49,22 @@ const SETTLE_MAX_MS = 20000;
 const DIM = 0.16;
 const FOCUS_DIM = 0.3;
 
-const ease = t => 1 - Math.pow(1 - t, 3);
+const ease = (t: number): number => 1 - Math.pow(1 - t, 3);
 
 /* ---------------------------------------------------------------- camera */
 
 /* screen = world * k + (x, y). */
 class Cam {
+  declare k: number;
+  declare x: number;
+  declare y: number;
+  declare min: number;
+  declare max: number;
+  declare w: number;
+  declare h: number;
+  declare tween: Tween | null;
+  declare touched: boolean;
+
   constructor() {
     this.k = 1; this.x = 0; this.y = 0;
     this.min = 0.02; this.max = 40;
@@ -39,20 +76,20 @@ class Cam {
 
   /* Keeps the world point at the frame's centre: x and y are absolute, so a resize shifts them
      by half the difference. */
-  resize(w, h) {
+  resize(w: number, h: number): void {
     this.x += (w - this.w) / 2;
     this.y += (h - this.h) / 2;
     this.w = w; this.h = h;
   }
 
-  toScreen(wx, wy) { return { x: wx * this.k + this.x, y: wy * this.k + this.y }; }
+  toScreen(wx: number, wy: number): Pt { return { x: wx * this.k + this.x, y: wy * this.k + this.y }; }
 
-  toWorld(sx, sy) { return { x: (sx - this.x) / this.k, y: (sy - this.y) / this.k }; }
+  toWorld(sx: number, sy: number): Pt { return { x: (sx - this.x) / this.k, y: (sy - this.y) / this.k }; }
 
-  clampK(k) { return clamp(k, this.min, this.max); }
+  clampK(k: number): number { return clamp(k, this.min, this.max); }
 
   /* The camera that frames `box` with `pad` pixels around it. */
-  framing(box, pad = FIT_PAD) {
+  framing(box: Box, pad = FIT_PAD): View {
     const bw = Math.max(1e-6, box.x1 - box.x0), bh = Math.max(1e-6, box.y1 - box.y0);
     const k = this.clampK(Math.min((this.w - pad * 2) / bw, (this.h - pad * 2) / bh));
     return {
@@ -62,21 +99,21 @@ class Cam {
     };
   }
 
-  set(to) { this.k = to.k; this.x = to.x; this.y = to.y; this.tween = null; }
+  set(to: View): void { this.k = to.k; this.x = to.x; this.y = to.y; this.tween = null; }
 
   /* Frame `box` and count it as untouched, so a later resize may reframe. */
-  frame(box, ms = 0) {
+  frame(box: Box, ms = 0): void {
     this.glide(this.framing(box), ms);
     this.touched = false;
   }
 
   /* Move to `to` over `ms`, or straight away when `ms` is 0. */
-  glide(to, ms) {
+  glide(to: View, ms: number): void {
     if (!ms) { this.set(to); return; }
     this.tween = { from: { k: this.k, x: this.x, y: this.y }, to, at: 0, ms };
   }
 
-  goTo(wx, wy, k, ms = 0) {
+  goTo(wx: number, wy: number, k: number, ms = 0): void {
     const nk = this.clampK(k || this.k);
     this.glide({ k: nk, x: this.w / 2 - wx * nk, y: this.h / 2 - wy * nk }, ms);
     this.touched = true;
@@ -84,7 +121,7 @@ class Cam {
 
   /* Ease toward the framing of `box` without ever arriving: what an
      arrangement that is still moving is followed with. */
-  chase(box, dt) {
+  chase(box: Box, dt: number): void {
     const to = this.framing(box);
     const f = 1 - Math.exp(-dt / FOLLOW_TAU);
     this.k += (to.k - this.k) * f;
@@ -92,7 +129,7 @@ class Cam {
     this.y += (to.y - this.y) * f;
   }
 
-  zoomAt(sx, sy, factor) {
+  zoomAt(sx: number, sy: number, factor: number): void {
     this.tween = null;
     this.touched = true;
     const before = this.toWorld(sx, sy);
@@ -102,10 +139,10 @@ class Cam {
     this.y += (after.y - before.y) * this.k;
   }
 
-  panBy(dx, dy) { this.tween = null; this.touched = true; this.x += dx; this.y += dy; }
+  panBy(dx: number, dy: number): void { this.tween = null; this.touched = true; this.x += dx; this.y += dy; }
 
   /* Advance an in-flight move. Returns whether the camera is still moving. */
-  advance(ms) {
+  advance(ms: number): boolean {
     const tw = this.tween;
     if (!tw) return false;
     tw.at += ms;
@@ -122,17 +159,57 @@ class Cam {
 /* ---------------------------------------------------------------- engine */
 
 export class GraphCanvas {
+  declare cv: HTMLCanvasElement;
+  declare ctx: CanvasRenderingContext2D;
+  declare cb: GraphCallbacks;
+  declare colorOf: (type: string) => string;
+  declare nodes: GraphNode[];
+  declare byUid: Map<string, GraphNode>;
+  declare D: Store;
+  declare edges: GraphEdge[];
+  declare show: Show;
+  declare hover: Hit | null;
+  declare selected: GraphNode | null;
+  declare cameFrom: string | null;
+  declare selectedDomain: string | null;
+  declare focusSet: Set<string> | null;
+  declare lit: Set<string> | null;
+  declare linkMode: boolean;
+  declare linkFrom: GraphNode | null;
+  declare spotlit: boolean;
+  declare palette: Palette;
+  declare cam: Cam;
+  declare drag: Pt | null;
+  declare moved: boolean;
+  declare pointers: Map<number, Pt>;
+  declare pinch: { gap: number; k: number; mid: [number, number] } | null;
+  declare running: boolean;
+  declare raf: number;
+  declare dirty: boolean;
+  declare lastFrame: number;
+  declare w: number;
+  declare h: number;
+  declare mode: string;
+  declare note: string;
+  declare arr: Arrangement;
+  declare settleStart: number;
+  declare settled: boolean;
+  declare _resize: () => void;
+  declare _ro: ResizeObserver | undefined;
+  declare _up: (e: PointerEvent) => void;
+  declare _keyDown: (e: KeyboardEvent) => void;
+
   /* `nodes` and `edges` are the /api/graph payload; `colorOf(type)` gives a type's CSS colour.
      Callbacks: onSelect, onSelectDomain, onOpen, onHover, onLink, onSettle, obstacles(). */
   /* read from the root's data-motion, so a change of setting applies at once */
-  get motion() { return motionOn(); }
+  get motion(): boolean { return motionOn(); }
 
-  constructor(canvas, {
+  constructor(canvas: HTMLCanvasElement, {
     nodes, edges, colorOf,
     onSelect = () => {}, onSelectDomain = () => {}, onOpen = () => {},
     onHover = () => {}, onLink = () => {}, onSettle = () => {},
     obstacles = () => [], mode = DEFAULT_MODE, show = {},
-  }) {
+  }: GraphOptions) {
     const ctx = canvas.getContext('2d');
     if (!ctx) throw new Error('getContext("2d") returned null');
     this.cv = canvas;
@@ -140,7 +217,7 @@ export class GraphCanvas {
     this.cb = { onSelect, onSelectDomain, onOpen, onHover, onLink, onSettle, obstacles };
     this.colorOf = colorOf;
 
-    this.nodes = nodes.map((n, i) => ({
+    this.nodes = nodes.map((n, i): GraphNode => ({
       ...n,
       i,
       /* the name: the title a writer chose, falling back to the opening line
@@ -184,7 +261,7 @@ export class GraphCanvas {
     addEventListener('resize', this._resize);
     if (typeof ResizeObserver === 'function') {
       this._ro = new ResizeObserver(this._resize);
-      this._ro.observe(canvas.parentElement);
+      if (canvas.parentElement) this._ro.observe(canvas.parentElement);
     }
     this.resize();
 
@@ -204,7 +281,7 @@ export class GraphCanvas {
     this.setMode(mode, { fit: true });
   }
 
-  destroy() {
+  destroy(): void {
     this.running = false;
     cancelAnimationFrame(this.raf);
     this.raf = 0;
@@ -219,7 +296,7 @@ export class GraphCanvas {
 
   /* Build an arrangement and frame it; selection, spotlight and toggles are the reader's state
      and survive. */
-  setMode(id, { fit = true } = {}) {
+  setMode(id: string, { fit = true }: { fit?: boolean } = {}): string {
     this.hover = null;
     this.lit = null;
     const spec = arrangement(id);
@@ -235,7 +312,7 @@ export class GraphCanvas {
     return this.mode;
   }
 
-  setShow(patch) {
+  setShow(patch: Partial<Show>): Show {
     this.show = { ...this.show, ...patch };
     this.dirty = true;
     this._wake();
@@ -244,8 +321,10 @@ export class GraphCanvas {
 
   /* ----------------------------------------------------------- the frame */
 
-  resize() {
-    const r = this.cv.parentElement.getBoundingClientRect();
+  resize(): void {
+    const host = this.cv.parentElement;
+    if (!host) return;
+    const r = host.getBoundingClientRect();
     const dpr = Math.min(2, devicePixelRatio || 1);
     this.w = Math.max(1, r.width); this.h = Math.max(1, r.height);
     this.cv.width = Math.round(this.w * dpr);
@@ -260,12 +339,12 @@ export class GraphCanvas {
 
   /* The rectangles the floating chrome occupies, padded, so no name is drawn
      where a panel covers it. */
-  _taken() {
+  _taken(): Rect[] {
     return this.cb.obstacles().map(([x, y, w, h]) =>
       ({ x: x - 6, y: y - 6, w: w + 12, h: h + 12 }));
   }
 
-  fade(uid) {
+  fade(uid: string): number {
     const node = this.byUid.get(uid);
     if (!node) return 1;
     let v = node.miss ? DIM : 1;
@@ -274,8 +353,8 @@ export class GraphCanvas {
   }
 
   /* What every arrangement is handed, rebuilt per frame so it is never stale. */
-  env() {
-    const marks = [];
+  env(): Env {
+    const marks: Mark[] = [];
     if (this.hover && this.hover !== this.selected)
       marks.push({ ...idOf(this.hover), color: this.palette.hot, width: 1.6 });
     if (this.selected)
@@ -305,28 +384,28 @@ export class GraphCanvas {
       fade: uid => this.fade(uid),
       /* Whether a path is in scope (selected domain, else hovered), under it, or an ancestor;
          ancestors stay legible so the lit branch can be read. */
-      inScope: path => {
+      inScope: (path: string) => {
         const at = this.selectedDomain
           || (this.hover && !this.hover.uid ? this.hover.domain : null);
         if (!at || !path) return true;
         return path === at || path.startsWith(`${at}/`) || at.startsWith(`${path}/`);
       },
-      font: (weight, size) => `${weight} ${size}px ${this.palette.font}`,
+      font: (weight: number, size: number) => `${weight} ${size}px ${this.palette.font}`,
     };
   }
 
-  fit() {
+  fit(): void {
     this.cam.frame(this.arr.box(), this.motion ? FIT_MS : 0);
     this.dirty = true;
     this._wake();
   }
 
-  _wake() {
+  _wake(): void {
     if (!this.running || this.raf) return;
     this.raf = requestAnimationFrame(this._loop);
   }
 
-  _loop(now) {
+  _loop(now: number): void {
     this.raf = 0;
     if (!this.running) return;
     const ms = Math.min(64, now - (this.lastFrame || now - 16));
@@ -362,7 +441,7 @@ export class GraphCanvas {
     if (moving || busy) this._wake();
   }
 
-  draw() {
+  draw(): void {
     const ctx = this.ctx;
     ctx.clearRect(0, 0, this.w, this.h);
     this.arr.draw(ctx, this.cam, this.env());
@@ -370,7 +449,7 @@ export class GraphCanvas {
 
   /* ------------------------------------------------------- interaction */
 
-  _local(e) {
+  _local(e: MouseEvent): [number, number] {
     const r = this.cv.getBoundingClientRect();
     /* the backstop for a resize that never arrived: the rect is being read
        anyway, and a stale camera answers a click with the wrong memory */
@@ -379,12 +458,12 @@ export class GraphCanvas {
   }
 
   /* What is under a canvas point: a memory, a domain body, or nothing. */
-  at(sx, sy) {
+  at(sx: number, sy: number): Hit | null {
     const p = this.cam.toWorld(sx, sy);
     return this.arr.hit(p.x, p.y, this.cam);
   }
 
-  _down(e) {
+  _down(e: PointerEvent): void {
     try { this.cv.setPointerCapture(e.pointerId); } catch { /* not capturable */ }
     this.pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
     if (this.pointers.size === 2) {
@@ -399,7 +478,7 @@ export class GraphCanvas {
     this.cv.classList.add('grabbing');
   }
 
-  _move(e) {
+  _move(e: PointerEvent): void {
     if (this.pointers.has(e.pointerId)) {
       this.pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
     }
@@ -407,7 +486,7 @@ export class GraphCanvas {
       const [a, b] = [...this.pointers.values()];
       const gap = Math.max(1, Math.hypot(a.x - b.x, a.y - b.y));
       const r = this.cv.getBoundingClientRect();
-      const mid = [(a.x + b.x) / 2, (a.y + b.y) / 2];
+      const mid: [number, number] = [(a.x + b.x) / 2, (a.y + b.y) / 2];
       this.cam.zoomAt(mid[0] - r.left, mid[1] - r.top, gap / this.pinch.gap);
       this.cam.panBy(mid[0] - this.pinch.mid[0], mid[1] - this.pinch.mid[1]);
       this.pinch.gap = gap;
@@ -446,7 +525,7 @@ export class GraphCanvas {
     this.cb.onHover(found, e.clientX, e.clientY);
   }
 
-  _pointerUp(e) {
+  _pointerUp(e?: PointerEvent): void {
     if (e) this.pointers.delete(e.pointerId);
     if (this.pointers.size < 2) this.pinch = null;
     if (this.pointers.size) return;
@@ -454,7 +533,7 @@ export class GraphCanvas {
     this.cv.classList.remove('grabbing');
   }
 
-  _wheel(e) {
+  _wheel(e: WheelEvent): void {
     e.preventDefault();
     const [x, y] = this._local(e);
     this.cam.zoomAt(x, y, Math.exp(-e.deltaY * 0.0016));
@@ -462,11 +541,12 @@ export class GraphCanvas {
     this._wake();
   }
 
-  _click(e) {
+  _click(e: MouseEvent): void {
     if (this.moved) { this.moved = false; return; }
     const found = this.at(...this._local(e));
     if (this.linkMode && found && found.uid) {
       const node = this.byUid.get(found.uid);
+      if (!node) return;
       if (!this.linkFrom) {
         this.linkFrom = node;
         this.dirty = true;
@@ -490,13 +570,14 @@ export class GraphCanvas {
       this.arr.click(null, this.env());
       this.fit();
     }
-    this.select(found ? found.uid : null);
+    this.select(found?.uid ?? null);
   }
 
-  _onKeyDown(e) {
+  _onKeyDown(e: KeyboardEvent): void {
     if (e.defaultPrevented || e.metaKey || e.ctrlKey || e.altKey) return;
     const el = document.activeElement;
-    if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable)) return;
+    if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA'
+               || (el instanceof HTMLElement && el.isContentEditable))) return;
     if (!this.selected) return;
     if (e.key === 'ArrowRight') { e.preventDefault(); this.hop(1); }
     else if (e.key === 'ArrowLeft') { e.preventDefault(); this.hop(-1); }
@@ -507,7 +588,7 @@ export class GraphCanvas {
 
   /* Select a memory and travel to it. Passing null clears the selection and
      leaves the camera where it is -- dismissing a card is not a journey. */
-  select(uid, { fly = true } = {}) {
+  select(uid: string | null, { fly = true }: { fly?: boolean } = {}): void {
     const node = uid ? this.byUid.get(uid) : null;
     this.selected = node || null;
     this.cameFrom = null;
@@ -521,25 +602,26 @@ export class GraphCanvas {
   }
 
 /* Select a domain: what is filed in or under it keeps its strength; null clears it. */
-  selectDomain(path) {
+  selectDomain(path: string | null): void {
     if (this.selected) {
       this.selected = null;
       this.cameFrom = null;
       this.cb.onSelect(null);
     }
     this.selectedDomain = path || null;
-    this.focusSet = path ? this.inDomain(path) : null;
+    const held = path ? this.inDomain(path) : null;
+    this.focusSet = held;
     this.dirty = true;
     this._wake();
     this.cb.onSelectDomain(
-      path ? { domain: path, count: this.focusSet.size } : null);
+      path && held ? { domain: path, count: held.size } : null);
   }
 
   /* Every memory filed at `path` or under it; `also` paths are ignored, or a leaf would light
      half the store. */
-  inDomain(path) {
+  inDomain(path: string): Set<string> {
     const under = `${path}/`;
-    const out = new Set();
+    const out = new Set<string>();
     for (const n of this.nodes) {
       const d = n.domain || '';
       if (d === path || d.startsWith(under)) out.add(n.uid);
@@ -547,7 +629,7 @@ export class GraphCanvas {
     return out;
   }
 
-  _focus(node) {
+  _focus(node: GraphNode | null): void {
     this.focusSet = node
       ? new Set([node.uid, ...this.neighbours(node.uid).map(p => p.uid)])
       : null;
@@ -557,17 +639,17 @@ export class GraphCanvas {
 
   /* The set the pointer lights: a memory and its neighbours, or a domain and
      everything filed under it. */
-  _around(at) {
+  _around(at: Hit | null): Set<string> | null {
     if (!at) return null;
     if (!at.uid) return at.domain ? this.inDomain(at.domain) : null;
-    const out = new Set([at.uid]);
+    const out = new Set<string>([at.uid]);
     for (const e of this.D.adj.get(at.uid) || [])
       out.add(e.from_uid === at.uid ? e.to_uid : e.from_uid);
     return out;
   }
 
   /* Bring a memory to the middle, at a zoom close enough to read its name. */
-  travel(uid) {
+  travel(uid: string): void {
     const at = this.arr.locate?.(uid);
     if (!at) return;
     this.cam.goTo(at.x, at.y, Math.max(this.cam.k, 1), this.motion ? FLY_MS : 0);
@@ -576,7 +658,7 @@ export class GraphCanvas {
   }
 
   /* Step along the selection's relations; `cameFrom` keeps a repeated key moving outward. */
-  hop(step) {
+  hop(step: number): GraphNode | null {
     const from = this.selected;
     if (!from) return null;
     const peers = this.neighbours(from.uid);
@@ -593,9 +675,9 @@ export class GraphCanvas {
   }
 
   /* The memories one relation away, most-connected first. */
-  neighbours(uid) {
-    const seen = new Set();
-    const out = [];
+  neighbours(uid: string): GraphNode[] {
+    const seen = new Set<string>();
+    const out: GraphNode[] = [];
     for (const e of this.D.adj.get(uid) || []) {
       const other = e.from_uid === uid ? e.to_uid : e.from_uid;
       if (other === uid || seen.has(other)) continue;
@@ -608,9 +690,9 @@ export class GraphCanvas {
 
   /* Every term has to match. Nothing is removed and the arrangement never
      moves: what a search does here is push everything else back. */
-  spotlight(raw) {
+  spotlight(raw: unknown): { count: number; first: GraphNode | null } {
     const terms = String(raw || '').toLowerCase().split(/\s+/).filter(Boolean);
-    let count = 0, first = null;
+    let count = 0, first: GraphNode | null = null;
     for (const node of this.nodes) {
       if (!terms.length) { node.miss = false; count++; continue; }
       const hay = `${node.name} ${node.label || ''} ${node.domain || ''} `
@@ -627,7 +709,7 @@ export class GraphCanvas {
     return { count, first };
   }
 
-  toggleLinkMode() {
+  toggleLinkMode(): boolean {
     this.linkMode = !this.linkMode;
     this.linkFrom = null;
     this.cv.classList.toggle('linkmode', this.linkMode);
@@ -636,7 +718,7 @@ export class GraphCanvas {
     return this.linkMode;
   }
 
-  clearLinkFrom() {
+  clearLinkFrom(): void {
     this.linkFrom = null;
     this.dirty = true;
     this._wake();
@@ -644,11 +726,12 @@ export class GraphCanvas {
 }
 
 /* A hit's identity, whichever kind it is. */
-const idOf = hit => (hit.uid ? { uid: hit.uid } : { domain: hit.domain });
+const idOf = (hit: Hit): { uid: string } | { domain: string | undefined } =>
+  (hit.uid ? { uid: hit.uid } : { domain: hit.domain });
 
 /* The theme's own colours, read once: the graph follows the stylesheet like
    the rest of the dashboard. */
-function readPalette() {
+function readPalette(): Palette {
   const ink = cssVar('--ink') || 'rgba(255,255,255,.87)';
   return {
     ink,
@@ -675,7 +758,7 @@ function readPalette() {
   };
 }
 
-const haloFrom = bg => {
+const haloFrom = (bg: string): string => {
   const h = bg.replace('#', '');
   const n = h.length === 3 ? h.split('').map(c => c + c).join('') : h;
   const v = parseInt(n, 16);

@@ -1,10 +1,5 @@
-/* The diagram editor view: toolbar, inspector, and everything the canvas
-   engine (../diagram-engine.js) reaches back out through hooks for.
-
-   The engine owns geometry and drawing and nothing else -- no dialogs, no
-   API calls, no DOM outside its canvas. Every write below goes through
-   act(), which reloads from the store afterwards, because the store is
-   what decided the layout in the first place. */
+/* The diagram editor view: toolbar, inspector and the hooks the canvas engine calls back through.
+   Every write goes through act(), which reloads from the store, since the store decides the layout. */
 
 import { $, esc, debounce } from '../core/dom.ts';
 import { api, seg } from '../core/api.ts';
@@ -16,7 +11,7 @@ import { pickerFor, pickerValue, wirePicker, fixedItems } from '../core/pick.js'
 import { pickMemories } from '../core/link-picker.js';
 import { onTeardown } from '../core/lifecycle.ts';
 import { openRecord } from '../core/nav.ts';
-import { DiagramEditor, NODE_SHAPES, FONT_SCALES } from '../diagram-engine.js';
+import { DiagramEditor, NODE_SHAPES, FONT_SCALES } from '../engines/diagram-engine.ts';
 import { t } from '../i18n.ts';
 
 const shapeItems = () => NODE_SHAPES.map(s => ({ value: s, label: t(`dg.shape.${s}`) }));

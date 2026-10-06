@@ -1,9 +1,37 @@
 /* The canvas kit for the graph arrangements, in SCREEN coordinates. Fills are batched per colour
    and alpha, and dots under 1.5px are drawn as rects. */
 
+type Ctx = CanvasRenderingContext2D;
+
+export interface Pt { x: number; y: number }
+export interface Rect { x: number; y: number; w: number; h: number }
+export interface Box { x0: number; y0: number; x1: number; y1: number }
+export interface Dot { sx: number; sy: number; r: number; fill: string; alpha?: number | null }
+export type LabelSide = 'right' | 'left' | 'top' | 'bottom';
+
+export interface DrawOptions {
+  font: string;
+  color: string;
+  halo: string;
+  gap?: number;
+  sides?: LabelSide[];
+  maxW?: number;
+  haloWidth?: number;
+}
+
+export interface ForceOptions {
+  font: string;
+  color: string;
+  halo: string;
+  align?: CanvasTextAlign;
+  baseline?: CanvasTextBaseline;
+  haloWidth?: number;
+  maxW?: number;
+}
+
 /* `hex` at alpha `a`. An `rgb(...)` or `rgba(...)` string is handed back
    unchanged, since it carries its own alpha. */
-export const hexA = (hex, a) => {
+export const hexA = (hex: string | null | undefined, a: number): string => {
   const s = String(hex || '');
   if (s.startsWith('rgb')) return s;
   const h = s.replace('#', '');
@@ -15,8 +43,8 @@ export const hexA = (hex, a) => {
 
 /* Filled dots. Each item needs {sx, sy, r, fill} and may carry its own
    `alpha`; `alpha` here is the default for the ones that do not. */
-export function dots(ctx, items, alpha = 1) {
-  const buckets = new Map();
+export function dots(ctx: Ctx, items: Dot[], alpha = 1): void {
+  const buckets = new Map<string, { fill: string; alpha: number; items: Dot[] }>();
   for (const it of items) {
     const a = it.alpha == null ? alpha : it.alpha;
     if (a <= 0) continue;
@@ -40,7 +68,7 @@ export function dots(ctx, items, alpha = 1) {
 }
 
 /* `color` (hex or rgba()) at alpha `a`, which replaces any alpha it carried. */
-export function withAlpha(color, a) {
+export function withAlpha(color: string, a: number): string {
   const s = String(color || '').trim();
   const m = s.match(/^rgba?\(([^)]+)\)$/i);
   if (m) {
@@ -52,7 +80,7 @@ export function withAlpha(color, a) {
 
 /* One relation, faint at its source and bright at its target; a gradient per line, so only
    for the few under the pointer. */
-export function gradLine(ctx, a, b, color, width) {
+export function gradLine(ctx: Ctx, a: Pt, b: Pt, color: string, width: number): void {
   const g = ctx.createLinearGradient(a.x, a.y, b.x, b.y);
   g.addColorStop(0, withAlpha(color, 0.12));
   g.addColorStop(1, withAlpha(color, 0.95));
@@ -66,7 +94,7 @@ export function gradLine(ctx, a, b, color, width) {
 }
 
 /* A ring around a dot: the hovered one, the selected one, the link source. */
-export function ring(ctx, x, y, r, color, w = 2) {
+export function ring(ctx: Ctx, x: number, y: number, r: number, color: string, w = 2): void {
   ctx.beginPath();
   ctx.arc(x, y, r, 0, 6.2832);
   ctx.strokeStyle = color;
@@ -75,7 +103,7 @@ export function ring(ctx, x, y, r, color, w = 2) {
 }
 
 /* Many polylines that share a colour and a width, in one path. */
-export function lines(ctx, polys, color, width, alpha = 1) {
+export function lines(ctx: Ctx, polys: Pt[][], color: string, width: number, alpha = 1): void {
   if (!polys.length) return;
   ctx.globalAlpha = alpha;
   ctx.strokeStyle = color;
@@ -91,12 +119,11 @@ export function lines(ctx, polys, color, width, alpha = 1) {
   ctx.globalAlpha = 1;
 }
 
-/* The bounding box of positioned things, padded. `key` is the property
-   holding each one's radius. */
-export function bounds(items, pad = 0, key = 'r') {
+/* The bounding box of positioned things, padded by each one's radius `r` and by `pad`. */
+export function bounds(items: ReadonlyArray<Pt & { r?: number }>, pad = 0): Box {
   let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
   for (const it of items) {
-    const r = (key && it[key]) || 0;
+    const r = it.r || 0;
     if (it.x - r < x0) x0 = it.x - r;
     if (it.x + r > x1) x1 = it.x + r;
     if (it.y - r < y0) y0 = it.y - r;
@@ -108,7 +135,7 @@ export function bounds(items, pad = 0, key = 'r') {
 
 /* The box holding most of an arrangement, `q` cut from each axis end, so a flung outlier does not
    shrink the store to a thumbnail; it is still drawn. */
-export function robustBounds(items, pad = 0, q = 0.012) {
+export function robustBounds(items: ReadonlyArray<Pt & { r?: number }>, pad = 0, q = 0.012): Box {
   if (items.length < 20) return bounds(items, pad);
   const xs = items.map(i => i.x).sort((a, b) => a - b);
   const ys = items.map(i => i.y).sort((a, b) => a - b);
@@ -118,22 +145,26 @@ export function robustBounds(items, pad = 0, q = 0.012) {
 
 /* Nearest item within `radius` WORLD units, over a grid so the pointer costs
    the same at ten thousand nodes. */
-export class Picker {
-  constructor(items, cell = 40) {
+export class Picker<T extends Pt> {
+  declare cell: number;
+  declare g: Map<string, T[]>;
+
+  constructor(items: T[], cell = 40) {
     this.cell = cell;
     this.g = new Map();
     for (const it of items) {
       const k = `${Math.floor(it.x / cell)},${Math.floor(it.y / cell)}`;
-      if (!this.g.has(k)) this.g.set(k, []);
-      this.g.get(k).push(it);
+      const list = this.g.get(k);
+      if (list) list.push(it);
+      else this.g.set(k, [it]);
     }
   }
 
-  at(x, y, radius) {
+  at(x: number, y: number, radius: number): T | null {
     const c = this.cell;
     const reach = Math.ceil(radius / c);
     const i0 = Math.floor(x / c), j0 = Math.floor(y / c);
-    let best = null, bd = radius * radius;
+    let best: T | null = null, bd = radius * radius;
     for (let j = j0 - reach; j <= j0 + reach; j++)
       for (let i = i0 - reach; i <= i0 + reach; i++) {
         const cell = this.g.get(`${i},${j}`);
@@ -152,31 +183,36 @@ const CELL = 48;
 /* Labels placed in priority order, refusing any that collide with one already placed or with
    the chrome rectangles the page supplies. */
 export class LabelBoard {
-  constructor(ctx) {
+  declare ctx: Ctx;
+  declare grid: Map<string, Rect[]>;
+  declare placed: Rect[];
+
+  constructor(ctx: Ctx) {
     this.ctx = ctx;
     this.grid = new Map();
     this.placed = [];
   }
 
   /* `taken` is [{x, y, w, h}] in canvas coordinates. */
-  reset(taken = []) {
+  reset(taken: Rect[] = []): void {
     this.grid.clear();
     this.placed.length = 0;
     for (const r of taken) this.occupy(r);
   }
 
-  occupy(r) {
+  occupy(r: Rect): void {
     const i0 = Math.floor(r.x / CELL), i1 = Math.floor((r.x + r.w) / CELL);
     const j0 = Math.floor(r.y / CELL), j1 = Math.floor((r.y + r.h) / CELL);
     for (let j = j0; j <= j1; j++)
       for (let i = i0; i <= i1; i++) {
         const k = `${i},${j}`;
-        if (!this.grid.has(k)) this.grid.set(k, []);
-        this.grid.get(k).push(r);
+        const cell = this.grid.get(k);
+        if (cell) cell.push(r);
+        else this.grid.set(k, [r]);
       }
   }
 
-  free(r) {
+  free(r: Rect): boolean {
     const i0 = Math.floor(r.x / CELL), i1 = Math.floor((r.x + r.w) / CELL);
     const j0 = Math.floor(r.y / CELL), j1 = Math.floor((r.y + r.h) / CELL);
     for (let j = j0; j <= j1; j++)
@@ -191,7 +227,7 @@ export class LabelBoard {
   }
 
   /* Trim `text` to `maxW` pixels in the font already set on the context. */
-  _fit(text, maxW) {
+  _fit(text: unknown, maxW: number): string {
     const ctx = this.ctx;
     let label = String(text == null ? '' : text);
     if (ctx.measureText(label).width <= maxW) return label;
@@ -205,7 +241,7 @@ export class LabelBoard {
 
   /* Draw `text` anchored at (x, y), on the first side of `sides` that fits.
      Returns whether it was drawn. */
-  draw(text, x, y, opts = {}) {
+  draw(text: unknown, x: number, y: number, opts: DrawOptions): boolean {
     const {
       font, color, halo, gap = 9, sides = ['right', 'left', 'top', 'bottom'],
       maxW = 220, haloWidth = 3.5,
@@ -217,7 +253,7 @@ export class LabelBoard {
     const w = ctx.measureText(label).width;
     const h = 13;
     for (const side of sides) {
-      let bx, by;
+      let bx: number, by: number;
       if (side === 'right') { bx = x + gap; by = y - h / 2; }
       else if (side === 'left') { bx = x - gap - w; by = y - h / 2; }
       else if (side === 'top') { bx = x - w / 2; by = y - gap - h; }
@@ -244,7 +280,7 @@ export class LabelBoard {
 
   /* A label that appears wherever it lands: the name of a region, which has
      no second side to try. */
-  force(text, x, y, opts = {}) {
+  force(text: unknown, x: number, y: number, opts: ForceOptions): Rect | null {
     const {
       font, color, halo, align = 'center', baseline = 'middle',
       haloWidth = 4, maxW = 1e9,

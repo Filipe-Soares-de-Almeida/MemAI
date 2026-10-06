@@ -1,18 +1,11 @@
-/* Feed the relations graph's geometry a synthetic store and print what came
-   back, for tests/test_graph_2d.py to hold it to.
+/* Prints what the relations graph's DOM-free geometry (packing, force pass, density field, the three
+   arrangements) makes of a synthetic store, for tests/test_graph_2d.py: node tools/graph-cases.mjs */
 
-   Only the parts that have no DOM are exercised: the circle packing, the
-   force pass, the density field and the three arrangements. The engine around
-   them (graph-2d.js) reaches for a canvas and a stylesheet, which is the line
-   this stops at.
-
-   Usage: node tools/graph-cases.mjs    ->    one JSON object on stdout */
-
-import { packSiblings, enclose } from '../src/memai/webui/graph-geom.ts';
-import { Sim, buildQuad, repel } from '../src/memai/webui/graph-force.ts';
-import { density, isolines, smooth } from '../src/memai/webui/graph-field.ts';
+import { packSiblings, enclose } from '../src/memai/webui/engines/graph-geom.ts';
+import { Sim, buildQuad, repel } from '../src/memai/webui/engines/graph-force.ts';
+import { density, isolines, smooth } from '../src/memai/webui/engines/graph-field.ts';
 import { deriveStore, ARRANGEMENTS, arrangement, buildTree, topOf }
-  from '../src/memai/webui/graph-arrange.js';
+  from '../src/memai/webui/engines/graph-arrange.ts';
 
 /* a fixed sequence, so a failure is the same failure twice */
 const rng = (seed => () => {
