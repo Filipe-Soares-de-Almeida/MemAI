@@ -15,8 +15,8 @@ import { I18N, t } from './i18n.ts';
 
 import OverviewView from './views/overview/OverviewView.vue';
 import MemoriesView from './views/memories/MemoriesView.vue';
-import { renderGraph } from './views/graph.js';
-import { renderDiagrams } from './views/diagrams.js';
+import GraphView from './views/graph/GraphView.vue';
+import DiagramsView from './views/diagrams/DiagramsView.vue';
 import { renderDiagram } from './views/diagram.js';
 import DomainsView from './views/domains/DomainsView.vue';
 import MaintenanceView from './views/maintenance/MaintenanceView.vue';
@@ -29,8 +29,8 @@ import { openNewMemory } from './views/new-memory/index.ts';
 registerViews({
   overview: OverviewView,
   memories: MemoriesView,
-  graph: renderGraph,
-  diagrams: renderDiagrams,
+  graph: GraphView,
+  diagrams: DiagramsView,
   diagram: renderDiagram,
   domains: DomainsView,
   maintenance: MaintenanceView,

@@ -355,19 +355,69 @@ class RelationCreated(TypedDict):
     relation_id: int
 
 
+class GraphNode(TypedDict):
+    """A memory as the relations graph draws it; `label` is the body's opening line."""
+    uid: str
+    type: str
+    domain: str
+    also: NotRequired[list[str]]
+    status: str
+    confidence: str
+    tags: str
+    title: str
+    label: str
+    degree: int
+    created_at: str
+
+
+class GraphEdge(TypedDict):
+    id: int
+    from_uid: str
+    to_uid: str
+    relation_type: str
+    note: str
+
+
 class Graph(Scoped):
-    nodes: list[Row]
-    edges: list[Row]
+    nodes: list[GraphNode]
+    edges: list[GraphEdge]
     total: int
     truncated: bool
 
 
 # ------------------------------------------------------------------ diagrams
 
+class DiagramIssue(TypedDict):
+    kind: str
+    keys: list[str]
+
+
+class DiagramRow(TypedDict):
+    """A diagram as the diagram list shows it: its size, its ties and what is wrong with its shape."""
+    uid: str
+    kind: str
+    title: str
+    summary: str
+    domain: str
+    status: str
+    confidence: str
+    tags: str
+    created_at: str
+    updated_at: str
+    also: list[str]
+    nodes: int
+    edges: int
+    links: int
+    jumps: int
+    documented: int
+    issues: list[DiagramIssue]
+    issue_count: int
+
+
 class DiagramPage(Scoped):
     total: int
     with_issues: int
-    items: list[Row]
+    items: list[DiagramRow]
 
 
 class DiagramCreated(TypedDict):

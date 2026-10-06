@@ -360,19 +360,67 @@ export interface RelationCreated {
   relation_id: number;
 }
 
+export interface GraphNode {
+  uid: string;
+  type: string;
+  domain: string;
+  also?: string[];
+  status: string;
+  confidence: string;
+  tags: string;
+  title: string;
+  label: string;
+  degree: number;
+  created_at: string;
+}
+
+export interface GraphEdge {
+  id: number;
+  from_uid: string;
+  to_uid: string;
+  relation_type: string;
+  note: string;
+}
+
 export interface Graph {
   domain_scope?: string[];
-  nodes: Record<string, unknown>[];
-  edges: Record<string, unknown>[];
+  nodes: GraphNode[];
+  edges: GraphEdge[];
   total: number;
   truncated: boolean;
+}
+
+export interface DiagramIssue {
+  kind: string;
+  keys: string[];
+}
+
+export interface DiagramRow {
+  uid: string;
+  kind: string;
+  title: string;
+  summary: string;
+  domain: string;
+  status: string;
+  confidence: string;
+  tags: string;
+  created_at: string;
+  updated_at: string;
+  also: string[];
+  nodes: number;
+  edges: number;
+  links: number;
+  jumps: number;
+  documented: number;
+  issues: DiagramIssue[];
+  issue_count: number;
 }
 
 export interface DiagramPage {
   domain_scope?: string[];
   total: number;
   with_issues: number;
-  items: Record<string, unknown>[];
+  items: DiagramRow[];
 }
 
 export interface DiagramCreated {

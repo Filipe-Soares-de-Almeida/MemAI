@@ -37,7 +37,7 @@ export const pinMark = pin => PIN[pin]
   : '';
 
 /* the relation picker's entry for a type outside the suggestions: it opens a text field */
-const REL_OTHER = '__other';
+export const REL_OTHER = '__other';
 
 /* A relation type's display label; the stored string moves to the title (relTypeTitle). The set
    is open, so an unknown type falls back to itself rather than to the key. */
@@ -82,7 +82,7 @@ export const peerName = peer => {
 
 /* A named picker of the known relation types, with an escape hatch for any string. Emits the
    picker and its custom-value sibling; wireRelTypeField() joins them and returns the getter. */
-const relItems = options => [
+export const relItems = options => [
   { value: '', label: t('dr.rel.type.placeholder'),
     html: `<span class="pick-any">${t('dr.rel.type.placeholder')}</span>` },
   ...options.map(r => ({ value: r, label: t(`rel.${r}`) })),
