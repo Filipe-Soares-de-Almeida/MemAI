@@ -1,11 +1,11 @@
 /* Vocabulary every view shares: memory types, the confidence scale, fragments built from them,
    and the domains cache. Labels resolve t() at import; a language switch reloads the page. */
 
-import { $, esc, cssVar } from './dom.js';
-import { api } from './api.js';
+import { $, esc, cssVar } from './dom.ts';
+import { api } from './api.ts';
 import { icon } from './icons.js';
 import { fixedItems, pickerFor, wirePicker } from './pick.js';
-import { t } from '../i18n.js';
+import { t } from '../i18n.ts';
 import { copyUid } from './ui.js';
 import { TYPE_ORDER } from './vocab.js';
 import { MEMORY } from '../contract.js';

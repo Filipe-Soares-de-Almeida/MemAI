@@ -12,12 +12,12 @@
    not already done, apart from the calendar, which is a reshaping of the
    activity rows and not a second count. */
 
-import { esc, fmtInt, fmtDay } from '../core/dom.js';
-import { api } from '../core/api.js';
+import { esc, fmtInt, fmtDay } from '../core/dom.ts';
+import { api } from '../core/api.ts';
 import { tipShow, tipHide } from '../core/ui.js';
 import { typeTag, CONF, TYPE_ORDER } from '../core/shared.js';
-import { go } from '../core/router.js';
-import { I18N, t } from '../i18n.js';
+import { go } from '../core/router.ts';
+import { I18N, t } from '../i18n.ts';
 
 const CONF_ORDER = ['confirmed', 'unverified', 'contradicted'];
 const confColor = c =>

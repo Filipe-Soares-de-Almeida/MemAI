@@ -8,7 +8,10 @@ const TOKEN = /[\p{L}\p{N}_]+|\s+|[^\p{L}\p{N}_\s]/gu;
    4.5MB at most); past it the changed middle is marked whole. */
 const CAP = 1500;
 
-const tokenize = text => text.match(TOKEN) || [];
+type Range = [number, number];
+export interface Diff { del: Range[]; ins: Range[] }
+
+const tokenize = (text: string): string[] => text.match(TOKEN) || [];
 
 const WS = /^\s*$/;
 
@@ -17,8 +20,8 @@ const WS = /^\s*$/;
 const BRIDGE = 12;
 
 /* Ranges trimmed of edge whitespace, all-whitespace ones dropped, near neighbours merged. */
-function tidy(text, ranges) {
-  const out = [];
+function tidy(text: string, ranges: Range[]): Range[] {
+  const out: Range[] = [];
   for (const r of ranges) {
     let [s, e] = r;
     while (s < e && WS.test(text[s])) s++;
@@ -33,7 +36,7 @@ function tidy(text, ranges) {
 
 /* What one text drops and the other adds: {del, ins} as sorted, non-overlapping ranges into
    `before` and `after`; identical texts give two empty lists. */
-export function diffRanges(before, after) {
+export function diffRanges(before: unknown, after: unknown): Diff {
   const a = String(before ?? ''), b = String(after ?? '');
   if (a === b) return { del: [], ins: [] };
   const A = tokenize(a), B = tokenize(b);
@@ -67,7 +70,7 @@ export function diffRanges(before, after) {
     }
   }
 
-  const del = [], ins = [];
+  const del: Range[] = [], ins: Range[] = [];
   let i = 0, j = 0, pa = offA, pb = offB, dOpen = -1, iOpen = -1;
   const closeDel = () => { if (dOpen >= 0) { del.push([dOpen, pa]); dOpen = -1; } };
   const closeIns = () => { if (iOpen >= 0) { ins.push([iOpen, pb]); iOpen = -1; } };
@@ -88,20 +91,22 @@ export function diffRanges(before, after) {
   return { del: tidy(a, del), ins: tidy(b, ins) };
 }
 
-const textNodes = el => {
+const isText = (n: Node): n is Text => n.nodeType === Node.TEXT_NODE;
+
+const textNodes = (el: Element): Text[] => {
   const walk = el.ownerDocument.createTreeWalker(el, NodeFilter.SHOW_TEXT);
-  const out = [];
-  for (let n = walk.nextNode(); n; n = walk.nextNode()) out.push(n);
+  const out: Text[] = [];
+  for (let n = walk.nextNode(); n; n = walk.nextNode()) if (isText(n)) out.push(n);
   return out;
 };
 
 /* Wraps each range in a <mark>, cutting back to front so earlier offsets stay valid. */
-function paint(nodes, ranges, cls) {
+function paint(nodes: Text[], ranges: Range[], cls: string): void {
   if (!ranges.length) return;
-  const cuts = [];
+  const cuts: Array<[Text, number, number]> = [];
   let at = 0;
   for (const node of nodes) {
-    const end = at + node.nodeValue.length;
+    const end = at + node.data.length;
     for (const [s, e] of ranges) {
       if (s >= end) break;
       const from = Math.max(s, at) - at, to = Math.min(e, end) - at;
@@ -112,20 +117,20 @@ function paint(nodes, ranges, cls) {
   for (let k = cuts.length - 1; k >= 0; k--) {
     const [node, from, to] = cuts[k];
     const part = from ? node.splitText(from) : node;
-    if (to - from < part.nodeValue.length) part.splitText(to - from);
+    if (to - from < part.data.length) part.splitText(to - from);
     const mark = part.ownerDocument.createElement('mark');
     mark.className = cls;
-    part.parentNode.replaceChild(mark, part);
+    part.replaceWith(mark);
     mark.appendChild(part);
   }
 }
 
 /* Marks changes in place in a before/after pair, whose final markup must already be in place;
    marking twice would diff the marks. */
-export function markPair(beforeEl, afterEl) {
+export function markPair(beforeEl: Element | null, afterEl: Element | null): void {
   if (!beforeEl || !afterEl) return;
   const a = textNodes(beforeEl), b = textNodes(afterEl);
-  const join = nodes => nodes.map(n => n.nodeValue).join('');
+  const join = (nodes: Text[]) => nodes.map(n => n.data).join('');
   const { del, ins } = diffRanges(join(a), join(b));
   paint(a, del, 'df-del');
   paint(b, ins, 'df-ins');

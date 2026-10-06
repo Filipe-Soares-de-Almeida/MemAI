@@ -10,17 +10,17 @@
    the whole store, and a log you have scrolled back through is a place
    you were reading. */
 
-import { $, esc, fmtInt, fmtBytes, fmtDate, fmtAgo } from '../core/dom.js';
-import { api, seg } from '../core/api.js';
+import { $, esc, fmtInt, fmtBytes, fmtDate, fmtAgo } from '../core/dom.ts';
+import { api, seg } from '../core/api.ts';
 import { toast, failed, confirmModal, promptModal, openModal, closeModal } from '../core/ui.js';
 import { typeTag, typeClass, uidChip, statusTag, wireCopyChips, failedHTML, retryable,
          getDomains, typeItems, domainDatalist } from '../core/shared.js';
 import { pickerFor, pickerValue, setPickerValue, wirePicker, fixedItems } from '../core/pick.js';
 import { icon } from '../core/icons.js';
-import { replaceParams } from '../core/router.js';
+import { replaceParams } from '../core/router.ts';
 import { openRecord } from './record.js';
-import { MOTION_MODES, getMotion, setMotion } from '../core/motion.js';
-import { I18N, t } from '../i18n.js';
+import { MOTION_MODES, getMotion, setMotion } from '../core/motion.ts';
+import { I18N, t } from '../i18n.ts';
 import { ADMIN } from '../contract.js';
 
 /* The address of each workspace, as ?tab= and as the order of the strip. */
@@ -1058,7 +1058,7 @@ export async function renderMaintenance(view, params) {
       b => b.addEventListener('click', () => openRecord(b.dataset.uid)));
   });
 
-  /* The day heading, from a YYYY-MM-DD key. dom.js's fmtDay drops the year,
+  /* The day heading, from a YYYY-MM-DD key. fmtDay in core/dom.ts drops the year,
      which a log going back months cannot afford. */
   function fmtDayKey(key) {
     const [y, m, d] = String(key).split('-');

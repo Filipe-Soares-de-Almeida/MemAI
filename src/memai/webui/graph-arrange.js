@@ -1,9 +1,9 @@
 /* The relations graph's three arrangements (hubs, pack, atlas) behind one interface: constructor,
    step, progress, halt, box, locate, draw, hit, click. A hit carries `uid` or `domain`. */
 
-import { clamp, packSiblings } from './graph-geom.js';
-import { Sim, spiral } from './graph-force.js';
-import { density, isolines, smooth } from './graph-field.js';
+import { clamp, packSiblings } from './graph-geom.ts';
+import { Sim, spiral } from './graph-force.ts';
+import { density, isolines, smooth } from './graph-field.ts';
 import { dots, lines, ring, gradLine, hexA, robustBounds, Picker, LabelBoard }
   from './graph-draw.js';
 

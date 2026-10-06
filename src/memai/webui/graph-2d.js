@@ -1,9 +1,9 @@
 /* The relations graph on a 2D canvas: camera, frame loop, pointer, selection and toggles, reported
    through callbacks. The arrangement settles a slice per frame and stops at SETTLE_MAX_MS. */
 
-import { cssVar } from './core/dom.js';
-import { motionOn } from './core/motion.js';
-import { clamp } from './graph-geom.js';
+import { cssVar } from './core/dom.ts';
+import { motionOn } from './core/motion.ts';
+import { clamp } from './graph-geom.ts';
 import { deriveStore, arrangement, DEFAULT_MODE } from './graph-arrange.js';
 
 /* the travel to one memory, and the pull-back that frames the whole graph */

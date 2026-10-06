@@ -13,8 +13,8 @@
    left off, and the arrangement also rides in the address so a link carries
    it. A `mode` in the address wins over the stored one. */
 
-import { $, esc, fmtInt, debounce } from '../core/dom.js';
-import { api, query } from '../core/api.js';
+import { $, esc, fmtInt, debounce } from '../core/dom.ts';
+import { api, query } from '../core/api.ts';
 import { icon } from '../core/icons.js';
 import { toast, failed, tipShow, tipHide, openModal, closeModal, setPressed } from '../core/ui.js';
 import { typeTag, typeColor, uidChip, statusTag, confPill, wireCopyChips,
@@ -23,12 +23,12 @@ import { typeTag, typeColor, uidChip, statusTag, confPill, wireCopyChips,
          wireRelTypeField } from '../core/shared.js';
 import { pickerFor, wirePicker, fixedItems } from '../core/pick.js';
 import { domainPickerHTML, wireDomainPicker } from '../core/domain-picker.js';
-import { go, refreshBehind, replaceParams } from '../core/router.js';
-import { onTeardown } from '../core/lifecycle.js';
+import { go, refreshBehind, replaceParams } from '../core/router.ts';
+import { onTeardown } from '../core/lifecycle.ts';
 import { openRecord } from './record.js';
 import { GraphCanvas } from '../graph-2d.js';
 import { ARRANGEMENTS, DEFAULT_MODE, arrangement } from '../graph-arrange.js';
-import { t } from '../i18n.js';
+import { t } from '../i18n.ts';
 
 /* How many of a memory's relations the card offers as a journey before it
    stops listing them, and how much of a name one of those chips carries. The

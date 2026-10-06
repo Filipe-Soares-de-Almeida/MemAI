@@ -6,16 +6,16 @@
    and what they hold, comes from /api/config rather than from a list here, so
    a label lives in one place. */
 
-import { esc } from '../core/dom.js';
-import { api } from '../core/api.js';
+import { esc } from '../core/dom.ts';
+import { api } from '../core/api.ts';
 import { toast, failed, openModal, closeModal } from '../core/ui.js';
 import { typeItems, confItems, getDomains, invalidateDomains,
          domainDatalist, sectionLabelHTML } from '../core/shared.js';
 import { pickerFor, pickerValue, wirePicker, fixedItems } from '../core/pick.js';
-import { go, refreshBehind } from '../core/router.js';
+import { go, refreshBehind } from '../core/router.ts';
 import { openRecord } from './record.js';
 import { newDiagramSkeleton } from './diagrams.js';
-import { t } from '../i18n.js';
+import { t } from '../i18n.ts';
 import { TASK } from '../contract.js';
 
 /* The types this form does not write: the server refuses a handoff here. */

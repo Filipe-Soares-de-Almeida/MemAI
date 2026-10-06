@@ -8,9 +8,9 @@
 
    Usage: node tools/graph-cases.mjs    ->    one JSON object on stdout */
 
-import { packSiblings, enclose } from '../src/memai/webui/graph-geom.js';
-import { Sim, buildQuad, repel } from '../src/memai/webui/graph-force.js';
-import { density, isolines, smooth } from '../src/memai/webui/graph-field.js';
+import { packSiblings, enclose } from '../src/memai/webui/graph-geom.ts';
+import { Sim, buildQuad, repel } from '../src/memai/webui/graph-force.ts';
+import { density, isolines, smooth } from '../src/memai/webui/graph-field.ts';
 import { deriveStore, ARRANGEMENTS, arrangement, buildTree, topOf }
   from '../src/memai/webui/graph-arrange.js';
 

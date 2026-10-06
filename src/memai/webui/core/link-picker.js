@@ -1,15 +1,15 @@
 /* Choosing memories to point at, as a dialog over the form that raised it: results, the full
    memory, and a tray of picks. Resolves uids; what they become is the caller's business. */
 
-import { esc, fmtDate, fmtInt, debounce } from './dom.js';
-import { api, seg } from './api.js';
+import { esc, fmtDate, fmtInt, debounce } from './dom.ts';
+import { api, seg } from './api.ts';
 import { icon } from './icons.js';
 import { openModal, closeModal } from './ui.js';
 import { typeColor, typeClass, confPill, statusTag, uidChip, relTypeField,
          wireRelTypeField, TYPE_LABEL, typeItems, getDomains } from './shared.js';
 import { pickerFor, setPickerValue, wirePicker, fixedItems } from './pick.js';
 import { domainPickerHTML, wireDomainPicker } from './domain-picker.js';
-import { t } from '../i18n.js';
+import { t } from '../i18n.ts';
 
 /* Records fetched for the preview pane, emptied each time a dialog opens. */
 const previews = new Map();

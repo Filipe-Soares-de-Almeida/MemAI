@@ -9,16 +9,16 @@
    Filtering is client-side: the server sends the whole set for the domain
    and status asked for, and the point of the view is to scan it. */
 
-import { $, esc, fmtInt, fmtAgo } from '../core/dom.js';
-import { api } from '../core/api.js';
+import { $, esc, fmtInt, fmtAgo } from '../core/dom.ts';
+import { api } from '../core/api.ts';
 import { icon } from '../core/icons.js';
 import { failed, promptModal } from '../core/ui.js';
 import { statusTag, uidChip, wireCopyChips, getDomains,
          invalidateDomains } from '../core/shared.js';
 import { domainPickerHTML, wireDomainPicker } from '../core/domain-picker.js';
-import { go } from '../core/router.js';
+import { go } from '../core/router.ts';
 import { openRecord } from './record.js';
-import { t } from '../i18n.js';
+import { t } from '../i18n.ts';
 
 const ISSUE_ORDER = ['empty', 'no_start', 'many_starts', 'unreachable',
                      'dead_end', 'no_end'];

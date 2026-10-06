@@ -11,8 +11,8 @@
    send-to-project and permanent delete are not -- each is its own act with
    its own confirmation, and each runs when it is pressed. */
 
-import { $, esc, fmtInt, fmtDate, fmtAgo, debounce } from '../core/dom.js';
-import { api, query } from '../core/api.js';
+import { $, esc, fmtInt, fmtDate, fmtAgo, debounce } from '../core/dom.ts';
+import { api, query } from '../core/api.ts';
 import { icon } from '../core/icons.js';
 import { toast, failed, promptModal, typedConfirmModal } from '../core/ui.js';
 import { typeTag, statusTag, confPill, CONF, getDomains, inDomainPath,
@@ -20,10 +20,10 @@ import { typeTag, statusTag, confPill, CONF, getDomains, inDomainPath,
 import { pickerFor, wirePicker, fixedItems } from '../core/pick.js';
 import { domainPickerHTML, wireDomainPicker } from '../core/domain-picker.js';
 import { moveToProjectModal } from '../core/projects.js';
-import { go, refreshBehind, parseHash } from '../core/router.js';
-import { onTeardown } from '../core/lifecycle.js';
+import { go, refreshBehind, parseHash } from '../core/router.ts';
+import { onTeardown } from '../core/lifecycle.ts';
 import { openRecord, setRecordSequence } from './record.js';
-import { t } from '../i18n.js';
+import { t } from '../i18n.ts';
 import { ADMIN, TASK } from '../contract.js';
 
 const PAGE = 50;

@@ -106,6 +106,9 @@ jobs:
           npm ci
           npm run build
 
+      - name: Type-check the dashboard
+        run: npm run typecheck
+
       - name: Test the dashboard
         run: npm test
 

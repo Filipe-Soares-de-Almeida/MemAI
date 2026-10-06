@@ -15,12 +15,12 @@
    they do. The commands are here to be copied and run with everything
    closed. */
 
-import { esc, fmtAgo, fmtDay } from '../core/dom.js';
-import { api } from '../core/api.js';
+import { esc, fmtAgo, fmtDay } from '../core/dom.ts';
+import { api } from '../core/api.ts';
 import { copyCode, toast, failed } from '../core/ui.js';
 import { pickerFor, wirePicker, fixedItems } from '../core/pick.js';
 import { icon } from '../core/icons.js';
-import { t } from '../i18n.js';
+import { t } from '../i18n.ts';
 
 /* Where a version sits relative to the running one. `past` wears nothing:
    the whole list below the current version is past, and a tag on every row

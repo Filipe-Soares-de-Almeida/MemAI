@@ -1,12 +1,12 @@
 /* The project switch in the app bar and the move-to-project dialog. A switch re-runs the route,
    which re-reads the new project; it is refused while a dialog is open. */
 
-import { $, esc, fmtInt, debounce } from './dom.js';
-import { api } from './api.js';
+import { $, esc, fmtInt, debounce } from './dom.ts';
+import { api } from './api.ts';
 import { toast, failed, modalOpen, openModal, closeModal, promptModal } from './ui.js';
 import { pickerFor, pickerValue, setPickerValue, wirePicker, fixedItems } from './pick.js';
-import { route } from './router.js';
-import { t } from '../i18n.js';
+import { route } from './router.ts';
+import { t } from '../i18n.ts';
 
 /* The row that is an action rather than a project. A project name is a file
    name, and no file name may carry this character. */

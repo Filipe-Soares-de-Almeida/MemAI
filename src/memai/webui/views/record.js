@@ -13,8 +13,8 @@
    and the previous text is kept inside that version -- which is what the
    API does anyway. */
 
-import { esc, fmtDate, fmtInt, debounce } from '../core/dom.js';
-import { api, seg } from '../core/api.js';
+import { esc, fmtDate, fmtInt, debounce } from '../core/dom.ts';
+import { api, seg } from '../core/api.ts';
 import { icon } from '../core/icons.js';
 import { toast, failed, openModal, closeModal, confirmModal, promptModal,
          openDropMenu, copyCode, copyUid, modalOpen, keysHTML, saveKeysHTML } from '../core/ui.js';
@@ -24,13 +24,13 @@ import { typeTag, uidChip, statusTag, wireCopyChips,
          cachedDomains, invalidateDomains, domainDatalist } from '../core/shared.js';
 import { pickerFor, pickerValue, wirePicker, fixedItems } from '../core/pick.js';
 import { pickMemories } from '../core/link-picker.js';
-import { go, backTo, refreshBehind, previousRoute } from '../core/router.js';
-import { onTeardown } from '../core/lifecycle.js';
+import { go, backTo, refreshBehind, previousRoute } from '../core/router.ts';
+import { onTeardown } from '../core/lifecycle.ts';
 import { renderRich, wireRich, headings } from '../core/richtext.js';
 import { highlightIn } from '../core/highlight.js';
 import { DiagramEditor } from '../diagram-engine.js';
 import { mountTask } from './task.js';
-import { t } from '../i18n.js';
+import { t } from '../i18n.ts';
 
 /* Where every other view sends a reader who clicked a memory. It is a
    navigation, so Back works and the URL is shareable. */

@@ -17,8 +17,8 @@
    going, and Apply is what runs it. A re-home reindexes every memory in the
    subtree, so it is not something a slip of the mouse should commit. */
 
-import { esc, fmtInt, fmtAgo } from '../core/dom.js';
-import { api } from '../core/api.js';
+import { esc, fmtInt, fmtAgo } from '../core/dom.ts';
+import { api } from '../core/api.ts';
 import { icon } from '../core/icons.js';
 import { toast, failed, openModal, closeModal, confirmModal, promptModal,
          openDropMenu, setPressed } from '../core/ui.js';
@@ -27,9 +27,9 @@ import { typeTag, getDomains, invalidateDomains, byDomainPath, domainLeaf,
 import { pickerFor, pickerValue, wirePicker, fixedItems } from '../core/pick.js';
 import { domainPickerHTML, wireDomainPicker } from '../core/domain-picker.js';
 import { moveToProjectModal } from '../core/projects.js';
-import { go, refreshBehind } from '../core/router.js';
+import { go, refreshBehind } from '../core/router.ts';
 import { openRecord } from './record.js';
-import { t } from '../i18n.js';
+import { t } from '../i18n.ts';
 
 const CASE_MODES = ['preserve', 'lower', 'upper'];
 

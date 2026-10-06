@@ -6,18 +6,18 @@
    act(), which reloads from the store afterwards, because the store is
    what decided the layout in the first place. */
 
-import { $, esc, debounce } from '../core/dom.js';
-import { api, seg } from '../core/api.js';
+import { $, esc, debounce } from '../core/dom.ts';
+import { api, seg } from '../core/api.ts';
 import { icon } from '../core/icons.js';
 import { toast, failed, openModal, closeModal, confirmModal, promptModal,
          openCtxMenu, openDropMenu, tipShow, tipHide, setPressed } from '../core/ui.js';
 import { typeClass, DG_REL_SUGGEST, peerName } from '../core/shared.js';
 import { pickerFor, pickerValue, wirePicker, fixedItems } from '../core/pick.js';
 import { pickMemories } from '../core/link-picker.js';
-import { onTeardown } from '../core/lifecycle.js';
+import { onTeardown } from '../core/lifecycle.ts';
 import { openRecord } from './record.js';
 import { DiagramEditor, NODE_SHAPES, FONT_SCALES } from '../diagram-engine.js';
-import { t } from '../i18n.js';
+import { t } from '../i18n.ts';
 
 const shapeItems = () => NODE_SHAPES.map(s => ({ value: s, label: t(`dg.shape.${s}`) }));
 

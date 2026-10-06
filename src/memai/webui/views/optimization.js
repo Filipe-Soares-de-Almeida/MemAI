@@ -12,18 +12,18 @@
    one suggestion moves it by a fraction of a point and a whole run by one at
    best. `verified` is what differs from one suggestion to the next. */
 
-import { $, esc, fmtInt, fmtDate, dayKey, monthKey, fromKey } from '../core/dom.js';
-import { api, seg } from '../core/api.js';
+import { $, esc, fmtInt, fmtDate, dayKey, monthKey, fromKey } from '../core/dom.ts';
+import { api, seg } from '../core/api.ts';
 import { icon } from '../core/icons.js';
 import { toast, failed, confirmModal, copyCode } from '../core/ui.js';
 import { typeTag, uidChip, statusTag, confPill, wireCopyChips, failedHTML,
          relLabel, relTypeTitle, peerName, kindColor,
          kindLabel, kindTitle, CONF } from '../core/shared.js';
 import { renderRich, wireRich } from '../core/richtext.js';
-import { markPair } from '../core/textdiff.js';
-import { go, previousRoute, replaceParams } from '../core/router.js';
+import { markPair } from '../core/textdiff.ts';
+import { go, previousRoute, replaceParams } from '../core/router.ts';
 import { openRecord } from './record.js';
-import { I18N, t } from '../i18n.js';
+import { I18N, t } from '../i18n.ts';
 import { DIFF_KINDS, SET_KINDS, FLAG_KINDS, LINE_KINDS, TEXT_KINDS, CONTENT_KINDS,
          WHAT_MIXED } from '../core/suggestion-kinds.js';
 

@@ -1,19 +1,25 @@
 /* The version mark in the app bar, linking to the releases; it shows the update icon when the
    cached release check (memai/update.py) has seen newer versions. A failed request changes nothing. */
 
-import { $, esc } from './dom.js';
-import { api } from './api.js';
+import { $, esc } from './dom.ts';
+import { api } from './api.ts';
 import { icon } from './icons.js';
-import { t } from '../i18n.js';
+import { t } from '../i18n.ts';
 
-export async function mountVersionChip() {
+interface UpdateState {
+  current?: string;
+  latest?: string;
+  behind?: number;
+}
+
+export async function mountVersionChip(): Promise<void> {
   const host = $('#verHost');
   if (!host) return;
-  try { paint(host, await api('/api/update')); }
+  try { paint(host, await api<UpdateState>('/api/update')); }
   catch { /* see the module docstring */ }
 }
 
-function paint(host, state) {
+function paint(host: HTMLElement, state: UpdateState): void {
   const behind = Number(state.behind || 0);
   const label = behind
     ? t('ver.behind', { n: behind, latest: esc(state.latest), v: esc(state.current) })
