@@ -108,6 +108,27 @@ export interface TaskProgress {
   total: number;
 }
 
+export interface MemorySummary {
+  rowid_pk: number;
+  uid: string;
+  type: string;
+  title: string;
+  content: string;
+  content_len: number;
+  domain: string;
+  also?: string[];
+  tags: string;
+  session: string;
+  status: string;
+  confidence: string;
+  pin: string;
+  superseded_by: string | null;
+  review_after: string;
+  source_ref: string;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface MemoryRow {
   rowid_pk: number;
   uid: string;
@@ -356,9 +377,9 @@ export interface DomainTree {
 
 export interface DomainDetail {
   domain: string;
-  filed: Record<string, unknown>[];
+  filed: MemorySummary[];
   filed_total: number;
-  crossing: Record<string, unknown>[];
+  crossing: MemorySummary[];
 }
 
 export interface DomainRenamed {
@@ -369,10 +390,17 @@ export interface DomainRenamed {
   merged: unknown;
 }
 
+export interface NormalizeEntry {
+  from: string;
+  to: string;
+  count: number;
+  action: "rename" | "merge";
+}
+
 export interface NormalizePlan {
   mode: string;
   dry_run: true;
-  plan: Record<string, unknown>[];
+  plan: NormalizeEntry[];
   renames: number;
   merges: number;
 }

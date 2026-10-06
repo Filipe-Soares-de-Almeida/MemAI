@@ -18,7 +18,7 @@ import MemoriesView from './views/memories/MemoriesView.vue';
 import { renderGraph } from './views/graph.js';
 import { renderDiagrams } from './views/diagrams.js';
 import { renderDiagram } from './views/diagram.js';
-import { renderDomains } from './views/domains.js';
+import DomainsView from './views/domains/DomainsView.vue';
 import { renderMaintenance } from './views/maintenance.js';
 import { renderOptimization } from './views/optimization.js';
 import ChangelogView from './views/changelog/ChangelogView.vue';
@@ -32,7 +32,7 @@ registerViews({
   graph: renderGraph,
   diagrams: renderDiagrams,
   diagram: renderDiagram,
-  domains: renderDomains,
+  domains: DomainsView,
   maintenance: renderMaintenance,
   optimization: renderOptimization,
   changelog: ChangelogView,

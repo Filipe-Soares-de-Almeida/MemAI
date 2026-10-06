@@ -47,8 +47,9 @@ export function openModal({ title, bodyHTML, footHTML, ariaLabel, wide = false, 
   return app.mount(document.createElement('div')).scrim;
 }
 
-/* Resolves with what the dialog reports through `done`; a close reports its cancel value. */
-function ask(component, props) {
+/* Mounts a dialog component; resolves with what it reports through `done`, and a close reports
+   its cancel value. */
+export function openDialog(component, props = {}) {
   return new Promise(resolve => {
     let settled = false;
     const app = createApp(component, {
@@ -65,15 +66,15 @@ function ask(component, props) {
 }
 
 export const confirmModal = ({ title, body, okLabel, danger = false }) =>
-  ask(ConfirmDialog, { title, body, okLabel, danger });
+  openDialog(ConfirmDialog, { title, body, okLabel, danger });
 
 export const promptModal = ({ title, body = '', label, placeholder = '', value = '', okLabel,
                               danger = false }) =>
-  ask(PromptDialog, { title, body, label, placeholder, value, okLabel, danger });
+  openDialog(PromptDialog, { title, body, label, placeholder, value, okLabel, danger });
 
 /* The button stays disabled until the field holds `phrase` exactly. */
 export const typedConfirmModal = ({ title, bodyHTML = '', phrase, okLabel }) =>
-  ask(TypedConfirmDialog, { title, bodyHtml: bodyHTML, phrase, okLabel });
+  openDialog(TypedConfirmDialog, { title, bodyHtml: bodyHTML, phrase, okLabel });
 
 /* ─── menus of actions: items are `{label, run, danger, note}` or `{sep: true}`; openCtxMenu lands
    at a pointer, openDropMenu under a control. */

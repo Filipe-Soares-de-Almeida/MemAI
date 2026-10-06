@@ -116,8 +116,8 @@ class TaskProgress(TypedDict):
     total: int
 
 
-class MemoryRow(TypedDict):
-    """A memory as the list shows it: its columns, with the body cut to a snippet."""
+class MemorySummary(TypedDict):
+    """A memory's columns, with the body cut to a snippet."""
     rowid_pk: int
     uid: str
     type: str
@@ -136,6 +136,10 @@ class MemoryRow(TypedDict):
     source_ref: str
     created_at: str
     updated_at: str
+
+
+class MemoryRow(MemorySummary):
+    """A memory as the list shows it: its summary, how often it is recalled, and how a task stands."""
     recalls: int
     last_recall: str | None
     progress: NotRequired[TaskProgress]
@@ -366,9 +370,9 @@ class DomainTree(TypedDict):
 
 class DomainDetail(TypedDict):
     domain: str
-    filed: list[Row]
+    filed: list[MemorySummary]
     filed_total: int
-    crossing: list[Row]
+    crossing: list[MemorySummary]
 
 
 class DomainRenamed(TypedDict):
@@ -379,10 +383,15 @@ class DomainRenamed(TypedDict):
     merged: Any
 
 
+# "from" is a keyword, so this one is spelled as a call.
+NormalizeEntry = TypedDict("NormalizeEntry", {
+    "from": str, "to": str, "count": int, "action": Literal["rename", "merge"]})
+
+
 class NormalizePlan(TypedDict):
     mode: str
     dry_run: Literal[True]
-    plan: list[Row]
+    plan: list[NormalizeEntry]
     renames: int
     merges: int
 
