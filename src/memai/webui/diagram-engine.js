@@ -1,84 +1,26 @@
 /* Canvas editor for one diagram memory; positions come from the store. Edge geometry has a Python
    twin, memai/diagram_svg.py: change both, then route-parity.mjs --write and test_diagram_svg.py. */
 
+import { DIAGRAM } from './contract.js';
+
 const esc = s => String(s ?? '').replace(/[&<>"']/g,
   c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const cssVar = name =>
   getComputedStyle(document.documentElement).getPropertyValue(name).trim();
 
-export const NODE_SHAPES = ['start', 'step', 'decision', 'io', 'end'];
+/* Box and edge metrics shared with the server's layout and SVG export, in the units the store lays
+   out with; what each one does is said where it is used. */
+const {
+  NODE_W, NODE_H, DECISION_H, NODE_MIN_W, NODE_MAX_W, NODE_MIN_H, NODE_MAX_H,
+  IO_SKEW, ARROW_GAP, ARROW_LEN, ARROW_FLARE, ORTH_STUB, FAN_GAP, FAN_STUB, MERGE_GAP, MERGE_TAIL,
+  ORTH_RADIUS, ORTH_SNAP, LABEL_PX, LABEL_LH, LABEL_MIN_SCALE, BADGE_WORDS, BADGE_CHARS,
+  BADGE_MIN_SCALE, RING_GROW, BADGE_OUT,
+} = DIAGRAM;
+export const { SHAPES: NODE_SHAPES, BADGE_PX } = DIAGRAM;
 
-/* Box geometry, in the same abstract units the server lays out with
-   (LAYOUT_COL_W 300 / LAYOUT_ROW_H 200), so a stored arrangement has
-   room to breathe without any scaling here. Deliberately smaller than one
-   layout cell: the air between boxes is what keeps a long flow readable. */
-/* These four must match db.NODE_DEFAULT_W / NODE_DEFAULT_H /
-   DECISION_DEFAULT_H / NODE_MIN_* -- the server lays out in the same units
-   and clamps a resize to the same bounds. */
-const NODE_W = 170;
-const NODE_H = 48;
-const DECISION_H = 66;
-const NODE_MIN_W = 110, NODE_MAX_W = 560;
-const NODE_MIN_H = 34, NODE_MAX_H = 340;
-/* Every constant from here to ORTH_SNAP is mirrored in diagram_svg.py
-   under the same name. Changing one alone silently splits the canvas from
-   the SVG export -- see the twin-file note at the top of this file for the
-   two commands that catch it. */
-const IO_SKEW = 14;          /* the lean on an input/output parallelogram */
 const HANDLE = 7;            /* half-side of a corner resize grip, world units */
 const SNAP_PX = 7;           /* how near an axis has to be to pull a card onto it */
-const ARROW_GAP = 5;         /* air between the box edge and the arrow tip */
-const ORTH_STUB = 26;        /* how far a right-angled edge leaves its box */
-/* Two edges leaving the same side of the same card used to be drawn from
-   the exact same point with the exact same stub, so they ran on top of each
-   other until they parted -- on a hand-arranged 34-step flow, 37 of 49
-   edges had some length of line drawn over another line. FAN_GAP spreads
-   their anchors along the side; FAN_STUB staggers how deep each one turns,
-   so the perpendicular legs separate too. See assignFans(). */
-const FAN_GAP = 22;
-const FAN_STUB = 14;
-/* The funnel. MERGE_GAP is where an edge's own parallel track begins, out
-   from the card; MERGE_TAIL is the straight bit right at the card, so a
-   line leaves and arrives square and the arrowhead is never drawn on the
-   diagonal that closes the funnel. */
-const MERGE_GAP = 30;
-const MERGE_TAIL = 9;
-const ORTH_RADIUS = 11;      /* corner rounding on a right-angled edge */
-/* Two boxes almost -- but not exactly -- in line used to get a full Z
-   detour for an offset of a few units, and two rounded corners that close
-   together bow into an S. Below this offset the run is drawn as one
-   segment: a couple of degrees off vertical reads as straight, a wiggle
-   reads as a mistake. */
-const ORTH_SNAP = 18;
 const EDGE_PICK_PX = 11;     /* how near the pointer must be to grab a line */
-
-/* Label metrics live in world units alongside the box metrics above, so a
-   label occupies the same fraction of its box at every zoom level. Both
-   are multiplied by the diagram's stored font scale. Mirrored in
-   diagram_svg.py, along with the two badge limits below. */
-const LABEL_PX = 12;
-const LABEL_LH = 14;
-export const BADGE_PX = 10;
-/* How much of an edge's label is drawn on the line. A branch condition is
-   often a whole sentence, and a badge that long is a wall across the
-   picture, so a long one is cut to a phrase and hovering it shows the rest.
-
-   BOTH limits have to be passed before anything is cut, not either: four
-   short words are still only fourteen characters, and cutting those to
-   three left an ellipsis promising text that was barely there. See
-   shortLabel() and the tip in onMove(). */
-const BADGE_WORDS = 3;
-const BADGE_CHARS = 20;
-/* How far outside a card the selection ring is traced. The badge beside a
-   card is measured from THAT and not from the card, so selecting one does
-   not move the badge onto the ring -- and does not move the badge at all,
-   which a ring-only offset would. Mirrored in diagram_svg.py, which draws
-   no ring but has to place the badge in the same spot. */
-const RING_GROW = 6;
-/* Air between the ring's outline and a count floating beside it. Small, and
-   measured from an OUTLINE -- see drawBadge(). Mirrored in diagram_svg.py,
-   where frame() also has to reserve room for what it puts outside the box. */
-const BADGE_OUT = 7;
 export const FONT_SCALES = [0.8, 1, 1.25, 1.6, 2];
 
 /* canvas `font` takes a literal font stack -- it does not resolve the
@@ -1608,11 +1550,11 @@ export class DiagramEditor {
     const tanX = to.x - prev.x, tanY = to.y - prev.y;
     const d = Math.hypot(tanX, tanY) || 1;
     const ux = tanX / d, uy = tanY / d;
-    const s = hot ? 11 : 9;
+    const s = hot ? ARROW_LEN + 2 : ARROW_LEN;
     cx.beginPath();
     cx.moveTo(to.x, to.y);
-    cx.lineTo(to.x - ux * s - uy * s * 0.45, to.y - uy * s + ux * s * 0.45);
-    cx.lineTo(to.x - ux * s + uy * s * 0.45, to.y - uy * s - ux * s * 0.45);
+    cx.lineTo(to.x - ux * s - uy * s * ARROW_FLARE, to.y - uy * s + ux * s * ARROW_FLARE);
+    cx.lineTo(to.x - ux * s + uy * s * ARROW_FLARE, to.y - uy * s - ux * s * ARROW_FLARE);
     cx.closePath();
     cx.fillStyle = strong;
     cx.fill();
@@ -1648,8 +1590,8 @@ export class DiagramEditor {
     e.hit = box;                         /* for labelAt(), see onClick */
   }
 
-  /* An edge label cut to the phrase drawn on the line; unchanged when it fits, so a caller can
-     compare to see whether anything is hidden. */
+  /* An edge label cut to the phrase drawn on the line, only past BOTH limits (four short words are
+     still short); unchanged when it fits, so a caller can compare to see whether anything is hidden. */
   static shortLabel(text) {
     const full = String(text ?? '').trim();
     const words = full.split(/\s+/);
@@ -1691,7 +1633,7 @@ export class DiagramEditor {
       cx.setLineDash([]);
     }
 
-    if (this.scale < 0.3) return;
+    if (this.scale < LABEL_MIN_SCALE) return;
     /* World units, not 11.5/scale, so text stays inside its box at every zoom (small when far out,
        hence the early return); the diagram's font scale multiplies both. */
     const px = LABEL_PX * this.fontScale;
@@ -1711,7 +1653,7 @@ export class DiagramEditor {
 
     /* Attached memories get a marker (a note shows on hover); steps continuing in another flow
        get theirs on the row below, since two counts on one row read as one number. */
-    if (this.scale > 0.45) {
+    if (this.scale > BADGE_MIN_SCALE) {
       const count = this.linkCount[n.key];
       const jumps = this.jumpCount[n.key];
       if (count) this.drawBadge(n, -1, String(count), this.drawLinkMark);

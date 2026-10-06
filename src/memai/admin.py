@@ -56,6 +56,7 @@ from memai import (
     __version__,
     autostart,
     changelog,
+    contract,
     db,
     portable,
     sections,
@@ -82,12 +83,12 @@ KNOWN_TYPES = db.MEMORY_TYPES
 # edit; a diagram is created with its graph and a task with its items.
 CREATABLE_TYPES = tuple(
     t for t in db.MEMORY_TYPES if t not in ("handoff", db.DIAGRAM_TYPE, db.TASK_TYPE))
-CONFIDENCES = ("unverified", "confirmed", "contradicted")
+CONFIDENCES = db.CONFIDENCE_VALUES
 STATUSES = ("active", "archived")
 
 # uids per /api/bulk call, and the cap on the uid list a scope-wide archive echoes for its Undo:
 # an Undo longer than bulk accepts could not work.
-BULK_MAX = 500
+BULK_MAX = contract.BULK_MAX
 
 # The graph gets the whole scope (layout in a worker, one instanced GPU pass). `limit` cuts most-
 # connected first; the ceiling only keeps a hand-typed number from straining SQLite.

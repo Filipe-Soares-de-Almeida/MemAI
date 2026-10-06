@@ -6,7 +6,8 @@ THIS FILE IS THE PYTHON TWIN OF webui/diagram-engine.js
 The admin dashboard draws a diagram on a <canvas> in JavaScript; this
 module draws the same diagram as SVG for readers with no browser -- a
 chat client, an exporter. Neither one is derived from the other, so
-every constant and every geometry decision below exists TWICE.
+every geometry decision below exists TWICE; the metrics both read come
+from contract.json.
 
 Change one, change both, then run:
 
@@ -36,29 +37,29 @@ from functools import lru_cache
 from pathlib import Path
 
 from . import db
-
-# ── mirrored constants: each has a same-named twin in webui/diagram-engine.js, whose comments
-# hold the reasoning. Box geometry comes from db; hit-test tolerances have no use here.
-
-LABEL_PX = 12.0          # node label size, world units, before font_scale
-LABEL_LH = 14.0          # and its line height
-BADGE_PX = 10.0          # edge label and corner counts
-BADGE_WORDS = 3          # an edge label is cut past BOTH of these...
-BADGE_CHARS = 20         # ...never just one, see short_label()
-RING_GROW = 6.0          # how far outside a card the canvas rings a selection
-BADGE_OUT = 7.0          # air between that ring and a count beside the card
-
-IO_SKEW = 14.0           # the lean on an input/output parallelogram
-ARROW_GAP = 5.0          # air between the box edge and the arrow tip
-ORTH_STUB = 26.0         # how far a right-angled edge leaves its box
-FAN_GAP = 22.0           # spread of several edges along one side
-FAN_STUB = 14.0          # and how much deeper each one turns
-MERGE_GAP = 30.0         # where an edge's own parallel track begins
-MERGE_TAIL = 9.0         # the straight bit right at the card
-ORTH_RADIUS = 11.0       # corner rounding on a right-angled edge
-ORTH_SNAP = 18.0         # below this offset a run is drawn as one segment
-
-NODE_SHAPES = ("start", "step", "decision", "io", "end")
+from .contract import (  # noqa: F401
+    ARROW_FLARE,
+    ARROW_GAP,
+    ARROW_LEN,
+    BADGE_CHARS,
+    BADGE_MIN_SCALE,
+    BADGE_OUT,
+    BADGE_PX,
+    BADGE_WORDS,
+    FAN_GAP,
+    FAN_STUB,
+    IO_SKEW,
+    LABEL_LH,
+    LABEL_MIN_SCALE,
+    LABEL_PX,
+    MERGE_GAP,
+    MERGE_TAIL,
+    NODE_SHAPES,
+    ORTH_RADIUS,
+    ORTH_SNAP,
+    ORTH_STUB,
+    RING_GROW,
+)
 
 # ── text measurement ────────────────────────────────────────────────────
 
@@ -755,14 +756,6 @@ INK = "rgba(255,255,255,.87)"   # --ink
 INK2 = "rgba(255,255,255,.6)"   # --ink-2
 LINE = "rgba(255,255,255,.12)"  # --line
 WARN = "#ffd54f"         # --warn
-
-ARROW_LEN = 9.0          # drawEdge's `s` for a normal edge
-ARROW_FLARE = 0.45       # and its half-width factor
-
-# Below these scales the canvas draws no label (drawNode / drawEdge); the shell matches it so a
-# zoomed-out flow is not a field of grey smears.
-LABEL_MIN_SCALE = 0.3
-BADGE_MIN_SCALE = 0.45
 
 _XML_ESCAPES = {"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}
 

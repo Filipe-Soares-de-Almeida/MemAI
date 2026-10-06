@@ -24,10 +24,10 @@ import { go, refreshBehind, parseHash } from '../core/router.js';
 import { onTeardown } from '../core/lifecycle.js';
 import { openRecord, setRecordSequence } from './record.js';
 import { t } from '../i18n.js';
+import { ADMIN, TASK } from '../contract.js';
 
 const PAGE = 50;
-/* The most memories one bulk call takes (BULK_MAX in admin.py). */
-const BULK_MAX = 500;
+const { BULK_MAX } = ADMIN;
 const selection = new Set();
 
 /* What the inspector is holding but has not written. Reset on every render,
@@ -185,8 +185,7 @@ export async function renderMemories(view, params, ctx) {
                keeps the tree it is. -->
           ${field(t('mem.f.type'), pickerFor({ id: 'fType', value: state.type, items: types, ariaLabel: t('common.allTypes') }))}
           ${state.type === 'task' ? bare(`<div class="seg" id="fTask" role="group" aria-label="${t('mem.task.aria')}">
-            ${[['open', 'task.state.open'], ['completed', 'task.state.completed'],
-               ['cancelled', 'task.state.cancelled'], ['', 'common.all']].map(([v, key]) =>
+            ${[...TASK.STATES.map(s => [s, `task.state.${s}`]), ['', 'common.all']].map(([v, key]) =>
               `<button type="button" data-v="${v}" aria-pressed="${state.task_state === v}">${t(key)}</button>`).join('')}
           </div>`) : ''}
           ${field(t('mem.f.domain'), domainPickerHTML({ id: 'fDomain', value: state.domain,

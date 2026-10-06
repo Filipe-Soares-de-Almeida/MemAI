@@ -16,14 +16,13 @@ import { go, refreshBehind } from '../core/router.js';
 import { openRecord } from './record.js';
 import { newDiagramSkeleton } from './diagrams.js';
 import { t } from '../i18n.js';
+import { TASK } from '../contract.js';
 
 /* The types this form does not write: the server refuses a handoff here. */
 const NOT_WRITTEN_HERE = ['handoff'];
 
-/* The task limits the server enforces (memai/tasks.py), shown as counts. */
-const GOAL_MAX = 2000;
-const ITEMS_MAX = 50;
-const ITEM_MAX = 300;
+/* The task limits the server enforces, shown as counts. */
+const { GOAL_MAX, ITEMS_MAX, ITEM_MAX } = TASK;
 
 const itemLines = text => text.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
 

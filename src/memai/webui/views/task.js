@@ -11,8 +11,9 @@ import { pickMemories } from '../core/link-picker.js';
 import { typeTag } from '../core/shared.js';
 import { go, parseHash, refreshBehind } from '../core/router.js';
 import { t } from '../i18n.js';
+import { MEMORY, TASK } from '../contract.js';
 
-const STATES = ['todo', 'doing', 'done', 'dropped'];
+const STATES = TASK.ITEM_STATES;
 
 /* One click on an item's mark moves it along todo, doing, done; a done or a
    dropped item goes back to todo. */
@@ -20,9 +21,8 @@ const NEXT = { todo: 'doing', doing: 'done', done: 'todo', dropped: 'todo' };
 
 const OLDER_SHOWN = 3;
 
-/* db.TITLE_MAX and tasks.NOTE_MAX on the server */
-const NOTE_TITLE_MAX = 120;
-const NOTE_MAX = 4000;
+const NOTE_TITLE_MAX = MEMORY.TITLE_MAX;
+const { NOTE_MAX } = TASK;
 
 /* the opening of a body as plain words: markup that only means something when drawn goes */
 const peekOf = text => String(text || '')

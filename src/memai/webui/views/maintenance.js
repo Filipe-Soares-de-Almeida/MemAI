@@ -21,6 +21,7 @@ import { replaceParams } from '../core/router.js';
 import { openRecord } from './record.js';
 import { MOTION_MODES, getMotion, setMotion } from '../core/motion.js';
 import { I18N, t } from '../i18n.js';
+import { ADMIN } from '../contract.js';
 
 /* The address of each workspace, as ?tab= and as the order of the strip. */
 const TABS = ['backups', 'storage', 'sections', 'dupes', 'log', 'warden', 'interface'];
@@ -609,7 +610,7 @@ export async function renderMaintenance(view, params) {
      which zips will be written -- for month and week it asks the server,
      which owns the grouping. Resolves to the request fields, or null. */
   const ZIP_NAME = /^[\p{L}\p{N}_]([\p{L}\p{N}_ .\-]*[\p{L}\p{N}_])?$/u;
-  const ZIP_NAME_MAX = 60;
+  const ZIP_NAME_MAX = ADMIN.ARCHIVE_LABEL_MAX;
 
   function archiveDialog(names, size) {
     return new Promise(resolve => {

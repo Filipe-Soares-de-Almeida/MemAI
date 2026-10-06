@@ -8,6 +8,7 @@ import { fixedItems, pickerFor, wirePicker } from './pick.js';
 import { t } from '../i18n.js';
 import { copyUid } from './ui.js';
 import { TYPE_ORDER } from './vocab.js';
+import { MEMORY } from '../contract.js';
 
 export { TYPE_ORDER, REL_SUGGEST, DG_REL_SUGGEST } from './vocab.js';
 
@@ -18,20 +19,16 @@ export const TYPES = Object.fromEntries(
    display-only */
 export const TYPE_LABEL = Object.fromEntries(TYPE_ORDER.map(tp => [tp, t(`type.${tp}`)]));
 
-/* `icon` names an entry in core/icons.js -- all three are ringed marks, so
-   a confidence state never reads as the bare cross that dismisses things */
-export const CONF = {
-  unverified:   { icon: 'unverified', label: t('conf.unverified') },
-  confirmed:    { icon: 'confirmed', label: t('conf.confirmed') },
-  contradicted: { icon: 'contradicted', label: t('conf.contradicted') },
-};
+/* Each confidence state has a ringed mark of its own name in core/icons.js, so it never reads as
+   the bare cross that dismisses things. */
+export const CONF = Object.fromEntries(MEMORY.CONFIDENCES.map(c =>
+  [c, { icon: c, label: t(`conf.${c}`) }]));
 
-/* A pin is a pushpin: filled for every domain, an outline stuck into a base
-   line for one domain, so the two differ in shape and not only in weight. */
-export const PIN = {
-  global: { icon: 'pin', label: t('mem.pin.global') },
-  domain: { icon: 'pin-domain', label: t('mem.pin.domain') },
-};
+/* A pin is a pushpin: filled for every domain, an outline stuck into a base line for one domain,
+   so the two differ in shape and not only in weight. */
+const PIN_ICON = { global: 'pin', domain: 'pin-domain' };
+export const PIN = Object.fromEntries(MEMORY.PINS.map(p =>
+  [p, { icon: PIN_ICON[p], label: t(`mem.pin.${p}`) }]));
 
 export const pinMark = pin => PIN[pin]
   ? `<span class="pin-mark pin-${pin}" role="img" title="${esc(PIN[pin].label)}"
@@ -260,7 +257,7 @@ export function wireCopyChips(root) {
 /* ─── domain paths: 'acme/x100/p200' is a routine in a module in a product. The server stores
    and matches them; these helpers draw them. */
 
-export const DOMAIN_SEP = '/';
+export const DOMAIN_SEP = MEMORY.DOMAIN_SEP;
 
 export const domainSegments = d => (d || '').split(DOMAIN_SEP).filter(Boolean);
 export const domainLeaf = d => domainSegments(d).slice(-1)[0] || '';
