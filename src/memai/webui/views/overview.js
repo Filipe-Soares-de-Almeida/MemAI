@@ -13,11 +13,11 @@
    activity rows and not a second count. */
 
 import { esc, fmtInt, fmtDay } from '../core/dom.ts';
-import { api } from '../core/api.ts';
 import { tipShow, tipHide } from '../core/ui.js';
 import { typeTag, CONF, TYPE_ORDER } from '../core/shared.js';
 import { go } from '../core/router.ts';
 import { I18N, t } from '../i18n.ts';
+import * as client from '../api/client.ts';
 
 const CONF_ORDER = ['confirmed', 'unverified', 'contradicted'];
 const confColor = c =>
@@ -50,7 +50,7 @@ const SYMPTOM_ROUTE = {
 };
 
 export async function renderOverview(view, params, ctx) {
-  const o = await api('/api/overview');
+  const o = await client.overview();
   if (ctx.stale()) return;
 
   const h = o.health;
@@ -430,7 +430,7 @@ function wire(view, o) {
     scan.disabled = true;
     scan.textContent = t('ov.sym.scanning');
     try {
-      const r = await api('/api/maintenance/dedup?limit=60');
+      const r = await client.maintenance.dedup({ limit: 60 });
       view.querySelector('[data-dupes]').textContent = fmtInt(r.pairs.length);
       view.querySelector('[data-dupes-share]').textContent =
         t('ov.sym.atOverlap', { p: Math.round(r.threshold * 100) });
@@ -453,7 +453,7 @@ function wire(view, o) {
     check.disabled = true;
     check.textContent = t('ov.sym.file.checking');
     try {
-      const h = await api('/api/maintenance/health');
+      const h = await client.maintenance.health();
       const indexOk = h.fts.ok && h.fts.rows === h.fts.expected;
       const passed = Number(h.integrity.ok) + Number(indexOk);
       const detail = [

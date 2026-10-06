@@ -2,11 +2,11 @@
    which re-reads the new project; it is refused while a dialog is open. */
 
 import { $, esc, fmtInt, debounce } from './dom.ts';
-import { api } from './api.ts';
 import { toast, failed, modalOpen, openModal, closeModal, promptModal } from './ui.js';
 import { pickerFor, pickerValue, setPickerValue, wirePicker, fixedItems } from './pick.js';
 import { route } from './router.ts';
 import { t } from '../i18n.ts';
+import * as client from '../api/client.ts';
 
 /* The row that is an action rather than a project. A project name is a file
    name, and no file name may carry this character. */
@@ -27,7 +27,7 @@ const items = () => [...rows.map(projectItem), newItem()];
 
 export async function mountProjectPicker() {
   if (!$('#projectHost')) return;
-  try { paint(await api('/api/projects')); }
+  try { paint(await client.projects.list()); }
   catch (err) { failed('err.project', err); }
 }
 
@@ -54,7 +54,7 @@ async function pick(value) {
   if (modalOpen()) { revert(); toast(t('project.busy'), 'bad'); return; }
   if (value === NEW) { revert(); await create(); return; }
   try {
-    const r = await api('/api/projects/active', { body: { name: value } });
+    const r = await client.projects.activate({ name: value });
     active = r.active;
     toast(t('project.switched', { name: esc(r.active) }), 'ok');
     reread();
@@ -68,7 +68,7 @@ async function create() {
   });
   if (name === null) return;
   try {
-    const data = await api('/api/projects', { body: { name: name.trim(), activate: true } });
+    const data = await client.projects.create({ name: name.trim(), activate: true });
     paint(data);
     toast(t('project.created', { name: esc(data.active) }), 'ok');
     reread();
@@ -85,7 +85,7 @@ function reread() {
 
 export async function moveToProjectModal({ uids = [], domain = '' }) {
   let data;
-  try { data = await api('/api/projects'); }
+  try { data = await client.projects.list(); }
   catch (err) { failed('err.project', err); return false; }
   const others = data.projects.filter(p => p.name !== data.active);
   const targets = [...others.map(projectItem), newItem()];
@@ -123,7 +123,7 @@ export async function moveToProjectModal({ uids = [], domain = '' }) {
       okBtn.disabled = true;
       if (!name) { plan.innerHTML = `<div>${scope}</div><div class="hint">${t('mv.nameIt')}</div>`; return; }
       try {
-        const r = await api('/api/projects/move', { body: body(true) });
+        const r = await client.projects.move(body(true));
         if (target() !== name) return;   /* the field moved on while this was in flight */
         plan.innerHTML = planHTML(r, scope);
         okBtn.disabled = r.memories - r.conflicts.length <= 0;
@@ -141,7 +141,7 @@ export async function moveToProjectModal({ uids = [], domain = '' }) {
     okBtn.onclick = async () => {
       okBtn.disabled = true;
       try {
-        const r = await api('/api/projects/move', { body: body(false) });
+        const r = await client.projects.move(body(false));
         toast(t('mv.done', { n: fmtInt(r.moved), target: esc(r.target) }), 'ok',
               r.backup ? { detail: t('mv.backup', { name: r.backup.split(/[\\/]/).pop() }) } : {});
         done(r.moved > 0);

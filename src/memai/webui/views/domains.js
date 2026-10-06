@@ -18,7 +18,6 @@
    subtree, so it is not something a slip of the mouse should commit. */
 
 import { esc, fmtInt, fmtAgo } from '../core/dom.ts';
-import { api } from '../core/api.ts';
 import { icon } from '../core/icons.js';
 import { toast, failed, openModal, closeModal, confirmModal, promptModal,
          openDropMenu, setPressed } from '../core/ui.js';
@@ -30,6 +29,7 @@ import { moveToProjectModal } from '../core/projects.js';
 import { go, refreshBehind } from '../core/router.ts';
 import { openRecord } from '../core/nav.ts';
 import { t } from '../i18n.ts';
+import * as client from '../api/client.ts';
 
 const CASE_MODES = ['preserve', 'lower', 'upper'];
 
@@ -63,7 +63,7 @@ const pathOf = (parent, leaf) => (parent ? `${parent}${DOMAIN_SEP}${leaf}` : lea
 
 export async function renderDomains(view, params, ctx) {
   const domains = await getDomains(true);
-  const cfg = await api('/api/config').catch(() => ({ domain_case: 'preserve' }));
+  const cfg = await client.config.get().catch(() => ({ domain_case: 'preserve' }));
   if (ctx.stale()) return;
 
   const byPath = new Map(domains.map(d => [d.domain, d]));
@@ -230,7 +230,7 @@ async function loadDetail(view, node, domains) {
   if (!host) return;
   host.innerHTML = '<div class="loading"><span class="spin"></span></div>';
   let data;
-  try { data = await api(`/api/domains/detail?domain=${encodeURIComponent(node.domain)}`); }
+  try { data = await client.domains.detail({ domain: node.domain }); }
   catch (err) {
     if (!host.isConnected) return;
     /* in the pane and not only as a toast: a toast fades, and the pane it
@@ -431,7 +431,7 @@ async function applyQueue() {
   let affected = 0;
   try {
     for (const m of runs) {
-      const r = await api('/api/domains/rename', { body: { from: m.from, to: m.to } });
+      const r = await client.domains.rename({ from: m.from, to: m.to });
       affected += r.affected;
     }
   } catch (err) { failed('err.domain', err); }
@@ -471,7 +471,7 @@ async function restoreDomain(d) {
 
 async function setDomainStatus(domain, status, reason) {
   try {
-    const r = await api('/api/domains/status', { body: { domain, status, reason } });
+    const r = await client.domains.status({ domain, status, reason });
     /* Nothing to do is a result, not a failure -- and not silence either:
        the button was live because the level had counts, so a zero here means
        the tree was read before somebody else's write. */
@@ -483,7 +483,7 @@ async function setDomainStatus(domain, status, reason) {
     const undo = status === 'archived' && r.uids.length ? {
       action: {
         label: t('common.undo'),
-        run: () => api('/api/bulk', { body: { action: 'restore', uids: r.uids } })
+        run: () => client.bulk({ action: 'restore', uids: r.uids })
           .then(() => {
             toast(t('do.arch.undone', { n: fmtInt(r.uids.length) }), 'ok');
             invalidateDomains();
@@ -545,8 +545,7 @@ function openDeleteModal(d, domains) {
   modal.querySelector('[data-x]').onclick = closeModal;
   okBtn.onclick = async () => {
     try {
-      const r = await api('/api/domains/delete',
-                          { body: { domain: d.domain, confirm: phrase.value } });
+      const r = await client.domains.delete({ domain: d.domain, confirm: phrase.value });
       closeModal();
       toast(t('do.del.done', { n: fmtInt(r.purged) })
             + (r.unlinked ? t('do.del.unlinked', { n: fmtInt(r.unlinked) }) : ''), 'ok');
@@ -576,7 +575,7 @@ function openCaseModal(cfg) {
   modal.querySelector('[data-x]').onclick = closeModal;
   modal.querySelector('[data-ok]').onclick = async () => {
     try {
-      await api('/api/config', { body: { domain_case: pickerValue(modal, 'caseMode') } });
+      await client.config.set({ domain_case: pickerValue(modal, 'caseMode') });
       closeModal();
       toast(t('do.case.saved'), 'ok');
     } catch (err) { failed('err.save', err); }
@@ -586,7 +585,7 @@ function openCaseModal(cfg) {
 async function openNormalizeModal() {
   let plan;
   try {
-    plan = await api('/api/domains/normalize', { body: { dry_run: true } });
+    plan = await client.domains.normalize({ dry_run: true });
   } catch (err) { failed('err.load', err); return; }
   /* Nothing to do is reported the same way whatever the policy is; under
      'preserve' it also says why there was never going to be anything. */
@@ -615,7 +614,7 @@ async function openNormalizeModal() {
   modal.querySelector('[data-x]').onclick = closeModal;
   modal.querySelector('[data-ok]').onclick = async () => {
     try {
-      const r = await api('/api/domains/normalize', { body: { dry_run: false } });
+      const r = await client.domains.normalize({ dry_run: false });
       closeModal();
       toast(t('do.norm.done', { n: r.moved, affected: r.affected }), 'ok');
       invalidateDomains();
@@ -691,7 +690,7 @@ function openRenameModal(from, domains) {
   okBtn.onclick = async () => {
     const to = target();
     try {
-      const r = await api('/api/domains/rename', { body: { from, to } });
+      const r = await client.domains.rename({ from, to });
       closeModal();
       toast(t('do.rn.moved', { n: r.affected }) + (r.merged ? t('do.rn.merged') : ''), 'ok');
       invalidateDomains();

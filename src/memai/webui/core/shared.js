@@ -2,13 +2,13 @@
    and the domains cache. Labels resolve t() at import; a language switch reloads the page. */
 
 import { $, esc, cssVar } from './dom.ts';
-import { api } from './api.ts';
 import { icon } from './icons.js';
 import { fixedItems, pickerFor, wirePicker } from './pick.js';
 import { t } from '../i18n.ts';
 import { copyUid } from './ui.js';
 import { TYPE_ORDER } from './vocab.js';
 import { MEMORY } from '../contract.ts';
+import * as client from '../api/client.ts';
 
 export { TYPE_ORDER, REL_SUGGEST, DG_REL_SUGGEST } from './vocab.js';
 
@@ -325,7 +325,7 @@ let cache = null, cachedAt = 0;
 
 export async function getDomains(force = false) {
   if (!force && cache && Date.now() - cachedAt < 60000) return cache;
-  const data = await api('/api/domains');
+  const data = await client.domains.tree();
   cache = data.domains;
   cachedAt = Date.now();
   return cache;

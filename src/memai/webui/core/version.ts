@@ -2,20 +2,15 @@
    cached release check (memai/update.py) has seen newer versions. A failed request changes nothing. */
 
 import { $, esc } from './dom.ts';
-import { api } from './api.ts';
+import { update } from '../api/client.ts';
 import { icon } from './icons.js';
 import { t } from '../i18n.ts';
-
-interface UpdateState {
-  current?: string;
-  latest?: string;
-  behind?: number;
-}
+import type { UpdateState } from '../api/types.ts';
 
 export async function mountVersionChip(): Promise<void> {
   const host = $('#verHost');
   if (!host) return;
-  try { paint(host, await api<UpdateState>('/api/update')); }
+  try { paint(host, await update.state()); }
   catch { /* see the module docstring */ }
 }
 

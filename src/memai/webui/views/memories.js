@@ -12,7 +12,7 @@
    its own confirmation, and each runs when it is pressed. */
 
 import { $, esc, fmtInt, fmtDate, fmtAgo, debounce } from '../core/dom.ts';
-import { api, query } from '../core/api.ts';
+import { query } from '../core/api.ts';
 import { icon } from '../core/icons.js';
 import { toast, failed, promptModal, typedConfirmModal } from '../core/ui.js';
 import { typeTag, statusTag, confPill, CONF, getDomains, inDomainPath,
@@ -25,6 +25,7 @@ import { onTeardown } from '../core/lifecycle.ts';
 import { openRecord, setRecordSequence } from '../core/nav.ts';
 import { t } from '../i18n.ts';
 import { ADMIN, TASK } from '../contract.ts';
+import * as client from '../api/client.ts';
 
 const PAGE = 50;
 const { BULK_MAX } = ADMIN;
@@ -129,7 +130,7 @@ export async function renderMemories(view, params, ctx) {
     linked: state.linked, due: state.due, stale: state.stale,
     untitled: state.untitled, untagged: state.untagged,
   };
-  const data = await api(`/api/memories?${query({ ...filter, limit: PAGE, offset: state.page * PAGE })}`);
+  const data = await client.memories.list({ ...filter, limit: PAGE, offset: state.page * PAGE });
   if (ctx.stale()) return;
 
   rowData = new Map(data.items.map(m => [m.uid, m]));
@@ -575,7 +576,7 @@ function paintBanner() {
   bar.querySelector('[data-bn-all]')?.addEventListener('click', async e => {
     e.currentTarget.disabled = true;
     try {
-      const r = await api(`/api/memories?${matchQs}`);
+      const r = await client.memories.list(matchQs);
       matchingUids = new Set(r.items.map(m => m.uid));
       for (const m of r.items) { rowData.set(m.uid, m); selection.add(m.uid); }
       paintInspector();
@@ -784,7 +785,7 @@ async function applyStaged(picked) {
        policy against the domain the memory ends up with, so it has to see
        the row after the other edits rather than beside them. */
     for (const body of calls) {
-      affected += (await api('/api/bulk', { body: { ...body, uids } })).affected;
+      affected += (await client.bulk({ ...body, uids })).affected;
     }
     if (staged.domain) invalidateDomains();
     toast(t('bulk.updated', { n: affected }), 'ok');
@@ -820,7 +821,7 @@ async function purgeSelected(picked) {
   });
   if (!ok) return;
   try {
-    const r = await api('/api/memories/purge', { body: { uids, confirm: phrase } });
+    const r = await client.memories.purgeMany({ uids, confirm: phrase });
     toast(t('bulk.purge.done', { n: r.purged, name: r.backup }), 'ok');
     invalidateDomains();
     selection.clear();
@@ -847,7 +848,7 @@ async function runAction(action, picked) {
     if (reason === null) return;
   }
   try {
-    const r = await api('/api/bulk', { body: { action, reason, uids } });
+    const r = await client.bulk({ action, reason, uids });
     /* Archiving fifty rows behind a single confirm was a one-way door.
        Restore over the same set is the exact inverse, so it is offered
        rather than leaving you to find those fifty rows again. The reverse
@@ -855,7 +856,7 @@ async function runAction(action, picked) {
     toast(t('bulk.updated', { n: r.affected }), 'ok', action === 'archive' ? {
       action: {
         label: t('common.undo'),
-        run: () => api('/api/bulk', { body: { action: 'restore', uids } })
+        run: () => client.bulk({ action: 'restore', uids })
           .then(() => { toast(t('bulk.undone', { n: uids.length }), 'ok'); refreshBehind(); })
           .catch(err => failed('err.bulk', err)),
       },

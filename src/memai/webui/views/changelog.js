@@ -16,11 +16,11 @@
    closed. */
 
 import { esc, fmtAgo, fmtDay } from '../core/dom.ts';
-import { api } from '../core/api.ts';
 import { copyCode, toast, failed } from '../core/ui.js';
 import { pickerFor, wirePicker, fixedItems } from '../core/pick.js';
 import { icon } from '../core/icons.js';
 import { t } from '../i18n.ts';
+import * as client from '../api/client.ts';
 
 /* Where a version sits relative to the running one. `past` wears nothing:
    the whole list below the current version is past, and a tag on every row
@@ -32,7 +32,7 @@ const TAG = {
 };
 
 export async function renderChangelog(view, params, ctx) {
-  const data = await api('/api/changelog');
+  const data = await client.changelog();
   if (ctx.stale()) return;
   const state = data.update;
 
@@ -90,7 +90,7 @@ function wireCheck(view, state, reload) {
     button.disabled = true;
     button.textContent = t('rls.checking');
     try {
-      const next = await api('/api/update/check', { body: {} });
+      const next = await client.update.check();
       if (next.failed) toast(t('rls.msg.failed'), 'warn');
       else if (next.behind) toast(t('rls.msg.behind', { latest: bare(next.latest) }), 'ok');
       else toast(t('rls.msg.current'), 'ok');
@@ -106,7 +106,7 @@ function wireCheck(view, state, reload) {
     id: 'rlEvery', items: fixedItems(everyItems(state.interval_hours)),
     onPick: async value => {
       try {
-        await api('/api/update/interval', { body: { hours: Number(value) } });
+        await client.update.interval({ hours: Number(value) });
         toast(t('rls.msg.every', { every: hoursLabel(Number(value)) }), 'ok');
       } catch (err) { failed('err.update', err); }
     },

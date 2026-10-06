@@ -10,7 +10,6 @@
    and status asked for, and the point of the view is to scan it. */
 
 import { $, esc, fmtInt, fmtAgo } from '../core/dom.ts';
-import { api } from '../core/api.ts';
 import { icon } from '../core/icons.js';
 import { failed, promptModal } from '../core/ui.js';
 import { statusTag, uidChip, wireCopyChips, getDomains,
@@ -20,6 +19,7 @@ import { go } from '../core/router.ts';
 import { openRecord } from '../core/nav.ts';
 import { newDiagramSkeleton } from '../core/diagram-skeleton.ts';
 import { t } from '../i18n.ts';
+import * as client from '../api/client.ts';
 
 const ISSUE_ORDER = ['empty', 'no_start', 'many_starts', 'unreachable',
                      'dead_end', 'no_end'];
@@ -77,7 +77,7 @@ export async function renderDiagrams(view, params, ctx) {
   if (state.domain) qs.set('domain', state.domain);
   const [domains, data] = await Promise.all([
     getDomains().catch(() => []),
-    api(`/api/diagrams?${qs}`),
+    client.diagrams.list(qs),
   ]);
   if (ctx.stale()) return;
 

@@ -2,7 +2,6 @@
    the reader's settings, kept in localStorage; a `mode` in the address wins over the stored one. */
 
 import { $, esc, fmtInt, debounce } from '../core/dom.ts';
-import { api, query } from '../core/api.ts';
 import { icon } from '../core/icons.js';
 import { toast, failed, tipShow, tipHide, openModal, closeModal, setPressed } from '../core/ui.js';
 import { typeTag, typeColor, uidChip, statusTag, confPill, wireCopyChips,
@@ -17,6 +16,7 @@ import { openRecord } from '../core/nav.ts';
 import { GraphCanvas } from '../engines/graph-2d.ts';
 import { ARRANGEMENTS, DEFAULT_MODE, arrangement } from '../engines/graph-arrange.ts';
 import { t } from '../i18n.ts';
+import * as client from '../api/client.ts';
 
 /* How many of a memory's relations the card offers as a journey before it
    stops listing them, and how much of a name one of those chips carries. The
@@ -72,7 +72,7 @@ export async function renderGraph(view, params, ctx) {
 
   const [domains, data] = await Promise.all([
     getDomains().catch(() => []),
-    api(`/api/graph?${query({ status: state.status, domain: state.domain, type: state.type })}`),
+    client.graph({ status: state.status, domain: state.domain, type: state.type }),
   ]);
   if (ctx.stale()) return;
 
@@ -409,10 +409,10 @@ export async function renderGraph(view, params, ctx) {
     mq('[data-x]').onclick = () => { closeModal(); engine.clearLinkFrom(); };
     mq('[data-ok]').onclick = async () => {
       try {
-        await api('/api/relations', { body: {
+        await client.relations.create({
           from_uid: a.uid, to_uid: b.uid,
           relation_type: glRelValue() || 'relates_to',
-          note: mq('#glNote').value } });
+          note: mq('#glNote').value });
         closeModal();
         toast(t('dr.rel.created'), 'ok');
         refreshBehind();
