@@ -271,9 +271,22 @@ class UpdateState(TypedDict):
     commands: list[str]
 
 
+class ReleaseSection(TypedDict):
+    title: str
+    entries: list[str]
+
+
+class Release(TypedDict):
+    version: str
+    date: str
+    url: str
+    sections: list[ReleaseSection]
+    state: Literal["installed", "ahead", "past"]
+
+
 class Changelog(TypedDict):
     current: str
-    releases: list[Row]
+    releases: list[Release]
     update: UpdateState
     source: bool
 

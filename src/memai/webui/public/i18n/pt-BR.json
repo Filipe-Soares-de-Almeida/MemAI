@@ -424,6 +424,7 @@
     "err.save": "A alteração não foi salva.",
     "err.status": "O status não foi alterado.",
     "err.update": "A verificação de versão não foi concluída.",
+    "err.unexpected": "Algo deu errado.",
     "g.alsoIn": "em {n} outros",
     "g.banner.source": "Modo relacionar: clique na memória de ORIGEM",
     "g.banner.target": "Origem: {uid} — agora clique no alvo",

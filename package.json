@@ -10,18 +10,21 @@
     "build": "vite build",
     "preview": "vite preview",
     "test": "vitest run",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "vue-tsc --noEmit"
   },
   "devDependencies": {
+    "@vitejs/plugin-vue": "6.0.9",
     "happy-dom": "20.14.5",
     "typescript": "6.0.3",
     "vite": "8.3.2",
-    "vitest": "5.0.3"
+    "vitest": "5.0.3",
+    "vue-tsc": "3.3.12"
   },
   "engines": {
     "node": ">=22.18"
   },
   "dependencies": {
-    "highlight.js": "11.12.0"
+    "highlight.js": "11.12.0",
+    "vue": "3.5.43"
   }
 }

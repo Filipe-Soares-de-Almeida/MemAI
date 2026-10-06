@@ -2634,7 +2634,7 @@ def changelog_page(request, payload) -> schema.Changelog:
         rows[update.parse_version(entry["version"])] = {
             **entry, "state": _state_of(entry["version"], current)}
     releases = [rows[key] for key in sorted(rows, reverse=True)]
-    return {"current": current, "releases": releases,
+    return {"current": current, "releases": cast(list[schema.Release], releases),
             "update": update_state(), "source": changelog.source() is not None}
 
 

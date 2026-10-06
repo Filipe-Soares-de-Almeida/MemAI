@@ -260,9 +260,22 @@ export interface UpdateState {
   commands: string[];
 }
 
+export interface ReleaseSection {
+  title: string;
+  entries: string[];
+}
+
+export interface Release {
+  version: string;
+  date: string;
+  url: string;
+  sections: ReleaseSection[];
+  state: "installed" | "ahead" | "past";
+}
+
 export interface Changelog {
   current: string;
-  releases: Record<string, unknown>[];
+  releases: Release[];
   update: UpdateState;
   source: boolean;
 }
