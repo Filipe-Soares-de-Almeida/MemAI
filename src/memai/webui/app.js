@@ -13,7 +13,7 @@ import { registerViews, route } from './core/router.ts';
 import { mountChrome } from './core/chrome.ts';
 import { I18N, t } from './i18n.ts';
 
-import { renderOverview } from './views/overview.js';
+import OverviewView from './views/overview/OverviewView.vue';
 import { renderMemories } from './views/memories.js';
 import { renderGraph } from './views/graph.js';
 import { renderDiagrams } from './views/diagrams.js';
@@ -27,7 +27,7 @@ import { openRecord } from './core/nav.ts';
 import { openNewMemory } from './views/new-memory.js';
 
 registerViews({
-  overview: renderOverview,
+  overview: OverviewView,
   memories: renderMemories,
   graph: renderGraph,
   diagrams: renderDiagrams,
