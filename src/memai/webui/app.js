@@ -22,7 +22,7 @@ import DomainsView from './views/domains/DomainsView.vue';
 import { renderMaintenance } from './views/maintenance.js';
 import { renderOptimization } from './views/optimization.js';
 import ChangelogView from './views/changelog/ChangelogView.vue';
-import { renderRecord } from './views/record/index.js';
+import RecordView from './views/record/RecordView.vue';
 import { openRecord } from './core/nav.ts';
 import { openNewMemory } from './views/new-memory/index.ts';
 
@@ -36,7 +36,7 @@ registerViews({
   maintenance: renderMaintenance,
   optimization: renderOptimization,
   changelog: ChangelogView,
-  memory: renderRecord,
+  memory: RecordView,
 }, { onRecord: openRecord });
 
 mountChrome();

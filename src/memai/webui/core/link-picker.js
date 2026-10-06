@@ -66,6 +66,8 @@ const previewHTML = m => `
 
 /* Resolves `{uids, relation, note}` (uids never empty) or null when dismissed. The relation and
    note are picked here because they belong to the same decision as the memory. */
+/** @param {{ title?: string, exclude?: string, linked?: string[], multi?: boolean, type?: string,
+              okLabel?: string, relOptions?: string[] | null, relValue?: string, withNote?: boolean }} [opts] */
 export function pickMemories({
   title, exclude = '', linked = [], multi = true, type = '', okLabel,
   relOptions = null, relValue = '', withNote = false,

@@ -86,9 +86,12 @@ def store(tmp_path_factory):
         other = db.insert_memory(conn, type="note", domain="acme/x200", title="Wick length",
                                  content="Trim the wick to a centimetre.", tags="wick")
         db.add_relation(conn, note, other, "relates_to")
+        db.update_memory_content(conn, note, f"The lantern takes grade B oil. See [[{other}]].",
+                                 note="name the wick note")
         task = tasks.create_task(conn, title="Refill the lanterns", goal="Every lantern burns tonight.",
                                  items=["Buy oil", "Trim wicks"], domain="acme/x100")
-        tasks.add_note(conn, task, title="Where the oil is", body="In the shed.", items=[])
+        tasks.add_note(conn, task, title="Where the oil is", body=f"In the shed, by [[{other}]].", items=[])
+        tasks.link_item(conn, task, "i2", [other])
         tasks.add_comment(conn, task, "Oil is on order.", item="", author="person")
         diagram, _ = db.insert_diagram(
             conn, title="Refill routine", domain="acme/x100",

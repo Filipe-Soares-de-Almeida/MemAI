@@ -175,13 +175,57 @@ export interface SectionSpec {
   max_len: number;
 }
 
+export interface BodyLink {
+  uid: string;
+  type?: string;
+  domain?: string;
+  status?: string;
+  snippet?: string;
+  linked?: boolean;
+  missing?: boolean;
+}
+
+export interface TaskLink {
+  uid: string;
+  title: string;
+  type: string;
+}
+
+export interface TaskItem {
+  key: string;
+  seq: number;
+  text: string;
+  state: string;
+  updated_at: string;
+  updated_session: string;
+  links: TaskLink[];
+}
+
+export interface TaskComment {
+  id: number;
+  item: string;
+  body: string;
+  author: string;
+  session: string;
+  created_at: string;
+}
+
+export interface TaskNote {
+  id: number;
+  title: string;
+  body: string;
+  items: string[];
+  updated_at: string;
+  body_links: Record<string, BodyLink>;
+}
+
 export interface TaskRecord {
   goal: string;
   state: string;
   completed_at: string;
-  items: Record<string, unknown>[];
-  comments: Record<string, unknown>[];
-  notes: Record<string, unknown>[];
+  items: TaskItem[];
+  comments: TaskComment[];
+  notes: TaskNote[];
 }
 
 export interface DiagramRecord {
@@ -195,6 +239,55 @@ export interface DiagramRecord {
   links: Record<string, unknown>[];
   jumps: Record<string, unknown>[];
   mermaid: string;
+}
+
+export interface EditEntry {
+  id: number;
+  memory_uid: string;
+  edited_at: string;
+  prev_content: string;
+  new_content: string;
+  note: string;
+}
+
+export interface RecordSection {
+  key: string;
+  text: string;
+}
+
+export interface PeerCard {
+  uid: string;
+  type: string;
+  domain: string;
+  title: string;
+  status: string;
+  confidence: string;
+  snippet: string;
+  created_at: string;
+}
+
+export interface MissingPeer {
+  uid: string;
+  missing: true;
+}
+
+export interface RecordRelation {
+  id: number;
+  from_uid: string;
+  to_uid: string;
+  relation_type: string;
+  note: string;
+  created_at: string;
+  direction: "in" | "out";
+  peer: PeerCard | MissingPeer;
+}
+
+export interface DiagramRef {
+  memory_uid: string;
+  node_key: string;
+  relation_type: string;
+  title: string;
+  label: string | null;
 }
 
 export interface MemoryRecord {
@@ -217,16 +310,16 @@ export interface MemoryRecord {
   updated_at: string;
   recalls: number;
   last_recall: string | null;
-  edit_history: Record<string, unknown>[];
+  edit_history: EditEntry[];
   spec: SectionSpec[];
-  sections: Record<string, unknown>[];
+  sections: RecordSection[];
   section_problem: string;
-  body_links: Record<string, Record<string, unknown>>;
-  relations: Record<string, unknown>[];
-  superseded_by_peer?: Record<string, unknown> | null;
+  body_links: Record<string, BodyLink>;
+  relations: RecordRelation[];
+  superseded_by_peer?: PeerCard | null;
   task?: TaskRecord | null;
   diagram?: DiagramRecord | null;
-  referenced_by_diagrams?: Record<string, unknown>[];
+  referenced_by_diagrams?: DiagramRef[];
 }
 
 export interface MetaSaved {

@@ -1,0 +1,65 @@
+<script setup lang="ts">
+/* A task note's editor: the record field's card without its preview, since saving is what shows the
+   note as it reads; the items it applies to are picked from the checklist, none meaning the task. */
+import { computed } from 'vue';
+import { t } from '../../i18n.ts';
+import { MEMORY, TASK } from '../../contract.ts';
+import type { TaskNote } from '../../api/types.ts';
+import AppIcon from '../../components/AppIcon.vue';
+import KeyHint from '../../components/KeyHint.vue';
+import type { Checklist } from './checklist.ts';
+
+const props = withDefaults(defineProps<{ c: Checklist; note?: TaskNote | null; scope?: string }>(),
+                           { note: null, scope: '' });
+const { current, ui } = props.c;
+const { NOTE_MAX } = TASK;
+
+const id = computed(() => (props.note ? String(props.note.id) : `new:${props.scope}`));
+const d = computed(() => ui.noteDraft ?? { title: '', body: '', items: [] });
+const sum = computed(() => (d.value.items.length ? t('task.note.scope.n', { n: d.value.items.length })
+  : t('task.note.scope.all')));
+
+function key(e: KeyboardEvent) {
+  if (e.key === 'Escape') { e.preventDefault(); props.c.leaveNote(); }
+  if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') { e.preventDefault(); props.c.submitNote(); }
+}
+</script>
+
+<template>
+  <section class="rf is-open tk-note" :data-note-form="id" @keydown="key">
+    <header class="rf-head">
+      <input v-model="d.title" class="tk-note-title-box" data-note-field="title" :maxlength="MEMORY.TITLE_MAX"
+             spellcheck="false" :aria-label="t('task.note.title')" :placeholder="t('task.note.title')">
+    </header>
+    <div class="rf-split rf-solo">
+      <div class="rf-pane">
+        <textarea v-model="d.body" data-note-field="body" rows="12" spellcheck="false" :maxlength="NOTE_MAX"
+                  :aria-label="t('task.note.body')" :placeholder="t('task.note.body')"></textarea>
+        <div class="tk-note-foot">
+          <span class="tk-hint"><KeyHint save :action="t('dr.key.save')" /><KeyHint :keys="['Esc']"
+                :action="t('dr.key.close')" /></span>
+          <span class="rf-count" data-note-count>{{ t('dr.sections.count', { n: d.body.length, max: NOTE_MAX }) }}</span>
+        </div>
+      </div>
+    </div>
+    <div v-if="current.items.length" class="tk-scope">
+      <div class="tk-scope-head">
+        <span class="rf-sub">{{ t('task.note.scope') }}</span>
+        <span class="tk-scope-sum" data-note-scope-sum>{{ sum }}</span>
+      </div>
+      <div class="tk-scope-list" role="group" :aria-label="t('task.note.scope.aria')">
+        <label v-for="i in current.items" :key="i.key" class="tk-scope-row" :title="i.text"><input type="checkbox"
+               :data-note-scope="i.key" :checked="d.items.includes(i.key)"
+               @change="c.scopeNote(i.key, ($event.target as HTMLInputElement).checked)"> <span
+               class="tk-scope-text">{{ i.text }}</span></label>
+      </div>
+    </div>
+    <div class="rf-save">
+      <button type="button" class="btn btn-solid btn-sm" :data-note-save="id" :disabled="!c.noteReady()"
+              @click="c.submitNote()">{{ t('common.save') }}</button>
+      <button type="button" class="btn btn-sm" data-note-cancel @click="c.leaveNote()">{{ t('common.cancel') }}</button>
+      <button v-if="note" type="button" class="btn btn-sm btn-danger tk-note-del" :data-note-del="note.id"
+              @click="c.deleteNote()"><AppIcon name="trash" />{{ t('task.note.delete') }}</button>
+    </div>
+  </section>
+</template>

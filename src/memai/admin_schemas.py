@@ -166,13 +166,58 @@ class SectionSpec(TypedDict):
     max_len: int
 
 
+class BodyLink(TypedDict):
+    """What a [[uid]] written in a body points at; a uid nothing resolves carries only `missing`."""
+    uid: str
+    type: NotRequired[str]
+    domain: NotRequired[str]
+    status: NotRequired[str]
+    snippet: NotRequired[str]
+    linked: NotRequired[bool]
+    missing: NotRequired[bool]
+
+
+class TaskLink(TypedDict):
+    uid: str
+    title: str
+    type: str
+
+
+class TaskItem(TypedDict):
+    key: str
+    seq: int
+    text: str
+    state: str
+    updated_at: str
+    updated_session: str
+    links: list[TaskLink]
+
+
+class TaskComment(TypedDict):
+    id: int
+    item: str
+    body: str
+    author: str
+    session: str
+    created_at: str
+
+
+class TaskNote(TypedDict):
+    id: int
+    title: str
+    body: str
+    items: list[str]
+    updated_at: str
+    body_links: dict[str, BodyLink]
+
+
 class TaskRecord(TypedDict):
     goal: str
     state: str
     completed_at: str
-    items: list[Row]
-    comments: list[Row]
-    notes: list[Row]
+    items: list[TaskItem]
+    comments: list[TaskComment]
+    notes: list[TaskNote]
 
 
 class DiagramRecord(TypedDict):
@@ -186,6 +231,56 @@ class DiagramRecord(TypedDict):
     links: list[Row]
     jumps: list[Row]
     mermaid: str
+
+
+class EditEntry(TypedDict):
+    id: int
+    memory_uid: str
+    edited_at: str
+    prev_content: str
+    new_content: str
+    note: str
+
+
+class RecordSection(TypedDict):
+    key: str
+    text: str
+
+
+class PeerCard(TypedDict):
+    uid: str
+    type: str
+    domain: str
+    title: str
+    status: str
+    confidence: str
+    snippet: str
+    created_at: str
+
+
+class MissingPeer(TypedDict):
+    uid: str
+    missing: Literal[True]
+
+
+class RecordRelation(TypedDict):
+    """A relation as seen from the record: which end it is on, and the memory at the other."""
+    id: int
+    from_uid: str
+    to_uid: str
+    relation_type: str
+    note: str
+    created_at: str
+    direction: Literal["in", "out"]
+    peer: PeerCard | MissingPeer
+
+
+class DiagramRef(TypedDict):
+    memory_uid: str
+    node_key: str
+    relation_type: str
+    title: str
+    label: str | None
 
 
 class MemoryRecord(TypedDict):
@@ -208,16 +303,16 @@ class MemoryRecord(TypedDict):
     updated_at: str
     recalls: int
     last_recall: str | None
-    edit_history: list[Row]
+    edit_history: list[EditEntry]
     spec: list[SectionSpec]
-    sections: list[Row]
+    sections: list[RecordSection]
     section_problem: str
-    body_links: dict[str, Row]
-    relations: list[Row]
-    superseded_by_peer: NotRequired[Row | None]
+    body_links: dict[str, BodyLink]
+    relations: list[RecordRelation]
+    superseded_by_peer: NotRequired[PeerCard | None]
     task: NotRequired[TaskRecord | None]
     diagram: NotRequired[DiagramRecord | None]
-    referenced_by_diagrams: NotRequired[list[Row]]
+    referenced_by_diagrams: NotRequired[list[DiagramRef]]
 
 
 class MetaSaved(TypedDict):
