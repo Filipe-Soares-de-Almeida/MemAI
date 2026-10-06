@@ -11,7 +11,7 @@ import { pickMemories } from '../core/link-picker.js';
 import { typeTag } from '../core/shared.js';
 import { go, parseHash, refreshBehind } from '../core/router.ts';
 import { t } from '../i18n.ts';
-import { MEMORY, TASK } from '../contract.js';
+import { MEMORY, TASK } from '../contract.ts';
 
 const STATES = TASK.ITEM_STATES;
 

@@ -1,7 +1,7 @@
 /* Canvas editor for one diagram memory; positions come from the store. Edge geometry has a Python
    twin, memai/diagram_svg.py: change both, then route-parity.mjs --write and test_diagram_svg.py. */
 
-import { DIAGRAM } from './contract.js';
+import { DIAGRAM } from './contract.ts';
 
 const esc = s => String(s ?? '').replace(/[&<>"']/g,
   c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));

@@ -24,7 +24,7 @@ import { go, refreshBehind, parseHash } from '../core/router.ts';
 import { onTeardown } from '../core/lifecycle.ts';
 import { openRecord, setRecordSequence } from './record.js';
 import { t } from '../i18n.ts';
-import { ADMIN, TASK } from '../contract.js';
+import { ADMIN, TASK } from '../contract.ts';
 
 const PAGE = 50;
 const { BULK_MAX } = ADMIN;

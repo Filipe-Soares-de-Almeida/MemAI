@@ -16,7 +16,7 @@ import { go, refreshBehind } from '../core/router.ts';
 import { openRecord } from './record.js';
 import { newDiagramSkeleton } from './diagrams.js';
 import { t } from '../i18n.ts';
-import { TASK } from '../contract.js';
+import { TASK } from '../contract.ts';
 
 /* The types this form does not write: the server refuses a handoff here. */
 const NOT_WRITTEN_HERE = ['handoff'];

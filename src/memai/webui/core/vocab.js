@@ -1,7 +1,7 @@
 /* The vocabularies the dashboard shares with the server, importing only the contract so a script
    can read them without a browser. */
 
-import { MEMORY } from '../contract.js';
+import { MEMORY } from '../contract.ts';
 
 /* the memory types, in the order every list and legend shows them */
 export const TYPE_ORDER = MEMORY.TYPES;

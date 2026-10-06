@@ -8,7 +8,7 @@ import { fixedItems, pickerFor, wirePicker } from './pick.js';
 import { t } from '../i18n.ts';
 import { copyUid } from './ui.js';
 import { TYPE_ORDER } from './vocab.js';
-import { MEMORY } from '../contract.js';
+import { MEMORY } from '../contract.ts';
 
 export { TYPE_ORDER, REL_SUGGEST, DG_REL_SUGGEST } from './vocab.js';
 

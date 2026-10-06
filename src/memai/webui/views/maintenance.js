@@ -21,7 +21,7 @@ import { replaceParams } from '../core/router.ts';
 import { openRecord } from './record.js';
 import { MOTION_MODES, getMotion, setMotion } from '../core/motion.ts';
 import { I18N, t } from '../i18n.ts';
-import { ADMIN } from '../contract.js';
+import { ADMIN } from '../contract.ts';
 
 /* The address of each workspace, as ?tab= and as the order of the strip. */
 const TABS = ['backups', 'storage', 'sections', 'dupes', 'log', 'warden', 'interface'];
