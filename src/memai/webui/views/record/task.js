@@ -1,17 +1,17 @@
 /* A task's checklist: every write repaints it from the {task, status} the server answers; one item's
    panel is open at a time. `onStatus` reports a close or reopen, `onWrite` any accepted write. */
 
-import { esc, fmtAgo, fmtDate, fmtInt } from '../core/dom.ts';
-import { api, seg } from '../core/api.ts';
-import { icon } from '../core/icons.js';
-import { toast, failed, openDropMenu, confirmModal, copyCode, keysHTML, saveKeysHTML } from '../core/ui.js';
-import { renderRich, wireRich } from '../core/richtext.js';
-import { highlightIn } from '../core/highlight.js';
-import { pickMemories } from '../core/link-picker.js';
-import { typeTag } from '../core/shared.js';
-import { go, parseHash, refreshBehind } from '../core/router.ts';
-import { t } from '../i18n.ts';
-import { MEMORY, TASK } from '../contract.ts';
+import { esc, fmtAgo, fmtDate, fmtInt } from '../../core/dom.ts';
+import { api, seg } from '../../core/api.ts';
+import { icon } from '../../core/icons.js';
+import { toast, failed, openDropMenu, confirmModal, copyCode, keysHTML, saveKeysHTML } from '../../core/ui.js';
+import { renderRich, wireRich } from '../../core/richtext.js';
+import { highlightIn } from '../../core/highlight.js';
+import { pickMemories } from '../../core/link-picker.js';
+import { typeTag } from '../../core/shared.js';
+import { go, parseHash, refreshBehind } from '../../core/router.ts';
+import { t } from '../../i18n.ts';
+import { MEMORY, TASK } from '../../contract.ts';
 
 const STATES = TASK.ITEM_STATES;
 

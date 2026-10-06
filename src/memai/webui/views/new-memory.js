@@ -13,8 +13,8 @@ import { typeItems, confItems, getDomains, invalidateDomains,
          domainDatalist, sectionLabelHTML } from '../core/shared.js';
 import { pickerFor, pickerValue, wirePicker, fixedItems } from '../core/pick.js';
 import { go, refreshBehind } from '../core/router.ts';
-import { openRecord } from './record.js';
-import { newDiagramSkeleton } from './diagrams.js';
+import { openRecord } from '../core/nav.ts';
+import { newDiagramSkeleton } from '../core/diagram-skeleton.ts';
 import { t } from '../i18n.ts';
 import { TASK } from '../contract.ts';
 

@@ -13,28 +13,25 @@
    and the previous text is kept inside that version -- which is what the
    API does anyway. */
 
-import { esc, fmtDate, fmtInt, debounce } from '../core/dom.ts';
-import { api, seg } from '../core/api.ts';
-import { icon } from '../core/icons.js';
+import { esc, fmtDate, fmtInt, debounce } from '../../core/dom.ts';
+import { api, seg } from '../../core/api.ts';
+import { icon } from '../../core/icons.js';
 import { toast, failed, openModal, closeModal, confirmModal, promptModal,
-         openDropMenu, copyCode, copyUid, modalOpen, keysHTML, saveKeysHTML } from '../core/ui.js';
+         openDropMenu, copyCode, copyUid, modalOpen, keysHTML, saveKeysHTML } from '../../core/ui.js';
 import { typeTag, uidChip, statusTag, wireCopyChips,
          CONF, PIN, REL_SUGGEST, relLabel, relTypeTitle, peerName, typeItems,
          sectionLabel, sectionLabelHTML, sectionHue,
-         cachedDomains, invalidateDomains, domainDatalist } from '../core/shared.js';
-import { pickerFor, pickerValue, wirePicker, fixedItems } from '../core/pick.js';
-import { pickMemories } from '../core/link-picker.js';
-import { go, backTo, refreshBehind, previousRoute } from '../core/router.ts';
-import { onTeardown } from '../core/lifecycle.ts';
-import { renderRich, wireRich, headings } from '../core/richtext.js';
-import { highlightIn } from '../core/highlight.js';
-import { DiagramEditor } from '../diagram-engine.js';
+         cachedDomains, invalidateDomains, domainDatalist } from '../../core/shared.js';
+import { pickerFor, pickerValue, wirePicker, fixedItems } from '../../core/pick.js';
+import { pickMemories } from '../../core/link-picker.js';
+import { go, backTo, refreshBehind, previousRoute } from '../../core/router.ts';
+import { openRecord, recordSequence } from '../../core/nav.ts';
+import { onTeardown } from '../../core/lifecycle.ts';
+import { renderRich, wireRich, headings } from '../../core/richtext.js';
+import { highlightIn } from '../../core/highlight.js';
+import { DiagramEditor } from '../../diagram-engine.js';
 import { mountTask } from './task.js';
-import { t } from '../i18n.ts';
-
-/* Where every other view sends a reader who clicked a memory. It is a
-   navigation, so Back works and the URL is shareable. */
-export const openRecord = uid => go('memory', { uid });
+import { t } from '../../i18n.ts';
 
 /* The read-only canvas a diagram record draws itself on. It listens on
    window and holds a ResizeObserver, so dropping the subtree that carries
@@ -55,18 +52,6 @@ const endTitleWatch = () => {
   titleWatch = null;
 };
 
-/* The list this record can step through, in the order it was shown.
-   Registered by whoever put the record on screen -- views/memories.js hands
-   over the page it just rendered and clears it on the way out.
-
-   Without it the record is a dead end: curating a page of memories meant
-   going back, finding the next row, opening it again, fifty times over. It
-   is a plain array of uids and not the rows themselves, so a record reached
-   from anywhere else simply finds itself absent from it and shows no
-   stepper. */
-let seq = [];
-export const setRecordSequence = uids => { seq = Array.isArray(uids) ? [...uids] : []; };
-
 /* Where the memory on screen sat in that list the last time the list still
    held it. It is what keeps the stepper alive across a write that drops the
    row: archiving from a list filtered to active memories takes the record
@@ -81,6 +66,7 @@ let anchored = null;
    where to resume; that also covers a row that fell off the end of a
    shrinking page. */
 function stepPos(uid) {
+  const seq = recordSequence();
   if (anchored !== uid) { anchored = uid; slot = null; }
   const at = seq.indexOf(uid);
   if (at >= 0) { slot = at; return { at, prev: at - 1, next: at + 1, gone: false }; }
@@ -247,6 +233,7 @@ export async function renderRecord(view, params, ctx) {
 /* ─── the bar ─────────────────────────────────────────────────────────── */
 
 function barHTML(m, uid) {
+  const seq = recordSequence();
   const pos = stepPos(uid);
   const stepper = !pos || (pos.prev < 0 && pos.next >= seq.length) ? '' : `
     <span class="rec-step" role="group" aria-label="${esc(t('dr.step.aria'))}"
@@ -926,6 +913,7 @@ function wireStatusAction(view, uid) {
 }
 
 function step(uid, delta) {
+  const seq = recordSequence();
   const pos = stepPos(uid);
   if (!pos) return;
   const to = delta < 0 ? pos.prev : pos.next;

@@ -18,7 +18,7 @@ import { typeTag, typeClass, uidChip, statusTag, wireCopyChips, failedHTML, retr
 import { pickerFor, pickerValue, setPickerValue, wirePicker, fixedItems } from '../core/pick.js';
 import { icon } from '../core/icons.js';
 import { replaceParams } from '../core/router.ts';
-import { openRecord } from './record.js';
+import { openRecord } from '../core/nav.ts';
 import { MOTION_MODES, getMotion, setMotion } from '../core/motion.ts';
 import { I18N, t } from '../i18n.ts';
 import { ADMIN } from '../contract.ts';

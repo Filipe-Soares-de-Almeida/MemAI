@@ -17,7 +17,8 @@ import { statusTag, uidChip, wireCopyChips, getDomains,
          invalidateDomains } from '../core/shared.js';
 import { domainPickerHTML, wireDomainPicker } from '../core/domain-picker.js';
 import { go } from '../core/router.ts';
-import { openRecord } from './record.js';
+import { openRecord } from '../core/nav.ts';
+import { newDiagramSkeleton } from '../core/diagram-skeleton.ts';
 import { t } from '../i18n.ts';
 
 const ISSUE_ORDER = ['empty', 'no_start', 'many_starts', 'unreachable',
@@ -26,15 +27,6 @@ const ISSUE_ORDER = ['empty', 'no_start', 'many_starts', 'unreachable',
 /* A flow starts as a start→end skeleton and is grown on the canvas: there
    is no useful "empty diagram", and typing a graph as text is not the
    point of the type. */
-export const newDiagramSkeleton = ({ title, domain = '', also = '', tags = '' }) =>
-  api('/api/diagrams', { body: {
-    title, domain, also, tags,
-    nodes: [
-      { key: 'start', shape: 'start', label: t('dg.skeleton.start') },
-      { key: 'finish', shape: 'end', label: t('dg.skeleton.end') },
-    ],
-    edges: [{ from: 'start', to: 'finish' }] } });
-
 async function promptNewDiagram(domain = '') {
   const title = await promptModal({
     title: t('dgl.newTitle'), body: t('dgl.newBody'),

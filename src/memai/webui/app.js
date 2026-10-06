@@ -21,7 +21,8 @@ import { renderDomains } from './views/domains.js';
 import { renderMaintenance } from './views/maintenance.js';
 import { renderOptimization } from './views/optimization.js';
 import { renderChangelog } from './views/changelog.js';
-import { renderRecord, openRecord } from './views/record.js';
+import { renderRecord } from './views/record/index.js';
+import { openRecord } from './core/nav.ts';
 import { openNewMemory } from './views/new-memory.js';
 
 registerViews({

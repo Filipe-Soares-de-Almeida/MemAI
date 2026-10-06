@@ -22,7 +22,7 @@ import { typeTag, uidChip, statusTag, confPill, wireCopyChips, failedHTML,
 import { renderRich, wireRich } from '../core/richtext.js';
 import { markPair } from '../core/textdiff.ts';
 import { go, previousRoute, replaceParams } from '../core/router.ts';
-import { openRecord } from './record.js';
+import { openRecord } from '../core/nav.ts';
 import { I18N, t } from '../i18n.ts';
 import { DIFF_KINDS, SET_KINDS, FLAG_KINDS, LINE_KINDS, TEXT_KINDS, CONTENT_KINDS,
          WHAT_MIXED } from '../core/suggestion-kinds.js';

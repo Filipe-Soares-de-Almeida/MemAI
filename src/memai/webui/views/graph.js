@@ -25,7 +25,7 @@ import { pickerFor, wirePicker, fixedItems } from '../core/pick.js';
 import { domainPickerHTML, wireDomainPicker } from '../core/domain-picker.js';
 import { go, refreshBehind, replaceParams } from '../core/router.ts';
 import { onTeardown } from '../core/lifecycle.ts';
-import { openRecord } from './record.js';
+import { openRecord } from '../core/nav.ts';
 import { GraphCanvas } from '../graph-2d.js';
 import { ARRANGEMENTS, DEFAULT_MODE, arrangement } from '../graph-arrange.js';
 import { t } from '../i18n.ts';

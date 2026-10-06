@@ -28,7 +28,7 @@ import { pickerFor, pickerValue, wirePicker, fixedItems } from '../core/pick.js'
 import { domainPickerHTML, wireDomainPicker } from '../core/domain-picker.js';
 import { moveToProjectModal } from '../core/projects.js';
 import { go, refreshBehind } from '../core/router.ts';
-import { openRecord } from './record.js';
+import { openRecord } from '../core/nav.ts';
 import { t } from '../i18n.ts';
 
 const CASE_MODES = ['preserve', 'lower', 'upper'];

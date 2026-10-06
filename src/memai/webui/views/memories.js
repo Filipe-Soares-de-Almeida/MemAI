@@ -22,7 +22,7 @@ import { domainPickerHTML, wireDomainPicker } from '../core/domain-picker.js';
 import { moveToProjectModal } from '../core/projects.js';
 import { go, refreshBehind, parseHash } from '../core/router.ts';
 import { onTeardown } from '../core/lifecycle.ts';
-import { openRecord, setRecordSequence } from './record.js';
+import { openRecord, setRecordSequence } from '../core/nav.ts';
 import { t } from '../i18n.ts';
 import { ADMIN, TASK } from '../contract.ts';
 

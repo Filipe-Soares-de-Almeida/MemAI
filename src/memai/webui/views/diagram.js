@@ -15,7 +15,7 @@ import { typeClass, DG_REL_SUGGEST, peerName } from '../core/shared.js';
 import { pickerFor, pickerValue, wirePicker, fixedItems } from '../core/pick.js';
 import { pickMemories } from '../core/link-picker.js';
 import { onTeardown } from '../core/lifecycle.ts';
-import { openRecord } from './record.js';
+import { openRecord } from '../core/nav.ts';
 import { DiagramEditor, NODE_SHAPES, FONT_SCALES } from '../diagram-engine.js';
 import { t } from '../i18n.ts';
 
