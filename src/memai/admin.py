@@ -1475,12 +1475,12 @@ def domain_detail(request, payload) -> schema.DomainDetail:
             """SELECT m.* FROM memory_domains dl JOIN memories m ON m.uid = dl.memory_uid
                WHERE dl.domain = ? AND m.status = 'active'
                ORDER BY m.created_at DESC LIMIT ?""", (domain, limit)).fetchall()
-    return {
+    return cast(schema.DomainDetail, {
         "domain": domain,
         "filed": [_summary(r, 160) for r in filed],
         "filed_total": filed_total,
         "crossing": [_summary(r, 160) for r in crossing],
-    }
+    })
 
 
 def rename_domain(request, payload) -> schema.DomainRenamed:
@@ -1610,9 +1610,10 @@ def normalize_domains(request, payload) -> schema.NormalizePlan | schema.Normali
                 counts[r["domain"]] = counts.get(r["domain"], 0) + r["n"]
         plan = _normalize_plan(mode, counts)
         if dry_run:
-            return {"mode": mode, "dry_run": True, "plan": plan,
-                    "renames": sum(1 for e in plan if e["action"] == "rename"),
-                    "merges": sum(1 for e in plan if e["action"] == "merge")}
+            return cast(schema.NormalizePlan, {
+                "mode": mode, "dry_run": True, "plan": plan,
+                "renames": sum(1 for e in plan if e["action"] == "rename"),
+                "merges": sum(1 for e in plan if e["action"] == "merge")})
         moved = [db.move_domain(conn, e["from"], e["to"], subtree=False) for e in plan]
     return {"ok": True, "mode": mode, "moved": len(plan),
             "affected": sum(m["moved"] for m in moved),
