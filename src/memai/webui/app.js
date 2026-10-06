@@ -14,7 +14,7 @@ import { mountChrome } from './core/chrome.ts';
 import { I18N, t } from './i18n.ts';
 
 import OverviewView from './views/overview/OverviewView.vue';
-import { renderMemories } from './views/memories.js';
+import MemoriesView from './views/memories/MemoriesView.vue';
 import { renderGraph } from './views/graph.js';
 import { renderDiagrams } from './views/diagrams.js';
 import { renderDiagram } from './views/diagram.js';
@@ -28,7 +28,7 @@ import { openNewMemory } from './views/new-memory/index.ts';
 
 registerViews({
   overview: OverviewView,
-  memories: renderMemories,
+  memories: MemoriesView,
   graph: renderGraph,
   diagrams: renderDiagrams,
   diagram: renderDiagram,

@@ -111,9 +111,43 @@ class ProjectMove(TypedDict):
 
 # ------------------------------------------------------------------ memories
 
+class TaskProgress(TypedDict):
+    done: int
+    total: int
+
+
+class MemoryRow(TypedDict):
+    """A memory as the list shows it: its columns, with the body cut to a snippet."""
+    rowid_pk: int
+    uid: str
+    type: str
+    title: str
+    content: str
+    content_len: int
+    domain: str
+    also: NotRequired[list[str]]
+    tags: str
+    session: str
+    status: str
+    confidence: str
+    pin: str
+    superseded_by: str | None
+    review_after: str
+    source_ref: str
+    created_at: str
+    updated_at: str
+    recalls: int
+    last_recall: str | None
+    progress: NotRequired[TaskProgress]
+    task_state: NotRequired[str]
+    fts_rank: NotRequired[float]
+    match_source: NotRequired[str]
+    succeeded_by: NotRequired[list[str]]
+
+
 class MemoryPage(Scoped):
     total: int
-    items: list[Row]
+    items: list[MemoryRow]
     searched: bool
 
 

@@ -103,10 +103,43 @@ export interface ProjectMove {
   errors?: unknown[];
 }
 
+export interface TaskProgress {
+  done: number;
+  total: number;
+}
+
+export interface MemoryRow {
+  rowid_pk: number;
+  uid: string;
+  type: string;
+  title: string;
+  content: string;
+  content_len: number;
+  domain: string;
+  also?: string[];
+  tags: string;
+  session: string;
+  status: string;
+  confidence: string;
+  pin: string;
+  superseded_by: string | null;
+  review_after: string;
+  source_ref: string;
+  created_at: string;
+  updated_at: string;
+  recalls: number;
+  last_recall: string | null;
+  progress?: TaskProgress;
+  task_state?: string;
+  fts_rank?: number;
+  match_source?: string;
+  succeeded_by?: string[];
+}
+
 export interface MemoryPage {
   domain_scope?: string[];
   total: number;
-  items: Record<string, unknown>[];
+  items: MemoryRow[];
   searched: boolean;
 }
 
