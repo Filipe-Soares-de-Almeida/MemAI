@@ -1257,7 +1257,8 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
 /* 293 domains is not a tree you walk to find one. The picker draws the same
    rails the columns do and filters as you type; picking a row navigates. */
 .dom-find.pick { width: 260px; --ctl-h: var(--ctl-h-sm); }
-.dom-bar-end { margin-left: auto; display: flex; align-items: center; gap: var(--sp-2); }
+.dom-bar-end { margin-left: auto; display: flex; align-items: center; gap: var(--sp-2);
+               min-width: 0; max-width: 100%; }
 
 .dom-crumb {
   display: flex; align-items: baseline; gap: var(--sp-1);
