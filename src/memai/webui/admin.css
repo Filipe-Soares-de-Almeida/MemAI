@@ -5540,6 +5540,13 @@ input.pick-q:focus { box-shadow: inset 0 -2px 0 var(--accent); }
   .mnt-file .ico { margin-top: 3px; }
   .mnt-file-when, .mnt-file-size { grid-column: 2; grid-row: 2; }
   .mnt-file-size { justify-self: end; }
+  /* the shelf that can be ticked keeps its tick before the icon and its two controls after the label */
+  .mnt-shelf-body.pickable .mnt-file { grid-template-columns: 18px 16px minmax(0, 1fr) auto; }
+  .mnt-shelf-body.pickable .mnt-file-when,
+  .mnt-shelf-body.pickable .mnt-file-size { grid-column: 3; }
+  /* the selection's sentence takes its own line above the three buttons */
+  .mnt-sel { flex-wrap: wrap; }
+  .mnt-sel-text { flex-basis: 100%; }
   /* the column heads, hidden at this width */
   .mnt-file-head { display: none; }
   /* a step's control drops under its own words rather than squeezing them */
