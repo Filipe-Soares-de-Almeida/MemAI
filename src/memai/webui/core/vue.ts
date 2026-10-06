@@ -4,7 +4,7 @@
 import { createApp, defineComponent, h, Suspense } from 'vue';
 import type { Component } from 'vue';
 import { onTeardown } from './lifecycle.ts';
-import { failed } from './ui.js';
+import { failed } from './toasts.ts';
 import type { ViewContext } from './router.ts';
 
 /* The props every routed component is mounted with. */

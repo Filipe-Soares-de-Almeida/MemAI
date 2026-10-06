@@ -3,13 +3,14 @@
    that update it, printed to copy and never run. */
 import { computed, ref } from 'vue';
 import { fmtAgo, fmtDay } from '../../core/dom.ts';
-import { copyCode, toast, failed } from '../../core/ui.js';
+import { copyCode } from '../../core/copy.ts';
+import { toast, failed } from '../../core/toasts.ts';
 import { icon } from '../../core/icons.js';
 import { t } from '../../i18n.ts';
 import * as client from '../../api/client.ts';
 import type { Changelog, ReleaseSection } from '../../api/types.ts';
 import type { ViewProps } from '../../core/vue.ts';
-import LegacyPicker from '../../components/LegacyPicker.vue';
+import Picker from '../../components/Picker.vue';
 
 defineProps<ViewProps>();
 
@@ -60,7 +61,8 @@ async function checkNow() {
 
 async function setEvery(value: string) {
   try {
-    await client.update.interval({ hours: Number(value) });
+    const next = await client.update.interval({ hours: Number(value) });
+    data.value = { ...data.value, update: next };
     toast(t('rls.msg.every', { every: hoursLabel(Number(value)) }), 'ok');
   } catch (err) { failed('err.update', err); }
 }
@@ -102,8 +104,8 @@ const groupTitle = (group: ReleaseSection) =>
                 :title="state.enabled ? undefined : t('rls.checkOff')"
                 @click="checkNow">{{ checking ? t('rls.checking') : t('rls.checkNow') }}</button>
         <label class="inline-label">{{ t('rls.every') }}
-          <LegacyPicker id="rlEvery" :value="String(state.interval_hours)" :items="everyItems"
-                        :aria-label="t('rls.every')" @pick="setEvery" /></label>
+          <Picker id="rlEvery" :model-value="String(state.interval_hours)" :items="everyItems"
+                  :aria-label="t('rls.every')" @pick="setEvery" /></label>
       </div>
     </header>
 

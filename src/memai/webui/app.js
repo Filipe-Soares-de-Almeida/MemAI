@@ -10,6 +10,7 @@ import { pickerFor, setPickerValue, wirePicker, fixedItems } from './core/pick.j
 import { mountProjectPicker } from './core/projects.js';
 import { mountVersionChip } from './core/version.ts';
 import { registerViews, route } from './core/router.ts';
+import { mountChrome } from './core/chrome.ts';
 import { I18N, t } from './i18n.ts';
 
 import { renderOverview } from './views/overview.js';
@@ -37,6 +38,8 @@ registerViews({
   changelog: ChangelogView,
   memory: renderRecord,
 }, { onRecord: openRecord });
+
+mountChrome();
 
 /* draw the shell's icons before the first route, so the app bar is never
    shown mid-assembly (i18n does the same for its text, at import time) */

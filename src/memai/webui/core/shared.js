@@ -5,7 +5,7 @@ import { $, esc, cssVar } from './dom.ts';
 import { icon } from './icons.js';
 import { fixedItems, pickerFor, wirePicker } from './pick.js';
 import { t } from '../i18n.ts';
-import { copyUid } from './ui.js';
+import { copyUid } from './copy.ts';
 import { TYPE_ORDER } from './vocab.js';
 import { MEMORY } from '../contract.ts';
 import * as client from '../api/client.ts';
