@@ -20,7 +20,7 @@ import { renderDiagrams } from './views/diagrams.js';
 import { renderDiagram } from './views/diagram.js';
 import DomainsView from './views/domains/DomainsView.vue';
 import { renderMaintenance } from './views/maintenance.js';
-import { renderOptimization } from './views/optimization.js';
+import OptimizationView from './views/optimization/OptimizationView.vue';
 import ChangelogView from './views/changelog/ChangelogView.vue';
 import RecordView from './views/record/RecordView.vue';
 import { openRecord } from './core/nav.ts';
@@ -34,7 +34,7 @@ registerViews({
   diagram: renderDiagram,
   domains: DomainsView,
   maintenance: renderMaintenance,
-  optimization: renderOptimization,
+  optimization: OptimizationView,
   changelog: ChangelogView,
   memory: RecordView,
 }, { onRecord: openRecord });

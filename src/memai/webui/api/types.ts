@@ -711,14 +711,70 @@ export interface OptimizationRun {
   backup_path: string | null;
 }
 
+export interface RunKindCount {
+  kind: string;
+  total: number;
+  pending: number;
+  rejected: number;
+}
+
+export interface RunRow {
+  id: number;
+  created_at: string;
+  note: string;
+  status: string;
+  backup_path: string | null;
+  total: number;
+  pending: number;
+  applied: number;
+  rejected: number;
+  kinds: RunKindCount[];
+}
+
 export interface OptimizationRuns {
-  runs: Record<string, unknown>[];
+  runs: RunRow[];
+}
+
+export interface SuggestionTarget {
+  uid: string;
+  type: string;
+  domain: string;
+  title: string;
+  status: string;
+  confidence: string;
+  snippet: string;
+  created_at: string;
+  tags: string;
+  review_after: string;
+  also: string[];
+}
+
+export interface Suggestion {
+  id: number;
+  run_id: number;
+  kind: string;
+  target_uid: string | null;
+  rationale: string;
+  verified: string;
+  status: string;
+  decided_at: string | null;
+  created_at: string;
+  payload: Record<string, unknown>;
+  target?: SuggestionTarget;
+  content_before?: string;
+  text_before?: string;
+  chars_before?: number;
+  chars_after?: number;
+  peers?: Record<string, PeerCard | null>;
+  sources?: (PeerCard | MissingPeer)[];
+  new_uid?: string | null;
+  body_links?: Record<string, BodyLink>;
 }
 
 export interface Suggestions {
   run: OptimizationRun;
   runs: OptimizationRun[];
-  suggestions: Record<string, unknown>[];
+  suggestions: Suggestion[];
 }
 
 export interface Ledger {
@@ -731,13 +787,23 @@ export interface Ledger {
   chars: number;
 }
 
+export interface KindGroup {
+  kind: string;
+  total: number;
+  pending: number;
+  applied: number;
+  rejected: number;
+  verified: number;
+  facts: Record<string, number | string>;
+}
+
 export interface OptimizationSummary {
   run: OptimizationRun;
   total: number;
   pending: number;
   verified: number;
   ledger: Ledger;
-  groups: Record<string, unknown>[];
+  groups: KindGroup[];
 }
 
 export interface Applied {
@@ -745,10 +811,15 @@ export interface Applied {
   backup: unknown;
 }
 
+export interface FailedApply {
+  id: number;
+  error: string;
+}
+
 export interface AppliedAll {
   ok: true;
   applied: number;
-  failed: unknown[];
+  failed: FailedApply[];
   backup: string | null;
   backups: string[];
 }

@@ -703,14 +703,60 @@ class OptimizationRun(TypedDict):
     backup_path: str | None
 
 
+class RunKindCount(TypedDict):
+    kind: str
+    total: int
+    pending: int
+    rejected: int
+
+
+class RunRow(OptimizationRun):
+    """A run as the calendar lists it: its counts, overall and per kind."""
+    total: int
+    pending: int
+    applied: int
+    rejected: int
+    kinds: list[RunKindCount]
+
+
 class OptimizationRuns(TypedDict):
-    runs: list[Row]
+    runs: list[RunRow]
+
+
+class SuggestionTarget(PeerCard):
+    """The memory a suggestion edits, with the fields its Before pane reads."""
+    tags: str
+    review_after: str
+    also: list[str]
+
+
+class Suggestion(TypedDict):
+    """A staged suggestion, with the cards and bodies its evidence pane draws."""
+    id: int
+    run_id: int
+    kind: str
+    target_uid: str | None
+    rationale: str
+    verified: str
+    status: str
+    decided_at: str | None
+    created_at: str
+    payload: dict[str, Any]
+    target: NotRequired[SuggestionTarget]
+    content_before: NotRequired[str]
+    text_before: NotRequired[str]
+    chars_before: NotRequired[int]
+    chars_after: NotRequired[int]
+    peers: NotRequired[dict[str, PeerCard | None]]
+    sources: NotRequired[list[PeerCard | MissingPeer]]
+    new_uid: NotRequired[str | None]
+    body_links: NotRequired[dict[str, BodyLink]]
 
 
 class Suggestions(TypedDict):
     run: OptimizationRun
     runs: list[OptimizationRun]
-    suggestions: list[Row]
+    suggestions: list[Suggestion]
 
 
 class Ledger(TypedDict):
@@ -723,13 +769,24 @@ class Ledger(TypedDict):
     chars: int
 
 
+class KindGroup(TypedDict):
+    """One kind of a run: its counts, and the facts its sentence is worded from."""
+    kind: str
+    total: int
+    pending: int
+    applied: int
+    rejected: int
+    verified: int
+    facts: dict[str, int | str]
+
+
 class OptimizationSummary(TypedDict):
     run: OptimizationRun
     total: int
     pending: int
     verified: int
     ledger: Ledger
-    groups: list[Row]
+    groups: list[KindGroup]
 
 
 class Applied(TypedDict):
@@ -737,10 +794,15 @@ class Applied(TypedDict):
     backup: Any
 
 
+class FailedApply(TypedDict):
+    id: int
+    error: str
+
+
 class AppliedAll(TypedDict):
     ok: Literal[True]
     applied: int
-    failed: list[Any]
+    failed: list[FailedApply]
     backup: str | None
     backups: list[str]
 

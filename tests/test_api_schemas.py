@@ -101,7 +101,14 @@ def store(tmp_path_factory):
         db.add_node_link(conn, diagram, "a", note, "explains")
         run = db.stage_optimization(conn, "tidy the tags", [
             {"kind": "retag", "target_uid": note, "payload": {"tags": "lantern, fuel"},
-             "rationale": "a synonym", "verified": "checked"}])
+             "rationale": "a synonym", "verified": "checked"},
+            {"kind": "reword", "target_uid": other, "rationale": f"clearer, see [[{note}]]",
+             "payload": {"new_content": "Trim the wick to one centimetre."}},
+            {"kind": "link", "target_uid": note, "rationale": "same lamp",
+             "payload": {"from_uid": note, "to_uid": other, "relation_type": "relates_to"}},
+            {"kind": "distill", "rationale": "one fact",
+             "payload": {"source_uids": [note, other], "new_type": "note", "title": "Lantern care",
+                         "new_content": "Grade B oil, a centimetre of wick.", "domain": "acme/x100"}}])
     with TestClient(admin.app) as client:
         yield {"client": client, "note": note, "task": task, "diagram": diagram,
                "run": run["run_id"]}

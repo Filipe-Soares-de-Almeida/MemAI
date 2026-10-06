@@ -1,5 +1,6 @@
 <script setup lang="ts">
-/* A memory body drawn by core/richtext: [[uid]] links open their record, code blocks copy and colour. */
+/* A memory body drawn by core/richtext: [[uid]] links open their record, code blocks copy and colour.
+   `prose` adds the reading measure; `highlight` off leaves code plain for a caller that marks it. */
 import { computed, onMounted, ref, watch } from 'vue';
 import { renderRich, wireRich } from '../core/richtext.js';
 import { highlightIn } from '../core/highlight.js';
@@ -7,7 +8,9 @@ import { copyCode } from '../core/copy.ts';
 import { openRecord } from '../core/nav.ts';
 import type { BodyLink } from '../api/types.ts';
 
-const props = defineProps<{ text: string; links?: Record<string, BodyLink> }>();
+const props = withDefaults(defineProps<{ text: string; links?: Record<string, BodyLink>; prose?: boolean;
+                                         highlight?: boolean }>(),
+                           { links: undefined, prose: true, highlight: true });
 
 const el = ref<HTMLElement | null>(null);
 const html = computed(() => renderRich(props.text, props.links));
@@ -16,7 +19,7 @@ const html = computed(() => renderRich(props.text, props.links));
 function wire() {
   if (!el.value) return;
   wireRich(el.value, { open: openRecord, copy: copyCode });
-  highlightIn(el.value).catch(() => {});
+  if (props.highlight) highlightIn(el.value).catch(() => {});
 }
 onMounted(wire);
 watch(html, wire, { flush: 'post' });
@@ -24,5 +27,5 @@ watch(html, wire, { flush: 'post' });
 
 <!-- v-html carries core/richtext's output, which escapes the body before it adds any tag. -->
 <template>
-  <div ref="el" class="content-prose rt" v-html="html"></div>
+  <div ref="el" class="rt" :class="{ 'content-prose': prose }" v-html="html"></div>
 </template>
