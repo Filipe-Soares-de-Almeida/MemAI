@@ -12,20 +12,21 @@
    one suggestion moves it by a fraction of a point and a whole run by one at
    best. `verified` is what differs from one suggestion to the next. */
 
-import { $, esc, fmtInt, fmtDate, dayKey, monthKey, fromKey } from '../core/dom.js';
-import { api, seg } from '../core/api.js';
+import { $, esc, fmtInt, fmtDate, dayKey, monthKey, fromKey } from '../core/dom.ts';
+import { seg } from '../core/api.ts';
 import { icon } from '../core/icons.js';
 import { toast, failed, confirmModal, copyCode } from '../core/ui.js';
 import { typeTag, uidChip, statusTag, confPill, wireCopyChips, failedHTML,
          relLabel, relTypeTitle, peerName, kindColor,
          kindLabel, kindTitle, CONF } from '../core/shared.js';
 import { renderRich, wireRich } from '../core/richtext.js';
-import { markPair } from '../core/textdiff.js';
-import { go, previousRoute, replaceParams } from '../core/router.js';
-import { openRecord } from './record.js';
-import { I18N, t } from '../i18n.js';
+import { markPair } from '../core/textdiff.ts';
+import { go, previousRoute, replaceParams } from '../core/router.ts';
+import { openRecord } from '../core/nav.ts';
+import { I18N, t } from '../i18n.ts';
 import { DIFF_KINDS, SET_KINDS, FLAG_KINDS, LINE_KINDS, TEXT_KINDS, CONTENT_KINDS,
          WHAT_MIXED } from '../core/suggestion-kinds.js';
+import * as client from '../api/client.ts';
 
 /* ─── one suggestion, rendered by kind ───────────────────────────────── */
 
@@ -319,7 +320,7 @@ export async function renderOptimization(view, params, ctx) {
   const review = params.get('review') || '';
 
   if (!runId) {
-    const runs = (await api('/api/optimization/runs')).runs;
+    const runs = (await client.optimization.runs()).runs;
     if (ctx.stale()) return;
     /* the day scope is resolved against the run index rather than sent to
        the server: created_at is UTC and a calendar day is the reader's own
@@ -332,7 +333,7 @@ export async function renderOptimization(view, params, ctx) {
     renderOptCalendar(view, runs, params);
     return;
   }
-  const sum = await api(`/api/optimization/summary?run=${seg(runId)}`);
+  const sum = await client.optimization.summary({ run: runId });
   if (ctx.stale()) return;
   const kind = params.get('kind') || '';
   if (kind) renderOptGroup(view, kindScope(sum, kind));
@@ -806,7 +807,7 @@ function renderOptRun(view, sum) {
       okLabel: t('op.group.applyConfirm.ok') }))) return;
     b.disabled = true;
     try {
-      reportApplied(await api('/api/optimization/apply-all', { body: { run: runId, kind } }));
+      reportApplied(await client.optimization.applyAll({ run: runId, kind }));
       await reload();
     } catch (err) { failed('err.optimize', err); b.disabled = false; }
   }));
@@ -818,7 +819,7 @@ function renderOptRun(view, sum) {
       okLabel: t('op.group.rejectConfirm.ok') }))) return;
     b.disabled = true;
     try {
-      const r = await api('/api/optimization/reject-all', { body: { run: runId, kind } });
+      const r = await client.optimization.rejectAll({ run: runId, kind });
       toast(t('op.toast.rejectedN', { n: r.rejected }), 'ok');
       await reload();
     } catch (err) { failed('err.optimize', err); b.disabled = false; }
@@ -833,8 +834,8 @@ function renderOptRun(view, sum) {
       okLabel: t('op.group.undoConfirm.ok') }))) return;
     b.disabled = true;
     try {
-      const r = await api(`/api/optimization/suggestions?run=${seg(runId)}&kind=${seg(b.dataset.undokind)}&status=applied`);
-      for (const s of r.suggestions) await api('/api/optimization/revert', { body: { id: s.id } });
+      const r = await client.optimization.suggestions({ run: runId, kind: b.dataset.undokind, status: 'applied' });
+      for (const s of r.suggestions) await client.optimization.revert({ id: s.id });
       toast(t('op.toast.revertedN', { n: r.suggestions.length }), 'ok');
       await reload();
     } catch (err) { failed('err.optimize', err); b.disabled = false; }
@@ -846,7 +847,7 @@ function renderOptRun(view, sum) {
       body: t('op.applyAllConfirm.body', { n: sum.pending, id: runId }),
       okLabel: t('op.applyAllConfirm.ok') }))) return;
     try {
-      reportApplied(await api('/api/optimization/apply-all', { body: { run: runId } }));
+      reportApplied(await client.optimization.applyAll({ run: runId }));
       await reload();
     } catch (err) { failed('err.optimize', err); }
   });
@@ -856,7 +857,7 @@ function renderOptRun(view, sum) {
       body: t('op.discardConfirm.body', { id: runId }),
       okLabel: t('op.discardConfirm.ok'), danger: true }))) return;
     try {
-      await api(`/api/optimization/runs/${seg(runId)}`, { method: 'DELETE' });
+      await client.optimization.deleteRun(runId);
       toast(t('op.toast.discarded'), 'ok');
       go('optimization');
     } catch (err) { failed('err.optimize', err); }
@@ -887,7 +888,7 @@ function kindScope(sum, kind) {
     keepDecided: false,
     pending: meta ? meta.pending : 0,
     async refresh() {
-      const fresh = await api(`/api/optimization/summary?run=${seg(runId)}`);
+      const fresh = await client.optimization.summary({ run: runId });
       const g = fresh.groups.find(x => x.kind === kind);
       return { pending: g ? g.pending : 0, total: g ? g.total : 0,
                sub: t('op.group.countPending', { p: g ? g.pending : 0, t: g ? g.total : 0 }) };
@@ -925,7 +926,7 @@ function dayScope(day, runsOfDay) {
     keepDecided: true,
     pending: now.pending,
     async refresh() {
-      const fresh = (await api('/api/optimization/runs')).runs
+      const fresh = (await client.optimization.runs()).runs
         .filter(r => dayKey(new Date(r.created_at)) === day);
       const sum = fresh.reduce(
         (a, r) => ({ pending: a.pending + r.pending, total: a.total + r.total }),
@@ -1090,14 +1091,14 @@ function renderOptGroup(view, scope) {
       paintDetail();
       await reloadRun();
     };
-    const act = (btn, path, id, msg, undo, status) => async () => {
+    const act = (btn, call, id, msg, undo, status) => async () => {
       btn.disabled = true;
       try {
-        const res = await api(path, { body: { id } });
+        const res = await call({ id });
         toast(res && res.backup ? t('op.toast.appliedBackup') : msg, 'ok', undo ? {
           action: {
             label: t('common.undo'),
-            run: () => api(undo, { body: { id } })
+            run: () => undo({ id })
               .then(async () => { toast(t('op.toast.reverted'), 'ok'); await settle(id, 'pending'); })
               .catch(err => failed('err.optimize', err)),
           },
@@ -1107,13 +1108,13 @@ function renderOptGroup(view, scope) {
     };
     const b1 = host.querySelector('[data-apply]');
     if (b1) b1.addEventListener('click',
-      act(b1, '/api/optimization/apply', +b1.dataset.apply, t('op.toast.applied1'), '/api/optimization/revert', 'applied'));
+      act(b1, client.optimization.apply, +b1.dataset.apply, t('op.toast.applied1'), client.optimization.revert, 'applied'));
     const b2 = host.querySelector('[data-reject]');
     if (b2) b2.addEventListener('click',
-      act(b2, '/api/optimization/reject', +b2.dataset.reject, t('op.toast.rejected1'), null, 'rejected'));
+      act(b2, client.optimization.reject, +b2.dataset.reject, t('op.toast.rejected1'), null, 'rejected'));
     const b3 = host.querySelector('[data-revert]');
     if (b3) b3.addEventListener('click',
-      act(b3, '/api/optimization/revert', +b3.dataset.revert, t('op.toast.reverted'), null, 'pending'));
+      act(b3, client.optimization.revert, +b3.dataset.revert, t('op.toast.reverted'), null, 'pending'));
   };
 
   const paintFoot = () => {
@@ -1172,7 +1173,7 @@ function renderOptGroup(view, scope) {
     if (!host) return;
     host.innerHTML = '<div class="loading"><span class="spin"></span></div>';
     try {
-      const r = await api(`/api/optimization/suggestions?${scope.query}`);
+      const r = await client.optimization.suggestions(scope.query);
       if (!host.isConnected) return;
       items = r.suggestions;
       /* A decision removes an id from the pending set; keeping it marked
@@ -1265,23 +1266,23 @@ function renderOptGroup(view, scope) {
 
     /* `what` names the operation in its own confirm: one shared wording
        here would have asked "apply the selection?" before rejecting it. */
-    const bulk = async (what, path, msg) => {
+    const bulk = async (what, call, msg) => {
       const ids = markedPending();
       if (!ids.length) return;
       if (!(await confirmModal({ title: t(`op.sel.${what}Confirm.title`),
         body: t(`op.sel.${what}Confirm.body`, { n: ids.length, scope: scope.title }),
         okLabel: t(`op.sel.${what}Confirm.ok`) }))) return;
       try {
-        const res = await api(path, { body: { ...scope.body, ids } });
+        const res = await call({ ...scope.body, ids });
         if (msg) toast(msg(res), 'ok'); else reportApplied(res);
         marked = new Set();
         await loadList();
       } catch (err) { failed('err.optimize', err); }
     };
     view.querySelector('[data-selapply]').addEventListener('click',
-      () => bulk('apply', '/api/optimization/apply-all', null));
+      () => bulk('apply', client.optimization.applyAll, null));
     view.querySelector('[data-selreject]').addEventListener('click',
-      () => bulk('reject', '/api/optimization/reject-all',
+      () => bulk('reject', client.optimization.rejectAll,
                  r => t('op.toast.rejectedN', { n: r.rejected })));
   }
 

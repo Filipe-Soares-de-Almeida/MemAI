@@ -1,11 +1,146 @@
 /* The relations graph's three arrangements (hubs, pack, atlas) behind one interface: constructor,
    step, progress, halt, box, locate, draw, hit, click. A hit carries `uid` or `domain`. */
 
-import { clamp, packSiblings } from './graph-geom.js';
-import { Sim, spiral } from './graph-force.js';
-import { density, isolines, smooth } from './graph-field.js';
+import { clamp, packSiblings } from './graph-geom.ts';
+import { Sim, spiral } from './graph-force.ts';
+import type { Body, Link } from './graph-force.ts';
+import { density, isolines, smooth } from './graph-field.ts';
 import { dots, lines, ring, gradLine, hexA, robustBounds, Picker, LabelBoard }
-  from './graph-draw.js';
+  from './graph-draw.ts';
+import type { Box, Pt, Rect } from './graph-draw.ts';
+
+/* A memory as /api/graph sends it, plus what the canvas derives from it. */
+export interface GraphNodeData {
+  uid: string;
+  type: string;
+  title?: string;
+  label?: string;
+  domain?: string;
+  also?: string[];
+  tags?: string;
+  degree?: number;
+}
+
+export interface GraphNode extends GraphNodeData {
+  i: number;
+  name: string;
+  miss: boolean;
+}
+
+export interface GraphEdge { from_uid: string; to_uid: string; relation_type: string }
+
+export interface DomainNode {
+  name: string;
+  path: string;
+  depth: number;
+  kids: DomainNode[];
+  kidMap: Map<string, DomainNode>;
+  mems: GraphNode[];
+  count: number;
+  parent?: DomainNode;
+}
+
+export interface Store {
+  nodes: GraphNode[];
+  edges: GraphEdge[];
+  byUid: Map<string, GraphNode>;
+  adj: Map<string, GraphEdge[]>;
+  degree: Map<string, number>;
+  tree: DomainNode;
+  domainOf: Map<string, DomainNode>;
+  domColor: Map<string, string>;
+  hueOf: (path: string) => string;
+}
+
+/* What a click or the pointer lands on: a memory, or a domain with its count. */
+export interface DomainHit { uid?: undefined; domain: string; count: number }
+export type Hit = GraphNode | DomainHit;
+
+export interface Palette {
+  ink: string;
+  ink2: string;
+  ink3: string;
+  accent: string;
+  accentHi: string;
+  hot: string;
+  tree: string;
+  treeHi: string;
+  treeHot: string;
+  halo: string;
+  font: string;
+  mono: string;
+  rel: Record<string, string> & { relates_to: string };
+}
+
+export interface Show { links: boolean; domains: boolean; names: boolean }
+export interface Mark { uid?: string; domain?: string; color: string; width: number }
+
+export interface Camera {
+  k: number;
+  toScreen(wx: number, wy: number): Pt;
+  goTo(wx: number, wy: number, k: number, ms?: number): void;
+}
+
+/* What GraphCanvas hands an arrangement, rebuilt per frame. */
+export interface Env {
+  D: Store;
+  W: number;
+  H: number;
+  cam: Camera;
+  palette: Palette;
+  show: Show;
+  hover: Hit | null;
+  selected: GraphNode | null;
+  linkFrom: GraphNode | null;
+  lit: Set<string> | null;
+  marks: Mark[];
+  taken: Rect[];
+  colorOf: (type: string) => string;
+  fade: (uid: string) => number;
+  inScope: (path: string) => boolean;
+  font: (weight: number, size: number) => string;
+}
+
+export interface Arrangement {
+  readonly progress: number;
+  step(env?: Env): boolean;
+  halt(): void;
+  box(): Box;
+  locate(uid: string): { x: number; y: number; r: number } | null;
+  draw(ctx: CanvasRenderingContext2D, cam: Camera, env: Env): void;
+  hit(x: number, y: number, cam: Camera): Hit | null;
+  click?(hit: Hit | null, env: Env): boolean;
+}
+
+export interface ArrangementSpec {
+  id: string;
+  make: (env: Env) => Arrangement;
+  note: string;
+  settles: boolean;
+}
+
+/* The list under `key`, created empty on first use. */
+const bucket = <K, V>(map: Map<K, V[]>, key: K): V[] => {
+  let list = map.get(key);
+  if (!list) { list = []; map.set(key, list); }
+  return list;
+};
+
+interface Seat { x: number; y: number; room: number; name?: string }
+
+interface HubBody extends Body {
+  domain: string;
+  name: string;
+  count: number;
+  depth: number;
+  hue: string;
+  r: number;
+  up?: HubBody;
+}
+
+interface MemBody extends Body { n: GraphNode; uid: string; r: number; up?: HubBody }
+
+interface RelLink { a: MemBody; b: MemBody; e: GraphEdge }
 
 /* One frame's share of a settle, in ms: what a 16ms frame leaves after drawing. */
 const SLICE_MS = 11;
@@ -18,13 +153,13 @@ const DOMAIN_HUES = [
 ];
 const DOMAIN_TAIL = '#78909c';
 
-export const seg = d => (d ? String(d).split('/') : []);
-export const topOf = d => (d ? String(d).split('/')[0] : '');
+export const seg = (d: string | null | undefined): string[] => (d ? String(d).split('/') : []);
+export const topOf = (d: string | null | undefined): string => (d ? String(d).split('/')[0] : '');
 
 /* The domain tree, memories hung off their FILED path only (`also` would double-count); `count`
    is the subtree total that area-based arrangements divide by. */
-export function buildTree(nodes) {
-  const root = { name: '', path: '', depth: 0, kids: [], kidMap: new Map(), mems: [], count: 0 };
+export function buildTree(nodes: GraphNode[]): DomainNode {
+  const root: DomainNode = { name: '', path: '', depth: 0, kids: [], kidMap: new Map(), mems: [], count: 0 };
   for (const n of nodes) {
     let cur = root;
     for (const s of seg(n.domain)) {
@@ -39,7 +174,7 @@ export function buildTree(nodes) {
     }
     cur.mems.push(n);
   }
-  (function tally(d) {
+  (function tally(d: DomainNode): number {
     d.count = d.mems.length;
     d.kids.forEach(k => { tally(k); d.count += k.count; });
     d.kids.sort((a, b) => b.count - a.count || a.name.localeCompare(b.name));
@@ -48,35 +183,35 @@ export function buildTree(nodes) {
   return root;
 }
 
-const flatten = root => {
-  const out = [];
-  (function walk(d) { if (d.depth) out.push(d); d.kids.forEach(walk); })(root);
+const flatten = (root: DomainNode): DomainNode[] => {
+  const out: DomainNode[] = [];
+  (function walk(d: DomainNode) { if (d.depth) out.push(d); d.kids.forEach(walk); })(root);
   return out;
 };
 
 /* Everything the three arrangements need derived from the payload once: the
    adjacency, the degree, the domain tree, and the hue per root domain. */
-export function deriveStore(nodes, edges) {
+export function deriveStore(nodes: GraphNode[], edges: GraphEdge[]): Store {
   const byUid = new Map(nodes.map(n => [n.uid, n]));
   const live = edges.filter(e => byUid.has(e.from_uid) && byUid.has(e.to_uid));
-  const adj = new Map(nodes.map(n => [n.uid, []]));
-  for (const e of live) { adj.get(e.from_uid).push(e); adj.get(e.to_uid).push(e); }
-  const degree = new Map(nodes.map(n => [n.uid, adj.get(n.uid).length]));
+  const adj = new Map<string, GraphEdge[]>(nodes.map(n => [n.uid, []]));
+  for (const e of live) { adj.get(e.from_uid)?.push(e); adj.get(e.to_uid)?.push(e); }
+  const degree = new Map(nodes.map(n => [n.uid, adj.get(n.uid)?.length ?? 0]));
   const tree = buildTree(nodes);
   const domainOf = new Map(flatten(tree).map(d => [d.path, d]));
-  const domColor = new Map();
+  const domColor = new Map<string, string>();
   tree.kids.forEach((k, i) =>
     domColor.set(k.name, i < DOMAIN_HUES.length ? DOMAIN_HUES[i] : DOMAIN_TAIL));
-  const hueOf = path => domColor.get(topOf(path)) || DOMAIN_TAIL;
+  const hueOf = (path: string) => domColor.get(topOf(path)) || DOMAIN_TAIL;
   return { nodes, edges: live, byUid, adj, degree, tree, domainOf, domColor, hueOf };
 }
 
 /* Relation colours: `relates_to`, nearly every relation, takes the neutral line colour. */
-const relColor = (palette, type) => palette.rel[type] || palette.rel.relates_to;
+const relColor = (palette: Palette, type: string): string => palette.rel[type] || palette.rel.relates_to;
 
 /* Whether a point is inside a set of closed loops, even-odd -- a territory
    with an island and a hole is several loops and one place. */
-function insideLoops(loops, x, y) {
+function insideLoops(loops: Pt[][], x: number, y: number): boolean {
   let on = false;
   for (const loop of loops)
     for (let i = 0, j = loop.length - 1; i < loop.length; j = i++) {
@@ -95,70 +230,83 @@ const HUBS = {
   charge: 900, linkK: 0.1, linkLen: 40, center: 14,
 };
 
-class Hubs {
-  constructor(env) {
-    const D = env.D;
-    const bodies = [], links = [], hubs = [], mems = [];
+class Hubs implements Arrangement {
+  declare bodies: Body[];
+  declare hubs: HubBody[];
+  declare mems: MemBody[];
+  declare rel: RelLink[];
+  declare byUid: Map<string, MemBody>;
+  declare picker: Picker<MemBody | HubBody> | null;
+  declare sim: Sim;
 
-    const keep = new Map();
+  constructor(env: Env) {
+    const D = env.D;
+    const bodies: Body[] = [], links: Link[] = [], hubs: HubBody[] = [], mems: MemBody[] = [];
+
+    const keep = new Map<string, DomainNode>();
     for (const d of D.domainOf.values()) {
       if (d.depth === 1 || d.mems.length + d.kids.length > 1) keep.set(d.path, d);
     }
-    const anchorFor = d => {
-      for (let x = d; x; x = x.parent) if (keep.has(x.path)) return keep.get(x.path);
+    const anchorFor = (d: DomainNode | undefined): DomainNode | null => {
+      for (let x = d; x; x = x.parent) if (keep.has(x.path)) return keep.get(x.path) ?? null;
       return null;
     };
 
-    const rootSeat = new Map();
-    const circles = D.tree.kids.map(k => ({ k, r: 18 + Math.sqrt(k.count) * 13 }));
+    const rootSeat = new Map<string, Seat>();
+    const circles = D.tree.kids.map(k => ({ k, r: 18 + Math.sqrt(k.count) * 13, x: 0, y: 0 }));
     packSiblings(circles);
     for (const c of circles) rootSeat.set(c.k.name, { x: c.x, y: c.y, room: c.r });
 
     const seedR = Math.sqrt(Math.max(1, D.nodes.length)) * 26;
-    const seedFor = (path, i, n) => {
+    const seedFor = (path: string | undefined, i: number, n: number): Pt => {
       const seat = rootSeat.get(topOf(path)) || { x: 0, y: 0, room: seedR * 0.3 };
       const s = spiral(i, Math.max(1, n), seat.room * 0.7);
       return { x: seat.x + s.x, y: seat.y + s.y };
     };
 
     let at = 0;
+    const bodyOf = new Map<DomainNode, HubBody>();
     for (const [, d] of keep) {
-      const b = {
+      const b: HubBody = {
         domain: d.path, name: d.name, count: d.count, depth: d.depth,
         hue: D.hueOf(d.path),
         r: 4 + Math.sqrt(d.count) * 2.1,
         m: 2 + Math.sqrt(d.count) * 1.5,
+        vx: 0, vy: 0,
         ...seedFor(d.path, at++, keep.size),
       };
-      d._body = b; hubs.push(b); bodies.push(b);
+      bodyOf.set(d, b); hubs.push(b); bodies.push(b);
     }
     for (const [, d] of keep) {
       const up = d.parent && anchorFor(d.parent);
-      if (up && up !== d) {
-        d._body.up = up._body;
-        links.push({ a: d._body, b: up._body, len: HUBS.linkLen * 2.1, k: HUBS.linkK * 1.4 });
+      const mine = bodyOf.get(d), theirs = up ? bodyOf.get(up) : undefined;
+      if (up && up !== d && mine && theirs) {
+        mine.up = theirs;
+        links.push({ a: mine, b: theirs, len: HUBS.linkLen * 2.1, k: HUBS.linkK * 1.4 });
       }
     }
 
     const N = D.nodes.length;
-    const byUid = new Map();
+    const byUid = new Map<string, MemBody>();
     D.nodes.forEach((n, i) => {
-      const b = {
+      const b: MemBody = {
         n, uid: n.uid,
         r: 2.2 + Math.sqrt(D.degree.get(n.uid) || 0) * 1.5, m: 1,
+        vx: 0, vy: 0,
         ...seedFor(n.domain, i, N),
       };
       byUid.set(n.uid, b);
       mems.push(b); bodies.push(b);
-      const host = D.domainOf.get(n.domain);
+      const host = D.domainOf.get(n.domain ?? '');
       const anchor = host && anchorFor(host);
-      if (anchor) {
-        b.up = anchor._body;
-        links.push({ a: b, b: anchor._body, len: HUBS.linkLen, k: HUBS.linkK * 1.6 });
+      const hub = anchor ? bodyOf.get(anchor) : undefined;
+      if (hub) {
+        b.up = hub;
+        links.push({ a: b, b: hub, len: HUBS.linkLen, k: HUBS.linkK * 1.6 });
       }
     });
 
-    const rel = [];
+    const rel: RelLink[] = [];
     for (const e of D.edges) {
       const a = byUid.get(e.from_uid), b = byUid.get(e.to_uid);
       if (!a || !b) continue;
@@ -179,34 +327,34 @@ class Hubs {
     });
   }
 
-  get progress() { return this.sim.progress; }
+  get progress(): number { return this.sim.progress; }
 
-  step() {
+  step(): boolean {
     if (this.sim.settled) return false;
     this.sim.run(SLICE_MS);
     this.picker = null;
     return !this.sim.settled;
   }
 
-  halt() { this.sim.halt(); }
+  halt(): void { this.sim.halt(); }
 
-  box() { return robustBounds(this.bodies, 26); }
+  box(): Box { return robustBounds(this.bodies, 26); }
 
-  locate(uid) {
+  locate(uid: string) {
     const b = this.byUid.get(uid);
     return b ? { x: b.x, y: b.y, r: b.r } : null;
   }
 
-  draw(ctx, cam, env) {
+  draw(ctx: CanvasRenderingContext2D, cam: Camera, env: Env): void {
     const { palette, show } = env;
     const K = cam.k;
     const board = new LabelBoard(ctx);
     board.reset(env.taken);
     const lit = env.lit;
-    const sc = b => cam.toScreen(b.x, b.y);
+    const sc = (b: Pt) => cam.toScreen(b.x, b.y);
 
     /* The tree is the quietest layer; what the pointer lights draws its own, brighter. */
-    const leafLines = [], hubLines = [], hotTree = [];
+    const leafLines: Pt[][] = [], hubLines: Pt[][] = [], hotTree: Pt[][] = [];
     for (const b of this.mems) {
       if (!b.up) continue;
       (lit && lit.has(b.uid) ? hotTree : leafLines).push([sc(b), sc(b.up)]);
@@ -217,12 +365,8 @@ class Hubs {
     lines(ctx, hotTree, palette.treeHot, 1.2);
 
     if (show.links) {
-      const byType = new Map();
-      for (const r of this.rel) {
-        const k = r.e.relation_type;
-        if (!byType.has(k)) byType.set(k, []);
-        byType.get(k).push([sc(r.a), sc(r.b)]);
-      }
+      const byType = new Map<string, Pt[][]>();
+      for (const r of this.rel) bucket(byType, r.e.relation_type).push([sc(r.a), sc(r.b)]);
       for (const [type, segs] of byType)
         lines(ctx, segs, relColor(palette, type), type === 'relates_to' ? 1 : 1.6,
               lit ? 0.25 : 1);
@@ -292,10 +436,11 @@ class Hubs {
       });
   }
 
-  hit(x, y, cam) {
-    if (!this.picker) this.picker = new Picker([...this.mems, ...this.hubs], 34);
+  hit(x: number, y: number, cam: Camera): Hit | null {
+    if (!this.picker) this.picker = new Picker<MemBody | HubBody>([...this.mems, ...this.hubs], 34);
     const found = this.picker.at(x, y, 16 / cam.k);
-    return found ? (found.n || { domain: found.domain, count: found.count }) : null;
+    if (!found) return null;
+    return 'n' in found ? found.n : { domain: found.domain, count: found.count };
   }
 }
 
@@ -305,38 +450,68 @@ class Hubs {
    a disc with its count and type mix, so the first frame costs the same at any store size. */
 const PACK = { gap: 2, pad: 5, memR: 3, degR: 1.5, minPx: 18 };
 
-function packDomain(d, D) {
+interface PackBase {
+  x: number;
+  y: number;
+  r: number;
+  ax: number;
+  ay: number;
+  mix: Record<string, number>;
+  parent?: PackDom;
+}
+
+interface PackLeaf extends PackBase { leaf: true; mem: GraphNode }
+
+interface PackDom extends PackBase {
+  leaf?: undefined;
+  domain: string;
+  name: string;
+  count: number;
+  depth: number;
+  children: PackItem[];
+  hue: string;
+}
+
+type PackItem = PackLeaf | PackDom;
+
+function packDomain(d: DomainNode, D: Store): PackDom {
   const kids = d.kids.map(k => packDomain(k, D));
-  const mems = d.mems.map(m => ({
+  const mems = d.mems.map((m): PackLeaf => ({
     mem: m, leaf: true,
     r: PACK.memR + Math.sqrt(D.degree.get(m.uid) || 0) * PACK.degR,
+    x: 0, y: 0, ax: 0, ay: 0, mix: {},
   }));
-  const all = [...kids, ...mems];
+  const all: PackItem[] = [...kids, ...mems];
   const gap = d.depth === 0 ? PACK.gap * 2 : PACK.gap;
   for (const c of all) c.r += gap;
   const R = all.length ? packSiblings(all) : PACK.memR;
   for (const c of all) c.r -= gap;
-  const node = {
+  const node: PackDom = {
     domain: d.path, name: d.name, count: d.count, depth: d.depth,
     children: all, r: R + (d.depth ? PACK.pad : 0),
-    hue: D.hueOf(d.path || d.name), x: 0, y: 0,
+    hue: D.hueOf(d.path || d.name), x: 0, y: 0, ax: 0, ay: 0, mix: {},
   };
   for (const c of all) c.parent = node;
   return node;
 }
 
-class Pack {
-  constructor(env) {
+class Pack implements Arrangement {
+  declare root: PackDom;
+  declare leaves: PackLeaf[];
+  declare doms: PackDom[];
+  declare byUid: Map<string, PackLeaf>;
+
+  constructor(env: Env) {
     const D = env.D;
     const root = packDomain(D.tree, D);
-    (function place(node, ox, oy) {
+    (function place(node: PackItem, ox: number, oy: number) {
       node.ax = ox + node.x;
       node.ay = oy + node.y;
-      if (node.children) for (const c of node.children) place(c, node.ax, node.ay);
+      if (!node.leaf) for (const c of node.children) place(c, node.ax, node.ay);
     })(root, 0, 0);
 
-    const leaves = [], doms = [];
-    (function walk(n) {
+    const leaves: PackLeaf[] = [], doms: PackDom[] = [];
+    (function walk(n: PackItem) {
       if (n.leaf) { leaves.push(n); return; }
       doms.push(n);
       for (const c of n.children) walk(c);
@@ -344,7 +519,7 @@ class Pack {
 
     /* the type mix of every subtree, so a closed disc still says WHAT it
        holds and not only how much */
-    (function mix(n) {
+    (function mix(n: PackItem): Record<string, number> {
       n.mix = {};
       if (n.leaf) { n.mix[n.mem.type] = 1; return n.mix; }
       for (const c of n.children) {
@@ -360,35 +535,35 @@ class Pack {
     this.byUid = new Map(leaves.map(l => [l.mem.uid, l]));
   }
 
-  get progress() { return 1; }
+  get progress(): number { return 1; }
 
-  step() { return false; }
+  step(): boolean { return false; }
 
-  halt() {}
+  halt(): void {}
 
-  box() {
+  box(): Box {
     const r = this.root.r;
     return { x0: -r - 20, y0: -r - 20, x1: r + 20, y1: r + 20 };
   }
 
-  locate(uid) {
+  locate(uid: string) {
     const l = this.byUid.get(uid);
     return l ? { x: l.ax, y: l.ay, r: l.r } : null;
   }
 
-  draw(ctx, cam, env) {
+  draw(ctx: CanvasRenderingContext2D, cam: Camera, env: Env): void {
     const { palette, show } = env;
     const K = cam.k;
     const board = new LabelBoard(ctx);
     board.reset(env.taken);
-    const onScreen = (n, rpx) => {
+    const onScreen = (n: PackItem, rpx: number) => {
       const s = cam.toScreen(n.ax, n.ay);
       return rpx > 1 && s.x + rpx > -40 && s.y + rpx > -40
              && s.x - rpx < env.W + 40 && s.y - rpx < env.H + 40;
     };
 
-    const open = [], closed = [], shown = [];
-    (function walk(n) {
+    const open: PackDom[] = [], closed: PackDom[] = [], shown: PackLeaf[] = [];
+    (function walk(n: PackItem) {
       const rpx = n.r * K;
       if (!onScreen(n, rpx)) return;
       if (n.leaf) { shown.push(n); return; }
@@ -508,15 +683,15 @@ class Pack {
 
   /* A memory first, then the innermost domain the pointer is inside: a click
      on the ground between two memories still goes somewhere. */
-  hit(x, y, cam) {
-    let best = null, bd = Infinity;
+  hit(x: number, y: number, cam: Camera): Hit | null {
+    let best: PackLeaf | null = null, bd = Infinity;
     for (const l of this.leaves) {
       const d = (l.ax - x) ** 2 + (l.ay - y) ** 2;
       const r = Math.max(l.r, 8 / cam.k);
       if (d < r * r && d < bd) { bd = d; best = l; }
     }
     if (best) return best.mem;
-    let inner = null;
+    let inner: PackDom | null = null;
     for (const n of this.doms) {
       if (!n.depth) continue;
       if ((n.ax - x) ** 2 + (n.ay - y) ** 2 < n.r * n.r)
@@ -526,7 +701,7 @@ class Pack {
   }
 
   /* Click descends into a domain; a click on the ground frames the store. */
-  click(hit, env) {
+  click(hit: Hit | null, env: Env): boolean {
     if (!hit || !hit.domain || hit.uid) return false;
     const node = this.doms.find(d => d.domain === hit.domain);
     if (!node) return false;
@@ -541,31 +716,57 @@ class Pack {
    store grows; the coastline is a level set of the domain's own density. */
 const ATLAS = { charge: 950, seatK: 14, level: 0.2, sigma: 34, area: 74 };
 
-class Atlas {
-  constructor(env) {
+interface AtlasBody extends Body { n: GraphNode; uid: string; seat: Seat; r: number }
+
+interface AtlasPair { a: AtlasBody; b: AtlasBody; e: GraphEdge }
+
+interface AtlasLink extends AtlasPair { cross: boolean }
+
+interface Coast {
+  root: DomainNode;
+  hue: string;
+  loops: Pt[][];
+  n: number;
+  cx: number;
+  cy: number;
+  span: number;
+}
+
+class Atlas implements Arrangement {
+  declare bodies: AtlasBody[];
+  declare byUid: Map<string, AtlasBody>;
+  declare seats: Map<string, Seat>;
+  declare roots: DomainNode[];
+  declare hueOf: (path: string) => string;
+  declare links: AtlasLink[];
+  declare coasts: Coast[] | null;
+  declare queue: DomainNode[] | null;
+  declare sim: Sim;
+
+  constructor(env: Env) {
     const D = env.D;
     const roots = D.tree.kids;
     const N = Math.max(1, D.nodes.length);
-    const circles = roots.map(r => ({ root: r, r: ATLAS.area * Math.sqrt(r.count) / 3 + 26 }));
+    const circles = roots.map(r => ({ root: r, r: ATLAS.area * Math.sqrt(r.count) / 3 + 26, x: 0, y: 0 }));
     packSiblings(circles);
-    const seats = new Map();
+    const seats = new Map<string, Seat>();
     for (const c of circles)
       seats.set(c.root.name, { x: c.x, y: c.y, name: c.root.name, room: c.r });
 
-    const bodies = [];
+    const bodies: AtlasBody[] = [];
     D.nodes.forEach((n, i) => {
       const seat = seats.get(topOf(n.domain)) || { x: 0, y: 0, room: 40 };
       const s = spiral(i, N, (seat.room || 40) * 0.7);
       bodies.push({
         n, uid: n.uid, m: 1, seat,
-        x: seat.x + s.x, y: seat.y + s.y,
+        x: seat.x + s.x, y: seat.y + s.y, vx: 0, vy: 0,
         r: 2.4 + Math.sqrt(D.degree.get(n.uid) || 0) * 1.6,
       });
     });
     const byUid = new Map(bodies.map(b => [b.uid, b]));
     const pairs = D.edges
       .map(e => ({ a: byUid.get(e.from_uid), b: byUid.get(e.to_uid), e }))
-      .filter(l => l.a && l.b);
+      .filter((l): l is AtlasPair => !!(l.a && l.b));
 
     this.bodies = bodies; this.byUid = byUid; this.seats = seats; this.roots = roots;
     this.hueOf = D.hueOf;
@@ -580,7 +781,7 @@ class Atlas {
 
   /* The physics owns the first nine tenths and the coastlines the last: both
      are a wait the reader is watching a bar for. */
-  get progress() {
+  get progress(): number {
     if (!this.sim.settled) return this.sim.progress * 0.9;
     const total = this.roots.length || 1;
     const left = this.queue ? this.queue.length : 0;
@@ -589,16 +790,17 @@ class Atlas {
 
   /* Busy through the physics settle, then one territory traced per frame so frames are not
      dropped; each appears as it lands. */
-  step() {
+  step(): boolean {
     if (!this.sim.settled) {
       this.sim.run(SLICE_MS);
       this.queue = null;
       this.coasts = null;
       return true;
     }
-    if (!this.coasts) { this.queue = this.roots.slice(); this.coasts = []; }
-    if (!this.queue.length) return false;
-    const one = this._coast(this.queue.shift());
+    if (!this.coasts || !this.queue) { this.queue = this.roots.slice(); this.coasts = []; }
+    const next = this.queue.shift();
+    if (!next) return false;
+    const one = this._coast(next);
     if (one) this.coasts.push(one);
     if (!this.queue.length) {
       this.coasts.sort((a, b) => b.n - a.n);
@@ -608,18 +810,18 @@ class Atlas {
   }
 
   /* The settle ceiling stops the physics; the finite tracing left still runs here. */
-  halt() {
+  halt(): void {
     this.sim.halt();
-    if (!this.coasts) { this.queue = this.roots.slice(); this.coasts = []; }
-    while (this.queue.length) {
-      const one = this._coast(this.queue.shift());
+    if (!this.coasts || !this.queue) { this.queue = this.roots.slice(); this.coasts = []; }
+    for (let next = this.queue.shift(); next; next = this.queue.shift()) {
+      const one = this._coast(next);
       if (one) this.coasts.push(one);
     }
     this.coasts.sort((a, b) => b.n - a.n);
   }
 
   /* The density field of one root domain, and its level set as a coastline. */
-  _coast(root) {
+  _coast(root: DomainNode): Coast | null {
     const pts = this.bodies.filter(b => topOf(b.n.domain) === root.name)
       .map(b => ({ x: b.x, y: b.y, w: 1 }));
     if (!pts.length) return null;
@@ -635,19 +837,19 @@ class Atlas {
     };
   }
 
-  box() { return robustBounds(this.bodies, 90, 0.004); }
+  box(): Box { return robustBounds(this.bodies, 90, 0.004); }
 
-  locate(uid) {
+  locate(uid: string) {
     const b = this.byUid.get(uid);
     return b ? { x: b.x, y: b.y, r: b.r } : null;
   }
 
-  draw(ctx, cam, env) {
+  draw(ctx: CanvasRenderingContext2D, cam: Camera, env: Env): void {
     const { palette, show } = env;
     const K = cam.k;
     const board = new LabelBoard(ctx);
     board.reset(env.taken);
-    const sc = p => cam.toScreen(p.x, p.y);
+    const sc = (p: Pt) => cam.toScreen(p.x, p.y);
     const lit = env.lit;
 
     if (this.coasts) {
@@ -672,16 +874,14 @@ class Atlas {
     /* A road between territories is bowed so parallel roads do not overlap; one inside a
        territory stays straight. */
     if (show.links) {
-      const local = [], trunk = new Map();
+      const local: Pt[][] = [], trunk = new Map<string, Pt[][]>();
       for (const l of this.links) {
         const a = sc(l.a), b = sc(l.b);
         if (!l.cross) { local.push([a, b]); continue; }
         const mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2;
         const dx = b.x - a.x, dy = b.y - a.y;
         const c = { x: mx - dy * 0.11, y: my + dx * 0.11 };
-        const type = l.e.relation_type;
-        if (!trunk.has(type)) trunk.set(type, []);
-        trunk.get(type).push([a, c, b]);
+        bucket(trunk, l.e.relation_type).push([a, c, b]);
       }
       lines(ctx, local, palette.tree, 1, lit ? 0.2 : 1);
       for (const [type, set] of trunk)
@@ -762,9 +962,9 @@ class Atlas {
 
   /* A settlement first, then the territory the pointer is standing in: the
      ground between two memories is a place here, and it is the domain. */
-  hit(x, y, cam) {
+  hit(x: number, y: number, cam: Camera): Hit | null {
     const r = 13 / cam.k;
-    let best = null, bd = r * r;
+    let best: AtlasBody | null = null, bd = r * r;
     for (const b of this.bodies) {
       const d = (b.x - x) ** 2 + (b.y - y) ** 2;
       if (d < bd) { bd = d; best = b; }
@@ -779,7 +979,7 @@ class Atlas {
 
 /* The three, in the order the picker offers them. `note` names the i18n key
    the legend explains each one with. */
-export const ARRANGEMENTS = [
+export const ARRANGEMENTS: ArrangementSpec[] = [
   { id: 'hubs', make: env => new Hubs(env), note: 'g.mode.hubs.note', settles: true },
   { id: 'pack', make: env => new Pack(env), note: 'g.mode.pack.note', settles: false },
   { id: 'atlas', make: env => new Atlas(env), note: 'g.mode.atlas.note', settles: true },
@@ -787,5 +987,5 @@ export const ARRANGEMENTS = [
 
 export const DEFAULT_MODE = ARRANGEMENTS[0].id;
 
-export const arrangement = id =>
+export const arrangement = (id: string): ArrangementSpec =>
   ARRANGEMENTS.find(a => a.id === id) || ARRANGEMENTS[0];

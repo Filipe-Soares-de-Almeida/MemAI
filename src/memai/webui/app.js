@@ -2,15 +2,15 @@
    router's importer, and the global keyboard shortcuts. */
 
 /* first, so the root carries data-motion before anything is drawn */
-import './core/motion.js';
-import { $ } from './core/dom.js';
+import './core/motion.ts';
+import { $ } from './core/dom.ts';
 import { paintIcons } from './core/icons.js';
 import { modalOpen, closeModal, toast } from './core/ui.js';
 import { pickerFor, setPickerValue, wirePicker, fixedItems } from './core/pick.js';
 import { mountProjectPicker } from './core/projects.js';
-import { mountVersionChip } from './core/version.js';
-import { registerViews, route } from './core/router.js';
-import { I18N, t } from './i18n.js';
+import { mountVersionChip } from './core/version.ts';
+import { registerViews, route } from './core/router.ts';
+import { I18N, t } from './i18n.ts';
 
 import { renderOverview } from './views/overview.js';
 import { renderMemories } from './views/memories.js';
@@ -21,7 +21,8 @@ import { renderDomains } from './views/domains.js';
 import { renderMaintenance } from './views/maintenance.js';
 import { renderOptimization } from './views/optimization.js';
 import { renderChangelog } from './views/changelog.js';
-import { renderRecord, openRecord } from './views/record.js';
+import { renderRecord } from './views/record/index.js';
+import { openRecord } from './core/nav.ts';
 import { openNewMemory } from './views/new-memory.js';
 
 registerViews({

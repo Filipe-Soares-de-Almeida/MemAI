@@ -1,12 +1,7 @@
-/* Runs core/textdiff.js over a set of before/after pairs and prints the
-   ranges it found, as JSON, so tests/test_textdiff.py can hold the diff to
-   them. Usage: node tools/diff-cases.mjs
+/* Prints core/textdiff.ts's ranges for tests/test_textdiff.py, spliced back into each text as
+   [-...-] and [+...+] so a test reads words rather than offsets. Usage: node tools/diff-cases.mjs */
 
-   Each case prints the two texts with their ranges spliced back in as
-   [-...-] and [+...+], which is what the tests read: a range list is a
-   pair of numbers and says nothing about which words it covers. */
-
-import { diffRanges } from '../src/memai/webui/core/textdiff.js';
+import { diffRanges } from '../src/memai/webui/core/textdiff.ts';
 
 const splice = (text, ranges, open, close) => {
   let out = '', at = 0;

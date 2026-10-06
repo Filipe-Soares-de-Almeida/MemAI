@@ -8,7 +8,8 @@ import { createHash } from 'node:crypto';
 import { readdir, readFile } from 'node:fs/promises';
 import { join, relative, sep } from 'node:path';
 
-export const BUILD_CONFIG = ['package.json', 'package-lock.json', 'vite.config.js', 'tsconfig.json'];
+export const BUILD_CONFIG = ['package.json', 'package-lock.json', 'vite.config.js', 'tsconfig.json',
+  'src/memai/contract.json'];
 const WEBUI = join('src', 'memai', 'webui');
 
 async function walk(dir, skip) {

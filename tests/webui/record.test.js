@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { renderRecord } from '../../src/memai/webui/views/record.js';
+import { renderRecord } from '../../src/memai/webui/views/record/index.js';
 import { calls, serveApi } from './support.js';
 
 async function until(check, ms = 2000) {

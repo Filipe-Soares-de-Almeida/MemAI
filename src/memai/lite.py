@@ -7,7 +7,7 @@ is, the clock's format, how a domain path is cut and normalised, and the
 intervals a session's state is judged against. `memai.db` re-exports all of
 it, so callers keep one spelling.
 
-Nothing here imports another memai module.
+Nothing here imports another memai module but the stdlib-only `memai.contract`.
 """
 
 from __future__ import annotations
@@ -16,7 +16,7 @@ import os
 from datetime import UTC, datetime
 from pathlib import Path
 
-DOMAIN_SEP = "/"
+from memai.contract import DOMAIN_SEP
 
 # Minutes before the warden, and the ask about open tasks, are owed again.
 WARDEN_MINUTES_DEFAULT = 20

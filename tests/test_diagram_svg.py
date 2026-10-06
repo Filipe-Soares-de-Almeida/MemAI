@@ -8,7 +8,7 @@ has to agree with it.
 
 To re-measure, serve the dashboard and run, in its console:
 
-    const m = await import('/static/diagram-engine.js');
+    const m = await import('/static/engines/diagram-engine.ts');
     const ed = Object.create(m.DiagramEditor.prototype);
     ed.cx = document.createElement('canvas').getContext('2d');
     ed.cx.font = "12px 'Roboto', 'Segoe UI', system-ui, sans-serif";

@@ -971,7 +971,7 @@ def test_dashboard_lists_only_the_types_it_can_create_for_an_unknown_type(client
         "title": "a would-be pitfall", "type": "pitfall", "content": "x"})
     assert res.status_code == 400
     assert res.json()["error"] == (
-        "type must be one of ('note', 'reasoning', 'anti_pattern', 'checkpoint')")
+        "type must be one of ('note', 'checkpoint', 'anti_pattern', 'reasoning')")
 
 
 def test_dashboard_does_not_create_or_retype_to_handoff(client):
@@ -980,7 +980,7 @@ def test_dashboard_does_not_create_or_retype_to_handoff(client):
     assert res.status_code == 400
     assert res.json()["error"] == (
         "a handoff is not created from the dashboard; "
-        "type must be one of ('note', 'reasoning', 'anti_pattern', 'checkpoint')")
+        "type must be one of ('note', 'checkpoint', 'anti_pattern', 'reasoning')")
     note = _create(client, content="a plain note")
     assert client.post(f"/api/memories/{note}/meta", json={"type": "handoff"}).status_code == 400
     assert client.get(f"/api/memories/{note}").json()["type"] == "note"

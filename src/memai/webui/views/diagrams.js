@@ -9,16 +9,17 @@
    Filtering is client-side: the server sends the whole set for the domain
    and status asked for, and the point of the view is to scan it. */
 
-import { $, esc, fmtInt, fmtAgo } from '../core/dom.js';
-import { api } from '../core/api.js';
+import { $, esc, fmtInt, fmtAgo } from '../core/dom.ts';
 import { icon } from '../core/icons.js';
 import { failed, promptModal } from '../core/ui.js';
 import { statusTag, uidChip, wireCopyChips, getDomains,
          invalidateDomains } from '../core/shared.js';
 import { domainPickerHTML, wireDomainPicker } from '../core/domain-picker.js';
-import { go } from '../core/router.js';
-import { openRecord } from './record.js';
-import { t } from '../i18n.js';
+import { go } from '../core/router.ts';
+import { openRecord } from '../core/nav.ts';
+import { newDiagramSkeleton } from '../core/diagram-skeleton.ts';
+import { t } from '../i18n.ts';
+import * as client from '../api/client.ts';
 
 const ISSUE_ORDER = ['empty', 'no_start', 'many_starts', 'unreachable',
                      'dead_end', 'no_end'];
@@ -26,15 +27,6 @@ const ISSUE_ORDER = ['empty', 'no_start', 'many_starts', 'unreachable',
 /* A flow starts as a start→end skeleton and is grown on the canvas: there
    is no useful "empty diagram", and typing a graph as text is not the
    point of the type. */
-export const newDiagramSkeleton = ({ title, domain = '', also = '', tags = '' }) =>
-  api('/api/diagrams', { body: {
-    title, domain, also, tags,
-    nodes: [
-      { key: 'start', shape: 'start', label: t('dg.skeleton.start') },
-      { key: 'finish', shape: 'end', label: t('dg.skeleton.end') },
-    ],
-    edges: [{ from: 'start', to: 'finish' }] } });
-
 async function promptNewDiagram(domain = '') {
   const title = await promptModal({
     title: t('dgl.newTitle'), body: t('dgl.newBody'),
@@ -85,7 +77,7 @@ export async function renderDiagrams(view, params, ctx) {
   if (state.domain) qs.set('domain', state.domain);
   const [domains, data] = await Promise.all([
     getDomains().catch(() => []),
-    api(`/api/diagrams?${qs}`),
+    client.diagrams.list(qs),
   ]);
   if (ctx.stale()) return;
 

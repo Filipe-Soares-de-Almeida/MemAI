@@ -1,7 +1,7 @@
 """What t() gives back, held to the strings the catalogs actually carry.
 
-The runtime is JavaScript, so these run it: tools/i18n-cases.mjs feeds
-i18n.js a set of lookups under node and prints what came back. Same
+The runtime is TypeScript, so these run it: tools/i18n-cases.mjs feeds
+i18n.ts a set of lookups under node and prints what came back. Same
 arrangement as tests/test_richtext.py -- the browser's code is the code
 under test, rather than a Python re-implementation of it standing in for it.
 
