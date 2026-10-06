@@ -1,21 +1,21 @@
 /* Choosing memories to point at, as a dialog over the form that raised it: results, the full
    memory, and a tray of picks. Resolves uids; what they become is the caller's business. */
 
-import { esc, fmtDate, fmtInt, debounce } from './dom.js';
-import { api, seg } from './api.js';
+import { esc, fmtDate, fmtInt, debounce } from './dom.ts';
 import { icon } from './icons.js';
 import { openModal, closeModal } from './ui.js';
 import { typeColor, typeClass, confPill, statusTag, uidChip, relTypeField,
          wireRelTypeField, TYPE_LABEL, typeItems, getDomains } from './shared.js';
 import { pickerFor, setPickerValue, wirePicker, fixedItems } from './pick.js';
 import { domainPickerHTML, wireDomainPicker } from './domain-picker.js';
-import { t } from '../i18n.js';
+import { t } from '../i18n.ts';
+import * as client from '../api/client.ts';
 
 /* Records fetched for the preview pane, emptied each time a dialog opens. */
 const previews = new Map();
 
 const previewOf = async uid => {
-  if (!previews.has(uid)) previews.set(uid, await api(`/api/memories/${seg(uid)}`));
+  if (!previews.has(uid)) previews.set(uid, await client.memories.get(uid));
   return previews.get(uid);
 };
 
@@ -211,7 +211,7 @@ export function pickMemories({
       });
       let r;
       try {
-        r = await api(`/api/lookup?${qs}`);
+        r = await client.lookup(qs);
       } catch {
         if (mine !== seq) return;
         listEl.innerHTML = `<div class="picker-note picker-note-bad">${t('lookup.failed')}</div>`;

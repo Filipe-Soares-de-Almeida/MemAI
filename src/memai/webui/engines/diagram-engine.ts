@@ -1,84 +1,126 @@
 /* Canvas editor for one diagram memory; positions come from the store. Edge geometry has a Python
    twin, memai/diagram_svg.py: change both, then route-parity.mjs --write and test_diagram_svg.py. */
 
-const esc = s => String(s ?? '').replace(/[&<>"']/g,
-  c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-const cssVar = name =>
+import { DIAGRAM } from '../contract.ts';
+
+export type Side = 'top' | 'bottom' | 'left' | 'right';
+export interface Pt { x: number; y: number }
+export interface Rect { x: number; y: number; w: number; h: number }
+
+/* A step as the store hands it over; w and h are absent until someone resizes it. */
+export interface DiagramNodeData {
+  key: string;
+  label?: string;
+  note?: string;
+  shape?: string;
+  x: number;
+  y: number;
+  w?: number | null;
+  h?: number | null;
+}
+
+/* Where a route was moved to dodge a card: a crossbar at a y or an x, or a corridor at an x. */
+export interface Via { corridor?: number; crossY?: number; crossX?: number }
+
+/* An edge as the store hands it over, plus the routing the editor writes onto it. */
+export interface DiagramEdge {
+  from: string;
+  to: string;
+  label?: string;
+  loops?: boolean;
+  back?: boolean;
+  lane?: number;
+  bow?: number;
+  via?: Via | null;
+  flank?: boolean;
+  fanFrom?: number;
+  fanTo?: number;
+  stubFrom?: number;
+  stubTo?: number;
+  hit?: Rect | null;
+}
+
+export interface DiagramData {
+  font_scale?: number | null;
+  nodes?: DiagramNodeData[];
+  edges?: DiagramEdge[];
+  links?: Array<{ node_key: string }>;
+  jumps?: Array<{ node_key?: string | null }>;
+}
+
+export interface DiagramNode {
+  key: string;
+  label: string;
+  note: string;
+  shape: string;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  sized: boolean;
+}
+
+type NodeBox = Pick<DiagramNode, 'x' | 'y' | 'w' | 'h' | 'shape'>;
+type Insets = Partial<Record<Side, number>>;
+type Geometry = Record<string, { x: number; y: number; w?: number; h?: number }>;
+
+export interface ContextHit {
+  world: Pt;
+  x: number;
+  y: number;
+  node: DiagramNode | null;
+  edge: DiagramEdge | null;
+}
+
+export interface DiagramHooks {
+  readOnly?: boolean;
+  tipShow?: (html: string, x: number, y: number) => void;
+  tipHide?: () => void;
+  insets?: () => Insets;
+  onMove?: (geometry: Geometry) => void;
+  onEditEdgeLabel?: (edge: DiagramEdge) => void;
+  onConnectProgress?: (from: DiagramNode | null) => void;
+  onConnect?: (from: string, to: string) => void;
+  onSelect?: (node: DiagramNode | null) => void;
+  onSelectEdge?: (edge: DiagramEdge | null) => void;
+  onContextMenu?: (hit: ContextHit) => void;
+}
+
+interface Handle { id: 'nw' | 'ne' | 'sw' | 'se'; x: number; y: number; sx: number; sy: number }
+interface Guide { axis: 'x' | 'y'; at: number }
+interface Pinch { dist: number; mx: number; my: number; scale: number; tx: number; ty: number }
+
+interface FanMember {
+  e: DiagramEdge;
+  side: Side;
+  self: DiagramNode;
+  peer: DiagramNode;
+  end: 'From' | 'To';
+  corridorX: number | null;
+}
+
+const FAN_KEY = { From: 'fanFrom', To: 'fanTo' } as const;
+const STUB_KEY = { From: 'stubFrom', To: 'stubTo' } as const;
+
+const ESCAPES: Record<string, string> =
+  { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
+const esc = (s: unknown): string => String(s ?? '').replace(/[&<>"']/g, c => ESCAPES[c]);
+const cssVar = (name: string): string =>
   getComputedStyle(document.documentElement).getPropertyValue(name).trim();
 
-export const NODE_SHAPES = ['start', 'step', 'decision', 'io', 'end'];
+/* Box and edge metrics shared with the server's layout and SVG export, in the units the store lays
+   out with; what each one does is said where it is used. */
+const {
+  NODE_W, NODE_H, DECISION_H, NODE_MIN_W, NODE_MAX_W, NODE_MIN_H, NODE_MAX_H,
+  IO_SKEW, ARROW_GAP, ARROW_LEN, ARROW_FLARE, ORTH_STUB, FAN_GAP, FAN_STUB, MERGE_GAP, MERGE_TAIL,
+  ORTH_RADIUS, ORTH_SNAP, LABEL_PX, LABEL_LH, LABEL_MIN_SCALE, BADGE_WORDS, BADGE_CHARS,
+  BADGE_MIN_SCALE, RING_GROW, BADGE_OUT,
+} = DIAGRAM;
+export const { SHAPES: NODE_SHAPES, BADGE_PX } = DIAGRAM;
 
-/* Box geometry, in the same abstract units the server lays out with
-   (LAYOUT_COL_W 300 / LAYOUT_ROW_H 200), so a stored arrangement has
-   room to breathe without any scaling here. Deliberately smaller than one
-   layout cell: the air between boxes is what keeps a long flow readable. */
-/* These four must match db.NODE_DEFAULT_W / NODE_DEFAULT_H /
-   DECISION_DEFAULT_H / NODE_MIN_* -- the server lays out in the same units
-   and clamps a resize to the same bounds. */
-const NODE_W = 170;
-const NODE_H = 48;
-const DECISION_H = 66;
-const NODE_MIN_W = 110, NODE_MAX_W = 560;
-const NODE_MIN_H = 34, NODE_MAX_H = 340;
-/* Every constant from here to ORTH_SNAP is mirrored in diagram_svg.py
-   under the same name. Changing one alone silently splits the canvas from
-   the SVG export -- see the twin-file note at the top of this file for the
-   two commands that catch it. */
-const IO_SKEW = 14;          /* the lean on an input/output parallelogram */
 const HANDLE = 7;            /* half-side of a corner resize grip, world units */
 const SNAP_PX = 7;           /* how near an axis has to be to pull a card onto it */
-const ARROW_GAP = 5;         /* air between the box edge and the arrow tip */
-const ORTH_STUB = 26;        /* how far a right-angled edge leaves its box */
-/* Two edges leaving the same side of the same card used to be drawn from
-   the exact same point with the exact same stub, so they ran on top of each
-   other until they parted -- on a hand-arranged 34-step flow, 37 of 49
-   edges had some length of line drawn over another line. FAN_GAP spreads
-   their anchors along the side; FAN_STUB staggers how deep each one turns,
-   so the perpendicular legs separate too. See assignFans(). */
-const FAN_GAP = 22;
-const FAN_STUB = 14;
-/* The funnel. MERGE_GAP is where an edge's own parallel track begins, out
-   from the card; MERGE_TAIL is the straight bit right at the card, so a
-   line leaves and arrives square and the arrowhead is never drawn on the
-   diagonal that closes the funnel. */
-const MERGE_GAP = 30;
-const MERGE_TAIL = 9;
-const ORTH_RADIUS = 11;      /* corner rounding on a right-angled edge */
-/* Two boxes almost -- but not exactly -- in line used to get a full Z
-   detour for an offset of a few units, and two rounded corners that close
-   together bow into an S. Below this offset the run is drawn as one
-   segment: a couple of degrees off vertical reads as straight, a wiggle
-   reads as a mistake. */
-const ORTH_SNAP = 18;
 const EDGE_PICK_PX = 11;     /* how near the pointer must be to grab a line */
-
-/* Label metrics live in world units alongside the box metrics above, so a
-   label occupies the same fraction of its box at every zoom level. Both
-   are multiplied by the diagram's stored font scale. Mirrored in
-   diagram_svg.py, along with the two badge limits below. */
-const LABEL_PX = 12;
-const LABEL_LH = 14;
-export const BADGE_PX = 10;
-/* How much of an edge's label is drawn on the line. A branch condition is
-   often a whole sentence, and a badge that long is a wall across the
-   picture, so a long one is cut to a phrase and hovering it shows the rest.
-
-   BOTH limits have to be passed before anything is cut, not either: four
-   short words are still only fourteen characters, and cutting those to
-   three left an ellipsis promising text that was barely there. See
-   shortLabel() and the tip in onMove(). */
-const BADGE_WORDS = 3;
-const BADGE_CHARS = 20;
-/* How far outside a card the selection ring is traced. The badge beside a
-   card is measured from THAT and not from the card, so selecting one does
-   not move the badge onto the ring -- and does not move the badge at all,
-   which a ring-only offset would. Mirrored in diagram_svg.py, which draws
-   no ring but has to place the badge in the same spot. */
-const RING_GROW = 6;
-/* Air between the ring's outline and a count floating beside it. Small, and
-   measured from an OUTLINE -- see drawBadge(). Mirrored in diagram_svg.py,
-   where frame() also has to reserve room for what it puts outside the box. */
-const BADGE_OUT = 7;
 export const FONT_SCALES = [0.8, 1, 1.25, 1.6, 2];
 
 /* canvas `font` takes a literal font stack -- it does not resolve the
@@ -86,22 +128,76 @@ export const FONT_SCALES = [0.8, 1, 1.25, 1.6, 2];
 const FONT_UI = "'Roboto', 'Segoe UI', system-ui, sans-serif";
 const FONT_MONO = "'Roboto Mono', ui-monospace, Consolas, monospace";
 
-const clampTo = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
+const clampTo = (v: number, lo: number, hi: number): number => Math.min(hi, Math.max(lo, v));
 
 /* A node draws at its own size when it has one, its shape's default when
    it does not -- same rule as db.node_box, font scale included. Without
    that scale here, asking for bigger text would only truncate the label:
    the card it has to fit in would not have changed. */
-const nodeSize = (n, fontScale = 1) => ({
+const nodeSize = (n: { w?: unknown; h?: unknown; shape: string }, fontScale = 1) => ({
   w: clampTo(Number(n.w) || NODE_W * fontScale, NODE_MIN_W, NODE_MAX_W),
   h: clampTo(Number(n.h) || (n.shape === 'decision' ? DECISION_H : NODE_H) * fontScale,
              NODE_MIN_H, NODE_MAX_H),
 });
 
 export class DiagramEditor {
-  constructor(canvas, data, hooks = {}) {
+  declare cv: HTMLCanvasElement;
+  declare cx: CanvasRenderingContext2D;
+  declare hooks: DiagramHooks;
+  declare scale: number;
+  declare tx: number;
+  declare ty: number;
+  declare w: number;
+  declare h: number;
+  declare drag: { node: DiagramNode; dx: number; dy: number } | null;
+  declare sizing: { node: DiagramNode; grip: Handle; fx: number; fy: number } | null;
+  declare guides: Guide[] | null;
+  declare fontScale: number;
+  declare fitScale: number | null;
+  declare pan: Pt | null;
+  declare pointers: Map<number, Pt>;
+  declare pinch: Pinch | null;
+  declare moved: boolean;
+  declare hover: DiagramNode | null;
+  declare selected: string | null;
+  declare selectedEdge: DiagramEdge | null;
+  declare connectMode: boolean;
+  declare connectFrom: DiagramNode | null;
+  declare destroyed: boolean;
+  declare _frame: number;
+  declare routesDirty: boolean;
+  declare readOnly: boolean;
+  declare hoverLabel: DiagramEdge | null;
+  declare data: DiagramData;
+  declare nodes: DiagramNode[];
+  declare byKey: Record<string, DiagramNode>;
+  declare edges: DiagramEdge[];
+  declare linkCount: Record<string, number>;
+  declare jumpCount: Record<string, number>;
+  declare orphans: Set<string>;
+  declare laneSpan: { left: number; right: number } | undefined;
+  declare colNode: string;
+  declare colSurface: string;
+  declare colInk: string;
+  declare colInk2: string;
+  declare colLine: string;
+  declare colAccent: string;
+  declare colWarn: string;
+  declare _down: (e: PointerEvent) => void;
+  declare _move: (e: PointerEvent) => void;
+  declare _up: (e: PointerEvent) => void;
+  declare _wheel: (e: WheelEvent) => void;
+  declare _click: (e: MouseEvent) => void;
+  declare _context: (e: MouseEvent) => void;
+  declare _leave: () => void;
+  declare _resize: () => void;
+  declare _ro: ResizeObserver | undefined;
+
+  constructor(canvas: HTMLCanvasElement, data: DiagramData, hooks: DiagramHooks = {}) {
+    const cx = canvas.getContext('2d');
+    if (!cx) throw new Error('getContext("2d") returned null');
     this.cv = canvas;
-    this.cx = canvas.getContext('2d');
+    this.cx = cx;
     this.hooks = hooks;
     this.scale = 1;
     this.tx = 0;
@@ -178,13 +274,13 @@ export class DiagramEditor {
     addEventListener('resize', this._resize);
     if (typeof ResizeObserver === 'function') {
       this._ro = new ResizeObserver(this._resize);
-      this._ro.observe(canvas.parentElement);
+      if (canvas.parentElement) this._ro.observe(canvas.parentElement);
     }
 
     this.requestDraw();
   }
 
-  destroy() {
+  destroy(): void {
     this.destroyed = true;
     cancelAnimationFrame(this._frame);
     this.cv.removeEventListener('pointerdown', this._down);
@@ -199,7 +295,7 @@ export class DiagramEditor {
     this._ro?.disconnect();
   }
 
-  readTheme() {
+  readTheme(): void {
     this.colNode = cssVar('--t-diagram') || '#009688';
     this.colSurface = cssVar('--surface') || '#1e1e1e';
     this.colInk = cssVar('--ink') || 'rgba(255,255,255,.87)';
@@ -211,11 +307,11 @@ export class DiagramEditor {
 
   /* ── data ──────────────────────────────────────────────────────── */
 
-  setData(data, { fit = false } = {}) {
+  setData(data: DiagramData, { fit = false }: { fit?: boolean } = {}): void {
     this.data = data;
     this.fontScale = clampTo(Number(data.font_scale) || 1, 0.7, 2.5);
-    this.nodes = (data.nodes || []).map(n => {
-      const shape = NODE_SHAPES.includes(n.shape) ? n.shape : 'step';
+    this.nodes = (data.nodes || []).map((n): DiagramNode => {
+      const shape = n.shape && NODE_SHAPES.includes(n.shape) ? n.shape : 'step';
       return {
         key: n.key,
         label: n.label || '',
@@ -282,12 +378,12 @@ export class DiagramEditor {
      detours, and each of those tests the whole route against every other
      box. That is fine once, and far too much per mousemove, so a drag
      asks for it to be skipped -- see draw(). */
-  laneEdges({ detours = true } = {}) {
+  laneEdges({ detours = true }: { detours?: boolean } = {}): void {
     const maxX = Math.max(...this.nodes.map(n => n.x + n.w / 2), 0);
     const minX = Math.min(...this.nodes.map(n => n.x - n.w / 2), 0);
     let taken = 0;
     let laneRight = maxX, laneLeft = minX;
-    const assign = e => {
+    const assign = (e: DiagramEdge) => {
       const a = this.byKey[e.from], b = this.byKey[e.to];
       const side = taken % 2 === 0 ? 1 : -1;
       const lane = Math.floor(taken / 2);
@@ -371,20 +467,20 @@ export class DiagramEditor {
        prevent. The second one is sent to the next candidate instead.
        Anything within FAN_GAP counts as the same corridor -- two vertical
        lines closer than that read as one thick one. */
-    const usedCorridors = [];
-    const corridorFree = (e, x) => {
+    const usedCorridors: Array<{ x: number; loY: number; hiY: number }> = [];
+    const corridorFree = (e: DiagramEdge, x: number) => {
       const a = this.byKey[e.from], b = this.byKey[e.to];
       const loY = Math.min(a.y, b.y), hiY = Math.max(a.y, b.y);
       return !usedCorridors.some(t =>
         Math.abs(t.x - x) < FAN_GAP && hiY > t.loY && loY < t.hiY);
     };
-    const reserve = (e, x) => {
+    const reserve = (e: DiagramEdge, x: number) => {
       const a = this.byKey[e.from], b = this.byKey[e.to];
       usedCorridors.push(
         { x, loY: Math.min(a.y, b.y), hiY: Math.max(a.y, b.y) });
     };
 
-    const fitsBetweenItsEnds = e => {
+    const fitsBetweenItsEnds = (e: DiagramEdge) => {
       if (!this.routeHitsABox(e)) return true;
       for (const via of this.detours(e)) {
         if (via.corridor !== undefined && !corridorFree(e, via.corridor)) continue;
@@ -426,7 +522,7 @@ export class DiagramEditor {
          Back edges are decided first so that the ones that DO take a lane
          stay nearest the diagram: a reader looking for the retry path finds
          it in the same place every time. */
-      const needLane = [];
+      const needLane: DiagramEdge[] = [];
       for (const e of this.edges) if (e.back && !fitsBetweenItsEnds(e)) needLane.push(e);
       for (const e of this.edges) if (!e.back && !fitsBetweenItsEnds(e)) needLane.push(e);
       for (const e of needLane) assign(e);
@@ -456,7 +552,7 @@ export class DiagramEditor {
      up on a margin lane clear across the diagram: every candidate it was
      allowed to try was the same blocked column, and the two that would have
      worked never got looked at. */
-  detours(e) {
+  detours(e: DiagramEdge): Via[] {
     const a = this.byKey[e.from], b = this.byKey[e.to];
     /* Which way the Z runs when nothing has forced a corridor yet, because
        that decides which crossbar can move. A vertical run's crossbar goes
@@ -471,8 +567,8 @@ export class DiagramEditor {
     const mid = vertical ? (a.y + b.y) / 2 : (a.x + b.x) / 2;
     const lo = vertical ? Math.min(a.y, b.y) : Math.min(a.x, b.x);
     const hi = vertical ? Math.max(a.y, b.y) : Math.max(a.x, b.x);
-    const barAt = new Set();
-    const corridorX = new Set();
+    const barAt = new Set<number>();
+    const corridorX = new Set<number>();
     for (const n of this.nodes) {
       const half = (vertical ? n.h : n.w) / 2 + ORTH_STUB;
       const centre = vertical ? n.y : n.x;
@@ -485,7 +581,7 @@ export class DiagramEditor {
     }
     const bars = [...barAt]
       .sort((u, v) => Math.abs(u - mid) - Math.abs(v - mid))
-      .map(v => (vertical ? { crossY: v } : { crossX: v }));
+      .map((v): Via => (vertical ? { crossY: v } : { crossX: v }));
     /* Cheapest first, and cheap is not the same as near. A corridor OUTSIDE
        the two columns makes the edge overshoot one of its own ends and come
        back: that is what "it goes past the card and hooks in from the far
@@ -494,11 +590,11 @@ export class DiagramEditor {
        arriving from. `over` is the extra sideways travel that costs, and it
        is zero for every candidate BETWEEN the two columns, so those are all
        preferred and proximity only decides between them. */
-    const over = x => Math.abs(x - a.x) + Math.abs(x - b.x) - Math.abs(a.x - b.x);
-    const near = x => Math.min(Math.abs(x - a.x), Math.abs(x - b.x));
+    const over = (x: number) => Math.abs(x - a.x) + Math.abs(x - b.x) - Math.abs(a.x - b.x);
+    const near = (x: number) => Math.min(Math.abs(x - a.x), Math.abs(x - b.x));
     const corridors = [...corridorX]
       .sort((u, v) => over(u) - over(v) || near(u) - near(v))
-      .map(corridor => ({ corridor }));
+      .map((corridor): Via => ({ corridor }));
     return [...bars.slice(0, 10), ...corridors.slice(0, 12)];
   }
 
@@ -506,7 +602,7 @@ export class DiagramEditor {
      not one of those ends? Sampled rather than solved: a bounding-box
      reject throws out almost every pair, and a handful of points along
      what survives is enough to catch a run down an occupied column. */
-  routeHitsABox(e) {
+  routeHitsABox(e: DiagramEdge): boolean {
     const pts = this.route(e);
     for (const n of this.nodes) {
       if (n.key === e.from || n.key === e.to) continue;
@@ -517,7 +613,7 @@ export class DiagramEditor {
     return false;
   }
 
-  static segHitsBox(p, q, n, pad = 6) {
+  static segHitsBox(p: Pt, q: Pt, n: NodeBox, pad = 6): boolean {
     const x0 = n.x - n.w / 2 - pad, x1 = n.x + n.w / 2 + pad;
     const y0 = n.y - n.h / 2 - pad, y1 = n.y + n.h / 2 + pad;
     if (Math.max(p.x, q.x) < x0 || Math.min(p.x, q.x) > x1) return false;
@@ -537,15 +633,15 @@ export class DiagramEditor {
 
   /* Steps the flow cannot reach from its start. Almost always a missing
      edge, so the canvas marks them instead of leaving them looking normal. */
-  orphanKeys() {
+  orphanKeys(): string[] {
     const start = this.nodes.find(n => n.shape === 'start');
     if (!start) return this.nodes.map(n => n.key);
-    const out = {};
+    const out: Record<string, string[]> = {};
     for (const e of this.edges) (out[e.from] = out[e.from] || []).push(e.to);
     const reached = new Set([start.key]);
     const queue = [start.key];
-    while (queue.length) {
-      for (const to of out[queue.shift()] || []) {
+    for (let at = queue.shift(); at !== undefined; at = queue.shift()) {
+      for (const to of out[at] || []) {
         if (!reached.has(to)) { reached.add(to); queue.push(to); }
       }
     }
@@ -554,11 +650,12 @@ export class DiagramEditor {
 
   /* ── viewport ──────────────────────────────────────────────────── */
 
-  resize() {
+  resize(): void {
     /* clientWidth/Height, not getBoundingClientRect: the canvas is
        inset:0 inside the stage, so it fills the PADDING box -- measuring
        the border box would size it a border wider than the space it has. */
     const stage = this.cv.parentElement;
+    if (!stage) return;
     const dpr = devicePixelRatio || 1;
     this.w = stage.clientWidth;
     this.h = stage.clientHeight;
@@ -572,7 +669,7 @@ export class DiagramEditor {
      the first row of a re-arranged flow behind the buttons -- the caller
      reports how much room they take (hooks.insets) and the fit centres in
      what is left, not in the whole stage. */
-  fit() {
+  fit(): void {
     if (!this.nodes.length || !this.w) return;
     const xs = this.nodes.flatMap(n => [n.x - n.w / 2, n.x + n.w / 2]);
     const ys = this.nodes.flatMap(n => [n.y - n.h / 2, n.y + n.h / 2]);
@@ -580,7 +677,7 @@ export class DiagramEditor {
     const minX = Math.min(...xs), maxX = Math.max(...xs);
     const minY = Math.min(...ys), maxY = Math.max(...ys);
     const pad = 22;
-    const ins = this.hooks.insets?.() || {};
+    const ins: Insets = this.hooks.insets?.() || {};
     const top = pad + (ins.top || 0), bottom = pad + (ins.bottom || 0);
     const left = pad + (ins.left || 0), right = pad + (ins.right || 0);
     const roomW = Math.max(40, this.w - left - right);
@@ -597,7 +694,7 @@ export class DiagramEditor {
     this.requestDraw();
   }
 
-  toWorld(e) {
+  toWorld(e: { clientX: number; clientY: number }): Pt {
     const r = this.cv.getBoundingClientRect();
     return {
       x: (e.clientX - r.left - this.tx) / this.scale,
@@ -605,14 +702,14 @@ export class DiagramEditor {
     };
   }
 
-  static inside(n, p) {
+  static inside(n: NodeBox, p: Pt): boolean {
     const dx = Math.abs(p.x - n.x), dy = Math.abs(p.y - n.y);
     /* a decision is drawn as a diamond, so hit-test the diamond */
     if (n.shape === 'decision') return dx / (n.w / 2) + dy / (n.h / 2) <= 1;
     return dx <= n.w / 2 && dy <= n.h / 2;
   }
 
-  nodeAt(p) {
+  nodeAt(p: Pt): DiagramNode | null {
     for (let i = this.nodes.length - 1; i >= 0; i--) {
       if (DiagramEditor.inside(this.nodes[i], p)) return this.nodes[i];
     }
@@ -621,7 +718,7 @@ export class DiagramEditor {
 
   /* ── interaction ───────────────────────────────────────────────── */
 
-  setReadOnly(on) {
+  setReadOnly(on: boolean): void {
     this.readOnly = on;
     if (on) {
       this.connectMode = false;
@@ -637,7 +734,7 @@ export class DiagramEditor {
   /* The two-finger gesture as it stood when it began. Every move is measured
      against this rather than against the previous frame, so the zoom cannot
      accumulate drift and the point between the fingers stays under them. */
-  pinchFrom() {
+  pinchFrom(): Pinch {
     const [a, b] = [...this.pointers.values()];
     const r = this.cv.getBoundingClientRect();
     return {
@@ -650,7 +747,7 @@ export class DiagramEditor {
 
   /* Zoom about a point in canvas space. Shared by the wheel and the pinch --
      it was the wheel's arithmetic, written once and needed twice. */
-  zoomAt(mx, my, next) {
+  zoomAt(mx: number, my: number, next: number): void {
     /* The floor is whatever showed the whole diagram, or 0.15 -- whichever is
        SMALLER. A fixed floor is only right while every diagram happens to fit
        above it; below it, zooming out stops at a level that cannot show the
@@ -661,7 +758,7 @@ export class DiagramEditor {
     this.scale = ns;
   }
 
-  onDown(e) {
+  onDown(e: PointerEvent): void {
     /* Capture so a drag that leaves the canvas keeps arriving here. In a
        try because it throws for a pointer the browser does not consider
        active, and losing capture is a worse drag -- not no drag at all. */
@@ -687,13 +784,15 @@ export class DiagramEditor {
        the card is always under them too */
     const grip = this.readOnly ? null : this.handleAt(p);
     if (grip) {
-      const node = this.byKey[this.selected];
+      const node = this.selectedNode();
       /* the opposite corner stays put, so a resize does not walk the card */
-      this.sizing = {
-        node, grip,
-        fx: node.x - grip.sx * node.w / 2,
-        fy: node.y - grip.sy * node.h / 2,
-      };
+      if (node) {
+        this.sizing = {
+          node, grip,
+          fx: node.x - grip.sx * node.w / 2,
+          fy: node.y - grip.sy * node.h / 2,
+        };
+      }
       return;
     }
     const n = this.readOnly ? null : this.nodeAt(p);
@@ -706,7 +805,7 @@ export class DiagramEditor {
     }
   }
 
-  onMove(e) {
+  onMove(e: PointerEvent): void {
     if (this.pointers.has(e.pointerId)) {
       this.pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
     }
@@ -789,7 +888,7 @@ export class DiagramEditor {
          costs height. */
       this.hooks.tipShow?.(
         `<b>${esc(n.key)}</b><br>${esc(n.note)}`, e.clientX, e.clientY);
-    } else if (lab && DiagramEditor.shortLabel(lab.label) !== lab.label.trim()) {
+    } else if (lab?.label && DiagramEditor.shortLabel(lab.label) !== lab.label.trim()) {
       /* only when something is actually hidden -- a tip repeating a badge
          you can already read is noise following the pointer around */
       this.hooks.tipShow?.(esc(lab.label.trim()), e.clientX, e.clientY);
@@ -801,7 +900,7 @@ export class DiagramEditor {
   /* Hand whatever was moved or resized to the caller to persist, and mark the
      routes for a full solve now that the geometry has stopped. Split out of
      onUp because a pinch beginning mid-drag ends that drag too. */
-  commitGeometry() {
+  commitGeometry(): void {
     if (this.drag || this.sizing) this.routesDirty = true;
     if (this.drag) {
       const { node } = this.drag;
@@ -821,7 +920,7 @@ export class DiagramEditor {
     }
   }
 
-  onUp(e) {
+  onUp(e?: PointerEvent): void {
     if (e) this.pointers.delete(e.pointerId);
     if (this.pointers.size < 2) this.pinch = null;
     /* one finger of a pinch lifting is not the end of the gesture */
@@ -841,10 +940,10 @@ export class DiagramEditor {
      once it comes within a few SCREEN pixels, so two steps can be put in
      the same column or the same row without eyeballing it -- and the guide
      line says which card it lined up with. */
-  snapToNeighbours(node, x, y) {
+  snapToNeighbours(node: DiagramNode, x: number, y: number): { x: number; y: number; guides: Guide[] } {
     const tol = SNAP_PX / this.scale;
-    const guides = [];
-    let onX = null, onY = null;
+    const guides: Guide[] = [];
+    let onX: number | null = null, onY: number | null = null;
     for (const m of this.nodes) {
       if (m === node) continue;
       if (Math.abs(m.x - x) <= tol && (onX === null || Math.abs(m.x - x) < Math.abs(onX - x))) onX = m.x;
@@ -855,7 +954,7 @@ export class DiagramEditor {
     return { x, y, guides };
   }
 
-  drawGuides() {
+  drawGuides(): void {
     const { cx } = this;
     if (!this.guides?.length) return;
     const left = -this.tx / this.scale, right = (this.w - this.tx) / this.scale;
@@ -873,7 +972,7 @@ export class DiagramEditor {
     cx.restore();
   }
 
-  onWheel(e) {
+  onWheel(e: WheelEvent): void {
     e.preventDefault();
     const r = this.cv.getBoundingClientRect();
     this.zoomAt(e.clientX - r.left, e.clientY - r.top,
@@ -881,7 +980,7 @@ export class DiagramEditor {
     this.requestDraw();
   }
 
-  onClick(e) {
+  onClick(e: MouseEvent): void {
     if (this.moved) { this.moved = false; return; }
     const world = this.toWorld(e);
     const n = this.nodeAt(world);
@@ -925,7 +1024,7 @@ export class DiagramEditor {
   }
 
   /* Select a connection from outside the canvas (the inspector's rows). */
-  selectEdge(from, to) {
+  selectEdge(from: string, to: string): DiagramEdge | null {
     this.selectedEdge = this.edges.find(e => e.from === from && e.to === to) || null;
     if (this.selectedEdge) this.selected = null;
     this.requestDraw();
@@ -936,7 +1035,7 @@ export class DiagramEditor {
      offer, so app.js gets the hit and not the coordinates alone. A line
      is picked by the LINE, not by its label -- which is the only way to
      reach an edge that has no label yet. */
-  onContext(e) {
+  onContext(e: MouseEvent): void {
     if (!this.hooks.onContextMenu) return;
     e.preventDefault();
     const world = this.toWorld(e);
@@ -952,7 +1051,7 @@ export class DiagramEditor {
 
   /* Begin a connection with one end already chosen (the context menu route
      in; the toolbar button leaves both ends to be clicked). */
-  startConnectFrom(key) {
+  startConnectFrom(key: string): void {
     const n = this.byKey[key];
     if (this.readOnly || !n) return;
     this.toggleConnectMode(true);
@@ -961,7 +1060,7 @@ export class DiagramEditor {
     this.requestDraw();
   }
 
-  toggleConnectMode(on = !this.connectMode) {
+  toggleConnectMode(on = !this.connectMode): void {
     if (this.readOnly) on = false;
     this.connectMode = on;
     this.connectFrom = null;
@@ -970,9 +1069,13 @@ export class DiagramEditor {
     this.hooks.onConnectProgress?.(null);
   }
 
-  select(key) {
-    this.selected = this.byKey[key] ? key : null;
+  select(key: string | null): void {
+    this.selected = key && this.byKey[key] ? key : null;
     this.requestDraw();
+  }
+
+  selectedNode(): DiagramNode | null {
+    return this.selected ? this.byKey[this.selected] || null : null;
   }
 
   /* Arrive ON a step: select it and put it in the middle of the free area.
@@ -984,13 +1087,13 @@ export class DiagramEditor {
      where the label on the card you just navigated to is unreadable. It
      opens near 1:1 unless the whole diagram already fits closer than that,
      and panning out from there is one wheel turn. */
-  focusNode(key) {
+  focusNode(key: string): boolean {
     const n = this.byKey[key];
     if (!n || !this.w) return false;
     this.selected = key;
     this.selectedEdge = null;
     this.scale = clampTo(Math.max(this.fitScale ?? 1, 0.9), 0.15, 1.2);
-    const ins = this.hooks.insets?.() || {};
+    const ins: Insets = this.hooks.insets?.() || {};
     const top = ins.top || 0, bottom = ins.bottom || 0;
     const left = ins.left || 0, right = ins.right || 0;
     this.tx = left + (this.w - left - right) / 2 - n.x * this.scale;
@@ -1001,7 +1104,7 @@ export class DiagramEditor {
 
   /* ── drawing ───────────────────────────────────────────────────── */
 
-  requestDraw() {
+  requestDraw(): void {
     if (this.destroyed || this._frame) return;
     this._frame = requestAnimationFrame(() => {
       this._frame = 0;
@@ -1010,7 +1113,7 @@ export class DiagramEditor {
          draw, so a missed observer tick costs one blurry frame at worst
          instead of leaving the backing store permanently wrong */
       const stage = this.cv.parentElement;
-      if (stage.clientWidth !== this.w || stage.clientHeight !== this.h) this.resize();
+      if (stage && (stage.clientWidth !== this.w || stage.clientHeight !== this.h)) this.resize();
       this.draw();
     });
   }
@@ -1019,7 +1122,7 @@ export class DiagramEditor {
      Per shape, because the old approach -- clip a ray from the centre to
      the bounding rectangle -- lands in empty space beside a diamond,
      whose sides do not follow that rectangle at all. */
-  static anchors(n) {
+  static anchors(n: NodeBox): Record<Side, Pt> {
     const hw = n.w / 2, hh = n.h / 2;
     if (n.shape === 'io') {
       /* Top and bottom attach on the card's CENTRE LINE, not at the middle
@@ -1065,7 +1168,7 @@ export class DiagramEditor {
      straight out into it and the whole route is two corners. It is only
      offered when the corridor stands clear (corridorClear) and the sideways
      leg hits nothing, because that leg runs along the card's own row. */
-  static sides(a, b, corridorX = null, flank = false) {
+  static sides(a: Pt, b: Pt, corridorX: number | null = null, flank = false): [Side, Side] {
     const dx = b.x - a.x, dy = b.y - a.y;
     if (corridorX !== null) {
       if (flank) {
@@ -1092,7 +1195,7 @@ export class DiagramEditor {
      Used for two decisions -- whether a corridor is a candidate at all, and
      whether it can be left by the near side (see sides()) -- because both
      ask the same question. */
-  corridorClear(e, corridorX) {
+  corridorClear(e: DiagramEdge, corridorX: number): boolean {
     const a = this.byKey[e.from], b = this.byKey[e.to];
     for (const n of [a, b]) {
       const clear = corridorX < n.x
@@ -1113,7 +1216,7 @@ export class DiagramEditor {
      crooked line in a drawing where everything else is square. A diamond's
      vertex is one point and cannot move; a stadium's left and right are the
      apex of a curve, so those cannot either. */
-  static slideSpan(n, side) {
+  static slideSpan(n: NodeBox, side: Side): [number, number] | null {
     const hw = n.w / 2, hh = n.h / 2, inset = 12;
     const vertical = side === 'top' || side === 'bottom';
     if (n.shape === 'decision') return null;
@@ -1139,7 +1242,7 @@ export class DiagramEditor {
      works the same for a rectangle, a parallelogram and a diamond's tip.
      Attaching the offset to the anchor instead is what put arrows on the
      face of a diamond and five separate landings on one card. */
-  static alongSide(pt, side, by) {
+  static alongSide(pt: Pt, side: Side, by: number): Pt {
     return side === 'top' || side === 'bottom'
       ? { x: pt.x + by, y: pt.y }
       : { x: pt.x, y: pt.y + by };
@@ -1173,32 +1276,35 @@ export class DiagramEditor {
 
      Called only from a full pass -- the sides depend on which edges took a
      corridor, and a drag keeps the previous solution. */
-  assignFans() {
-    const groups = new Map();
+  assignFans(): void {
+    const groups = new Map<string, FanMember[]>();
     for (const e of this.edges) {
       const a = this.byKey[e.from], b = this.byKey[e.to];
       const corridorX = this.corridorFor(e);
       const [sideFrom, sideTo] =
         DiagramEditor.sides(a, b, corridorX, !!e.flank);
       e.fanFrom = 0; e.fanTo = 0; e.stubFrom = 0; e.stubTo = 0;
-      for (const [key, side, self, peer, end] of
-           [[e.from, sideFrom, a, b, 'From'], [e.to, sideTo, b, a, 'To']]) {
+      const ends: Array<[string, Side, DiagramNode, DiagramNode, 'From' | 'To']> =
+        [[e.from, sideFrom, a, b, 'From'], [e.to, sideTo, b, a, 'To']];
+      for (const [key, side, self, peer, end] of ends) {
         const id = `${key}|${side}`;
-        if (!groups.has(id)) groups.set(id, []);
-        groups.get(id).push({ e, side, self, peer, end, corridorX });
+        const group = groups.get(id);
+        const member = { e, side, self, peer, end, corridorX };
+        if (group) group.push(member);
+        else groups.set(id, [member]);
       }
     }
     for (const members of groups.values()) {
       if (members.length < 2) continue;
       const vertical = members[0].side === 'top' || members[0].side === 'bottom';
-      const along = m => (vertical ? m.peer.x : m.peer.y);
+      const along = (m: FanMember) => (vertical ? m.peer.x : m.peer.y);
       /* every member of a group shares the card, so any one of them has it */
       const own = members[0].self;
       /* the same near-miss route() calls straight, and never an edge on a
          corridor: that one turns twice whatever happens, so handing it the
          centre line would only cost it to a neighbour that wanted it */
-      const offBy = m => Math.abs(along(m) - (vertical ? own.x : own.y));
-      const inLine = m => m.corridorX === null && offBy(m) <= ORTH_SNAP;
+      const offBy = (m: FanMember) => Math.abs(along(m) - (vertical ? own.x : own.y));
+      const inLine = (m: FanMember) => m.corridorX === null && offBy(m) <= ORTH_SNAP;
       members.sort((m, n) => along(m) - along(n));
       let keep = -1;
       for (const [i, m] of members.entries()) {
@@ -1207,12 +1313,12 @@ export class DiagramEditor {
       const mid = keep < 0 ? (members.length - 1) / 2 : keep;
       let rank = 0;
       members.forEach((m, i) => {
-        m.e[`fan${m.end}`] = (i - mid) * FAN_GAP;
+        m.e[FAN_KEY[m.end]] = (i - mid) * FAN_GAP;
         /* Strictly increasing, NOT symmetric about the middle: a symmetric
            depth gives the two members of a pair the same stub, which is
            exactly the case that needs them different. The kept member takes
            zero, so its route stays the unfanned one end to end. */
-        m.e[`stub${m.end}`] =
+        m.e[STUB_KEY[m.end]] =
           keep < 0 ? i * FAN_STUB : (i === keep ? 0 : ++rank * FAN_STUB);
       });
     }
@@ -1222,7 +1328,7 @@ export class DiagramEditor {
      Moving an anchor can push a route into a box the centred route missed,
      so any fanned edge that now collides gives its fan up -- unless it was
      colliding anyway, in which case the separation costs nothing. */
-  unfanCollisions() {
+  unfanCollisions(): void {
     for (const e of this.edges) {
       if (!(e.fanFrom || e.fanTo || e.stubFrom || e.stubTo)) continue;
       if (!this.routeHitsABox(e)) continue;
@@ -1234,7 +1340,7 @@ export class DiagramEditor {
 
   /* The anchor's coordinate moved towards `to` along its side, if the side
      allows it and the move stays small. null when it cannot line up. */
-  static slide(n, side, from, to) {
+  static slide(n: NodeBox, side: Side, from: number, to: number): number | null {
     const span = DiagramEditor.slideSpan(n, side);
     if (!span || span[0] >= span[1]) return null;
     if (Math.abs(to - from) > ORTH_SNAP) return null;
@@ -1243,7 +1349,7 @@ export class DiagramEditor {
   }
 
   /* Push an anchor outwards so the arrow tip stops short of the box. */
-  static offset(p, side, by) {
+  static offset(p: Pt, side: Side, by: number): Pt {
     if (side === 'top') return { x: p.x, y: p.y - by };
     if (side === 'bottom') return { x: p.x, y: p.y + by };
     if (side === 'left') return { x: p.x - by, y: p.y };
@@ -1253,7 +1359,7 @@ export class DiagramEditor {
   /* The vertical line an edge runs along instead of going straight between
      its ends: a side lane for a loop closer, or a local corridor for one
      that would otherwise cross a box. null for the ordinary case. */
-  corridorFor(e) {
+  corridorFor(e: DiagramEdge): number | null {
     if (e.lane) {
       const a = this.byKey[e.from], b = this.byKey[e.to];
       const reach = Math.abs(e.bow || ORTH_STUB);
@@ -1263,7 +1369,7 @@ export class DiagramEditor {
   }
 
   /* The polyline an edge follows, ends included. */
-  route(e) {
+  route(e: DiagramEdge): Pt[] {
     const a = this.byKey[e.from], b = this.byKey[e.to];
     const corridorX = this.corridorFor(e);
     const [sideFrom, sideTo] =
@@ -1292,13 +1398,13 @@ export class DiagramEditor {
        square and the arrowhead is not drawn on a diagonal.
        `from` ends at p and `to` starts at q in both cases, so the body
        handed over is only what goes strictly between them. */
-    const funnel = (from, to) => {
+    const funnel = (from: Pt, to: Pt) => {
       const lead = [tail];
       if (from !== tail) lead.push(DiagramEditor.offset(tail, sideFrom, MERGE_TAIL), from);
-      const trail = [];
+      const trail: Pt[] = [];
       if (to !== head) trail.push(to, DiagramEditor.offset(head, sideTo, MERGE_TAIL));
       trail.push(head);
-      return body => [...lead, ...body, ...trail];
+      return (body: Pt[]): Pt[] => [...lead, ...body, ...trail];
     };
     const done = funnel(p, q);
 
@@ -1321,10 +1427,10 @@ export class DiagramEditor {
          near the corridor is snapped ONTO it: the corridor is this edge's
          own parallel run either way. */
       if (sideFrom === 'left' || sideFrom === 'right') {
-        const snap = pt => Math.abs(corridorX - pt.x) < ORTH_RADIUS
+        const snap = (pt: Pt) => Math.abs(corridorX - pt.x) < ORTH_RADIUS
           ? { x: corridorX, y: pt.y } : pt;
         const from = snap(p), to = snap(q);
-        const body = [];
+        const body: Pt[] = [];
         if (from.x !== corridorX) body.push({ x: corridorX, y: from.y });
         if (to.x !== corridorX) body.push({ x: corridorX, y: to.y });
         return funnel(from, to)(body);
@@ -1393,7 +1499,7 @@ export class DiagramEditor {
     return done([{ x: q.x, y: p.y }]);              /* L: across, then down */
   }
 
-  static distToSeg(p, a, b) {
+  static distToSeg(p: Pt, a: Pt, b: Pt): number {
     const vx = b.x - a.x, vy = b.y - a.y;
     const len2 = vx * vx + vy * vy;
     const t = len2 ? Math.max(0, Math.min(1, ((p.x - a.x) * vx + (p.y - a.y) * vy) / len2)) : 0;
@@ -1403,9 +1509,9 @@ export class DiagramEditor {
   /* The edge whose LINE passes under a world point. Routed fresh rather
      than read off the last frame, so a line can be picked at the position
      it is actually drawn at even mid-drag. */
-  edgeAt(p) {
+  edgeAt(p: Pt): DiagramEdge | null {
     const tol = EDGE_PICK_PX / this.scale;
-    let best = null, bestD = Infinity;
+    let best: DiagramEdge | null = null, bestD = Infinity;
     for (const e of this.edges) {
       if (!this.byKey[e.from] || !this.byKey[e.to]) continue;
       const pts = this.route(e);
@@ -1418,9 +1524,9 @@ export class DiagramEditor {
   }
 
   /* Point half way along a polyline, for placing the label. */
-  static midpoint(pts) {
+  static midpoint(pts: Pt[]): Pt {
     let total = 0;
-    const segs = [];
+    const segs: number[] = [];
     for (let i = 1; i < pts.length; i++) {
       const len = Math.hypot(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y);
       segs.push(len); total += len;
@@ -1445,7 +1551,7 @@ export class DiagramEditor {
      whose left and right vertices are acute, it leaves the ring touching
      the shape at the tips while standing clear along the sides -- which is
      exactly what "the border isn't going around the card" looked like. */
-  shapePath(n, grow = 0) {
+  shapePath(n: NodeBox, grow = 0): void {
     const { cx } = this;
     cx.beginPath();
     if (n.shape === 'decision') {
@@ -1480,7 +1586,7 @@ export class DiagramEditor {
       return;
     }
     const hw = n.w / 2 + grow, hh = n.h / 2 + grow;
-    const box = [n.x - hw, n.y - hh, hw * 2, hh * 2];
+    const box: [number, number, number, number] = [n.x - hw, n.y - hh, hw * 2, hh * 2];
     /* a rounded corner offsets into a rounded corner of radius r + grow;
        leaving the radius alone is what made the ring's corners read as a
        different shape from the card's */
@@ -1499,7 +1605,7 @@ export class DiagramEditor {
      far further out than grow does: 6 units of selection ring put its edge
      16 units past the slope, so a badge that had cleared the shape itself
      was still drawn on the ring the moment the card was selected. */
-  static halfWidthAt(n, dy, grow = 0) {
+  static halfWidthAt(n: NodeBox, dy: number, grow = 0): number {
     const hw0 = n.w / 2, hh0 = n.h / 2;
     if (n.shape === 'decision') {
       const k = grow ? 1 + grow * Math.hypot(1 / hw0, 1 / hh0) : 1;
@@ -1523,10 +1629,10 @@ export class DiagramEditor {
     return hw;   /* a rounded rectangle, near enough for a 10-unit radius */
   }
 
-  wrap(text, maxWidth, maxLines) {
+  wrap(text: unknown, maxWidth: number, maxLines: number): string[] {
     const { cx } = this;
     const words = String(text).split(/\s+/).filter(Boolean);
-    const lines = [];
+    const lines: string[] = [];
     let line = '';
     for (const word of words) {
       const next = line ? `${line} ${word}` : word;
@@ -1553,7 +1659,7 @@ export class DiagramEditor {
   }
 
   /* Shorten one line by characters until it fits, ellipsis included. */
-  clamp(line, maxWidth) {
+  clamp(line: string, maxWidth: number): string {
     const { cx } = this;
     if (cx.measureText(line).width <= maxWidth) return line;
     let cut = line.replace(/…$/, '');
@@ -1565,7 +1671,7 @@ export class DiagramEditor {
      selection colour, with its condition readable at any zoom. A step with
      six lines through it is unreadable otherwise: this is what says which
      of them are its own. `dim` is everything else while that lasts. */
-  drawEdge(e, { hot = false, dim = false } = {}) {
+  drawEdge(e: DiagramEdge, { hot = false, dim = false }: { hot?: boolean; dim?: boolean } = {}): void {
     const { cx } = this;
     const a = this.byKey[e.from], b = this.byKey[e.to];
     if (!a || !b) { e.hit = null; return; }
@@ -1608,11 +1714,11 @@ export class DiagramEditor {
     const tanX = to.x - prev.x, tanY = to.y - prev.y;
     const d = Math.hypot(tanX, tanY) || 1;
     const ux = tanX / d, uy = tanY / d;
-    const s = hot ? 11 : 9;
+    const s = hot ? ARROW_LEN + 2 : ARROW_LEN;
     cx.beginPath();
     cx.moveTo(to.x, to.y);
-    cx.lineTo(to.x - ux * s - uy * s * 0.45, to.y - uy * s + ux * s * 0.45);
-    cx.lineTo(to.x - ux * s + uy * s * 0.45, to.y - uy * s - ux * s * 0.45);
+    cx.lineTo(to.x - ux * s - uy * s * ARROW_FLARE, to.y - uy * s + ux * s * ARROW_FLARE);
+    cx.lineTo(to.x - ux * s + uy * s * ARROW_FLARE, to.y - uy * s - ux * s * ARROW_FLARE);
     cx.closePath();
     cx.fillStyle = strong;
     cx.fill();
@@ -1648,9 +1754,9 @@ export class DiagramEditor {
     e.hit = box;                         /* for labelAt(), see onClick */
   }
 
-  /* An edge label cut to the phrase drawn on the line; unchanged when it fits, so a caller can
-     compare to see whether anything is hidden. */
-  static shortLabel(text) {
+  /* An edge label cut to the phrase drawn on the line, only past BOTH limits (four short words are
+     still short); unchanged when it fits, so a caller can compare to see whether anything is hidden. */
+  static shortLabel(text: unknown): string {
     const full = String(text ?? '').trim();
     const words = full.split(/\s+/);
     if (words.length <= BADGE_WORDS || full.length <= BADGE_CHARS) return full;
@@ -1661,7 +1767,7 @@ export class DiagramEditor {
   }
 
   /* The edge whose label sits under a world point, if any. */
-  labelAt(p) {
+  labelAt(p: Pt): DiagramEdge | null {
     for (const e of this.edges) {
       const h = e.hit;
       if (h && p.x >= h.x && p.x <= h.x + h.w && p.y >= h.y && p.y <= h.y + h.h) return e;
@@ -1669,7 +1775,7 @@ export class DiagramEditor {
     return null;
   }
 
-  drawNode(n, orphan, ringed = false) {
+  drawNode(n: DiagramNode, orphan: boolean, ringed = false): void {
     const { cx } = this;
     const terminal = n.shape === 'start' || n.shape === 'end';
     this.shapePath(n);
@@ -1691,7 +1797,7 @@ export class DiagramEditor {
       cx.setLineDash([]);
     }
 
-    if (this.scale < 0.3) return;
+    if (this.scale < LABEL_MIN_SCALE) return;
     /* World units, not 11.5/scale, so text stays inside its box at every zoom (small when far out,
        hence the early return); the diagram's font scale multiplies both. */
     const px = LABEL_PX * this.fontScale;
@@ -1711,7 +1817,7 @@ export class DiagramEditor {
 
     /* Attached memories get a marker (a note shows on hover); steps continuing in another flow
        get theirs on the row below, since two counts on one row read as one number. */
-    if (this.scale > 0.45) {
+    if (this.scale > BADGE_MIN_SCALE) {
       const count = this.linkCount[n.key];
       const jumps = this.jumpCount[n.key];
       if (count) this.drawBadge(n, -1, String(count), this.drawLinkMark);
@@ -1723,7 +1829,8 @@ export class DiagramEditor {
 
   /* A count and glyph OUTSIDE the card on the right (`row` -1 upper, 1 lower), hugging the outline
      via halfWidthAt, straddling the middle so the side's edge anchor stays clear. */
-  drawBadge(n, row, text, drawMark) {
+  drawBadge(n: NodeBox, row: number, text: string,
+            drawMark: (this: DiagramEditor, right: number, midY: number, size: number, color: string) => void): void {
     const { cx } = this;
     cx.save();
     const bpx = BADGE_PX * this.fontScale;
@@ -1741,7 +1848,7 @@ export class DiagramEditor {
 
   /* Where a badge starts and its middle: pure geometry, split out so the parity harness records it
      against diagram_svg.py. */
-  static badgeAnchor(n, row, bpx) {
+  static badgeAnchor(n: NodeBox, row: number, bpx: number): { left: number; midY: number } {
     const dy = row * bpx * 1.1;
     /* The ring's widest point over the badge's whole height (bpx*1.6), at both ends: diamonds and
        stadiums are widest at the inner end, a parallelogram at the outer. */
@@ -1754,7 +1861,7 @@ export class DiagramEditor {
 
   /* The "continues in another flow" mark, a wall with an arrow through it, drawn by hand (canvas
      cannot use core/icons.js) right-to-left from `right`. */
-  drawJumpMark(right, midY, size, color) {
+  drawJumpMark(right: number, midY: number, size: number, color: string): void {
     const { cx } = this;
     const w = size * 0.62, h = size * 0.52;
     const x0 = right - w, y0 = midY - h / 2;
@@ -1782,7 +1889,7 @@ export class DiagramEditor {
 
   /* The "has memories attached" mark, two nodes and a tie like the `graph` icon, drawn by hand
      since fonts lack a reliable glyph; right-to-left from `right`. */
-  drawLinkMark(right, midY, size, color) {
+  drawLinkMark(right: number, midY: number, size: number, color: string): void {
     const { cx } = this;
     const r = size * 0.15;
     const ax = right - size * 0.62, ay = midY + size * 0.22;
@@ -1804,11 +1911,11 @@ export class DiagramEditor {
   }
 
   /* Corner grips on the selected card only, and only while editing. */
-  resizable(n) {
+  resizable(n: DiagramNode): boolean {
     return !this.readOnly && !this.connectMode && n.key === this.selected;
   }
 
-  static handles(n) {
+  static handles(n: NodeBox): Handle[] {
     const hw = n.w / 2, hh = n.h / 2;
     return [
       { id: 'nw', x: n.x - hw, y: n.y - hh, sx: -1, sy: -1 },
@@ -1818,7 +1925,7 @@ export class DiagramEditor {
     ];
   }
 
-  drawHandles(n) {
+  drawHandles(n: DiagramNode): void {
     const { cx } = this;
     const s = HANDLE / Math.max(this.scale, 0.35);   /* stays grabbable zoomed out */
     cx.fillStyle = this.colAccent;
@@ -1832,15 +1939,15 @@ export class DiagramEditor {
     }
   }
 
-  handleAt(p) {
-    const n = this.byKey[this.selected];
+  handleAt(p: Pt): Handle | null {
+    const n = this.selectedNode();
     if (!n || !this.resizable(n)) return null;
     const s = HANDLE / Math.max(this.scale, 0.35);
     return DiagramEditor.handles(n).find(h =>
       Math.abs(p.x - h.x) <= s && Math.abs(p.y - h.y) <= s) || null;
   }
 
-  draw() {
+  draw(): void {
     const { cx } = this;
     cx.clearRect(0, 0, this.w, this.h);
     cx.save();
@@ -1857,7 +1964,7 @@ export class DiagramEditor {
     /* the selected step's lines go last, so they sit over the ones they
        cross instead of disappearing under them */
     const sel = this.selected, selEdge = this.selectedEdge;
-    const isHot = e => selEdge
+    const isHot = (e: DiagramEdge) => selEdge
       ? e === selEdge
       : (!!sel && (e.from === sel || e.to === sel));
     const anySel = !!(sel || selEdge);

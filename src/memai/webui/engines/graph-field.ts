@@ -1,9 +1,23 @@
 /* A scalar field over points and its isolines: the atlas draws a domain's density grid as a
    coastline, on a coarse grid so the territory reads, not each dot. */
 
+export interface Pt { x: number; y: number }
+export interface WeightedPt extends Pt { w?: number | null }
+export interface Box { x0: number; y0: number; x1: number; y1: number }
+export interface Field {
+  g: Float32Array;
+  cols: number;
+  rows: number;
+  cell: number;
+  x0: number;
+  y0: number;
+  max: number;
+}
+type Seg = [Pt, Pt];
+
 /* Accumulate a Gaussian kernel per point (weight `w`, default 1) onto a grid of step `cell`;
    returns the grid with its origin, size and maximum. */
-export function density(points, box, cell, sigma) {
+export function density(points: WeightedPt[], box: Box, cell: number, sigma: number): Field {
   const cols = Math.max(2, Math.ceil((box.x1 - box.x0) / cell) + 1);
   const rows = Math.max(2, Math.ceil((box.y1 - box.y0) / cell) + 1);
   const g = new Float32Array(cols * rows);
@@ -27,12 +41,12 @@ export function density(points, box, cell, sigma) {
 
 /* Marching squares over one threshold, in world coordinates. Cell edges are
    interpolated linearly, so the coast is smooth rather than stepped. */
-export function isolines(f, level) {
+export function isolines(f: Field, level: number): Pt[][] {
   const { g, cols, rows, cell, x0, y0 } = f;
-  const at = (i, j) => g[j * cols + i];
-  const segs = [];
-  const px = (i, j) => ({ x: x0 + i * cell, y: y0 + j * cell });
-  const mid = (pa, va, pb, vb) => {
+  const at = (i: number, j: number) => g[j * cols + i];
+  const segs: Seg[] = [];
+  const px = (i: number, j: number): Pt => ({ x: x0 + i * cell, y: y0 + j * cell });
+  const mid = (pa: Pt, va: number, pb: Pt, vb: number): Pt => {
     const t = (level - va) / ((vb - va) || 1e-9);
     return { x: pa.x + (pb.x - pa.x) * t, y: pa.y + (pb.y - pa.y) * t };
   };
@@ -66,18 +80,19 @@ export function isolines(f, level) {
 
 /* Join marching-squares segments into polylines, following chains through either endpoint;
    rounded keys absorb float noise on shared cell edges. */
-function stitch(segs) {
-  const key = p => `${Math.round(p.x * 16)},${Math.round(p.y * 16)}`;
-  const ends = new Map();
-  const add = (k, s) => {
-    if (!ends.has(k)) ends.set(k, []);
-    ends.get(k).push(s);
+function stitch(segs: Seg[]): Pt[][] {
+  const key = (p: Pt) => `${Math.round(p.x * 16)},${Math.round(p.y * 16)}`;
+  const ends = new Map<string, Seg[]>();
+  const add = (k: string, s: Seg) => {
+    const list = ends.get(k);
+    if (list) list.push(s);
+    else ends.set(k, [s]);
   };
   for (const s of segs) { add(key(s[0]), s); add(key(s[1]), s); }
 
-  const used = new Set();
-  const out = [];
-  const walk = (line, tail) => {
+  const used = new Set<Seg>();
+  const out: Pt[][] = [];
+  const walk = (line: Pt[], tail: Pt): Pt => {
     let at = tail, guard = 0;
     while (guard++ < 100000) {
       const cand = (ends.get(key(at)) || []).find(c => !used.has(c));
@@ -94,7 +109,7 @@ function stitch(segs) {
   for (const s of segs) {
     if (used.has(s)) continue;
     used.add(s);
-    const line = [s[0], s[1]];
+    const line: Pt[] = [s[0], s[1]];
     const end = walk(line, s[1]);
     if (key(end) !== key(line[0])) {
       /* open at both ends: extend backwards too and keep it as an open line */
@@ -111,7 +126,7 @@ function stitch(segs) {
 
 /* Chaikin smoothing: two rounds turn a marching-squares staircase into a
    coastline, within a fraction of a cell of where it was. */
-export function smooth(line, rounds = 2) {
+export function smooth(line: Pt[], rounds = 2): Pt[] {
   let pts = line;
   for (let r = 0; r < rounds; r++) {
     const next = [pts[0]];

@@ -1,7 +1,7 @@
 """What the before/after panes mark as changed.
 
-The diff is JavaScript, so these run it: tools/diff-cases.mjs feeds
-core/textdiff.js a set of pairs under node and prints the ranges it found,
+The diff is TypeScript, so these run it: tools/diff-cases.mjs feeds
+core/textdiff.ts a set of pairs under node and prints the ranges it found,
 spliced back into the text as [-dropped-] and [+added+].
 
 Skipped where node is absent; the diff still ships.

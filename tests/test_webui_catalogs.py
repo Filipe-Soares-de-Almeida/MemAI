@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from memai import db
+from memai import contract, db
 
 WEBUI = Path(__file__).resolve().parents[1] / "src" / "memai" / "webui"
 LOCALES = ("en", "pt-BR")
@@ -53,10 +53,18 @@ def test_every_memory_type_has_a_label(code):
 
 
 @pytest.mark.parametrize("code", LOCALES)
+def test_every_confidence_and_pin_has_a_label(code):
+    strings = _catalog(code)
+    keys = [f"conf.{c}" for c in contract.CONFIDENCES] + [f"mem.pin.{p}" for p in contract.PINS]
+    missing = [k for k in keys if k not in strings]
+    assert not missing, f"{code} lacks {missing}"
+
+
+@pytest.mark.parametrize("code", LOCALES)
 def test_the_task_keys_built_from_a_state_name_exist(code):
-    states = ["todo", "doing", "done", "dropped"]
+    states = list(contract.ITEM_STATES)
     families = {
-        "task.state": states + ["open", "completed", "cancelled"],
+        "task.state": states + list(contract.TASK_STATES),
         "task.mark": states,
         "task.toast": ["completed", "cancelled"],
         "task.closed": ["completed", "cancelled"],

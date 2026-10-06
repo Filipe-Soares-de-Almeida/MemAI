@@ -1,8 +1,8 @@
 /* Floating chrome: toasts, the hover tip, modals, the context menu. All of it lives outside
-   #view, so it survives a view swap and is dismissed deliberately (see lifecycle.js). */
+   #view, so it survives a view swap and is dismissed deliberately (see lifecycle.ts). */
 
-import { $, esc } from './dom.js';
-import { t } from '../i18n.js';
+import { $, esc } from './dom.ts';
+import { t } from '../i18n.ts';
 import { icon } from './icons.js';
 
 /* ─── toasts: kind '' neutral, 'ok', 'warn' (partial, `detail` says what), 'bad' (sticky alert).

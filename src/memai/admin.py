@@ -40,7 +40,7 @@ import sqlite3
 import sys
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 from urllib.parse import urlsplit
 
 import uvicorn
@@ -56,6 +56,7 @@ from memai import (
     __version__,
     autostart,
     changelog,
+    contract,
     db,
     portable,
     sections,
@@ -63,6 +64,7 @@ from memai import (
     update,
     webui_build,
 )
+from memai import admin_schemas as schema
 
 # Windows' registry-derived mimetypes map serves .js as text/plain, which
 # browsers refuse to execute as an ES module. Force the correct types.
@@ -82,12 +84,12 @@ KNOWN_TYPES = db.MEMORY_TYPES
 # edit; a diagram is created with its graph and a task with its items.
 CREATABLE_TYPES = tuple(
     t for t in db.MEMORY_TYPES if t not in ("handoff", db.DIAGRAM_TYPE, db.TASK_TYPE))
-CONFIDENCES = ("unverified", "confirmed", "contradicted")
+CONFIDENCES = db.CONFIDENCE_VALUES
 STATUSES = ("active", "archived")
 
 # uids per /api/bulk call, and the cap on the uid list a scope-wide archive echoes for its Undo:
 # an Undo longer than bulk accepts could not work.
-BULK_MAX = 500
+BULK_MAX = contract.BULK_MAX
 
 # The graph gets the whole scope (layout in a worker, one instanced GPU pass). `limit` cuts most-
 # connected first; the ceiling only keeps a hand-typed number from straining SQLite.
@@ -313,6 +315,7 @@ def api(handler):
             return JSONResponse({"error": str(exc)}, status_code=400)
         except Exception as exc:  # pragma: no cover - defensive
             return JSONResponse({"error": f"{type(exc).__name__}: {exc}"}, status_code=500)
+    endpoint.__wrapped__ = handler
     return endpoint
 
 
@@ -386,7 +389,7 @@ def _symptoms(conn: sqlite3.Connection, active: int) -> list[dict]:
     return out
 
 
-def overview(request, payload) -> dict:
+def overview(request, payload) -> schema.Overview:
     dbfile = db.default_db_path()
     with db.connect() as conn:
         total = conn.execute("SELECT COUNT(*) FROM memories").fetchone()[0]
@@ -425,7 +428,7 @@ def overview(request, payload) -> dict:
         symptoms = _symptoms(conn, health["active"])
         domains = db.list_domains(conn)
         recent = [_summary(r, 150) for r in db.list_recent(conn, limit=8)]
-    return {
+    return cast(schema.Overview, {
         "totals": {
             "memories": total,
             "active": by_status.get("active", 0),
@@ -451,17 +454,17 @@ def overview(request, payload) -> dict:
             "size": _file_size(dbfile),
             "wal_size": _file_size(dbfile.with_name(dbfile.name + "-wal")),
         },
-    }
+    })
 
 
 # ----------------------------------------------------------------- projects
 
-def projects(request, payload) -> dict:
+def projects(request, payload) -> schema.Projects:
     """Every project in the home, with its active-row count, and which is active."""
     return {"active": db.active_project(), "projects": db.list_projects(counts=True)}
 
 
-def project_create(request, payload) -> dict:
+def project_create(request, payload) -> schema.ProjectCreated:
     """Create an empty project, named as typed apart from surrounding spaces.
     `activate` switches to it in the same call."""
     name = str(payload.get("name") or "").strip()
@@ -471,19 +474,19 @@ def project_create(request, payload) -> dict:
     return {"ok": True, "name": name, **projects(request, payload)}
 
 
-def project_activate(request, payload) -> dict:
+def project_activate(request, payload) -> schema.ProjectActivated:
     """Point every process on this home at `name` from its next connect on."""
     name = str(payload.get("name") or "").strip()
     return {"ok": True, "active": db.set_active_project(name)}
 
 
-def project_delete(request, payload) -> dict:
+def project_delete(request, payload) -> schema.ProjectDeleted:
     """Remove an empty, inactive project. Refuses anything else -- see db.delete_project."""
     db.delete_project(request.path_params["name"])
     return {"ok": True, **projects(request, payload)}
 
 
-def project_move(request, payload) -> dict:
+def project_move(request, payload) -> schema.ProjectMove:
     """Carry memories out of the active project into `target` -- see portable.move.
 
     `uids` is a list of at most BULK_MAX, `domain` a path; either or both.
@@ -495,10 +498,10 @@ def project_move(request, payload) -> dict:
         raise ValueError("uids must be a list")
     if len(uids) > BULK_MAX:
         raise ValueError(f"at most {BULK_MAX} uids per operation")
-    return portable.move(
+    return cast(schema.ProjectMove, portable.move(
         db.active_project(), str(payload.get("target") or "").strip(),
         uids=[str(u) for u in uids], domain=str(payload.get("domain") or "").strip(),
-        dry_run=bool(payload.get("dry_run", True)), create=bool(payload.get("create")))
+        dry_run=bool(payload.get("dry_run", True)), create=bool(payload.get("create"))))
 
 
 # ---------------------------------------------------------------- memories
@@ -536,7 +539,7 @@ _PIN_FILTERS = {"any": "AND pin <> ''", "global": "AND pin = 'global'",
                 "domain": "AND pin = 'domain'"}
 
 
-def list_memories(request, payload) -> dict:
+def list_memories(request, payload) -> schema.MemoryPage:
     qp = request.query_params
     q = qp.get("q", "").strip()
     domain = qp.get("domain", "")
@@ -594,8 +597,8 @@ def list_memories(request, payload) -> dict:
                 hits = [pinned] + [h for h in hits if h["uid"] != q]
             total = len(hits)
             items = _with_usage(conn, [_summary(h) for h in hits[offset:offset + limit]])
-            return {"total": total, "items": _with_tasks(conn, items),
-                    "searched": True, **scope}
+            return cast(schema.MemoryPage, {"total": total, "items": _with_tasks(conn, items),
+                    "searched": True, **scope})
 
         where, params = ["1=1"], []
         if domain:
@@ -625,10 +628,10 @@ def list_memories(request, payload) -> dict:
                 WHERE {clause} ORDER BY {_MEMORY_SORTS[sort]} {direction} LIMIT ? OFFSET ?""",
             [*params, limit, offset]).fetchall()
         items = _with_tasks(conn, [_summary(r) for r in rows])
-    return {"total": total, "items": items, "searched": False, **scope}
+    return cast(schema.MemoryPage, {"total": total, "items": items, "searched": False, **scope})
 
 
-def memory_detail(request, payload) -> dict:
+def memory_detail(request, payload) -> schema.MemoryRecord:
     uid = request.path_params["uid"]
     with db.connect() as conn:
         row = db.get_memory(conn, uid)
@@ -664,10 +667,10 @@ def memory_detail(request, payload) -> dict:
             result["referenced_by_diagrams"] = [
                 dict(r) for r in db.diagrams_referencing(conn, uid)
             ]
-    return result
+    return cast(schema.MemoryRecord, result)
 
 
-def create_memory(request, payload) -> dict:
+def create_memory(request, payload) -> schema.MemoryCreated:
     type_ = (payload.get("type") or "").strip()
     title = (payload.get("title") or "").strip()
     content = (payload.get("content") or "").strip()
@@ -731,14 +734,14 @@ def _task_view(conn: sqlite3.Connection, uid: str) -> dict | None:
     return task
 
 
-def _task_answer(conn: sqlite3.Connection, uid: str) -> dict:
+def _task_answer(conn: sqlite3.Connection, uid: str) -> schema.TaskAnswer:
     """The task and its memory status after a write, so a view re-renders from one answer."""
-    return {"task": _task_view(conn, uid), "status": db.memory_row(conn, uid)["status"]}
+    return cast(schema.TaskAnswer, {"task": _task_view(conn, uid), "status": db.memory_row(conn, uid)["status"]})
 
 
 # A ValueError from tasks.* can arrive after rows were written, so each handler
 # lets it leave the connection block and the transaction rolls back.
-def create_task(request, payload) -> dict:
+def create_task(request, payload) -> schema.TaskCreated:
     with db.connect() as conn:
         uid = tasks.create_task(
             conn,
@@ -750,38 +753,38 @@ def create_task(request, payload) -> dict:
             tags=(payload.get("tags") or "").strip(),
             session=(payload.get("session") or "").strip(),
         )
-        return {"uid": uid, **_task_answer(conn, uid)}
+        return cast(schema.TaskCreated, {"uid": uid, **_task_answer(conn, uid)})
 
 
-def task_item_state(request, payload) -> dict:
+def task_item_state(request, payload) -> schema.TaskAnswer:
     uid = request.path_params["uid"]
     with db.connect() as conn:
         tasks.set_item_state(conn, uid, payload.get("item") or "", payload.get("state") or "")
         return _task_answer(conn, uid)
 
 
-def task_delete_item(request, payload) -> dict:
+def task_delete_item(request, payload) -> schema.TaskAnswer:
     uid = request.path_params["uid"]
     with db.connect() as conn:
         tasks.delete_item(conn, uid, payload.get("item") or "")
         return _task_answer(conn, uid)
 
 
-def task_add_items(request, payload) -> dict:
+def task_add_items(request, payload) -> schema.TaskAnswer:
     uid = request.path_params["uid"]
     with db.connect() as conn:
         tasks.add_items(conn, uid, _lines(payload.get("items")))
         return _task_answer(conn, uid)
 
 
-def task_goal(request, payload) -> dict:
+def task_goal(request, payload) -> schema.TaskAnswer:
     uid = request.path_params["uid"]
     with db.connect() as conn:
         tasks.set_goal(conn, uid, payload.get("goal") or "")
         return _task_answer(conn, uid)
 
 
-def task_comment(request, payload) -> dict:
+def task_comment(request, payload) -> schema.TaskAnswer:
     uid = request.path_params["uid"]
     with db.connect() as conn:
         tasks.add_comment(conn, uid, payload.get("body") or "",
@@ -789,7 +792,7 @@ def task_comment(request, payload) -> dict:
         return _task_answer(conn, uid)
 
 
-def task_note(request, payload) -> dict:
+def task_note(request, payload) -> schema.TaskAnswer:
     uid = request.path_params["uid"]
     items = [str(k) for k in payload.get("items") or []]
     with db.connect() as conn:
@@ -803,7 +806,7 @@ def task_note(request, payload) -> dict:
         return _task_answer(conn, uid)
 
 
-def task_delete_note(request, payload) -> dict:
+def task_delete_note(request, payload) -> schema.TaskAnswer:
     uid = request.path_params["uid"]
     with db.connect() as conn:
         tasks.delete_note(conn, uid, int(payload.get("id") or 0))
@@ -815,14 +818,14 @@ def _targets(value) -> list[str]:
     return [str(v) for v in value] if isinstance(value, (list, tuple)) else [str(value or "")]
 
 
-def task_link(request, payload) -> dict:
+def task_link(request, payload) -> schema.TaskAnswer:
     uid = request.path_params["uid"]
     with db.connect() as conn:
         tasks.link_item(conn, uid, payload.get("item") or "", _targets(payload.get("target")))
         return _task_answer(conn, uid)
 
 
-def task_unlink(request, payload) -> dict:
+def task_unlink(request, payload) -> schema.TaskAnswer:
     uid = request.path_params["uid"]
     with db.connect() as conn:
         for target in _targets(payload.get("target")) or [""]:
@@ -830,7 +833,7 @@ def task_unlink(request, payload) -> dict:
         return _task_answer(conn, uid)
 
 
-def edit_content(request, payload) -> dict:
+def edit_content(request, payload) -> schema.Ok:
     uid = request.path_params["uid"]
     content = payload.get("content", "")
     if not content.strip():
@@ -854,7 +857,7 @@ def edit_content(request, payload) -> dict:
     return {"ok": True}
 
 
-def edit_meta(request, payload) -> dict:
+def edit_meta(request, payload) -> schema.MetaSaved:
     """Update domain/also/tags/session/type. Every change leaves an audit
     entry in edits, so curation stays traceable.
 
@@ -932,10 +935,10 @@ def edit_meta(request, payload) -> dict:
         result = {"ok": True, "changed": list(changed)}
         if "also" in changed:
             result["also"] = db.get_domain_links(conn, uid)
-        return result
+        return cast(schema.MetaSaved, result)
 
 
-def edit_confidence(request, payload) -> dict:
+def edit_confidence(request, payload) -> schema.Ok:
     uid = request.path_params["uid"]
     confidence = payload.get("confidence", "")
     if confidence not in CONFIDENCES:
@@ -947,7 +950,7 @@ def edit_confidence(request, payload) -> dict:
     return {"ok": True}
 
 
-def edit_pin(request, payload) -> dict:
+def edit_pin(request, payload) -> schema.PinSaved:
     uid = request.path_params["uid"]
     pin = payload.get("pin", "")
     with db.connect() as conn:
@@ -957,7 +960,7 @@ def edit_pin(request, payload) -> dict:
     return {"ok": True, "pin": pin}
 
 
-def edit_status(request, payload) -> dict:
+def edit_status(request, payload) -> schema.Ok:
     uid = request.path_params["uid"]
     status = payload.get("status", "")
     if status not in STATUSES:
@@ -974,7 +977,7 @@ def edit_status(request, payload) -> dict:
     return {"ok": True}
 
 
-def purge(request, payload) -> dict:
+def purge(request, payload) -> schema.Ok:
     """Same guardrail as the MCP purge_memory tool: the operator must type
     the literal phrase 'DELETE <uid>' -- the UI never pre-fills it."""
     uid = request.path_params["uid"]
@@ -988,7 +991,7 @@ def purge(request, payload) -> dict:
     return {"ok": True}
 
 
-def purge_many(request, payload) -> dict:
+def purge_many(request, payload) -> schema.Purged:
     """Permanently delete many memories at once.
 
     The guardrail is the per-memory purge's, scaled: the operator types the
@@ -1009,10 +1012,10 @@ def purge_many(request, payload) -> dict:
     dest = _backup("pre-purge")
     with db.connect() as conn:
         gone = db.purge_memories(conn, uids)
-    return {"ok": True, "backup": dest.name, **gone}
+    return cast(schema.Purged, {"ok": True, "backup": dest.name, **gone})
 
 
-def bulk(request, payload) -> dict:
+def bulk(request, payload) -> schema.BulkDone:
     uids = payload.get("uids") or []
     action = payload.get("action", "")
     if not isinstance(uids, list) or not uids:
@@ -1058,7 +1061,7 @@ def bulk(request, payload) -> dict:
 
 # ---------------------------------------------------------------- relations
 
-def create_relation(request, payload) -> dict:
+def create_relation(request, payload) -> schema.RelationCreated:
     from_uid = (payload.get("from_uid") or "").strip()
     to_uid = (payload.get("to_uid") or "").strip()
     rel_type = (payload.get("relation_type") or "").strip()
@@ -1069,7 +1072,7 @@ def create_relation(request, payload) -> dict:
     return {"relation_id": rel_id}
 
 
-def delete_relation(request, payload) -> dict:
+def delete_relation(request, payload) -> schema.Ok:
     rel_id = request.path_params["rel_id"]
     with db.connect() as conn:
         cur = conn.execute("DELETE FROM relations WHERE id = ?", (rel_id,))
@@ -1078,7 +1081,7 @@ def delete_relation(request, payload) -> dict:
     return {"ok": True}
 
 
-def graph(request, payload) -> dict:
+def graph(request, payload) -> schema.Graph:
     qp = request.query_params
     status = qp.get("status", "active")
     domain = qp.get("domain", "")
@@ -1130,8 +1133,8 @@ def graph(request, payload) -> dict:
         "created_at": r["created_at"],
     }) for r in rows]
     # A cut that says nothing reads as "this is everything".
-    return {"nodes": nodes, "edges": edges,
-            "total": total, "truncated": total > len(nodes), **scope}
+    return cast(schema.Graph, {"nodes": nodes, "edges": edges,
+            "total": total, "truncated": total > len(nodes), **scope})
 
 
 # ---------------------------------------------------------------- diagrams
@@ -1168,7 +1171,7 @@ def _diagram_or_400(conn: sqlite3.Connection, uid: str) -> None:
         raise ValueError(f"unknown diagram: {uid}")
 
 
-def diagram_list(request, payload) -> dict:
+def diagram_list(request, payload) -> schema.DiagramPage:
     """Every diagram with its size and its structural problems.
 
     Backs the dedicated diagram view: a flow is maintained by fixing its
@@ -1180,24 +1183,24 @@ def diagram_list(request, payload) -> dict:
         items = db.diagram_overview(conn, domain=domain, status=status,
                                     subtree=_subtree_param(request))
         scope = _scope_echo(conn, domain)
-    return {
+    return cast(schema.DiagramPage, {
         "total": len(items),
         "with_issues": sum(1 for d in items if d["issues"]),
         "items": items,
         **scope,
-    }
+    })
 
 
-def diagram_detail(request, payload) -> dict:
+def diagram_detail(request, payload) -> schema.DiagramRecord:
     uid = request.path_params["uid"]
     with db.connect() as conn:
         data = _diagram_json(conn, uid)
     if data is None:
         raise ValueError(f"unknown diagram: {uid}")
-    return data
+    return cast(schema.DiagramRecord, data)
 
 
-def diagram_create(request, payload) -> dict:
+def diagram_create(request, payload) -> schema.DiagramCreated:
     with db.connect() as conn:
         uid = _require(db.insert_diagram(
             conn,
@@ -1214,7 +1217,7 @@ def diagram_create(request, payload) -> dict:
         return {"uid": uid, "also": db.get_domain_links(conn, uid)}
 
 
-def diagram_graph(request, payload) -> dict:
+def diagram_graph(request, payload) -> schema.Ok:
     """Replace the whole graph; surviving nodes keep their positions."""
     uid = request.path_params["uid"]
     with db.connect() as conn:
@@ -1223,7 +1226,7 @@ def diagram_graph(request, payload) -> dict:
     return {"ok": True}
 
 
-def diagram_meta(request, payload) -> dict:
+def diagram_meta(request, payload) -> schema.Ok:
     uid = request.path_params["uid"]
     if not {"title", "summary", "font_scale"} & set(payload):
         raise ValueError("nothing to update (fields: title, summary, font_scale)")
@@ -1237,7 +1240,7 @@ def diagram_meta(request, payload) -> dict:
     return {"ok": True}
 
 
-def diagram_node(request, payload) -> dict:
+def diagram_node(request, payload) -> schema.NodeSaved:
     uid = request.path_params["uid"]
     key = (payload.get("key") or "").strip()
     if not key:
@@ -1252,7 +1255,7 @@ def diagram_node(request, payload) -> dict:
     return {"ok": True, "key": key}
 
 
-def diagram_edge(request, payload) -> dict:
+def diagram_edge(request, payload) -> schema.Ok:
     uid = request.path_params["uid"]
     from_key = (payload.get("from") or payload.get("from_key") or "").strip()
     to_key = (payload.get("to") or payload.get("to_key") or "").strip()
@@ -1267,7 +1270,7 @@ def diagram_edge(request, payload) -> dict:
     return {"ok": True}
 
 
-def diagram_layout(request, payload) -> dict:
+def diagram_layout(request, payload) -> schema.LayoutSaved:
     """Persist dragged positions and resized boxes -- nothing else.
 
     `reset_boxes` is the way back: a list of node keys, or true for the
@@ -1286,7 +1289,7 @@ def diagram_layout(request, payload) -> dict:
     return {"ok": True, "moved": moved}
 
 
-def diagram_relayout(request, payload) -> dict:
+def diagram_relayout(request, payload) -> schema.LayoutSaved:
     """Throw away hand-dragged positions and rebuild the layered arrangement."""
     uid = request.path_params["uid"]
     with db.connect() as conn:
@@ -1295,7 +1298,7 @@ def diagram_relayout(request, payload) -> dict:
     return {"ok": True, "moved": moved}
 
 
-def diagram_link(request, payload) -> dict:
+def diagram_link(request, payload) -> schema.Ok:
     uid = request.path_params["uid"]
     node_key = (payload.get("node_key") or "").strip()
     target_uid = (payload.get("target_uid") or "").strip()
@@ -1312,7 +1315,7 @@ def diagram_link(request, payload) -> dict:
     return {"ok": True}
 
 
-def diagram_jump(request, payload) -> dict:
+def diagram_jump(request, payload) -> schema.Ok:
     """Create or drop a jump from a step of this diagram into another one.
 
     `node_key` is always the step on THIS diagram and `peer_uid`/
@@ -1343,7 +1346,7 @@ def diagram_jump(request, payload) -> dict:
     return {"ok": True}
 
 
-def diagram_mermaid(request, payload) -> dict:
+def diagram_mermaid(request, payload) -> schema.Mermaid:
     uid = request.path_params["uid"]
     with db.connect() as conn:
         _diagram_or_400(conn, uid)
@@ -1352,7 +1355,7 @@ def diagram_mermaid(request, payload) -> dict:
 
 # ---------------------------------------------------------------- domains
 
-def domains(request, payload) -> dict:
+def domains(request, payload) -> schema.DomainTree:
     """The domain tree, one entry per path, for the Domains view.
 
     Every field the table draws: both status counts, the type mix, the
@@ -1437,10 +1440,10 @@ def domains(request, payload) -> dict:
 
     result = sorted(agg.values(), key=lambda d: d["domain"])
     result.sort(key=lambda d: d["subtree_latest_at"], reverse=True)
-    return {"domains": result}
+    return cast(schema.DomainTree, {"domains": result})
 
 
-def domain_detail(request, payload) -> dict:
+def domain_detail(request, payload) -> schema.DomainDetail:
     """What one level of the tree holds, for the pane beside the columns.
 
     Two lists, because they are two different facts and a pane that ran
@@ -1480,7 +1483,7 @@ def domain_detail(request, payload) -> dict:
     }
 
 
-def rename_domain(request, payload) -> dict:
+def rename_domain(request, payload) -> schema.DomainRenamed:
     """Rename, re-home or merge a domain, subdomains included.
 
     'to' is a full path, so this is also how a domain is nested: renaming
@@ -1505,7 +1508,7 @@ def rename_domain(request, payload) -> dict:
             "domains": moved["domains"], "merged": moved["merged"]}
 
 
-def domain_status(request, payload) -> dict:
+def domain_status(request, payload) -> schema.DomainStatusSaved:
     """Archive or restore a whole domain, subdomains included.
 
     A domain has no status column -- it is named by the memories filed under
@@ -1531,7 +1534,7 @@ def domain_status(request, payload) -> dict:
             "uids": uids if len(uids) <= BULK_MAX else []}
 
 
-def delete_domain(request, payload) -> dict:
+def delete_domain(request, payload) -> schema.DomainDeleted:
     """Permanently delete a domain and every memory filed in it.
 
     Same guardrail as the MCP purge_memory tool and the per-memory purge
@@ -1548,7 +1551,7 @@ def delete_domain(request, payload) -> dict:
         raise ValueError(f"confirm phrase must exactly equal '{expected}'")
     with db.connect() as conn:
         gone = db.purge_domain(conn, domain)
-    return {"ok": True, **gone}
+    return cast(schema.DomainDeleted, {"ok": True, **gone})
 
 
 def _normalize_plan(mode: str, counts: dict[str, int]) -> list[dict]:
@@ -1581,7 +1584,7 @@ def _normalize_plan(mode: str, counts: dict[str, int]) -> list[dict]:
     return sorted(plan, key=lambda e: e["from"].lower())
 
 
-def normalize_domains(request, payload) -> dict:
+def normalize_domains(request, payload) -> schema.NormalizePlan | schema.NormalizeDone:
     """Bring already-stored domains in line with the casing + path policy.
 
     dry_run (default true) returns the plan for preview -- what renames
@@ -1618,7 +1621,7 @@ def normalize_domains(request, payload) -> dict:
 
 # ------------------------------------------------------------------ config
 
-def get_config(request, payload) -> dict:
+def get_config(request, payload) -> schema.Config:
     """Settings, plus the section spec the forms build their fields from.
 
     The spec is served rather than spelled in the UI: a label written in
@@ -1626,17 +1629,17 @@ def get_config(request, payload) -> dict:
     offered.
     """
     with db.connect() as conn:
-        return {"domain_case": db.get_domain_case(conn),
+        return cast(schema.Config, {"domain_case": db.get_domain_case(conn),
                 "svg_retention": db.get_svg_retention(conn),
                 "warden_enabled": db.get_warden_enabled(conn),
                 "warden_minutes": db.get_warden_minutes(conn),
                 "task_ask_enabled": db.get_task_ask_enabled(conn),
                 "task_ask_minutes": db.get_task_ask_minutes(conn),
                 "sections": {type_: [_section_spec(s) for s in spec]
-                             for type_, spec in sections.SECTION_SPEC.items()}}
+                             for type_, spec in sections.SECTION_SPEC.items()}})
 
 
-def set_config(request, payload) -> dict:
+def set_config(request, payload) -> schema.ConfigSaved:
     """Write whichever settings the payload names.
 
     Partial: only the settings the payload names are written, so a caller
@@ -1684,7 +1687,7 @@ def _fts_check(conn: sqlite3.Connection) -> tuple[bool, str]:
         return False, str(exc)
 
 
-def health(request, payload) -> dict:
+def health(request, payload) -> schema.Health:
     project = db.active_project()
     dbfile = db.default_db_path()
     with db.connect() as conn:
@@ -1717,7 +1720,7 @@ def health(request, payload) -> dict:
         {"name": p.name, "size": _file_size(p),
          "mtime": datetime.fromtimestamp(p.stat().st_mtime, tz=UTC).isoformat()}
         for p in db.backup_files(project)]
-    return {
+    return cast(schema.Health, {
         "project": project,
         # same rule as _fts_check: "ok" is quick_check's way of saying
         # nothing is wrong, and the UI has its own words for that
@@ -1745,17 +1748,17 @@ def health(request, payload) -> dict:
             "compact_reason": compact_reason,
         },
         "backups": backups[:12],
-    }
+    })
 
 
-def fts_rebuild(request, payload) -> dict:
+def fts_rebuild(request, payload) -> schema.FtsRebuilt:
     with db.connect() as conn:
         conn.execute("INSERT INTO memories_fts(memories_fts) VALUES ('rebuild')")
         count = conn.execute("SELECT COUNT(*) FROM memories_fts").fetchone()[0]
     return {"ok": True, "rows": count}
 
 
-def clean_orphans(request, payload) -> dict:
+def clean_orphans(request, payload) -> schema.OrphansCleaned:
     with db.connect() as conn:
         cur = conn.execute(
             """DELETE FROM relations
@@ -1798,7 +1801,7 @@ def clean_orphans(request, payload) -> dict:
             "jumps_removed": jumps, "task_links_removed": task_links}
 
 
-def prune_renders(request, payload) -> dict:
+def prune_renders(request, payload) -> schema.RendersPruned:
     """Clear generated SVGs now, rather than waiting for the next render.
 
     `all=true` empties the folder regardless of age -- the retention rule
@@ -1811,10 +1814,10 @@ def prune_renders(request, payload) -> dict:
     else:
         with db.connect() as conn:
             swept = db.prune_renders(db.get_svg_retention(conn))
-    return {"ok": True, **swept, "before": before, "after": db.renders_usage()}
+    return cast(schema.RendersPruned, {"ok": True, **swept, "before": before, "after": db.renders_usage()})
 
 
-def vacuum(request, payload) -> dict:
+def vacuum(request, payload) -> schema.Vacuumed:
     dbfile = db.default_db_path()
     before = _file_size(dbfile) + _file_size(dbfile.with_name(dbfile.name + "-wal"))
     conn = _raw_connect()
@@ -1829,7 +1832,7 @@ def vacuum(request, payload) -> dict:
     return {"ok": True, "before": before, "after": after}
 
 
-def backup(request, payload) -> dict:
+def backup(request, payload) -> schema.BackupTaken:
     dest = _backup()
     return {"ok": True, "project": db.active_project(), "path": str(dest),
             "size": _file_size(dest)}
@@ -1846,7 +1849,7 @@ def _shelf_row(path, meta: dict | None = None) -> dict:
     return row
 
 
-def backups(request, payload) -> dict:
+def backups(request, payload) -> schema.Backups:
     """The whole backup shelf of the active project, and its archives.
 
     `health` carries a short list of backups for the summary strip; this is
@@ -1870,7 +1873,7 @@ def backups(request, payload) -> dict:
             "archives": archives}
 
 
-def archive(request, payload) -> dict:
+def archive(request, payload) -> schema.ArchivePlan | schema.Archived:
     """Zip the named backups and take them off the shelf.
 
     `group` says where they go: "month" (the default) or "week" split them
@@ -1918,14 +1921,14 @@ def archive(request, payload) -> dict:
             "size": sum(a["size"] for a in archives)}
 
 
-def archive_rename(request, payload) -> dict:
+def archive_rename(request, payload) -> schema.Renamed:
     """Give an archive another name; the file keeps its `<project>-` prefix."""
     name = str(payload.get("name") or "")
     dest = db.rename_archive(db.active_project(), name, str(payload.get("label") or ""))
     return {"ok": True, "name": dest.name}
 
 
-def name_backup(request, payload) -> dict:
+def name_backup(request, payload) -> schema.BackupNamed:
     """Give one backup a name, or take the one it has away."""
     name = str(payload.get("name") or "")
     label = str(payload.get("label") or "").strip()[:120]
@@ -1933,7 +1936,7 @@ def name_backup(request, payload) -> dict:
     return {"ok": True, "name": name, "label": entry.get("label", "")}
 
 
-def pin_backup(request, payload) -> dict:
+def pin_backup(request, payload) -> schema.BackupPinned:
     """Pin or unpin one backup. A pinned backup cannot be ticked, so nothing
     that acts on a selection can reach it."""
     name = str(payload.get("name") or "")
@@ -1942,7 +1945,7 @@ def pin_backup(request, payload) -> dict:
     return {"ok": True, "name": name, "pinned": bool(entry.get("pinned"))}
 
 
-def delete_backups(request, payload) -> dict:
+def delete_backups(request, payload) -> schema.BackupsDeleted:
     """Remove backups from the shelf for good."""
     names = payload.get("names") or []
     if not isinstance(names, list) or not names:
@@ -1958,7 +1961,7 @@ def delete_backups(request, payload) -> dict:
     return {"ok": True, "deleted": count, "freed": freed}
 
 
-def restore_backup(request, payload) -> dict:
+def restore_backup(request, payload) -> schema.BackupRestored:
     """Put a backup back over the active project, keeping the current state.
 
     The copy is taken FIRST and named for what it is: restoring replaces
@@ -1971,21 +1974,21 @@ def restore_backup(request, payload) -> dict:
     return {"ok": True, "name": name, "kept": kept.name}
 
 
-def unarchive(request, payload) -> dict:
+def unarchive(request, payload) -> schema.Unarchived:
     """Put an archive's files back on the shelf and remove the archive."""
     name = str(payload.get("name") or "")
     restored = db.unarchive(db.active_project(), name)
     return {"ok": True, "name": name, "restored": restored}
 
 
-def archive_delete(request, payload) -> dict:
+def archive_delete(request, payload) -> schema.ArchiveDeleted:
     """Remove an archive and everything inside it."""
     name = str(payload.get("name") or "")
     count = db.delete_archive(db.active_project(), name)
     return {"ok": True, "name": name, "count": count}
 
 
-def sectionize(request, payload) -> dict:
+def sectionize(request, payload) -> schema.Sectionized:
     """Read every sectioned body in the store into its fields, once.
 
     Takes a backup first: the run rewrites the bodies whose fields are
@@ -1996,10 +1999,10 @@ def sectionize(request, payload) -> dict:
     dest = _backup("sectionize")
     with db.connect() as c:
         result = db.migrate_sections(c)
-    return {"ok": True, "backup": str(dest), **result}
+    return cast(schema.Sectionized, {"ok": True, "backup": str(dest), **result})
 
 
-def section_queue(request, payload) -> dict:
+def section_queue(request, payload) -> schema.SectionQueue:
     """The bodies that do not conform, and whether the store has been read."""
     with db.connect() as conn:
         return {"ok": True, "migrated": db.sections_read(conn),
@@ -2007,7 +2010,7 @@ def section_queue(request, payload) -> dict:
                 "queue": db.section_queue(conn)}
 
 
-def edit_sections(request, payload) -> dict:
+def edit_sections(request, payload) -> schema.Ok:
     """Rewrite one memory's body from the fields its type is made of.
 
     The way out of the queue. `sections` maps each field's key to its text;
@@ -2025,7 +2028,7 @@ def edit_sections(request, payload) -> dict:
     return {"ok": True}
 
 
-def dedup(request, payload) -> dict:
+def dedup(request, payload) -> schema.DedupPairs:
     threshold = min(max(float(request.query_params.get("threshold", 0.6)), 0.3), 0.99)
     domain = request.query_params.get("domain", "")
     with db.connect() as conn:
@@ -2039,10 +2042,10 @@ def dedup(request, payload) -> dict:
             limit=_int_param(request, "limit", 20, 1, 60))
         result = [{"a": _summary(a, DEDUP_SNIPPET), "b": _summary(b, DEDUP_SNIPPET),
                    "ratio": round(score, 3), "method": method} for a, b, score, method in pairs]
-    return {"pairs": result, "threshold": threshold, **scope}
+    return cast(schema.DedupPairs, {"pairs": result, "threshold": threshold, **scope})
 
 
-def audit(request, payload) -> dict:
+def audit(request, payload) -> schema.AuditLog:
     limit = _int_param(request, "limit", 100, 1, 400)
     with db.connect() as conn:
         rows = conn.execute(
@@ -2055,7 +2058,7 @@ def audit(request, payload) -> dict:
     return {"entries": [dict(r) for r in rows]}
 
 
-def lookup(request, payload) -> dict:
+def lookup(request, payload) -> schema.Lookup:
     """Finder for the memory-link picker in a record and on a diagram step.
 
     Every field returned is one the picker renders. The operator is
@@ -2177,7 +2180,7 @@ def _suggestion_json(conn, row) -> dict:
     return d
 
 
-def optimization_runs(request, payload) -> dict:
+def optimization_runs(request, payload) -> schema.OptimizationRuns:
     with db.connect() as conn:
         rows = db.list_optimization_runs(conn)
         kind_rows = db.optimization_run_kind_counts(conn)
@@ -2195,7 +2198,7 @@ def optimization_runs(request, payload) -> dict:
     return {"runs": runs}
 
 
-def optimization_suggestions(request, payload) -> dict:
+def optimization_suggestions(request, payload) -> schema.Suggestions:
     """A run's staged suggestions, or those of several runs at once.
 
     `runs` takes a comma-separated list and is what the calendar's day rail
@@ -2345,7 +2348,7 @@ def _group_facts(conn: sqlite3.Connection, kind: str, rows: list) -> dict:
     return {}
 
 
-def optimization_summary(request, payload) -> dict:
+def optimization_summary(request, payload) -> schema.OptimizationSummary:
     """The run's own head: how much of it was checked, and what it would do.
 
     Everything here is read off the staged rows. No projection of the health
@@ -2376,14 +2379,14 @@ def optimization_summary(request, payload) -> dict:
                 "verified": sum(bool((r["verified"] or "").strip()) for r in still),
                 "facts": _group_facts(conn, kind, still or mine),
             })
-    return {
+    return cast(schema.OptimizationSummary, {
         "run": dict(run),
         "total": len(rows),
         "pending": len(pending),
         "verified": sum(bool((r["verified"] or "").strip()) for r in pending),
         "ledger": ledger,
         "groups": groups,
-    }
+    })
 
 
 def _ensure_run_backup(run_id: int) -> str | None:
@@ -2412,7 +2415,7 @@ def _has_pending(run_id: int) -> bool:
         return bool(db.get_optimization_suggestions(conn, run_id, status="pending"))
 
 
-def optimization_apply(request, payload) -> dict:
+def optimization_apply(request, payload) -> schema.Applied:
     sug_id = payload.get("id")
     if not isinstance(sug_id, int):
         raise ValueError("id (int) required")
@@ -2471,7 +2474,7 @@ def _pending_in_scope(conn, run_ids: list[int], kind: str, ids: list[int] | None
     return rows
 
 
-def optimization_apply_all(request, payload) -> dict:
+def optimization_apply_all(request, payload) -> schema.AppliedAll:
     """Apply the pending suggestions of a run, a kind, a day, or a selection.
 
     Every run in the scope that still has something open gets its own
@@ -2507,7 +2510,7 @@ def optimization_apply_all(request, payload) -> dict:
             "backup": backups[0], "backups": backups}
 
 
-def optimization_reject(request, payload) -> dict:
+def optimization_reject(request, payload) -> schema.Ok:
     sug_id = payload.get("id")
     if not isinstance(sug_id, int):
         raise ValueError("id (int) required")
@@ -2516,7 +2519,7 @@ def optimization_reject(request, payload) -> dict:
     return {"ok": True}
 
 
-def optimization_reject_all(request, payload) -> dict:
+def optimization_reject_all(request, payload) -> schema.RejectedAll:
     """Reject the pending suggestions of a scope, the way apply-all applies them.
 
     Takes no backup: rejecting writes nothing to any memory, it only marks
@@ -2530,7 +2533,7 @@ def optimization_reject_all(request, payload) -> dict:
     return {"ok": True, "rejected": len(pending)}
 
 
-def optimization_revert(request, payload) -> dict:
+def optimization_revert(request, payload) -> schema.Ok:
     sug_id = payload.get("id")
     if not isinstance(sug_id, int):
         raise ValueError("id (int) required")
@@ -2539,7 +2542,7 @@ def optimization_revert(request, payload) -> dict:
     return {"ok": True}
 
 
-def optimization_delete_run(request, payload) -> dict:
+def optimization_delete_run(request, payload) -> schema.Ok:
     run_id = request.path_params["run_id"]
     with db.connect() as conn:
         ok = db.delete_optimization_run(conn, run_id)
@@ -2564,7 +2567,7 @@ def _state_of(version: str, current: str) -> str:
     return AHEAD if update.is_newer(version, current) else PAST
 
 
-def update_state(request=None, payload=None) -> dict:
+def update_state(request=None, payload=None) -> schema.UpdateState:
     """What the release check knows, without asking it anything.
 
     The cache is filled by a hook process or by `check_update`; this only
@@ -2587,7 +2590,7 @@ def update_state(request=None, payload=None) -> dict:
             "commands": update.commands()}
 
 
-def check_update(request, payload) -> dict:
+def check_update(request, payload) -> schema.UpdateState:
     """Ask GitHub for the releases now, whatever the window says.
 
     The one place the dashboard reaches the network. A request that does not
@@ -2600,13 +2603,13 @@ def check_update(request, payload) -> dict:
     return update_state()
 
 
-def set_update_interval(request, payload) -> dict:
+def set_update_interval(request, payload) -> schema.UpdateState:
     """Choose how many hours an answer is used before another request."""
     update.set_interval(payload.get("hours"))
     return update_state()
 
 
-def changelog_page(request, payload) -> dict:
+def changelog_page(request, payload) -> schema.Changelog:
     """Every release this installation can name, newest first.
 
     Two sources, one shape. `CHANGELOG.md` ships with the package and is the

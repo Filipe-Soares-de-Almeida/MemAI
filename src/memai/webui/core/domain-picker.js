@@ -1,11 +1,11 @@
 /* The domain filter: core/pick.js with the Domains table's CSS rails drawn from the same shape
    function, and the filter field always on. */
 
-import { esc } from './dom.js';
+import { esc } from './dom.ts';
 import { closePicker, pickerHTML, wirePicker } from './pick.js';
 import { DOMAIN_SEP, byDomainPath, domainGuides, domainLeaf, domainRailHTML,
          domainSegments } from './shared.js';
-import { t } from '../i18n.js';
+import { t } from '../i18n.ts';
 
 export { closePicker as closeDomainPicker };
 

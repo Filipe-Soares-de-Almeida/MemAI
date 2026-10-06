@@ -1899,8 +1899,8 @@ def get_relations(uid: str, part: str = "relations", offset: int = 0) -> dict:
 @tool("core")
 def set_confidence(uid: str, confidence: str) -> dict:
     """Set a memory's confidence: unverified | confirmed | contradicted."""
-    if confidence not in ("unverified", "confirmed", "contradicted"):
-        return {"ok": False, "error": "confidence must be unverified|confirmed|contradicted"}
+    if confidence not in db.CONFIDENCE_VALUES:
+        return {"ok": False, "error": f"confidence must be {'|'.join(db.CONFIDENCE_VALUES)}"}
     with db.connect() as conn:
         ok = db.set_confidence(conn, uid, confidence)
     return {"ok": ok}

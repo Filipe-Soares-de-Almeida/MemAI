@@ -11,18 +11,54 @@ const MAX_DEPTH = 26;
    seeded on top of each other do not fly apart. */
 const SOFT2 = 16;
 
+export interface Body {
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  m: number;
+  fixed?: boolean;
+  seat?: { x: number; y: number } | null;
+}
+
+export interface Link { a: Body; b: Body; len?: number | null; k?: number | null }
+
+export interface Force { fx: number; fy: number }
+
+export interface SimOptions {
+  charge: number;
+  linkK: number;
+  linkLen: number;
+  damp: number;
+  groupK: number;
+  center: boolean;
+  alpha: number;
+  decay: number;
+  alphaMin: number;
+}
+
 class Quad {
-  constructor(x0, y0, x1, y1, depth) {
+  x0: number;
+  y0: number;
+  x1: number;
+  y1: number;
+  depth: number;
+  kids: Quad[] | null = null;
+  body: Body | null = null;
+  bucket: Body[] | null = null;
+  mass = 0;
+  cx = 0;
+  cy = 0;
+
+  constructor(x0: number, y0: number, x1: number, y1: number, depth: number) {
     this.x0 = x0; this.y0 = y0; this.x1 = x1; this.y1 = y1; this.depth = depth;
-    this.kids = null; this.body = null; this.bucket = null;
-    this.mass = 0; this.cx = 0; this.cy = 0;
   }
 
-  insert(b) {
+  insert(b: Body): void {
     if (this.bucket) { this.bucket.push(b); return; }
-    if (!this.kids && !this.body) { this.body = b; return; }
     if (!this.kids) {
       const held = this.body;
+      if (!held) { this.body = b; return; }
       const mx = (this.x0 + this.x1) / 2;
       if (this.depth >= MAX_DEPTH || !(mx > this.x0 && mx < this.x1)) {
         this.bucket = [held, b];
@@ -36,7 +72,7 @@ class Quad {
     this.quadFor(b).insert(b);
   }
 
-  split() {
+  split(): void {
     const mx = (this.x0 + this.x1) / 2, my = (this.y0 + this.y1) / 2, d = this.depth + 1;
     this.kids = [
       new Quad(this.x0, this.y0, mx, my, d), new Quad(mx, this.y0, this.x1, my, d),
@@ -44,12 +80,13 @@ class Quad {
     ];
   }
 
-  quadFor(b) {
+  /* the child cell `b` falls in; split() has run */
+  quadFor(b: Body): Quad {
     const mx = (this.x0 + this.x1) / 2, my = (this.y0 + this.y1) / 2;
-    return this.kids[(b.y >= my ? 2 : 0) + (b.x >= mx ? 1 : 0)];
+    return this.kids![(b.y >= my ? 2 : 0) + (b.x >= mx ? 1 : 0)];
   }
 
-  summarize() {
+  summarize(): void {
     if (this.body) { this.mass = this.body.m; this.cx = this.body.x; this.cy = this.body.y; return; }
     if (this.bucket) {
       let m = 0, sx = 0, sy = 0;
@@ -71,7 +108,7 @@ class Quad {
 }
 
 /* The tree over `bodies`, summarized and ready to be read by `repel`. */
-export function buildQuad(bodies) {
+export function buildQuad(bodies: Body[]): Quad | null {
   if (!bodies.length) return null;
   let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
   for (const b of bodies) {
@@ -90,7 +127,7 @@ export function buildQuad(bodies) {
   return q;
 }
 
-function pair(b, o, k, out) {
+function pair(b: Body, o: Body, k: number, out: Force): void {
   if (o === b) return;
   let dx = b.x - o.x, dy = b.y - o.y;
   let d2 = dx * dx + dy * dy;
@@ -103,7 +140,7 @@ function pair(b, o, k, out) {
 }
 
 /* Sum the repulsion a whole tree exerts on `b` into `out`. */
-export function repel(q, b, k, out) {
+export function repel(q: Quad | null, b: Body, k: number, out: Force): void {
   if (!q || !q.mass) return;
   if (q.body) { pair(b, q.body, k, out); return; }
   if (q.bucket) { for (const o of q.bucket) pair(b, o, k, out); return; }
@@ -121,7 +158,11 @@ export function repel(q, b, k, out) {
 /* A simulation over `bodies` ({x, y, m, fixed}) and `links` ({a, b, len, k}). `groupK` pulls
    toward `b.seat`, which must be fixed or the arrangement rides it inward. */
 export class Sim {
-  constructor(bodies, links, opts = {}) {
+  bodies: Body[];
+  links: Link[];
+  o: SimOptions;
+
+  constructor(bodies: Body[], links: Link[], opts: Partial<SimOptions> = {}) {
     this.bodies = bodies;
     this.links = links;
     this.o = {
@@ -137,14 +178,14 @@ export class Sim {
     for (const b of bodies) { b.vx = b.vx || 0; b.vy = b.vy || 0; b.m = b.m || 1; }
   }
 
-  get settled() { return this.o.alpha <= this.o.alphaMin; }
+  get settled(): boolean { return this.o.alpha <= this.o.alphaMin; }
 
-  get progress() {
+  get progress(): number {
     const { alpha, alphaMin } = this.o;
     return Math.min(1, Math.max(0, (1 - alpha) / (1 - alphaMin)));
   }
 
-  pass() {
+  pass(): void {
     const o = this.o, bodies = this.bodies;
     const tree = buildQuad(bodies);
     const acc = { fx: 0, fy: 0 };
@@ -191,7 +232,7 @@ export class Sim {
 
   /* Passes until settled, until `maxPasses`, or until the millisecond budget
      runs out -- one frame's share of the arrangement. Returns how many ran. */
-  run(budgetMs = 12, maxPasses = 400) {
+  run(budgetMs = 12, maxPasses = 400): number {
     const t0 = performance.now();
     let n = 0;
     while (!this.settled && n < maxPasses && performance.now() - t0 < budgetMs) {
@@ -201,12 +242,12 @@ export class Sim {
   }
 
   /* Stop the arrangement where it stands: `settled` reads true from here. */
-  halt() { this.o.alpha = 0; }
+  halt(): void { this.o.alpha = 0; }
 }
 
 /* A phyllotaxis spiral. Seeding from it leaves a force layout no accidental
    symmetry to sit in, and on its own it fills a disc evenly. */
-export function spiral(i, n, radius) {
+export function spiral(i: number, n: number, radius: number): { x: number; y: number } {
   const g = Math.PI * (3 - Math.sqrt(5));
   const r = radius * Math.sqrt((i + 0.5) / n);
   return { x: Math.cos(i * g) * r, y: Math.sin(i * g) * r };

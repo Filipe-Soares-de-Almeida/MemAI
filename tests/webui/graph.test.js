@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { GraphCanvas } from '../../src/memai/webui/graph-2d.js';
+import { GraphCanvas } from '../../src/memai/webui/engines/graph-2d.ts';
 import { renderGraph } from '../../src/memai/webui/views/graph.js';
 import { catalog, serveApi } from './support.js';
 

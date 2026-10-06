@@ -1,0 +1,51 @@
+{
+  "memory": {
+    "TYPES": ["note", "checkpoint", "anti_pattern", "reasoning", "handoff", "diagram", "task"],
+    "CONFIDENCES": ["unverified", "confirmed", "contradicted"],
+    "PINS": ["global", "domain"],
+    "TITLE_MAX": 120,
+    "DOMAIN_SEP": "/"
+  },
+  "task": {
+    "STATES": ["open", "completed", "cancelled"],
+    "ITEM_STATES": ["todo", "doing", "done", "dropped"],
+    "GOAL_MAX": 2000,
+    "ITEM_MAX": 300,
+    "ITEMS_MAX": 50,
+    "NOTE_MAX": 4000
+  },
+  "admin": {
+    "BULK_MAX": 500,
+    "ARCHIVE_LABEL_MAX": 60
+  },
+  "diagram": {
+    "SHAPES": ["start", "step", "decision", "io", "end"],
+    "NODE_W": 170,
+    "NODE_H": 48,
+    "DECISION_H": 66,
+    "NODE_MIN_W": 110,
+    "NODE_MAX_W": 560,
+    "NODE_MIN_H": 34,
+    "NODE_MAX_H": 340,
+    "IO_SKEW": 14,
+    "ARROW_GAP": 5,
+    "ARROW_LEN": 9,
+    "ARROW_FLARE": 0.45,
+    "ORTH_STUB": 26,
+    "FAN_GAP": 22,
+    "FAN_STUB": 14,
+    "MERGE_GAP": 30,
+    "MERGE_TAIL": 9,
+    "ORTH_RADIUS": 11,
+    "ORTH_SNAP": 18,
+    "LABEL_PX": 12,
+    "LABEL_LH": 14,
+    "LABEL_MIN_SCALE": 0.3,
+    "BADGE_PX": 10,
+    "BADGE_WORDS": 3,
+    "BADGE_CHARS": 20,
+    "BADGE_MIN_SCALE": 0.45,
+    "RING_GROW": 6,
+    "BADGE_OUT": 7
+  }
+}

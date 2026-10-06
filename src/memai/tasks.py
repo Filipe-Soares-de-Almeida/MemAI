@@ -8,15 +8,9 @@ import re
 import sqlite3
 
 from . import budget, db
+from .contract import GOAL_MAX, ITEM_MAX, ITEM_STATES, ITEMS_MAX, NOTE_MAX, TASK_STATES
 
-ITEM_STATES = ("todo", "doing", "done", "dropped")
-TASK_STATES = ("open", "completed", "cancelled")
-
-GOAL_MAX = 2000
-ITEM_MAX = 300
-ITEMS_MAX = 50
 COMMENT_MAX = 2000
-NOTE_MAX = 4000
 
 MARKS = {"todo": "[ ]", "doing": "[~]", "done": "[x]", "dropped": "[-]"}
 

@@ -32,7 +32,7 @@ from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from memai import guard, sections
+from memai import contract, guard, sections
 from memai.lite import (  # noqa: F401
     DOMAIN_SEP,
     TASK_ASK_MINUTES_DEFAULT,
@@ -61,7 +61,7 @@ ALSO_SEP = "\n"
 CONFIDENCE_CONTRADICTED = "contradicted"
 
 # Characters a stripped title may hold: past this it restates the memory instead of naming it.
-TITLE_MAX = 120
+TITLE_MAX = contract.TITLE_MAX
 
 # The FTS index and its triggers, kept separate because they are also what a
 # store built before a new indexed column has to be rebuilt from (_ensure_fts).
@@ -724,7 +724,7 @@ def archive_name(project: str, when: date | None = None) -> str:
 # How a batch of backups is split into zips when none is named: by the ISO
 # week or the calendar month each was taken in.
 ARCHIVE_GROUPS = ("week", "month")
-ARCHIVE_LABEL_MAX = 60
+ARCHIVE_LABEL_MAX = contract.ARCHIVE_LABEL_MAX
 _ARCHIVE_LABEL = re.compile(r"[\w]([\w .\-]*[\w])?")
 
 
@@ -2216,7 +2216,7 @@ def set_confidence(conn: sqlite3.Connection, uid: str, confidence: str) -> bool:
     return True
 
 
-PIN_VALUES = ("", "global", "domain")
+PIN_VALUES = ("", *contract.PINS)
 
 
 def pin_error(pin: str, domain: str) -> str | None:
@@ -2535,20 +2535,17 @@ def get_relations(conn: sqlite3.Connection, uid: str) -> list[sqlite3.Row]:
 
 DIAGRAM_TYPE = "diagram"
 DIAGRAM_KINDS = ("flowchart",)
-NODE_SHAPES = ("start", "step", "decision", "io", "end")
+NODE_SHAPES = contract.NODE_SHAPES
 
 # Cap on a rendered body returned to an agent; the stored content is never truncated.
 DIAGRAM_BODY_BUDGET = 12_000
 
-# Abstract canvas units, laid out here so every renderer draws the same picture. The default box
-# must match the canvas copy (diagram.js), or a stored arrangement stops matching what is drawn.
-NODE_DEFAULT_W = 170.0
-NODE_DEFAULT_H = 48.0
-DECISION_DEFAULT_H = 66.0        # a diamond needs the extra height to read
-# What a resize is allowed to reach. Wide enough for a long routine name,
-# bounded so one card cannot swallow the canvas.
-NODE_MIN_W, NODE_MAX_W = 110.0, 560.0
-NODE_MIN_H, NODE_MAX_H = 34.0, 340.0
+# Abstract canvas units, laid out here so every renderer draws the same picture.
+NODE_DEFAULT_W = contract.NODE_W
+NODE_DEFAULT_H = contract.NODE_H
+DECISION_DEFAULT_H = contract.DECISION_H
+NODE_MIN_W, NODE_MAX_W = contract.NODE_MIN_W, contract.NODE_MAX_W
+NODE_MIN_H, NODE_MAX_H = contract.NODE_MIN_H, contract.NODE_MAX_H
 FONT_SCALE_MIN, FONT_SCALE_MAX = 0.7, 2.5
 
 # Air between boxes, wider than a default box: edges carry the sequence. A change applies only to
@@ -2561,9 +2558,7 @@ LAYOUT_ROW_H = NODE_DEFAULT_H + LAYOUT_GAP_Y   # 200
 TASK_TYPE = "task"
 # types whose content is generated from rows, so no prose scan or merge applies
 GENERATED_TYPES = (DIAGRAM_TYPE, TASK_TYPE)
-# every type a memory can have; the tools and the dashboard read this one list
-MEMORY_TYPES = ("note", "reasoning", "anti_pattern", "checkpoint", "handoff",
-                DIAGRAM_TYPE, TASK_TYPE)
+MEMORY_TYPES = contract.MEMORY_TYPES
 
 
 def type_error(type_: str, allowed: tuple[str, ...] = MEMORY_TYPES) -> str | None:
@@ -4913,7 +4908,7 @@ def dedup_candidates(
 
 # ------------------------------------------------------------------ optimization
 
-CONFIDENCE_VALUES = ("unverified", "confirmed", CONFIDENCE_CONTRADICTED)
+CONFIDENCE_VALUES = contract.CONFIDENCES
 SUGGESTION_KINDS = (
     "compact", "reword", "retag", "retitle", "redomain", "crosslist",
     "set_confidence", "review", "archive", "link", "merge", "distill",

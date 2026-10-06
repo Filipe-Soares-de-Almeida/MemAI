@@ -1,15 +1,25 @@
 /* Circle packing in world units: front-chain sibling packing and Welzl's smallest enclosing
    circle (the d3-hierarchy algorithms), so a nested domain reads as one body. */
 
-export const clamp = (v, lo, hi) => (v < lo ? lo : v > hi ? hi : v);
+export interface Circle { x: number; y: number; r: number }
+
+/* One circle on the front chain: a ring of the circles packed so far. */
+class ChainNode {
+  next: ChainNode = this;
+  prev: ChainNode = this;
+  c: Circle;
+  constructor(c: Circle) { this.c = c; }
+}
+
+export const clamp = (v: number, lo: number, hi: number): number => (v < lo ? lo : v > hi ? hi : v);
 
 const EPS = 1e-6;
-const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
-const holds = (a, b) => a.r >= dist(a, b) + b.r - EPS;       /* a contains b */
-const holdsNot = (a, b) => a.r < dist(a, b) + b.r - EPS;
+const dist = (a: Circle, b: Circle): number => Math.hypot(a.x - b.x, a.y - b.y);
+const holds = (a: Circle, b: Circle): boolean => a.r >= dist(a, b) + b.r - EPS;   /* a contains b */
+const holdsNot = (a: Circle, b: Circle): boolean => a.r < dist(a, b) + b.r - EPS;
 
 /* Put `c` tangent to both `a` and `b`. */
-function place(b, a, c) {
+function place(b: Circle, a: Circle, c: Circle): void {
   const dx = b.x - a.x, dy = b.y - a.y, d2 = dx * dx + dy * dy;
   if (d2) {
     let a2 = a.r + c.r; a2 *= a2;
@@ -26,20 +36,20 @@ function place(b, a, c) {
   } else { c.x = a.x + c.r; c.y = a.y; }
 }
 
-const overlaps = (a, b) => {
+const overlaps = (a: Circle, b: Circle): boolean => {
   const dr = a.r + b.r - EPS, dx = b.x - a.x, dy = b.y - a.y;
   return dr > 0 && dr * dr > dx * dx + dy * dy;
 };
 
-const score = node => {
+const score = (node: ChainNode): number => {
   const a = node.c, b = node.next.c, ab = a.r + b.r;
   const dx = (a.x * b.r + b.x * a.r) / ab, dy = (a.y * b.r + b.y * a.r) / ab;
   return dx * dx + dy * dy;
 };
 
-const basis1 = a => ({ x: a.x, y: a.y, r: a.r });
+const basis1 = (a: Circle): Circle => ({ x: a.x, y: a.y, r: a.r });
 
-function basis2(a, b) {
+function basis2(a: Circle, b: Circle): Circle {
   const x21 = b.x - a.x, y21 = b.y - a.y, r21 = b.r - a.r;
   const l = Math.hypot(x21, y21);
   return { x: (a.x + b.x + x21 / l * r21) / 2,
@@ -47,7 +57,7 @@ function basis2(a, b) {
            r: (l + a.r + b.r) / 2 };
 }
 
-function basis3(a, b, c) {
+function basis3(a: Circle, b: Circle, c: Circle): Circle {
   const a2 = a.x - b.x, a3 = a.x - c.x, b2 = a.y - b.y, b3 = a.y - c.y,
         c2 = b.r - a.r, c3 = c.r - a.r;
   const d1 = a.x * a.x + a.y * a.y - a.r * a.r;
@@ -65,12 +75,12 @@ function basis3(a, b, c) {
   return { x: a.x + xa + xb * r, y: a.y + ya + yb * r, r };
 }
 
-const encloseBasis = B =>
+const encloseBasis = (B: Circle[]): Circle =>
   B.length === 1 ? basis1(B[0]) : B.length === 2 ? basis2(B[0], B[1]) : basis3(B[0], B[1], B[2]);
 
-const holdsAll = (e, B) => B.every(q => holds(e, q));
+const holdsAll = (e: Circle, B: Circle[]): boolean => B.every(q => holds(e, q));
 
-function extendBasis(B, p) {
+function extendBasis(B: Circle[], p: Circle): Circle[] {
   if (holdsAll(p, B)) return [p];
   for (let i = 0; i < B.length; i++)
     if (holdsNot(p, B[i]) && holdsAll(basis2(B[i], p), B)) return [B[i], p];
@@ -85,8 +95,8 @@ function extendBasis(B, p) {
 }
 
 /* The smallest circle containing every circle given, as {x, y, r}. */
-export function enclose(circles) {
-  let i = 0, e = null, B = [];
+export function enclose(circles: Circle[]): Circle {
+  let i = 0, e: Circle | null = null, B: Circle[] = [];
   while (i < circles.length) {
     const p = circles[i];
     if (e && holds(e, p)) { i++; continue; }
@@ -99,7 +109,7 @@ export function enclose(circles) {
 
 /* Lay `circles` (each carrying `r`) tangent to one another, centred on their
    enclosing circle. Writes x/y per circle and returns the enclosing radius. */
-export function packSiblings(circles) {
+export function packSiblings(circles: Circle[]): number {
   const n = circles.length;
   if (!n) return 0;
   let a = circles[0];
@@ -110,13 +120,14 @@ export function packSiblings(circles) {
   if (n === 2) return a.r + b.r;
   place(b, a, circles[2]);
 
-  let A = { c: a }, Bn = { c: b }, C = { c: circles[2] };
+  const A = new ChainNode(a), Bn = new ChainNode(b);
+  let C = new ChainNode(circles[2]);
   A.next = C.prev = Bn; Bn.next = A.prev = C; C.next = Bn.prev = A;
   let head = A, tail = Bn;
 
   pack: for (let i = 3; i < n; i++) {
     place(head.c, tail.c, circles[i]);
-    C = { c: circles[i] };
+    C = new ChainNode(circles[i]);
     let j = tail.next, k = head.prev, sj = tail.c.r, sk = head.c.r;
     do {
       if (sj <= sk) {

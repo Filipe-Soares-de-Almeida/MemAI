@@ -10,17 +10,18 @@
    the whole store, and a log you have scrolled back through is a place
    you were reading. */
 
-import { $, esc, fmtInt, fmtBytes, fmtDate, fmtAgo } from '../core/dom.js';
-import { api, seg } from '../core/api.js';
+import { $, esc, fmtInt, fmtBytes, fmtDate, fmtAgo } from '../core/dom.ts';
 import { toast, failed, confirmModal, promptModal, openModal, closeModal } from '../core/ui.js';
 import { typeTag, typeClass, uidChip, statusTag, wireCopyChips, failedHTML, retryable,
          getDomains, typeItems, domainDatalist } from '../core/shared.js';
 import { pickerFor, pickerValue, setPickerValue, wirePicker, fixedItems } from '../core/pick.js';
 import { icon } from '../core/icons.js';
-import { replaceParams } from '../core/router.js';
-import { openRecord } from './record.js';
-import { MOTION_MODES, getMotion, setMotion } from '../core/motion.js';
-import { I18N, t } from '../i18n.js';
+import { replaceParams } from '../core/router.ts';
+import { openRecord } from '../core/nav.ts';
+import { MOTION_MODES, getMotion, setMotion } from '../core/motion.ts';
+import { I18N, t } from '../i18n.ts';
+import { ADMIN } from '../contract.ts';
+import * as client from '../api/client.ts';
 
 /* The address of each workspace, as ?tab= and as the order of the strip. */
 const TABS = ['backups', 'storage', 'sections', 'dupes', 'log', 'warden', 'interface'];
@@ -30,32 +31,32 @@ const TABS = ['backups', 'storage', 'sections', 'dupes', 'log', 'warden', 'inter
 const RECLAIM_WARN = 262144;
 
 const OPS = {
-  'fts': { path: '/api/maintenance/fts-rebuild', body: {},
+  'fts': { call: () => client.maintenance.ftsRebuild(),
            msg: r => t('mn.msg.fts', { n: fmtInt(r.rows) }) },
   /* Both of these delete and both are irreversible, so both ask first.
      Clean orphans DELETES rows; VACUUM rewrites the file and discards the
      free pages an undo would have needed. */
-  'orphans': { path: '/api/maintenance/clean-orphans', body: {},
+  'orphans': { call: () => client.maintenance.cleanOrphans(),
                confirm: t('mn.confirm.orphans'), danger: true,
                msg: r => t('mn.msg.orphans', { r: r.relations_removed }) },
-  'vacuum': { path: '/api/maintenance/vacuum', body: {},
+  'vacuum': { call: () => client.maintenance.vacuum(),
               confirm: t('mn.confirm.vacuum'), danger: true,
               msg: r => t('mn.msg.vacuum', { a: fmtBytes(r.before), b: fmtBytes(r.after) }) },
-  'backup': { path: '/api/maintenance/backup', body: {},
+  'backup': { call: () => client.maintenance.backup(),
               msg: r => t('mn.msg.backup', { name: r.path.split(/[\\/]/).pop(), size: fmtBytes(r.size) }) },
   /* Confirm-first like the two above, for a different reason: nothing is
      deleted, but the bodies whose fields sit under a header line are
      rewritten. The server backs the store up before it starts. */
-  'sectionize': { path: '/api/maintenance/sectionize', body: {},
+  'sectionize': { call: () => client.maintenance.sectionize(),
                   confirm: t('mn.confirm.sectionize'),
                   msg: r => t('mn.msg.sectionize', { t: fmtInt(r.total), n: fmtInt(r.rewritten),
                                                      q: fmtInt(r.needs_review) }) },
   /* Clearing renders is NOT in the confirm-first group above: a render is a
      cache of a diagram that is still there, so the worst case is that the
      next read redraws it. */
-  'prune-renders': { path: '/api/maintenance/prune-renders', body: {},
+  'prune-renders': { call: () => client.maintenance.pruneRenders(),
                      msg: r => t('mn.msg.pruned', { n: fmtInt(r.pruned), size: fmtBytes(r.bytes) }) },
-  'prune-renders-all': { path: '/api/maintenance/prune-renders', body: { all: true },
+  'prune-renders-all': { call: () => client.maintenance.pruneRenders({ all: true }),
                          msg: r => t('mn.msg.pruned', { n: fmtInt(r.pruned), size: fmtBytes(r.bytes) }) },
 };
 
@@ -195,7 +196,7 @@ export async function renderMaintenance(view, params) {
   /* ── health: the store line, and the data two tabs are made of ────── */
 
   const loadHealth = retryable('#mntStore', async () => {
-    const h = await api('/api/maintenance/health');
+    const h = await client.maintenance.health();
     const line = $('#mntStore');
     if (!line) return;   /* the view was swapped mid-flight */
     health = h;
@@ -221,7 +222,7 @@ export async function renderMaintenance(view, params) {
          operations was the one running */
       b.innerHTML = `<span class="spin"></span>${esc(prev)}`;
       try {
-        const r = await api(op.path, { body: op.body });
+        const r = await op.call();
         toast(op.msg(r), 'ok');
         loadHealth().catch(() => {});
         if (built.has('sections')) loadSections().catch(() => {});
@@ -249,7 +250,7 @@ export async function renderMaintenance(view, params) {
      cannot be ticked, and a shelf that hides its thirteenth file is a shelf
      that cannot archive it. */
   const loadShelf = retryable('#bkBody', async () => {
-    const fresh = await api('/api/maintenance/backups');
+    const fresh = await client.maintenance.backups();
     if (!$('#bkBody')) return;
     shelf = fresh;
     const names = new Set(shelf.shelf.map(f => f.name));
@@ -368,8 +369,7 @@ export async function renderMaintenance(view, params) {
           placeholder: t('mn.arch.namePh'), okLabel: t('mn.bk.renameZip') });
         if (label === null || label.trim() === archiveLabel(archive.name, shelf.project)) return;
         try {
-          const r = await api('/api/maintenance/archive-rename',
-                              { body: { name: archive.name, label } });
+          const r = await client.maintenance.archiveRename({ name: archive.name, label });
           bkZip = r.name;
           await afterShelfWrite(t('mn.msg.zipRenamed', { name: zipLabel(r.name, shelf.project) }));
         } catch (err) { failed('err.maintenance', err); }
@@ -379,7 +379,7 @@ export async function renderMaintenance(view, params) {
           body: t('mn.confirm.unzip', { n: archive.count, name: archive.name }),
           okLabel: t('mn.bk.unzip') }))) return;
         try {
-          const r = await api('/api/maintenance/unarchive', { body: { name: archive.name } });
+          const r = await client.maintenance.unarchive({ name: archive.name });
           bkZip = null;
           await afterShelfWrite(t('mn.msg.unzipped', { n: fmtInt(r.restored.length) }));
         } catch (err) { failed('err.maintenance', err); }
@@ -389,7 +389,7 @@ export async function renderMaintenance(view, params) {
           body: t('mn.confirm.deleteZip', { n: archive.count, name: archive.name }),
           okLabel: t('mn.bk.deleteZip'), danger: true }))) return;
         try {
-          const r = await api('/api/maintenance/archive-delete', { body: { name: archive.name } });
+          const r = await client.maintenance.archiveDelete({ name: archive.name });
           bkZip = null;
           await afterShelfWrite(t('mn.msg.zipDeleted', { n: fmtInt(r.count), name: archive.name }));
         } catch (err) { failed('err.maintenance', err); }
@@ -460,7 +460,7 @@ export async function renderMaintenance(view, params) {
       const on = !files.find(f => f.name === name)?.pinned;
       b.disabled = true;
       try {
-        await api('/api/maintenance/backup-pin', { body: { name, pinned: on } });
+        await client.maintenance.backupPin({ name, pinned: on });
         bkSel.delete(name);   /* a pinned file cannot be ticked */
         await loadShelf();
       } catch (err) { failed('err.maintenance', err); b.disabled = false; }
@@ -486,7 +486,7 @@ export async function renderMaintenance(view, params) {
         const name = bkRenaming, label = field.value.trim();
         bkRenaming = null;
         try {
-          await api('/api/maintenance/backup-name', { body: { name, label } });
+          await client.maintenance.backupName({ name, label });
           await loadShelf();
         } catch (err) { failed('err.maintenance', err); paintBackups(); }
       });
@@ -571,7 +571,7 @@ export async function renderMaintenance(view, params) {
         body: t('mn.confirm.restore', { name: one.label || one.name }),
         okLabel: t('mn.bk.restoreOk') }))) return;
       try {
-        const r = await api('/api/maintenance/backup-restore', { body: { name: one.name } });
+        const r = await client.maintenance.backupRestore({ name: one.name });
         await afterShelfWrite(t('mn.msg.restored', { name: one.name, kept: r.kept }));
         loadSections().catch(() => {});
       } catch (err) { failed('err.maintenance', err); }
@@ -583,7 +583,7 @@ export async function renderMaintenance(view, params) {
         body: t('mn.confirm.deleteBackups', { n: names.length, size: fmtBytes(size) }),
         okLabel: t('mn.bk.delete'), danger: true }))) return;
       try {
-        const r = await api('/api/maintenance/backup-delete', { body: { names } });
+        const r = await client.maintenance.backupDelete({ names });
         await afterShelfWrite(t('mn.msg.deleted', {
           n: fmtInt(r.deleted), size: fmtBytes(r.freed) }));
       } catch (err) { failed('err.maintenance', err); }
@@ -594,7 +594,7 @@ export async function renderMaintenance(view, params) {
       const where = await archiveDialog(names, size);
       if (!where) return;
       try {
-        const r = await api('/api/maintenance/archive', { body: { names, ...where } });
+        const r = await client.maintenance.archive({ names, ...where });
         await afterShelfWrite(t('mn.msg.archived', {
           n: fmtInt(r.added),
           name: r.archives.map(a => zipLabel(a.name, shelf.project)).join(', '),
@@ -609,7 +609,7 @@ export async function renderMaintenance(view, params) {
      which zips will be written -- for month and week it asks the server,
      which owns the grouping. Resolves to the request fields, or null. */
   const ZIP_NAME = /^[\p{L}\p{N}_]([\p{L}\p{N}_ .\-]*[\p{L}\p{N}_])?$/u;
-  const ZIP_NAME_MAX = 60;
+  const ZIP_NAME_MAX = ADMIN.ARCHIVE_LABEL_MAX;
 
   function archiveDialog(names, size) {
     return new Promise(resolve => {
@@ -682,7 +682,7 @@ export async function renderMaintenance(view, params) {
           plan.className = 'arch-plan';
           plan.textContent = '…';
           try {
-            const r = await api('/api/maintenance/archive', { body: { names, group: w, dry_run: true } });
+            const r = await client.maintenance.archive({ names, group: w, dry_run: true });
             if (mine !== seq) return;
             lines(r.plan);
             ok.disabled = false;
@@ -771,7 +771,7 @@ export async function renderMaintenance(view, params) {
     wireOps(panel('storage'));
     wirePicker(view, { id: 'rnKeep', items: fixedItems(keepItems), onPick: async mode => {
       try {
-        await api('/api/config', { body: { svg_retention: mode } });
+        await client.config.set({ svg_retention: mode });
         toast(t('mn.msg.retention', { mode: t('mn.rn.mode.' + mode) }), 'ok');
       } catch (err) { failed('err.maintenance', err); }
     } });
@@ -863,7 +863,7 @@ export async function renderMaintenance(view, params) {
   /* ── sections ──────────────────────────────────────────────────────── */
 
   const loadSections = retryable('#scBody', async () => {
-    const s = await api('/api/maintenance/sections-queue');
+    const s = await client.maintenance.sectionsQueue();
     const body = $('#scBody');
     if (!body) return;
     badge('sections', s.queue.length);
@@ -940,7 +940,7 @@ export async function renderMaintenance(view, params) {
       const qs = new URLSearchParams({ threshold: $('#ddThr').value });
       if (pickerValue(view, 'ddType')) qs.set('type', pickerValue(view, 'ddType'));
       if ($('#ddDomain').value.trim()) qs.set('domain', $('#ddDomain').value.trim());
-      const r = await api(`/api/maintenance/dedup?${qs}`);
+      const r = await client.maintenance.dedup(qs);
       badge('dupes', r.pairs.length);
       if (!r.pairs.length) {
         body.innerHTML = `<div class="empty">${t('mn.dd.none')}</div>`;
@@ -979,8 +979,7 @@ export async function renderMaintenance(view, params) {
             placeholder: t('mn.dd.archPh'), okLabel: t('common.archive'), danger: true });
           if (reason === null) return;
           try {
-            await api(`/api/memories/${seg(btn.dataset.archm)}/status`, {
-              body: { status: 'archived', reason: reason || t('mn.dd.dupReason') } });
+            await client.memories.status(btn.dataset.archm, { status: 'archived', reason: reason || t('mn.dd.dupReason') });
             toast(t('dr.archived'), 'ok');
             /* sink the card a step instead of dimming it: the snippet is what
                you would re-read to check you archived the right one */
@@ -991,7 +990,7 @@ export async function renderMaintenance(view, params) {
         btn.addEventListener('click', async () => {
           const p = r.pairs[btn.dataset.linkdup];
           try {
-            await api('/api/relations', { body: { from_uid: p.a.uid, to_uid: p.b.uid, relation_type: 'duplicates', note: t('mn.dd.linkNote', { p: (p.ratio * 100).toFixed(0) }) } });
+            await client.relations.create({ from_uid: p.a.uid, to_uid: p.b.uid, relation_type: 'duplicates', note: t('mn.dd.linkNote', { p: (p.ratio * 100).toFixed(0) }) });
             toast(t('mn.dd.linked'), 'ok');
             btn.disabled = true;
           } catch (err) { failed('err.relation', err); }
@@ -1007,7 +1006,7 @@ export async function renderMaintenance(view, params) {
   /* ── the change log ────────────────────────────────────────────────── */
 
   const loadLog = retryable('#logBody', async () => {
-    const r = await api('/api/audit?limit=200');
+    const r = await client.audit({ limit: 200 });
     const host = $('#logBody');
     if (!host) return;
     if (!r.entries.length) {
@@ -1057,7 +1056,7 @@ export async function renderMaintenance(view, params) {
       b => b.addEventListener('click', () => openRecord(b.dataset.uid)));
   });
 
-  /* The day heading, from a YYYY-MM-DD key. dom.js's fmtDay drops the year,
+  /* The day heading, from a YYYY-MM-DD key. fmtDay in core/dom.ts drops the year,
      which a log going back months cannot afford. */
   function fmtDayKey(key) {
     const [y, m, d] = String(key).split('-');
@@ -1107,7 +1106,7 @@ export async function renderMaintenance(view, params) {
     /* Both controls reflect the stored value; only a pick writes one. The
        interval stays on file while the warden is off, so turning it back on
        does not lose the choice. */
-    api('/api/config').then(cfg => {
+    client.config.get().then(cfg => {
       const on = $('#wdOn');
       const every = $('#wdEvery');
       const state = onOffItems.find(it => it.value === (cfg.warden_enabled ? 'on' : 'off'));
@@ -1126,7 +1125,7 @@ export async function renderMaintenance(view, params) {
     wirePicker(view, { id: 'wdOn', items: fixedItems(onOffItems), onPick: async value => {
       const enabled = value === 'on';
       try {
-        const cfg = await api('/api/config', { body: { warden_enabled: enabled } });
+        const cfg = await client.config.set({ warden_enabled: enabled });
         toast(enabled ? t('mn.msg.wardenOn', { n: cfg.warden_minutes })
                       : t('mn.msg.wardenOff'), 'ok');
       } catch (err) { failed('err.maintenance', err); }
@@ -1134,7 +1133,7 @@ export async function renderMaintenance(view, params) {
 
     wirePicker(view, { id: 'wdEvery', items: fixedItems(everyItems), onPick: async value => {
       try {
-        await api('/api/config', { body: { warden_minutes: Number(value) } });
+        await client.config.set({ warden_minutes: Number(value) });
         toast(t('mn.msg.wardenEvery', { n: value }), 'ok');
       } catch (err) { failed('err.maintenance', err); }
     } });
@@ -1144,7 +1143,7 @@ export async function renderMaintenance(view, params) {
     wirePicker(view, { id: 'taOn', items: fixedItems(onOffItems), onPick: async value => {
       const enabled = value === 'on';
       try {
-        const cfg = await api('/api/config', { body: { task_ask_enabled: enabled } });
+        const cfg = await client.config.set({ task_ask_enabled: enabled });
         toast(enabled ? t('mn.msg.taskOn', { n: cfg.task_ask_minutes })
                       : t('mn.msg.taskOff'), 'ok');
       } catch (err) { failed('err.maintenance', err); }
@@ -1152,7 +1151,7 @@ export async function renderMaintenance(view, params) {
 
     wirePicker(view, { id: 'taEvery', items: fixedItems(everyItems), onPick: async value => {
       try {
-        await api('/api/config', { body: { task_ask_minutes: Number(value) } });
+        await client.config.set({ task_ask_minutes: Number(value) });
         toast(t('mn.msg.taskEvery', { n: value }), 'ok');
       } catch (err) { failed('err.maintenance', err); }
     } });
@@ -1182,7 +1181,7 @@ export async function renderMaintenance(view, params) {
   BUILD[opened]();
   loadHealth();
   if (opened !== 'sections') {
-    api('/api/maintenance/sections-queue')
+    client.maintenance.sectionsQueue()
       .then(s => badge('sections', s.queue.length)).catch(() => {});
   }
 }

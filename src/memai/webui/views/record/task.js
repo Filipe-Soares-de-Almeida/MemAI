@@ -1,18 +1,19 @@
 /* A task's checklist: every write repaints it from the {task, status} the server answers; one item's
    panel is open at a time. `onStatus` reports a close or reopen, `onWrite` any accepted write. */
 
-import { esc, fmtAgo, fmtDate, fmtInt } from '../core/dom.js';
-import { api, seg } from '../core/api.js';
-import { icon } from '../core/icons.js';
-import { toast, failed, openDropMenu, confirmModal, copyCode, keysHTML, saveKeysHTML } from '../core/ui.js';
-import { renderRich, wireRich } from '../core/richtext.js';
-import { highlightIn } from '../core/highlight.js';
-import { pickMemories } from '../core/link-picker.js';
-import { typeTag } from '../core/shared.js';
-import { go, parseHash, refreshBehind } from '../core/router.js';
-import { t } from '../i18n.js';
+import { esc, fmtAgo, fmtDate, fmtInt } from '../../core/dom.ts';
+import { icon } from '../../core/icons.js';
+import { toast, failed, openDropMenu, confirmModal, copyCode, keysHTML, saveKeysHTML } from '../../core/ui.js';
+import { renderRich, wireRich } from '../../core/richtext.js';
+import { highlightIn } from '../../core/highlight.js';
+import { pickMemories } from '../../core/link-picker.js';
+import { typeTag } from '../../core/shared.js';
+import { go, parseHash, refreshBehind } from '../../core/router.ts';
+import { t } from '../../i18n.ts';
+import { MEMORY, TASK } from '../../contract.ts';
+import * as client from '../../api/client.ts';
 
-const STATES = ['todo', 'doing', 'done', 'dropped'];
+const STATES = TASK.ITEM_STATES;
 
 /* One click on an item's mark moves it along todo, doing, done; a done or a
    dropped item goes back to todo. */
@@ -20,9 +21,8 @@ const NEXT = { todo: 'doing', doing: 'done', done: 'todo', dropped: 'todo' };
 
 const OLDER_SHOWN = 3;
 
-/* db.TITLE_MAX and tasks.NOTE_MAX on the server */
-const NOTE_TITLE_MAX = 120;
-const NOTE_MAX = 4000;
+const NOTE_TITLE_MAX = MEMORY.TITLE_MAX;
+const { NOTE_MAX } = TASK;
 
 /* the opening of a body as plain words: markup that only means something when drawn goes */
 const peekOf = text => String(text || '')
@@ -90,11 +90,11 @@ export function mountTask(host, { uid, task, status }, { onStatus, onWrite } = {
 
   /* One write at a time, so a second click cannot read a stale state; `onOk`
      runs (and is awaited) on acceptance, before the repaint. */
-  const write = async (path, body, { method = 'POST', errKey = 'task.err.save', onOk } = {}) => {
+  const write = async (call, body, { errKey = 'task.err.save', onOk } = {}) => {
     if (busy) { want = []; return null; }
     busy = true;
     try {
-      const res = await api(`/api/tasks/${seg(uid)}/${path}`, { method, body });
+      const res = await call(uid, body);
       await onOk?.(state);
       apply(res);
       if (!alive()) refreshIfShown();
@@ -119,7 +119,7 @@ export function mountTask(host, { uid, task, status }, { onStatus, onWrite } = {
   const setItem = async (key, next, { quiet = false } = {}) => {
     const before = current.items.find(i => i.key === key)?.state;
     const wasOpen = current.state === 'open';
-    const res = await write('item', { item: key, state: next }, { onOk: s => { s.pulse = key; } });
+    const res = await write(client.tasks.item, { item: key, state: next }, { onOk: s => { s.pulse = key; } });
     if (!res || quiet) return;
     if (wasOpen && res.task.state !== 'open') {
       toast(t(`task.toast.${res.task.state}`), 'ok', {
@@ -147,8 +147,8 @@ export function mountTask(host, { uid, task, status }, { onStatus, onWrite } = {
     const wasOpen = current.state === 'open';
     focusAfter(...[current.items[at + 1], current.items[at - 1]].filter(Boolean)
       .map(i => attr('data-step', i.key)), '#tkAddOpen');
-    const res = await write('item', { item: key }, {
-      method: 'DELETE', errKey: 'task.err.delete',
+    const res = await write(client.tasks.deleteItem, { item: key }, {
+      errKey: 'task.err.delete',
       onOk: async s => {
         if (s.open === key) s.open = '';
         s.drafts.delete(key);
@@ -521,7 +521,7 @@ export function mountTask(host, { uid, task, status }, { onStatus, onWrite } = {
       });
       if (!chosen?.uids.length) return;
       focusAfter(attr('data-link', item.key));
-      await write('link', { item: item.key, target: chosen.uids }, { errKey: 'task.err.link' });
+      await write(client.tasks.link, { item: item.key, target: chosen.uids }, { errKey: 'task.err.link' });
     }));
     /* the control that goes is replaced by the next link's, else the
        previous one's, else the item's "add link" */
@@ -532,8 +532,7 @@ export function mountTask(host, { uid, task, status }, { onStatus, onWrite } = {
         .map(r => r?.querySelector('[data-unlink]')).filter(Boolean)
         .map(selectorOf);
       focusAfter(...near, attr('data-link', item));
-      write('link', { item, target: b.dataset.unlink },
-            { method: 'DELETE', errKey: 'task.err.link' });
+      write(client.tasks.unlink, { item, target: b.dataset.unlink }, { errKey: 'task.err.link' });
     }));
 
     /* a link opens the record it names */
@@ -547,7 +546,7 @@ export function mountTask(host, { uid, task, status }, { onStatus, onWrite } = {
         const body = box.value.trim();
         if (!body) return;
         focusAfter(attr('data-draft', scope));
-        await write('comment', { body, item: scope },
+        await write(client.tasks.comment, { body, item: scope },
                     { errKey: 'task.err.comment', onOk: s => s.drafts.delete(scope) });
       };
       box.addEventListener('input', () => {
@@ -603,7 +602,7 @@ export function mountTask(host, { uid, task, status }, { onStatus, onWrite } = {
                           items: current.items.map(i => i.key).filter(k => d.items.includes(k)) };
         if (!fresh) payload.id = Number(target);
         focusAfter(back);
-        await write('note', payload, { errKey: 'task.err.note', onOk: s => {
+        await write(client.tasks.note, payload, { errKey: 'task.err.note', onOk: s => {
           s.noteEdit = '';
           s.noteDraft = null;
           if (!fresh) { s.notesShut.delete(target); s.notesOpen.add(target); }
@@ -634,7 +633,7 @@ export function mountTask(host, { uid, task, status }, { onStatus, onWrite } = {
           title: t('task.note.delete'), body: t('task.note.delete.body', { title: esc(note.title) }),
           okLabel: t('task.note.delete'), danger: true });
         if (!ok) return;
-        await write('note', { id: note.id }, { method: 'DELETE', errKey: 'task.err.note',
+        await write(client.tasks.deleteNote, { id: note.id }, { errKey: 'task.err.note',
           onOk: s => { s.noteEdit = ''; s.noteDraft = null; } });
       });
     }
@@ -653,7 +652,7 @@ export function mountTask(host, { uid, task, status }, { onStatus, onWrite } = {
       const save = async () => {
         const goal = goalBox.value.trim();
         if (goal === current.goal) { leave(); return; }
-        await write('goal', { goal }, { onOk: s => { s.goalEditing = false; focusAfter('#tkGoalEdit'); } });
+        await write(client.tasks.goal, { goal }, { onOk: s => { s.goalEditing = false; focusAfter('#tkGoalEdit'); } });
       };
       q('#tkGoalSave').addEventListener('click', save);
       q('#tkGoalCancel').addEventListener('click', leave);
@@ -673,7 +672,7 @@ export function mountTask(host, { uid, task, status }, { onStatus, onWrite } = {
     if (addBox) {
       const send = async () => {
         if (!addBox.value.trim()) return;
-        await write('items', { items: addBox.value }, {
+        await write(client.tasks.items, { items: addBox.value }, {
           errKey: 'task.err.items',
           onOk: s => { s.adding = false; s.drafts.delete('+items'); focusAfter('#tkAddOpen'); },
         });

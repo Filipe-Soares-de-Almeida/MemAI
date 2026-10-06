@@ -1,9 +1,9 @@
 /* A memory body drawn read-only as headings, paragraphs, lists, GFM tables, code, bold and [[uid]]
    links; unknown lines keep their whitespace. Everything is escaped before any tag is added. */
 
-import { esc } from './dom.js';
+import { esc } from './dom.ts';
 import { icon } from './icons.js';
-import { t } from '../i18n.js';
+import { t } from '../i18n.ts';
 
 const UID = /^[0-9a-f]{16}$/;
 

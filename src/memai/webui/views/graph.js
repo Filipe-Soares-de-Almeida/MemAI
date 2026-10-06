@@ -1,20 +1,7 @@
-/* The relations graph: the view around the node field.
+/* The relations graph view: the chrome around engines/graph-2d.ts. The arrangement and toggles are
+   the reader's settings, kept in localStorage; a `mode` in the address wins over the stored one. */
 
-   Everything drawn is in graph-2d.js and everything arranged is in
-   graph-arrange.js. This file owns the chrome -- the filters, the arrangement
-   picker, the two show toggles, the legend, the progress of the arrangement,
-   the card, the tip and the link dialog -- and talks to the engine through its
-   callbacks. The layout is computed in the browser and never stored, unlike
-   the diagram editor, whose coordinates come from the store; see diagram.js
-   for that contrast.
-
-   The arrangement and the show toggles are the reader's settings, not
-   filters: they ride in localStorage so the next session opens where this one
-   left off, and the arrangement also rides in the address so a link carries
-   it. A `mode` in the address wins over the stored one. */
-
-import { $, esc, fmtInt, debounce } from '../core/dom.js';
-import { api, query } from '../core/api.js';
+import { $, esc, fmtInt, debounce } from '../core/dom.ts';
 import { icon } from '../core/icons.js';
 import { toast, failed, tipShow, tipHide, openModal, closeModal, setPressed } from '../core/ui.js';
 import { typeTag, typeColor, uidChip, statusTag, confPill, wireCopyChips,
@@ -23,12 +10,13 @@ import { typeTag, typeColor, uidChip, statusTag, confPill, wireCopyChips,
          wireRelTypeField } from '../core/shared.js';
 import { pickerFor, wirePicker, fixedItems } from '../core/pick.js';
 import { domainPickerHTML, wireDomainPicker } from '../core/domain-picker.js';
-import { go, refreshBehind, replaceParams } from '../core/router.js';
-import { onTeardown } from '../core/lifecycle.js';
-import { openRecord } from './record.js';
-import { GraphCanvas } from '../graph-2d.js';
-import { ARRANGEMENTS, DEFAULT_MODE, arrangement } from '../graph-arrange.js';
-import { t } from '../i18n.js';
+import { go, refreshBehind, replaceParams } from '../core/router.ts';
+import { onTeardown } from '../core/lifecycle.ts';
+import { openRecord } from '../core/nav.ts';
+import { GraphCanvas } from '../engines/graph-2d.ts';
+import { ARRANGEMENTS, DEFAULT_MODE, arrangement } from '../engines/graph-arrange.ts';
+import { t } from '../i18n.ts';
+import * as client from '../api/client.ts';
 
 /* How many of a memory's relations the card offers as a journey before it
    stops listing them, and how much of a name one of those chips carries. The
@@ -84,7 +72,7 @@ export async function renderGraph(view, params, ctx) {
 
   const [domains, data] = await Promise.all([
     getDomains().catch(() => []),
-    api(`/api/graph?${query({ status: state.status, domain: state.domain, type: state.type })}`),
+    client.graph({ status: state.status, domain: state.domain, type: state.type }),
   ]);
   if (ctx.stale()) return;
 
@@ -421,10 +409,10 @@ export async function renderGraph(view, params, ctx) {
     mq('[data-x]').onclick = () => { closeModal(); engine.clearLinkFrom(); };
     mq('[data-ok]').onclick = async () => {
       try {
-        await api('/api/relations', { body: {
+        await client.relations.create({
           from_uid: a.uid, to_uid: b.uid,
           relation_type: glRelValue() || 'relates_to',
-          note: mq('#glNote').value } });
+          note: mq('#glNote').value });
         closeModal();
         toast(t('dr.rel.created'), 'ok');
         refreshBehind();

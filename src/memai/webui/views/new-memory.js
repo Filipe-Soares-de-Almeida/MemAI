@@ -6,30 +6,29 @@
    and what they hold, comes from /api/config rather than from a list here, so
    a label lives in one place. */
 
-import { esc } from '../core/dom.js';
-import { api } from '../core/api.js';
+import { esc } from '../core/dom.ts';
 import { toast, failed, openModal, closeModal } from '../core/ui.js';
 import { typeItems, confItems, getDomains, invalidateDomains,
          domainDatalist, sectionLabelHTML } from '../core/shared.js';
 import { pickerFor, pickerValue, wirePicker, fixedItems } from '../core/pick.js';
-import { go, refreshBehind } from '../core/router.js';
-import { openRecord } from './record.js';
-import { newDiagramSkeleton } from './diagrams.js';
-import { t } from '../i18n.js';
+import { go, refreshBehind } from '../core/router.ts';
+import { openRecord } from '../core/nav.ts';
+import { newDiagramSkeleton } from '../core/diagram-skeleton.ts';
+import { t } from '../i18n.ts';
+import { TASK } from '../contract.ts';
+import * as client from '../api/client.ts';
 
 /* The types this form does not write: the server refuses a handoff here. */
 const NOT_WRITTEN_HERE = ['handoff'];
 
-/* The task limits the server enforces (memai/tasks.py), shown as counts. */
-const GOAL_MAX = 2000;
-const ITEMS_MAX = 50;
-const ITEM_MAX = 300;
+/* The task limits the server enforces, shown as counts. */
+const { GOAL_MAX, ITEMS_MAX, ITEM_MAX } = TASK;
 
 const itemLines = text => text.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
 
 export async function openNewMemory() {
   const domains = await getDomains().catch(() => []);
-  const spec = await api('/api/config').then(c => c.sections || {}).catch(() => ({}));
+  const spec = await client.config.get().then(c => c.sections || {}).catch(() => ({}));
   const types = typeItems().filter(it => !NOT_WRITTEN_HERE.includes(it.value));
   const confs = confItems();
   const modal = openModal({
@@ -135,10 +134,10 @@ export async function openNewMemory() {
         return;
       }
       if (isTask()) {
-        const r = await api('/api/tasks', { body: {
+        const r = await client.tasks.create({
           title: mq('#nmTitle').value, goal: goalBox.value, items: itemsBox.value,
           domain: mq('#nmDomain').value, also: mq('#nmAlso').value,
-          tags: mq('#nmTags').value } });
+          tags: mq('#nmTags').value });
         closeModal();
         toast(t('nm.task.created', { uid: r.uid }), 'ok');
         invalidateDomains();
@@ -147,7 +146,7 @@ export async function openNewMemory() {
         return;
       }
       const fields = fieldsFor();
-      const r = await api('/api/memories', { body: {
+      const r = await client.memories.create({
         type: pickerValue(modal, 'nmType'), confidence: pickerValue(modal, 'nmConf'),
         title: mq('#nmTitle').value,
         domain: mq('#nmDomain').value, also: mq('#nmAlso').value,
@@ -155,7 +154,7 @@ export async function openNewMemory() {
         ...(fields.length
           ? { sections: Object.fromEntries(
                 fields.map(f => [f.key, mq(`#nmSec-${f.key}`).value])) }
-          : { content: mq('#nmContent').value }) } });
+          : { content: mq('#nmContent').value }) });
       closeModal();
       toast(t('nm.created', { uid: r.uid }), 'ok');
       invalidateDomains();

@@ -13,28 +13,25 @@
    and the previous text is kept inside that version -- which is what the
    API does anyway. */
 
-import { esc, fmtDate, fmtInt, debounce } from '../core/dom.js';
-import { api, seg } from '../core/api.js';
-import { icon } from '../core/icons.js';
+import { esc, fmtDate, fmtInt, debounce } from '../../core/dom.ts';
+import { icon } from '../../core/icons.js';
 import { toast, failed, openModal, closeModal, confirmModal, promptModal,
-         openDropMenu, copyCode, copyUid, modalOpen, keysHTML, saveKeysHTML } from '../core/ui.js';
+         openDropMenu, copyCode, copyUid, modalOpen, keysHTML, saveKeysHTML } from '../../core/ui.js';
 import { typeTag, uidChip, statusTag, wireCopyChips,
          CONF, PIN, REL_SUGGEST, relLabel, relTypeTitle, peerName, typeItems,
          sectionLabel, sectionLabelHTML, sectionHue,
-         cachedDomains, invalidateDomains, domainDatalist } from '../core/shared.js';
-import { pickerFor, pickerValue, wirePicker, fixedItems } from '../core/pick.js';
-import { pickMemories } from '../core/link-picker.js';
-import { go, backTo, refreshBehind, previousRoute } from '../core/router.js';
-import { onTeardown } from '../core/lifecycle.js';
-import { renderRich, wireRich, headings } from '../core/richtext.js';
-import { highlightIn } from '../core/highlight.js';
-import { DiagramEditor } from '../diagram-engine.js';
+         cachedDomains, invalidateDomains, domainDatalist } from '../../core/shared.js';
+import { pickerFor, pickerValue, wirePicker, fixedItems } from '../../core/pick.js';
+import { pickMemories } from '../../core/link-picker.js';
+import { go, backTo, refreshBehind, previousRoute } from '../../core/router.ts';
+import { openRecord, recordSequence } from '../../core/nav.ts';
+import { onTeardown } from '../../core/lifecycle.ts';
+import { renderRich, wireRich, headings } from '../../core/richtext.js';
+import { highlightIn } from '../../core/highlight.js';
+import { DiagramEditor } from '../../engines/diagram-engine.ts';
 import { mountTask } from './task.js';
-import { t } from '../i18n.js';
-
-/* Where every other view sends a reader who clicked a memory. It is a
-   navigation, so Back works and the URL is shareable. */
-export const openRecord = uid => go('memory', { uid });
+import { t } from '../../i18n.ts';
+import * as client from '../../api/client.ts';
 
 /* The read-only canvas a diagram record draws itself on. It listens on
    window and holds a ResizeObserver, so dropping the subtree that carries
@@ -55,18 +52,6 @@ const endTitleWatch = () => {
   titleWatch = null;
 };
 
-/* The list this record can step through, in the order it was shown.
-   Registered by whoever put the record on screen -- views/memories.js hands
-   over the page it just rendered and clears it on the way out.
-
-   Without it the record is a dead end: curating a page of memories meant
-   going back, finding the next row, opening it again, fifty times over. It
-   is a plain array of uids and not the rows themselves, so a record reached
-   from anywhere else simply finds itself absent from it and shows no
-   stepper. */
-let seq = [];
-export const setRecordSequence = uids => { seq = Array.isArray(uids) ? [...uids] : []; };
-
 /* Where the memory on screen sat in that list the last time the list still
    held it. It is what keeps the stepper alive across a write that drops the
    row: archiving from a list filtered to active memories takes the record
@@ -81,6 +66,7 @@ let anchored = null;
    where to resume; that also covers a row that fell off the end of a
    shrinking page. */
 function stepPos(uid) {
+  const seq = recordSequence();
   if (anchored !== uid) { anchored = uid; slot = null; }
   const at = seq.indexOf(uid);
   if (at >= 0) { slot = at; return { at, prev: at - 1, next: at + 1, gone: false }; }
@@ -93,19 +79,16 @@ function stepPos(uid) {
    that reverses it. An undo which reimplements the call it is undoing is an
    undo that drifts away from it on the next change. */
 const setStatus = (uid, status, reason) =>
-  api(`/api/memories/${seg(uid)}/status`,
-      { body: reason === undefined ? { status } : { status, reason } });
+  client.memories.status(uid, reason === undefined ? { status } : { status, reason });
 
 /* A relation is recreatable from what its own row already knew, so deleting
    one is reversible without asking you to find the pair again. `direction`
    is which end this record is on. */
-const relink = (uid, rel) => api('/api/relations', {
-  body: {
-    from_uid: rel.direction === 'out' ? uid : rel.peer.uid,
-    to_uid: rel.direction === 'out' ? rel.peer.uid : uid,
-    relation_type: rel.relation_type,
-    note: rel.note || '',
-  },
+const relink = (uid, rel) => client.relations.create({
+  from_uid: rel.direction === 'out' ? uid : rel.peer.uid,
+  to_uid: rel.direction === 'out' ? rel.peer.uid : uid,
+  relation_type: rel.relation_type,
+  note: rel.note || '',
 });
 
 /* Where you have been inside the record, oldest first, and the route the
@@ -180,7 +163,7 @@ export async function renderRecord(view, params, ctx) {
   walk(uid);
   endRecordCanvas();
   endTitleWatch();
-  const m = await api(`/api/memories/${seg(uid)}`);
+  const m = await client.memories.get(uid);
   if (ctx.stale()) return;
   /* named now that it has been read, so the record one step further in can
      put its name on the button that comes back here */
@@ -247,6 +230,7 @@ export async function renderRecord(view, params, ctx) {
 /* ─── the bar ─────────────────────────────────────────────────────────── */
 
 function barHTML(m, uid) {
+  const seq = recordSequence();
   const pos = stepPos(uid);
   const stepper = !pos || (pos.prev < 0 && pos.next >= seq.length) ? '' : `
     <span class="rec-step" role="group" aria-label="${esc(t('dr.step.aria'))}"
@@ -580,7 +564,7 @@ function historyHTML(m) {
    size and its edit history; the side panel reads them again. */
 async function refreshTrail(view, m, uid) {
   let now;
-  try { now = await api(`/api/memories/${seg(uid)}`); } catch { return; }
+  try { now = await client.memories.get(uid); } catch { return; }
   const side = view.querySelector('.rec-side');
   if (!side || side.dataset.uid !== uid) return;
   Object.assign(m, { updated_at: now.updated_at, content: now.content, edit_history: now.edit_history });
@@ -680,7 +664,7 @@ function wire(view, m, uid, fields, isDiagram) {
     if (value === (m.title || '')) return;
     if (!value) { title.value = m.title || ''; return; }   /* the API refuses an empty one */
     try {
-      await api(`/api/memories/${seg(uid)}/meta`, { body: { title: value } });
+      await client.memories.meta(uid, { title: value });
       toast(t('dr.titleUpdated'), 'ok');
       save();
     } catch (err) { title.value = m.title || ''; failed('err.save', err); }
@@ -768,7 +752,7 @@ function wire(view, m, uid, fields, isDiagram) {
        the layout is whatever was arranged in the editor -- this draws it,
        it does not re-derive it. */
     const stage = q('#dRecordStage');
-    api(`/api/diagrams/${seg(uid)}`).then(data => {
+    client.diagrams.get(uid).then(data => {
       if (!document.contains(stage)) return;   /* navigated away mid-flight */
       recEngine = new DiagramEditor(stage.querySelector('canvas'), data, {});
     }).catch(err => {
@@ -790,7 +774,7 @@ function wire(view, m, uid, fields, isDiagram) {
   q('#dConf').querySelectorAll('button').forEach(b => b.addEventListener('click', async () => {
     if (b.dataset.c === m.confidence) return;
     try {
-      await api(`/api/memories/${seg(uid)}/confidence`, { body: { confidence: b.dataset.c } });
+      await client.memories.confidence(uid, { confidence: b.dataset.c });
       toast(t('dr.confSet', { label: CONF[b.dataset.c].label }), 'ok');
       save();
     } catch (err) { failed('err.save', err); }
@@ -800,7 +784,7 @@ function wire(view, m, uid, fields, isDiagram) {
   q('#dPin').querySelectorAll('button').forEach(b => b.addEventListener('click', async () => {
     if (b.disabled || b.dataset.pin === (m.pin || '')) return;
     try {
-      await api(`/api/memories/${seg(uid)}/pin`, { body: { pin: b.dataset.pin } });
+      await client.memories.pin(uid, { pin: b.dataset.pin });
       toast(t('dr.pinSet', { label: b.textContent.trim() }), 'ok');
       save();
     } catch (err) { failed('err.save', err); }
@@ -826,7 +810,7 @@ function wire(view, m, uid, fields, isDiagram) {
     if (!ok) return;
     const rel = m.relations.find(r => String(r.id) === b.dataset.delrel);
     try {
-      await api(`/api/relations/${seg(b.dataset.delrel)}`, { method: 'DELETE' });
+      await client.relations.delete(b.dataset.delrel);
       toast(t('dr.rel.removed'), 'ok', rel ? {
         action: {
           label: t('common.undo'),
@@ -861,8 +845,8 @@ function wire(view, m, uid, fields, isDiagram) {
     let made = 0;
     try {
       for (const target of chosen.uids) {
-        await api('/api/relations', { body: {
-          from_uid: uid, to_uid: target, relation_type: relType, note: chosen.note } });
+        await client.relations.create({
+          from_uid: uid, to_uid: target, relation_type: relType, note: chosen.note });
         made++;
       }
       toast(t('dr.rel.createdN', { n: made }), 'ok');
@@ -926,6 +910,7 @@ function wireStatusAction(view, uid) {
 }
 
 function step(uid, delta) {
+  const seq = recordSequence();
   const pos = stepPos(uid);
   if (!pos) return;
   const to = delta < 0 ? pos.prev : pos.next;
@@ -945,17 +930,17 @@ async function saveFields(view, m, uid, fields) {
      server can hold it to the shape its type is supposed to have. Editing
      ONE field still sends the whole set -- the others come back from what
      was read, unchanged. */
-  const [path, body] = sectioned
-    ? [`/api/memories/${seg(uid)}/sections`, {
+  const [save, body] = sectioned
+    ? [client.memories.sections, {
         sections: Object.fromEntries(fields.map(f => {
           const box = boxes.find(b => b.dataset.src === f.key);
           return [f.key, box ? box.value : (f.text || '')];
         })),
         note,
       }]
-    : [`/api/memories/${seg(uid)}/content`, { content: boxes[0].value, note }];
+    : [client.memories.content, { content: boxes[0].value, note }];
   try {
-    await api(path, { body });
+    await save(uid, body);
     toast(t('dr.contentUpdated'), 'ok');
     resetEditing(uid);
     refreshBehind();
@@ -987,7 +972,7 @@ async function dropMeta(m, kind, value) {
 
 async function writeMeta(uid, body) {
   try {
-    await api(`/api/memories/${seg(uid)}/meta`, { body });
+    await client.memories.meta(uid, body);
     invalidateDomains();
     refreshBehind();
   } catch (err) { failed('err.save', err); }
@@ -1023,11 +1008,11 @@ function openMetaModal(m) {
   mq('[data-x]').onclick = closeModal;
   mq('[data-ok]').onclick = async () => {
     try {
-      const r = await api(`/api/memories/${seg(m.uid)}/meta`, { body: {
+      const r = await client.memories.meta(m.uid, {
         type: pickerValue(modal, 'mmType'), title: mq('#mmName').value,
         domain: mq('#mmDomain').value,
         also: mq('#mmAlso').value,
-        tags: mq('#mmTags').value, session: mq('#mmSession').value } });
+        tags: mq('#mmTags').value, session: mq('#mmSession').value });
       closeModal();
       toast(r.changed.length ? t('mm.updated', { list: r.changed.join(', ') }) : t('mm.nothing'), 'ok');
       invalidateDomains();
@@ -1073,7 +1058,7 @@ function openPurgeModal(uid) {
   modal.querySelector('[data-x]').onclick = closeModal;
   okBtn.onclick = async () => {
     try {
-      await api(`/api/memories/${seg(uid)}/purge`, { body: { confirm: phrase.value } });
+      await client.memories.purge(uid, { confirm: phrase.value });
       closeModal();
       toast(t('dz.purged'), 'ok');
       backTo('memories');

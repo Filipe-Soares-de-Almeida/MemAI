@@ -1,23 +1,18 @@
-/* The diagram editor view: toolbar, inspector, and everything the canvas
-   engine (../diagram-engine.js) reaches back out through hooks for.
+/* The diagram editor view: toolbar, inspector and the hooks the canvas engine calls back through.
+   Every write goes through act(), which reloads from the store, since the store decides the layout. */
 
-   The engine owns geometry and drawing and nothing else -- no dialogs, no
-   API calls, no DOM outside its canvas. Every write below goes through
-   act(), which reloads from the store afterwards, because the store is
-   what decided the layout in the first place. */
-
-import { $, esc, debounce } from '../core/dom.js';
-import { api, seg } from '../core/api.js';
+import { $, esc, debounce } from '../core/dom.ts';
 import { icon } from '../core/icons.js';
 import { toast, failed, openModal, closeModal, confirmModal, promptModal,
          openCtxMenu, openDropMenu, tipShow, tipHide, setPressed } from '../core/ui.js';
 import { typeClass, DG_REL_SUGGEST, peerName } from '../core/shared.js';
 import { pickerFor, pickerValue, wirePicker, fixedItems } from '../core/pick.js';
 import { pickMemories } from '../core/link-picker.js';
-import { onTeardown } from '../core/lifecycle.js';
-import { openRecord } from './record.js';
-import { DiagramEditor, NODE_SHAPES, FONT_SCALES } from '../diagram-engine.js';
-import { t } from '../i18n.js';
+import { onTeardown } from '../core/lifecycle.ts';
+import { openRecord } from '../core/nav.ts';
+import { DiagramEditor, NODE_SHAPES, FONT_SCALES } from '../engines/diagram-engine.ts';
+import { t } from '../i18n.ts';
+import * as client from '../api/client.ts';
 
 const shapeItems = () => NODE_SHAPES.map(s => ({ value: s, label: t(`dg.shape.${s}`) }));
 
@@ -157,7 +152,7 @@ export async function renderDiagram(view, params, ctx) {
     view.innerHTML = `<div class="empty">${t('dg.noUid')}</div>`;
     return;
   }
-  const mem = await api(`/api/memories/${seg(uid)}`);
+  const mem = await client.memories.get(uid);
   if (ctx.stale()) return;
   if (mem.type !== 'diagram' || !mem.diagram) {
     view.innerHTML = `<div class="empty">${t('dg.notDiagram')}</div>`;
@@ -220,7 +215,7 @@ export async function renderDiagram(view, params, ctx) {
     Object.keys(pending).forEach(k => delete pending[k]);
     if (!Object.keys(batch).length) return;
     try {
-      await api(`/api/diagrams/${seg(uid)}/layout`, { body: { positions: batch } });
+      await client.diagrams.layout(uid, { positions: batch });
     } catch (err) {
       /* the canvas is now lying about where things are; take the store's word */
       failed('err.diagram', err);
@@ -229,7 +224,7 @@ export async function renderDiagram(view, params, ctx) {
   }, 450);
 
   async function reload({ fit = false } = {}) {
-    data = await api(`/api/diagrams/${seg(uid)}`);
+    data = await client.diagrams.get(uid);
     engine.setData(data, { fit });
     if (selected && !data.nodes.some(n => n.key === selected)) selected = null;
     if (selected) engine.select(selected);
@@ -298,8 +293,7 @@ export async function renderDiagram(view, params, ctx) {
 
   /* The condition written on a line, edited from the line itself, from the
      right-click menu, or from the connection rows in the inspector. */
-  const saveEdgeLabel = (edge, label) => act(() => api(`/api/diagrams/${seg(uid)}/edge`, {
-    body: { from: edge.from, to: edge.to, label } }), t('dg.saved'));
+  const saveEdgeLabel = (edge, label) => act(() => client.diagrams.edge(uid, { from: edge.from, to: edge.to, label }), t('dg.saved'));
 
   async function editEdgeLabel(edge) {
     const label = await promptModal({
@@ -312,8 +306,7 @@ export async function renderDiagram(view, params, ctx) {
     await saveEdgeLabel(edge, label);
   }
 
-  const deleteEdge = edge => act(() => api(`/api/diagrams/${seg(uid)}/edge`, {
-    body: { from: edge.from, to: edge.to, delete: true } }), t('dg.disconnected'));
+  const deleteEdge = edge => act(() => client.diagrams.edge(uid, { from: edge.from, to: edge.to, delete: true }), t('dg.disconnected'));
 
   async function editStep(node) {
     const out = await dgStepModal({
@@ -323,8 +316,7 @@ export async function renderDiagram(view, params, ctx) {
     if (!out) return;
     /* note deliberately not sent: the API patches only what it receives,
        and the note is edited in the inspector where there is room for it */
-    await act(() => api(`/api/diagrams/${seg(uid)}/node`, {
-      body: { key: node.key, label: out.label, shape: out.shape } }), t('dg.saved'));
+    await act(() => client.diagrams.node(uid, { key: node.key, label: out.label, shape: out.shape }), t('dg.saved'));
   }
 
   /* The long half of a step. Reachable from the inspector, and from the card
@@ -345,8 +337,7 @@ export async function renderDiagram(view, params, ctx) {
     m.querySelector('[data-ok]').onclick = async () => {
       const note = m.querySelector('#dgnNote').value;
       closeModal();
-      await act(() => api(`/api/diagrams/${seg(uid)}/node`, {
-        body: { key: node.key, note } }), t('dg.saved'));
+      await act(() => client.diagrams.node(uid, { key: node.key, note }), t('dg.saved'));
     };
   }
 
@@ -357,8 +348,7 @@ export async function renderDiagram(view, params, ctx) {
       okLabel: t('dg.deleteStep'), danger: true });
     if (!ok) return;
     if (selected === key) selected = null;
-    await act(() => api(`/api/diagrams/${seg(uid)}/node`, {
-      body: { key, delete: true } }), t('dg.deleted'));
+    await act(() => client.diagrams.node(uid, { key, delete: true }), t('dg.deleted'));
   }
 
   /* A step created where you right-clicked, rather than wherever a fresh
@@ -368,9 +358,9 @@ export async function renderDiagram(view, params, ctx) {
     const step = await dgStepModal({ title: t('dg.newStep.title') });
     if (!step) return;
     try {
-      await api(`/api/diagrams/${seg(uid)}/node`, { body: step });
-      await api(`/api/diagrams/${seg(uid)}/layout`, { body: { positions: {
-        [step.key]: { x: Math.round(world.x), y: Math.round(world.y) } } } });
+      await client.diagrams.node(uid, step);
+      await client.diagrams.layout(uid, { positions: {
+        [step.key]: { x: Math.round(world.x), y: Math.round(world.y) } } });
       toast(t('dg.added'), 'ok');
       await reload();
       selected = step.key;
@@ -380,7 +370,7 @@ export async function renderDiagram(view, params, ctx) {
   }
 
   async function arrange() {
-    await act(() => api(`/api/diagrams/${seg(uid)}/relayout`, { body: {} }), t('dg.arranged'));
+    await act(() => client.diagrams.relayout(uid), t('dg.arranged'));
     engine.fit();
   }
 
@@ -460,7 +450,7 @@ export async function renderDiagram(view, params, ctx) {
         summary: m.querySelector('#dgmSummary').value,
       };
       closeModal();
-      await act(() => api(`/api/diagrams/${seg(uid)}/meta`, { body }), t('dg.saved'));
+      await act(() => client.diagrams.meta(uid, body), t('dg.saved'));
     };
   }
 
@@ -476,13 +466,11 @@ export async function renderDiagram(view, params, ctx) {
   function openFontMenu(ev) {
     openDropMenu(ev.currentTarget, FONT_SCALES.map(s => ({
       label: `${Math.round(s * 100)}%${s === 1 ? ` · ${t('dg.font.default')}` : ''}`,
-      run: () => act(() => api(`/api/diagrams/${seg(uid)}/meta`, {
-        body: { font_scale: s } }), t('dg.saved')),
+      run: () => act(() => client.diagrams.meta(uid, { font_scale: s }), t('dg.saved')),
     })));
   }
 
-  const resetCardSize = key => act(() => api(`/api/diagrams/${seg(uid)}/layout`, {
-    body: { reset_boxes: [key] } }), t('dg.sizeReset'));
+  const resetCardSize = key => act(() => client.diagrams.layout(uid, { reset_boxes: [key] }), t('dg.sizeReset'));
 
   /* ── read-only vs editing ───────────────────────────────────────────── */
   function applyMode() {
@@ -523,9 +511,8 @@ export async function renderDiagram(view, params, ctx) {
 
   /* Deleting works from either end, so the payload is always "my side, the
      other side" -- see db.delete_diagram_jump. */
-  const deleteJump = j => act(() => api(`/api/diagrams/${seg(uid)}/jump`, {
-    body: { node_key: j.node_key, peer_uid: j.peer_uid, peer_node: j.peer_node,
-            delete: true } }), t('dg.jump.removed'));
+  const deleteJump = j => act(() => client.diagrams.jump(uid, { node_key: j.node_key, peer_uid: j.peer_uid, peer_node: j.peer_node,
+            delete: true }), t('dg.jump.removed'));
 
   async function addJump(nodeKey) {
     const chosen = await pickMemories({
@@ -535,13 +522,13 @@ export async function renderDiagram(view, params, ctx) {
     if (!chosen?.uids.length) return;
     const peer = chosen.uids[0];
     let target;
-    try { target = await api(`/api/diagrams/${seg(peer)}`); }
+    try { target = await client.diagrams.get(peer); }
     catch (err) { failed('err.load', err); return; }
     const step = await dgJumpTargetModal(target);
     if (!step) return;
-    await act(() => api(`/api/diagrams/${seg(uid)}/jump`, { body: {
+    await act(() => client.diagrams.jump(uid, {
       node_key: nodeKey, peer_uid: peer, peer_node: step.node,
-      label: step.label } }), t('dg.jump.added'));
+      label: step.label }), t('dg.jump.added'));
   }
 
   /* Rendered after every paint of a panel that can hold jump rows: the rows
@@ -749,10 +736,10 @@ export async function renderDiagram(view, params, ctx) {
 
     /* node fields */
     wirePicker(side, { id: 'dgShape', items: fixedItems(shapeItems()), onPick: () => {} });
-    side.querySelector('#dgSave').onclick = () => act(() => api(`/api/diagrams/${seg(uid)}/node`, { body: {
+    side.querySelector('#dgSave').onclick = () => act(() => client.diagrams.node(uid, {
       key: node.key, label: side.querySelector('#dgLabel').value,
       shape: pickerValue(side, 'dgShape'),
-      note: side.querySelector('#dgNote').value } }), t('dg.saved'));
+      note: side.querySelector('#dgNote').value }), t('dg.saved'));
 
     side.querySelector('#dgDel').onclick = () => deleteStep(node.key);
 
@@ -767,8 +754,8 @@ export async function renderDiagram(view, params, ctx) {
 
     /* links */
     side.querySelectorAll('[data-dellink]').forEach(b => b.onclick = () =>
-      act(() => api(`/api/diagrams/${seg(uid)}/link`, { body: {
-        node_key: node.key, target_uid: b.dataset.dellink, delete: true } }), t('dg.unlinked')));
+      act(() => client.diagrams.link(uid, {
+        node_key: node.key, target_uid: b.dataset.dellink, delete: true }), t('dg.unlinked')));
 
     /* Attaching is a form of its own now (core/link-picker.js), so several
        memories can go onto one step in one pass and each candidate can be
@@ -789,9 +776,9 @@ export async function renderDiagram(view, params, ctx) {
            failure leaves the ones that landed rather than rolling back a
            batch the operator chose deliberately */
         for (const target of chosen.uids) {
-          await api(`/api/diagrams/${seg(uid)}/link`, { body: {
+          await client.diagrams.link(uid, {
             node_key: node.key, target_uid: target,
-            relation_type: chosen.relation || 'explains' } });
+            relation_type: chosen.relation || 'explains' });
         }
       }, t('dg.linkedN', { n: chosen.uids.length }));
     };
@@ -831,8 +818,7 @@ export async function renderDiagram(view, params, ctx) {
         okLabel: t('dg.connectOk'),
       });
       if (label === null) { paintHint(); return; }
-      await act(() => api(`/api/diagrams/${seg(uid)}/edge`, {
-        body: { from, to, label } }), t('dg.connected'));
+      await act(() => client.diagrams.edge(uid, { from, to, label }), t('dg.connected'));
     },
   });
   /* the canvas dies with the view's innerHTML; the window listeners, the
@@ -843,7 +829,7 @@ export async function renderDiagram(view, params, ctx) {
   $('#dgAdd').onclick = async () => {
     const step = await dgStepModal({ title: t('dg.newStep.title') });
     if (!step) return;
-    await act(() => api(`/api/diagrams/${seg(uid)}/node`, { body: step }), t('dg.added'));
+    await act(() => client.diagrams.node(uid, step), t('dg.added'));
     selected = step.key;
     engine.select(step.key);
     paintSide();
@@ -879,7 +865,7 @@ export async function renderDiagram(view, params, ctx) {
   applyMode();
   $('#dgMermaid').onclick = async () => {
     let src = '';
-    try { src = (await api(`/api/diagrams/${seg(uid)}/mermaid`)).mermaid; }
+    try { src = (await client.diagrams.mermaid(uid)).mermaid; }
     catch (err) { failed('err.load', err); return; }
     const m = openModal({
       title: t('dg.mermaid.title'),

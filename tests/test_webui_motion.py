@@ -1,7 +1,7 @@
 """The dashboard's Animations setting: one attribute on the root decides every
 reduced-motion rule, and the stored choice survives a broken store.
 
-core/motion.js and the shell's inline script run under node against stand-ins
+core/motion.ts and the shell's inline script run under node against stand-ins
 for localStorage, matchMedia and the document. Two checks scan the sources: no
 other module reads the media query, and the entry point imports motion first.
 """
@@ -71,7 +71,7 @@ def ran() -> dict:
     if shutil.which("node") is None:
         pytest.skip("node not installed")
     out = subprocess.run(
-        ["node", "--input-type=module", "-e", RUNNER, str(WEBUI / "core" / "motion.js")],
+        ["node", "--input-type=module", "-e", RUNNER, str(WEBUI / "core" / "motion.ts")],
         capture_output=True, text=True, encoding="utf-8", timeout=60)
     assert out.returncode == 0, out.stderr
     return json.loads(out.stdout)
@@ -128,7 +128,7 @@ def test_the_motion_module_loads_before_anything_is_drawn():
 
 INDEX = (WEBUI / "index.html").read_text(encoding="utf-8")
 
-# the inline script is the code under test: run it, then run motion.js, in the
+# the inline script is the code under test: run it, then run motion.ts, in the
 # same stand-in environment
 SHELL_RUNNER = """
 import { pathToFileURL } from 'node:url';
@@ -184,7 +184,7 @@ def test_the_shell_script_and_the_module_agree_on_every_input(tmp_path):
     inline.write_text(_inline_motion_script(), encoding="utf-8")
     out = subprocess.run(
         ["node", "--input-type=module", "-e", SHELL_RUNNER,
-         str(WEBUI / "core" / "motion.js"), str(inline)],
+         str(WEBUI / "core" / "motion.ts"), str(inline)],
         capture_output=True, text=True, encoding="utf-8", timeout=60)
     assert out.returncode == 0, out.stderr
     cases = json.loads(out.stdout)

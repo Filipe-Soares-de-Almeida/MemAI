@@ -1,12 +1,5 @@
-/* Runs i18n.js over a set of lookups and prints what came back, as JSON, so
-   tests/test_i18n.py can hold t() to it.
-   Usage: node tools/i18n-cases.mjs [locale]
-
-   The runtime fetches its catalog from /static/i18n at module load, and
-   nothing serves that path here, so a fetch reading the catalog off disk is
-   installed rather than the module being restructured to suit a test: what
-   runs below is the module the browser loads. Same shims as
-   tools/richtext-cases.mjs. */
+/* Prints i18n.ts lookups as JSON for tests/test_i18n.py (node tools/i18n-cases.mjs [locale]); a
+   fetch reading the catalogs off disk stands in for /static/i18n, so the module runs unchanged. */
 
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
@@ -31,10 +24,10 @@ globalThis.document = { documentElement: {}, querySelectorAll: () => [] };
    depend on a colour */
 globalThis.getComputedStyle = () => ({ getPropertyValue: () => '' });
 
-const { t } = await import('../src/memai/webui/i18n.js');
+const { t } = await import('../src/memai/webui/i18n.ts');
 const { relLabel, relTypeTitle, REL_SUGGEST, DG_REL_SUGGEST } =
   await import('../src/memai/webui/core/shared.js');
-const { dayKey, monthKey, fromKey } = await import('../src/memai/webui/core/dom.js');
+const { dayKey, monthKey, fromKey } = await import('../src/memai/webui/core/dom.ts');
 
 /* [name, key, vars] -- one lookup per case */
 const CASES = [

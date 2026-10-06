@@ -32,7 +32,8 @@ from memai import __version__
 CREATE_NO_WINDOW = 0x08000000
 OFF_VALUES = {"0", "false", "no", "off"}
 # Mirrors BUILD_CONFIG in tools/build-stamp.mjs.
-BUILD_CONFIG = ("package.json", "package-lock.json", "vite.config.js", "tsconfig.json")
+BUILD_CONFIG = ("package.json", "package-lock.json", "vite.config.js", "tsconfig.json",
+                "src/memai/contract.json")
 STAMP = "build.json"
 NPM_TIMEOUT = 600
 

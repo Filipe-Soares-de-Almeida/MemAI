@@ -1,9 +1,9 @@
 /* A <select> replacement whose rows can carry marks and rails: a button and a listbox popover.
    Combobox ARIA with aria-activedescendant; one panel at a time, on <body>, dismissed on next act. */
 
-import { esc } from './dom.js';
-import { onTeardown } from './lifecycle.js';
-import { t } from '../i18n.js';
+import { esc } from './dom.ts';
+import { onTeardown } from './lifecycle.ts';
+import { t } from '../i18n.ts';
 
 /* Past this many rows the panel gets a filter field. Below it, the list is
    shorter than the field would be tall. */

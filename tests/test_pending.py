@@ -10,7 +10,7 @@ import pytest
 
 from memai import db, pending, server, tasks
 
-VOCABULARY = "note, reasoning, anti_pattern, checkpoint, handoff, diagram, task"
+VOCABULARY = "note, checkpoint, anti_pattern, reasoning, handoff, diagram, task"
 UNKNOWN = f"unknown type 'pitfall'; valid types: {VOCABULARY}"
 
 

@@ -1,12 +1,8 @@
-/* Runs core/richtext.js over a set of bodies and prints what it drew, as
-   JSON, so tests/test_richtext.py can hold the renderer to it.
-   Usage: node tools/richtext-cases.mjs
+/* Prints what core/richtext.js draws for a set of bodies, as JSON for tests/test_richtext.py.
+   Usage: node tools/richtext-cases.mjs */
 
-   The renderer reaches core/dom.js for esc(), which reaches the i18n
-   runtime, which fetches its catalog from /static/i18n at module load.
-   Nothing serves that path here, so a fetch reading the catalog off disk is
-   installed rather than the module being restructured to suit a test: what
-   runs below is the module the browser loads, import chain and all. */
+/* Through core/dom.ts the renderer loads the i18n runtime, which fetches its catalog; a fetch
+   reading it off disk stands in, so the module the browser loads runs unchanged. */
 
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';

@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it, vi } from 'vitest';
-import { mountTask } from '../../src/memai/webui/views/task.js';
+import { mountTask } from '../../src/memai/webui/views/record/task.js';
 import { calls, catalog, serveApi } from './support.js';
 
 const en = catalog('en');
