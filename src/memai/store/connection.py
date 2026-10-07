@@ -1,4 +1,4 @@
-"""Opening a store: the schema, the migrations every connect() runs, and the uid and token helpers."""
+"""Opening a store: the schema, the migrations every connect() runs, and uid and token helpers."""
 
 from __future__ import annotations
 
