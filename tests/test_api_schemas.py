@@ -86,9 +86,12 @@ def store(tmp_path_factory):
         other = db.insert_memory(conn, type="note", domain="acme/x200", title="Wick length",
                                  content="Trim the wick to a centimetre.", tags="wick")
         db.add_relation(conn, note, other, "relates_to")
+        db.update_memory_content(conn, note, f"The lantern takes grade B oil. See [[{other}]].",
+                                 note="name the wick note")
         task = tasks.create_task(conn, title="Refill the lanterns", goal="Every lantern burns tonight.",
                                  items=["Buy oil", "Trim wicks"], domain="acme/x100")
-        tasks.add_note(conn, task, title="Where the oil is", body="In the shed.", items=[])
+        tasks.add_note(conn, task, title="Where the oil is", body=f"In the shed, by [[{other}]].", items=[])
+        tasks.link_item(conn, task, "i2", [other])
         tasks.add_comment(conn, task, "Oil is on order.", item="", author="person")
         diagram, _ = db.insert_diagram(
             conn, title="Refill routine", domain="acme/x100",
@@ -96,10 +99,39 @@ def store(tmp_path_factory):
                    {"key": "b", "shape": "end", "label": "End"}],
             edges=[{"from": "a", "to": "b", "label": "done"}])
         db.add_node_link(conn, diagram, "a", note, "explains")
+        handoff, _ = db.insert_diagram(
+            conn, title="Wick routine", domain="acme/x200",
+            nodes=[{"key": "s", "shape": "start", "label": "Start"},
+                   {"key": "e", "shape": "end", "label": "End"}],
+            edges=[{"from": "s", "to": "e"}])
+        db.add_diagram_jump(conn, diagram, "a", handoff, "s", "the wick comes next")
+        db.add_diagram_jump(conn, handoff, "e", diagram, "", "back to the refill")
         run = db.stage_optimization(conn, "tidy the tags", [
             {"kind": "retag", "target_uid": note, "payload": {"tags": "lantern, fuel"},
-             "rationale": "a synonym", "verified": "checked"}])
+             "rationale": "a synonym", "verified": "checked"},
+            {"kind": "reword", "target_uid": other, "rationale": f"clearer, see [[{note}]]",
+             "payload": {"new_content": "Trim the wick to one centimetre."}},
+            {"kind": "link", "target_uid": note, "rationale": "same lamp",
+             "payload": {"from_uid": note, "to_uid": other, "relation_type": "relates_to"}},
+            {"kind": "distill", "rationale": "one fact",
+             "payload": {"source_uids": [note, other], "new_type": "note", "title": "Lantern care",
+                         "new_content": "Grade B oil, a centimetre of wick.", "domain": "acme/x100"}}])
+        db.insert_memory(conn, type="note", domain="acme/x200", title="Lantern oil",
+                         content="The lantern takes grade B oil only.", tags="lantern, oil")
+        brim = db.insert_memory(conn, type="anti_pattern", domain="acme/x100", title="Brimful lantern",
+                                content="TEMPTATION: fill to the brim\nWHY WRONG: the wick floods\n"
+                                        "INSTEAD: stop a finger below", tags="lantern")
+        conn.execute("UPDATE memories SET content = ? WHERE uid = ?",
+                     ("Filling a lantern to the brim floods the wick.", brim))
+        db.migrate_sections(conn)
+    project = db.active_project()
+    named, pinned, zipped = (db.backup_to(db.backups_dir(project) / db.backup_name(project, kind)).name
+                             for kind in ("", "pre-restore", "optimize-run1"))
     with TestClient(admin.app) as client:
+        client.post("/api/maintenance/backup-name", json={"name": named, "label": "before the refill"})
+        client.post("/api/maintenance/backup-pin", json={"name": pinned, "pinned": True})
+        client.post("/api/maintenance/archive", json={"names": [zipped], "group": "name",
+                                                      "label": "lamp checks"})
         yield {"client": client, "note": note, "task": task, "diagram": diagram,
                "run": run["run_id"]}
     patch.undo()

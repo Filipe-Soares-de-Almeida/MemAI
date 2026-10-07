@@ -111,9 +111,47 @@ class ProjectMove(TypedDict):
 
 # ------------------------------------------------------------------ memories
 
+class TaskProgress(TypedDict):
+    done: int
+    total: int
+
+
+class MemorySummary(TypedDict):
+    """A memory's columns, with the body cut to a snippet."""
+    rowid_pk: int
+    uid: str
+    type: str
+    title: str
+    content: str
+    content_len: int
+    domain: str
+    also: NotRequired[list[str]]
+    tags: str
+    session: str
+    status: str
+    confidence: str
+    pin: str
+    superseded_by: str | None
+    review_after: str
+    source_ref: str
+    created_at: str
+    updated_at: str
+
+
+class MemoryRow(MemorySummary):
+    """A memory as the list shows it: its summary, how often it is recalled, and how a task stands."""
+    recalls: int
+    last_recall: str | None
+    progress: NotRequired[TaskProgress]
+    task_state: NotRequired[str]
+    fts_rank: NotRequired[float]
+    match_source: NotRequired[str]
+    succeeded_by: NotRequired[list[str]]
+
+
 class MemoryPage(Scoped):
     total: int
-    items: list[Row]
+    items: list[MemoryRow]
     searched: bool
 
 
@@ -128,13 +166,131 @@ class SectionSpec(TypedDict):
     max_len: int
 
 
+class BodyLink(TypedDict):
+    """What a [[uid]] written in a body points at; a uid nothing resolves carries only `missing`."""
+    uid: str
+    type: NotRequired[str]
+    domain: NotRequired[str]
+    status: NotRequired[str]
+    snippet: NotRequired[str]
+    linked: NotRequired[bool]
+    missing: NotRequired[bool]
+
+
+class TaskLink(TypedDict):
+    uid: str
+    title: str
+    type: str
+
+
+class TaskItem(TypedDict):
+    key: str
+    seq: int
+    text: str
+    state: str
+    updated_at: str
+    updated_session: str
+    links: list[TaskLink]
+
+
+class TaskComment(TypedDict):
+    id: int
+    item: str
+    body: str
+    author: str
+    session: str
+    created_at: str
+
+
+class TaskNote(TypedDict):
+    id: int
+    title: str
+    body: str
+    items: list[str]
+    updated_at: str
+    body_links: dict[str, BodyLink]
+
+
 class TaskRecord(TypedDict):
     goal: str
     state: str
     completed_at: str
-    items: list[Row]
-    comments: list[Row]
-    notes: list[Row]
+    items: list[TaskItem]
+    comments: list[TaskComment]
+    notes: list[TaskNote]
+
+
+class EditEntry(TypedDict):
+    id: int
+    memory_uid: str
+    edited_at: str
+    prev_content: str
+    new_content: str
+    note: str
+
+
+class RecordSection(TypedDict):
+    key: str
+    text: str
+
+
+class PeerCard(TypedDict):
+    uid: str
+    type: str
+    domain: str
+    title: str
+    status: str
+    confidence: str
+    snippet: str
+    created_at: str
+
+
+class MissingPeer(TypedDict):
+    uid: str
+    missing: Literal[True]
+
+
+class DiagramNodeRow(TypedDict):
+    key: str
+    label: str
+    shape: str
+    note: str
+    seq: int
+    x: float
+    y: float
+    w: float | None
+    h: float | None
+
+
+# `from` is a keyword, hence the functional form; `loops` says the edge closes a cycle.
+DiagramEdgeRow = TypedDict("DiagramEdgeRow", {
+    "from": str, "to": str, "label": str, "seq": int, "loops": bool})
+
+
+class DiagramNodeLink(TypedDict):
+    """A step's tie to a memory, with the card the editor shows for it."""
+    node_key: str
+    target_uid: str
+    relation_type: str
+    created_at: str
+    target_type: str
+    target_domain: str
+    target_status: str
+    target_confidence: str
+    peer: PeerCard | MissingPeer
+
+
+class DiagramJump(TypedDict):
+    """A jump seen from this diagram: `node_key` is the step here ('' for the whole diagram)."""
+    direction: str
+    node_key: str
+    peer_uid: str
+    peer_node: str
+    peer_title: str
+    peer_node_label: str
+    peer_status: str
+    label: str
+    created_at: str
 
 
 class DiagramRecord(TypedDict):
@@ -143,11 +299,31 @@ class DiagramRecord(TypedDict):
     title: str
     summary: str
     font_scale: float
-    nodes: list[Row]
-    edges: list[Row]
-    links: list[Row]
-    jumps: list[Row]
+    nodes: list[DiagramNodeRow]
+    edges: list[DiagramEdgeRow]
+    links: list[DiagramNodeLink]
+    jumps: list[DiagramJump]
     mermaid: str
+
+
+class RecordRelation(TypedDict):
+    """A relation as seen from the record: which end it is on, and the memory at the other."""
+    id: int
+    from_uid: str
+    to_uid: str
+    relation_type: str
+    note: str
+    created_at: str
+    direction: Literal["in", "out"]
+    peer: PeerCard | MissingPeer
+
+
+class DiagramRef(TypedDict):
+    memory_uid: str
+    node_key: str
+    relation_type: str
+    title: str
+    label: str | None
 
 
 class MemoryRecord(TypedDict):
@@ -170,16 +346,16 @@ class MemoryRecord(TypedDict):
     updated_at: str
     recalls: int
     last_recall: str | None
-    edit_history: list[Row]
+    edit_history: list[EditEntry]
     spec: list[SectionSpec]
-    sections: list[Row]
+    sections: list[RecordSection]
     section_problem: str
-    body_links: dict[str, Row]
-    relations: list[Row]
-    superseded_by_peer: NotRequired[Row | None]
+    body_links: dict[str, BodyLink]
+    relations: list[RecordRelation]
+    superseded_by_peer: NotRequired[PeerCard | None]
     task: NotRequired[TaskRecord | None]
     diagram: NotRequired[DiagramRecord | None]
-    referenced_by_diagrams: NotRequired[list[Row]]
+    referenced_by_diagrams: NotRequired[list[DiagramRef]]
 
 
 class MetaSaved(TypedDict):
@@ -222,19 +398,69 @@ class RelationCreated(TypedDict):
     relation_id: int
 
 
+class GraphNode(TypedDict):
+    """A memory as the relations graph draws it; `label` is the body's opening line."""
+    uid: str
+    type: str
+    domain: str
+    also: NotRequired[list[str]]
+    status: str
+    confidence: str
+    tags: str
+    title: str
+    label: str
+    degree: int
+    created_at: str
+
+
+class GraphEdge(TypedDict):
+    id: int
+    from_uid: str
+    to_uid: str
+    relation_type: str
+    note: str
+
+
 class Graph(Scoped):
-    nodes: list[Row]
-    edges: list[Row]
+    nodes: list[GraphNode]
+    edges: list[GraphEdge]
     total: int
     truncated: bool
 
 
 # ------------------------------------------------------------------ diagrams
 
+class DiagramIssue(TypedDict):
+    kind: str
+    keys: list[str]
+
+
+class DiagramRow(TypedDict):
+    """A diagram as the diagram list shows it: its size, its ties and what is wrong with its shape."""
+    uid: str
+    kind: str
+    title: str
+    summary: str
+    domain: str
+    status: str
+    confidence: str
+    tags: str
+    created_at: str
+    updated_at: str
+    also: list[str]
+    nodes: int
+    edges: int
+    links: int
+    jumps: int
+    documented: int
+    issues: list[DiagramIssue]
+    issue_count: int
+
+
 class DiagramPage(Scoped):
     total: int
     with_issues: int
-    items: list[Row]
+    items: list[DiagramRow]
 
 
 class DiagramCreated(TypedDict):
@@ -271,9 +497,22 @@ class UpdateState(TypedDict):
     commands: list[str]
 
 
+class ReleaseSection(TypedDict):
+    title: str
+    entries: list[str]
+
+
+class Release(TypedDict):
+    version: str
+    date: str
+    url: str
+    sections: list[ReleaseSection]
+    state: Literal["installed", "ahead", "past"]
+
+
 class Changelog(TypedDict):
     current: str
-    releases: list[Row]
+    releases: list[Release]
     update: UpdateState
     source: bool
 
@@ -319,9 +558,9 @@ class DomainTree(TypedDict):
 
 class DomainDetail(TypedDict):
     domain: str
-    filed: list[Row]
+    filed: list[MemorySummary]
     filed_total: int
-    crossing: list[Row]
+    crossing: list[MemorySummary]
 
 
 class DomainRenamed(TypedDict):
@@ -332,10 +571,15 @@ class DomainRenamed(TypedDict):
     merged: Any
 
 
+# "from" is a keyword, so this one is spelled as a call.
+NormalizeEntry = TypedDict("NormalizeEntry", {
+    "from": str, "to": str, "count": int, "action": Literal["rename", "merge"]})
+
+
 class NormalizePlan(TypedDict):
     mode: str
     dry_run: Literal[True]
-    plan: list[Row]
+    plan: list[NormalizeEntry]
     renames: int
     merges: int
 
@@ -398,6 +642,12 @@ class Renders(RendersUsage):
     path: str
 
 
+class BackupFile(TypedDict):
+    name: str
+    size: int
+    mtime: str
+
+
 class StoreFile(TypedDict):
     path: str
     size: int
@@ -415,7 +665,7 @@ class Health(TypedDict):
     title: TitleCount
     renders: Renders
     file: StoreFile
-    backups: list[Row]
+    backups: list[BackupFile]
 
 
 class FtsRebuilt(TypedDict):
@@ -454,10 +704,27 @@ class BackupTaken(TypedDict):
     size: int
 
 
+class ShelfFile(BackupFile):
+    """A backup on the shelf, with what has been written about it."""
+    label: NotRequired[str]
+    pinned: NotRequired[bool]
+
+
+class ArchiveMember(BackupFile):
+    label: NotRequired[str]
+
+
+class ArchiveFile(BackupFile):
+    """A zip of backups: what it costs on disk, and `raw`, what it holds uncompressed."""
+    count: int
+    raw: int
+    members: list[ArchiveMember]
+
+
 class Backups(TypedDict):
     project: str
-    shelf: list[Row]
-    archives: list[Row]
+    shelf: list[ShelfFile]
+    archives: list[ArchiveFile]
 
 
 class ArchivePlanEntry(TypedDict):
@@ -471,10 +738,16 @@ class ArchivePlan(TypedDict):
     plan: list[ArchivePlanEntry]
 
 
+class ArchiveWritten(TypedDict):
+    name: str
+    added: int
+    size: int
+
+
 class Archived(TypedDict):
     ok: Literal[True]
     archive: str
-    archives: list[Row]
+    archives: list[ArchiveWritten]
     added: int
     raw: int
     size: int
@@ -521,8 +794,15 @@ class BackupRestored(TypedDict):
     kept: str
 
 
+class DedupPair(TypedDict):
+    a: MemorySummary
+    b: MemorySummary
+    ratio: float
+    method: str
+
+
 class DedupPairs(Scoped):
-    pairs: list[Row]
+    pairs: list[DedupPair]
     threshold: float
 
 
@@ -535,11 +815,21 @@ class Sectionized(TypedDict):
     needs_review: int
 
 
+class SectionQueueEntry(TypedDict):
+    uid: str
+    type: str
+    domain: str
+    status: str
+    detail: str
+    snippet: str
+    created_at: str
+
+
 class SectionQueue(TypedDict):
     ok: Literal[True]
     migrated: bool
     unread: int
-    queue: list[Row]
+    queue: list[SectionQueueEntry]
 
 
 # -------------------------------------------------------------- optimization
@@ -552,14 +842,60 @@ class OptimizationRun(TypedDict):
     backup_path: str | None
 
 
+class RunKindCount(TypedDict):
+    kind: str
+    total: int
+    pending: int
+    rejected: int
+
+
+class RunRow(OptimizationRun):
+    """A run as the calendar lists it: its counts, overall and per kind."""
+    total: int
+    pending: int
+    applied: int
+    rejected: int
+    kinds: list[RunKindCount]
+
+
 class OptimizationRuns(TypedDict):
-    runs: list[Row]
+    runs: list[RunRow]
+
+
+class SuggestionTarget(PeerCard):
+    """The memory a suggestion edits, with the fields its Before pane reads."""
+    tags: str
+    review_after: str
+    also: list[str]
+
+
+class Suggestion(TypedDict):
+    """A staged suggestion, with the cards and bodies its evidence pane draws."""
+    id: int
+    run_id: int
+    kind: str
+    target_uid: str | None
+    rationale: str
+    verified: str
+    status: str
+    decided_at: str | None
+    created_at: str
+    payload: dict[str, Any]
+    target: NotRequired[SuggestionTarget]
+    content_before: NotRequired[str]
+    text_before: NotRequired[str]
+    chars_before: NotRequired[int]
+    chars_after: NotRequired[int]
+    peers: NotRequired[dict[str, PeerCard | None]]
+    sources: NotRequired[list[PeerCard | MissingPeer]]
+    new_uid: NotRequired[str | None]
+    body_links: NotRequired[dict[str, BodyLink]]
 
 
 class Suggestions(TypedDict):
     run: OptimizationRun
     runs: list[OptimizationRun]
-    suggestions: list[Row]
+    suggestions: list[Suggestion]
 
 
 class Ledger(TypedDict):
@@ -572,13 +908,24 @@ class Ledger(TypedDict):
     chars: int
 
 
+class KindGroup(TypedDict):
+    """One kind of a run: its counts, and the facts its sentence is worded from."""
+    kind: str
+    total: int
+    pending: int
+    applied: int
+    rejected: int
+    verified: int
+    facts: dict[str, int | str]
+
+
 class OptimizationSummary(TypedDict):
     run: OptimizationRun
     total: int
     pending: int
     verified: int
     ledger: Ledger
-    groups: list[Row]
+    groups: list[KindGroup]
 
 
 class Applied(TypedDict):
@@ -586,10 +933,15 @@ class Applied(TypedDict):
     backup: Any
 
 
+class FailedApply(TypedDict):
+    id: int
+    error: str
+
+
 class AppliedAll(TypedDict):
     ok: Literal[True]
     applied: int
-    failed: list[Any]
+    failed: list[FailedApply]
     backup: str | None
     backups: list[str]
 
@@ -601,8 +953,21 @@ class RejectedAll(TypedDict):
 
 # ------------------------------------------------------------- audit, lookup
 
+class AuditEntry(TypedDict):
+    id: int
+    memory_uid: str
+    edited_at: str
+    note: str
+    prev_len: int | None
+    new_len: int | None
+    content_changed: int | None
+    type: str
+    domain: str
+    status: str
+
+
 class AuditLog(TypedDict):
-    entries: list[Row]
+    entries: list[AuditEntry]
 
 
 class Lookup(TypedDict):

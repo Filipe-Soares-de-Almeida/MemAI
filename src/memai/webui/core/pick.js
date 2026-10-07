@@ -12,6 +12,9 @@ const SEARCH_FROM = 9;
 /* the open panel, or nothing. One at a time: two would be two carets. */
 let live = null;
 
+/* Whether the open panel belongs to `btn`. */
+export const pickerOpenOn = btn => !!live && live.btn === btn;
+
 export function closePicker() {
   if (!live) return;
   const { panel, btn, drop } = live;
@@ -76,7 +79,7 @@ export function wirePicker(root, { id, items, onPick, search = 'auto',
   });
 }
 
-function openPanel(btn, { items, onPick, search, minWidth, panelCls, keepLabel, anchor, align }) {
+export function openPanel(btn, { items, onPick, search, minWidth, panelCls, keepLabel, anchor, align }) {
   closePicker();
   const current = btn.dataset.v || '';
   const all = items('');

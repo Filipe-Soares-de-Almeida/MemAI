@@ -262,14 +262,18 @@ export const ICON_NAMES = Object.keys(ICONS);
 
 
 
+/* An icon's viewBox and path data, for a component that draws the <svg> itself. */
+export function iconParts(name) {
+  const it = ICONS[name];
+  if (!it) console.error(`icon: no such icon '${name}'`);
+  return it || null;
+}
+
 /* Markup for a template string; `.ico` gets its stroke and size from admin.css. Decorative by
    default: pass `title` only for an icon-only control. */
 export function icon(name, { cls = '', title = '' } = {}) {
-  const it = ICONS[name];
-  if (!it) {
-    console.error(`icon: no such icon '${name}'`);
-    return '';
-  }
+  const it = iconParts(name);
+  if (!it) return '';
   const attrs = [
     `class="ico${cls ? ` ${cls}` : ''}"`,
     `viewBox="${it.viewBox}"`,

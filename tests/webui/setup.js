@@ -9,6 +9,10 @@ const SHELL = `<main id="view" class="view" tabindex="-1"></main>
   <div id="toasts" class="toasts" aria-live="polite"></div>
   <div id="tip" class="tip" hidden></div>`;
 
-beforeEach(() => { document.body.innerHTML = SHELL; });
+/* imported here rather than at the top, so the catalogs it loads go through the fetch above */
+beforeEach(async () => {
+  document.body.innerHTML = SHELL;
+  (await import('../../src/memai/webui/core/chrome.ts')).mountChrome();
+});
 
 afterEach(() => { serveApi(null); });

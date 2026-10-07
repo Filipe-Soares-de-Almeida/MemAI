@@ -1,6 +1,7 @@
 import { readdir, readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'vite';
+import vue from '@vitejs/plugin-vue';
 import { packageVersion, sourceHash } from './tools/build-stamp.mjs';
 
 /* The dashboard's sources sit inside the Python package. memai.admin serves
@@ -66,7 +67,7 @@ function buildStamp() {
 }
 
 export default defineConfig({
-  plugins: [thirdPartyNotices(), buildStamp()],
+  plugins: [vue(), thirdPartyNotices(), buildStamp()],
   root: webui,
   base: '/static/',
   /* Copied verbatim, never hashed: the fonts and the locale catalogs are both

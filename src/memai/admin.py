@@ -1475,12 +1475,12 @@ def domain_detail(request, payload) -> schema.DomainDetail:
             """SELECT m.* FROM memory_domains dl JOIN memories m ON m.uid = dl.memory_uid
                WHERE dl.domain = ? AND m.status = 'active'
                ORDER BY m.created_at DESC LIMIT ?""", (domain, limit)).fetchall()
-    return {
+    return cast(schema.DomainDetail, {
         "domain": domain,
         "filed": [_summary(r, 160) for r in filed],
         "filed_total": filed_total,
         "crossing": [_summary(r, 160) for r in crossing],
-    }
+    })
 
 
 def rename_domain(request, payload) -> schema.DomainRenamed:
@@ -1610,9 +1610,10 @@ def normalize_domains(request, payload) -> schema.NormalizePlan | schema.Normali
                 counts[r["domain"]] = counts.get(r["domain"], 0) + r["n"]
         plan = _normalize_plan(mode, counts)
         if dry_run:
-            return {"mode": mode, "dry_run": True, "plan": plan,
-                    "renames": sum(1 for e in plan if e["action"] == "rename"),
-                    "merges": sum(1 for e in plan if e["action"] == "merge")}
+            return cast(schema.NormalizePlan, {
+                "mode": mode, "dry_run": True, "plan": plan,
+                "renames": sum(1 for e in plan if e["action"] == "rename"),
+                "merges": sum(1 for e in plan if e["action"] == "merge")})
         moved = [db.move_domain(conn, e["from"], e["to"], subtree=False) for e in plan]
     return {"ok": True, "mode": mode, "moved": len(plan),
             "affected": sum(m["moved"] for m in moved),
@@ -1868,9 +1869,10 @@ def backups(request, payload) -> schema.Backups:
         archives.append({**_shelf_row(path), "count": len(members),
                          "raw": sum(m["size"] for m in members),
                          "members": members})
-    return {"project": project,
-            "shelf": [_shelf_row(p, meta.get(p.name)) for p in db.backup_files(project)],
-            "archives": archives}
+    return cast(schema.Backups, {
+        "project": project,
+        "shelf": [_shelf_row(p, meta.get(p.name)) for p in db.backup_files(project)],
+        "archives": archives})
 
 
 def archive(request, payload) -> schema.ArchivePlan | schema.Archived:
@@ -1916,9 +1918,9 @@ def archive(request, payload) -> schema.ArchivePlan | schema.Archived:
         landed = db.archive_grouped(project, names, group)
     archives = [{"name": dest.name, "added": len(got), "size": _file_size(dest)}
                 for dest, got in landed.items()]
-    return {"ok": True, "archive": archives[0]["name"], "archives": archives,
-            "added": len(names), "raw": raw,
-            "size": sum(a["size"] for a in archives)}
+    return cast(schema.Archived, {"ok": True, "archive": archives[0]["name"], "archives": archives,
+                                  "added": len(names), "raw": raw,
+                                  "size": sum(a["size"] for a in archives)})
 
 
 def archive_rename(request, payload) -> schema.Renamed:
@@ -2005,9 +2007,9 @@ def sectionize(request, payload) -> schema.Sectionized:
 def section_queue(request, payload) -> schema.SectionQueue:
     """The bodies that do not conform, and whether the store has been read."""
     with db.connect() as conn:
-        return {"ok": True, "migrated": db.sections_read(conn),
-                "unread": db.unread_sections(conn),
-                "queue": db.section_queue(conn)}
+        return cast(schema.SectionQueue, {"ok": True, "migrated": db.sections_read(conn),
+                                          "unread": db.unread_sections(conn),
+                                          "queue": db.section_queue(conn)})
 
 
 def edit_sections(request, payload) -> schema.Ok:
@@ -2055,7 +2057,7 @@ def audit(request, payload) -> schema.AuditLog:
                       m.type, m.domain, m.status
                FROM edits e JOIN memories m ON m.uid = e.memory_uid
                ORDER BY e.edited_at DESC, e.id DESC LIMIT ?""", (limit,)).fetchall()
-    return {"entries": [dict(r) for r in rows]}
+    return cast(schema.AuditLog, {"entries": [dict(r) for r in rows]})
 
 
 def lookup(request, payload) -> schema.Lookup:
@@ -2634,7 +2636,7 @@ def changelog_page(request, payload) -> schema.Changelog:
         rows[update.parse_version(entry["version"])] = {
             **entry, "state": _state_of(entry["version"], current)}
     releases = [rows[key] for key in sorted(rows, reverse=True)]
-    return {"current": current, "releases": releases,
+    return {"current": current, "releases": cast(list[schema.Release], releases),
             "update": update_state(), "source": changelog.source() is not None}
 
 
