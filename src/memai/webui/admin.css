@@ -1257,7 +1257,8 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
 /* 293 domains is not a tree you walk to find one. The picker draws the same
    rails the columns do and filters as you type; picking a row navigates. */
 .dom-find.pick { width: 260px; --ctl-h: var(--ctl-h-sm); }
-.dom-bar-end { margin-left: auto; display: flex; align-items: center; gap: var(--sp-2); }
+.dom-bar-end { margin-left: auto; display: flex; align-items: center; gap: var(--sp-2);
+               min-width: 0; max-width: 100%; }
 
 .dom-crumb {
   display: flex; align-items: baseline; gap: var(--sp-1);
@@ -1521,7 +1522,7 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
 
 .opt-cal-work {
   flex: 1; min-height: 0;
-  display: grid; gap: var(--sp-5);
+  display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--sp-5);
 }
 .opt-cal { display: flex; flex-direction: column; gap: var(--sp-3); min-height: 0; }
 
@@ -4482,6 +4483,9 @@ input.pick-q:focus { box-shadow: inset 0 -2px 0 var(--accent); }
 }
 /* both optimization layouts collapse to one column at the same breakpoint */
 @media (max-width: 760px) {
+  /* the table of kinds keeps its columns and headers and scrolls sideways, as the month does */
+  .opt-grp-scroll { overflow-x: auto; }
+  .opt-grp { min-width: 820px; }
   .opt-diff { grid-template-columns: 1fr; grid-template-areas: "bl" "bs" "arrow" "al" "as"; }
   .opt-rel { grid-template-columns: 1fr; grid-template-areas: "l1" "b1" "arrow" "l2" "b2"; }
   .opt-arrow { transform: rotate(90deg); padding: var(--sp-1) 0; }
@@ -5536,6 +5540,13 @@ input.pick-q:focus { box-shadow: inset 0 -2px 0 var(--accent); }
   .mnt-file .ico { margin-top: 3px; }
   .mnt-file-when, .mnt-file-size { grid-column: 2; grid-row: 2; }
   .mnt-file-size { justify-self: end; }
+  /* the shelf that can be ticked keeps its tick before the icon and its two controls after the label */
+  .mnt-shelf-body.pickable .mnt-file { grid-template-columns: 18px 16px minmax(0, 1fr) auto; }
+  .mnt-shelf-body.pickable .mnt-file-when,
+  .mnt-shelf-body.pickable .mnt-file-size { grid-column: 3; }
+  /* the selection's sentence takes its own line above the three buttons */
+  .mnt-sel { flex-wrap: wrap; }
+  .mnt-sel-text { flex-basis: 100%; }
   /* the column heads, hidden at this width */
   .mnt-file-head { display: none; }
   /* a step's control drops under its own words rather than squeezing them */

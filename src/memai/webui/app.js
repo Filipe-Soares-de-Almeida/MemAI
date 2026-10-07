@@ -10,33 +10,36 @@ import { pickerFor, setPickerValue, wirePicker, fixedItems } from './core/pick.j
 import { mountProjectPicker } from './core/projects.js';
 import { mountVersionChip } from './core/version.ts';
 import { registerViews, route } from './core/router.ts';
+import { mountChrome } from './core/chrome.ts';
 import { I18N, t } from './i18n.ts';
 
-import { renderOverview } from './views/overview.js';
-import { renderMemories } from './views/memories.js';
-import { renderGraph } from './views/graph.js';
-import { renderDiagrams } from './views/diagrams.js';
-import { renderDiagram } from './views/diagram.js';
-import { renderDomains } from './views/domains.js';
-import { renderMaintenance } from './views/maintenance.js';
-import { renderOptimization } from './views/optimization.js';
-import { renderChangelog } from './views/changelog.js';
-import { renderRecord } from './views/record/index.js';
+import OverviewView from './views/overview/OverviewView.vue';
+import MemoriesView from './views/memories/MemoriesView.vue';
+import GraphView from './views/graph/GraphView.vue';
+import DiagramsView from './views/diagrams/DiagramsView.vue';
+import DiagramView from './views/diagram/DiagramView.vue';
+import DomainsView from './views/domains/DomainsView.vue';
+import MaintenanceView from './views/maintenance/MaintenanceView.vue';
+import OptimizationView from './views/optimization/OptimizationView.vue';
+import ChangelogView from './views/changelog/ChangelogView.vue';
+import RecordView from './views/record/RecordView.vue';
 import { openRecord } from './core/nav.ts';
-import { openNewMemory } from './views/new-memory.js';
+import { openNewMemory } from './views/new-memory/index.ts';
 
 registerViews({
-  overview: renderOverview,
-  memories: renderMemories,
-  graph: renderGraph,
-  diagrams: renderDiagrams,
-  diagram: renderDiagram,
-  domains: renderDomains,
-  maintenance: renderMaintenance,
-  optimization: renderOptimization,
-  changelog: renderChangelog,
-  memory: renderRecord,
+  overview: OverviewView,
+  memories: MemoriesView,
+  graph: GraphView,
+  diagrams: DiagramsView,
+  diagram: DiagramView,
+  domains: DomainsView,
+  maintenance: MaintenanceView,
+  optimization: OptimizationView,
+  changelog: ChangelogView,
+  memory: RecordView,
 }, { onRecord: openRecord });
+
+mountChrome();
 
 /* draw the shell's icons before the first route, so the app bar is never
    shown mid-assembly (i18n does the same for its text, at import time) */

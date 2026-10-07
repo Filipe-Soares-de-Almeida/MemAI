@@ -5,9 +5,10 @@ import { $, esc, cssVar } from './dom.ts';
 import { icon } from './icons.js';
 import { fixedItems, pickerFor, wirePicker } from './pick.js';
 import { t } from '../i18n.ts';
-import { copyUid } from './ui.js';
+import { copyUid } from './copy.ts';
 import { TYPE_ORDER } from './vocab.js';
 import { MEMORY } from '../contract.ts';
+import { byDomainPath } from './domains.ts';
 import * as client from '../api/client.ts';
 
 export { TYPE_ORDER, REL_SUGGEST, DG_REL_SUGGEST } from './vocab.js';
@@ -36,7 +37,7 @@ export const pinMark = pin => PIN[pin]
   : '';
 
 /* the relation picker's entry for a type outside the suggestions: it opens a text field */
-const REL_OTHER = '__other';
+export const REL_OTHER = '__other';
 
 /* A relation type's display label; the stored string moves to the title (relTypeTitle). The set
    is open, so an unknown type falls back to itself rather than to the key. */
@@ -81,7 +82,7 @@ export const peerName = peer => {
 
 /* A named picker of the known relation types, with an escape hatch for any string. Emits the
    picker and its custom-value sibling; wireRelTypeField() joins them and returns the getter. */
-const relItems = options => [
+export const relItems = options => [
   { value: '', label: t('dr.rel.type.placeholder'),
     html: `<span class="pick-any">${t('dr.rel.type.placeholder')}</span>` },
   ...options.map(r => ({ value: r, label: t(`rel.${r}`) })),
@@ -254,56 +255,10 @@ export function wireCopyChips(root) {
     el.addEventListener('click', e => { e.stopPropagation(); copyUid(el.dataset.copy); }));
 }
 
-/* ─── domain paths: 'acme/x100/p200' is a routine in a module in a product. The server stores
-   and matches them; these helpers draw them. */
+/* ─── domain paths (core/domains.ts), and the markup drawn from them */
 
-export const DOMAIN_SEP = MEMORY.DOMAIN_SEP;
-
-export const domainSegments = d => (d || '').split(DOMAIN_SEP).filter(Boolean);
-export const domainLeaf = d => domainSegments(d).slice(-1)[0] || '';
-export const domainDepth = d => domainSegments(d).length;
-
-/* Whether a path is a scope or under it, segment-wise like the server: 'acme/x1000' is not
-   inside 'acme/x100'. An empty scope holds everything. */
-export function inDomainPath(domain, scope) {
-  const want = domainSegments(scope), segs = domainSegments(domain);
-  return want.every((s, i) => segs[i] === s);
-}
-
-/* Tree order: parent, its subtree, then the next sibling. By segments then depth, since '-'
-   sorts before '/' and would split a subtree. */
-export function byDomainPath(a, b) {
-  const x = domainSegments(a.domain), y = domainSegments(b.domain);
-  for (let i = 0; i < Math.min(x.length, y.length); i++) {
-    const c = x[i].localeCompare(y[i]);
-    if (c) return c;
-  }
-  return x.length - y.length;
-}
-
-/* The tree's shape per row: which ancestor rails continue and whether the row closes its branch.
-   `list` must be in tree order (byDomainPath); shared so every renderer draws the same tree. */
-export function domainGuides(list) {
-  const out = [];
-  /* cont[k - 1]: the row last seen at depth k has a sibling still to come,
-     so the column that branch owns keeps its line through the rows between */
-  const cont = [];
-  list.forEach((d, i) => {
-    const depth = domainDepth(d.domain);
-    let last = true;
-    for (let j = i + 1; j < list.length; j++) {
-      const next = domainDepth(list[j].domain);
-      if (next > depth) continue;
-      last = next < depth;
-      break;
-    }
-    /* one flag per pass-through column; the connector column is this row's
-       own `last`, and a root has neither */
-    out.push({ depth, through: cont.slice(1, depth - 1), last });
-    cont[depth - 1] = !last;
-  });
-  return out;
-}
+export { DOMAIN_SEP, domainSegments, domainLeaf, domainDepth, inDomainPath, byDomainPath,
+         domainGuides } from './domains.ts';
 
 /* One row's guide rails as markup. Hosts declare --dom-step and lay rows out as spacer, an 18px
    twist slot, then the name; `leaf` runs the closing stroke across an empty slot. */

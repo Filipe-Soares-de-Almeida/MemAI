@@ -103,10 +103,64 @@ export interface ProjectMove {
   errors?: unknown[];
 }
 
+export interface TaskProgress {
+  done: number;
+  total: number;
+}
+
+export interface MemorySummary {
+  rowid_pk: number;
+  uid: string;
+  type: string;
+  title: string;
+  content: string;
+  content_len: number;
+  domain: string;
+  also?: string[];
+  tags: string;
+  session: string;
+  status: string;
+  confidence: string;
+  pin: string;
+  superseded_by: string | null;
+  review_after: string;
+  source_ref: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface MemoryRow {
+  rowid_pk: number;
+  uid: string;
+  type: string;
+  title: string;
+  content: string;
+  content_len: number;
+  domain: string;
+  also?: string[];
+  tags: string;
+  session: string;
+  status: string;
+  confidence: string;
+  pin: string;
+  superseded_by: string | null;
+  review_after: string;
+  source_ref: string;
+  created_at: string;
+  updated_at: string;
+  recalls: number;
+  last_recall: string | null;
+  progress?: TaskProgress;
+  task_state?: string;
+  fts_rank?: number;
+  match_source?: string;
+  succeeded_by?: string[];
+}
+
 export interface MemoryPage {
   domain_scope?: string[];
   total: number;
-  items: Record<string, unknown>[];
+  items: MemoryRow[];
   searched: boolean;
 }
 
@@ -121,13 +175,131 @@ export interface SectionSpec {
   max_len: number;
 }
 
+export interface BodyLink {
+  uid: string;
+  type?: string;
+  domain?: string;
+  status?: string;
+  snippet?: string;
+  linked?: boolean;
+  missing?: boolean;
+}
+
+export interface TaskLink {
+  uid: string;
+  title: string;
+  type: string;
+}
+
+export interface TaskItem {
+  key: string;
+  seq: number;
+  text: string;
+  state: string;
+  updated_at: string;
+  updated_session: string;
+  links: TaskLink[];
+}
+
+export interface TaskComment {
+  id: number;
+  item: string;
+  body: string;
+  author: string;
+  session: string;
+  created_at: string;
+}
+
+export interface TaskNote {
+  id: number;
+  title: string;
+  body: string;
+  items: string[];
+  updated_at: string;
+  body_links: Record<string, BodyLink>;
+}
+
 export interface TaskRecord {
   goal: string;
   state: string;
   completed_at: string;
-  items: Record<string, unknown>[];
-  comments: Record<string, unknown>[];
-  notes: Record<string, unknown>[];
+  items: TaskItem[];
+  comments: TaskComment[];
+  notes: TaskNote[];
+}
+
+export interface EditEntry {
+  id: number;
+  memory_uid: string;
+  edited_at: string;
+  prev_content: string;
+  new_content: string;
+  note: string;
+}
+
+export interface RecordSection {
+  key: string;
+  text: string;
+}
+
+export interface PeerCard {
+  uid: string;
+  type: string;
+  domain: string;
+  title: string;
+  status: string;
+  confidence: string;
+  snippet: string;
+  created_at: string;
+}
+
+export interface MissingPeer {
+  uid: string;
+  missing: true;
+}
+
+export interface DiagramNodeRow {
+  key: string;
+  label: string;
+  shape: string;
+  note: string;
+  seq: number;
+  x: number;
+  y: number;
+  w: number | null;
+  h: number | null;
+}
+
+export interface DiagramEdgeRow {
+  from: string;
+  to: string;
+  label: string;
+  seq: number;
+  loops: boolean;
+}
+
+export interface DiagramNodeLink {
+  node_key: string;
+  target_uid: string;
+  relation_type: string;
+  created_at: string;
+  target_type: string;
+  target_domain: string;
+  target_status: string;
+  target_confidence: string;
+  peer: PeerCard | MissingPeer;
+}
+
+export interface DiagramJump {
+  direction: string;
+  node_key: string;
+  peer_uid: string;
+  peer_node: string;
+  peer_title: string;
+  peer_node_label: string;
+  peer_status: string;
+  label: string;
+  created_at: string;
 }
 
 export interface DiagramRecord {
@@ -136,11 +308,30 @@ export interface DiagramRecord {
   title: string;
   summary: string;
   font_scale: number;
-  nodes: Record<string, unknown>[];
-  edges: Record<string, unknown>[];
-  links: Record<string, unknown>[];
-  jumps: Record<string, unknown>[];
+  nodes: DiagramNodeRow[];
+  edges: DiagramEdgeRow[];
+  links: DiagramNodeLink[];
+  jumps: DiagramJump[];
   mermaid: string;
+}
+
+export interface RecordRelation {
+  id: number;
+  from_uid: string;
+  to_uid: string;
+  relation_type: string;
+  note: string;
+  created_at: string;
+  direction: "in" | "out";
+  peer: PeerCard | MissingPeer;
+}
+
+export interface DiagramRef {
+  memory_uid: string;
+  node_key: string;
+  relation_type: string;
+  title: string;
+  label: string | null;
 }
 
 export interface MemoryRecord {
@@ -163,16 +354,16 @@ export interface MemoryRecord {
   updated_at: string;
   recalls: number;
   last_recall: string | null;
-  edit_history: Record<string, unknown>[];
+  edit_history: EditEntry[];
   spec: SectionSpec[];
-  sections: Record<string, unknown>[];
+  sections: RecordSection[];
   section_problem: string;
-  body_links: Record<string, Record<string, unknown>>;
-  relations: Record<string, unknown>[];
-  superseded_by_peer?: Record<string, unknown> | null;
+  body_links: Record<string, BodyLink>;
+  relations: RecordRelation[];
+  superseded_by_peer?: PeerCard | null;
   task?: TaskRecord | null;
   diagram?: DiagramRecord | null;
-  referenced_by_diagrams?: Record<string, unknown>[];
+  referenced_by_diagrams?: DiagramRef[];
 }
 
 export interface MetaSaved {
@@ -213,19 +404,67 @@ export interface RelationCreated {
   relation_id: number;
 }
 
+export interface GraphNode {
+  uid: string;
+  type: string;
+  domain: string;
+  also?: string[];
+  status: string;
+  confidence: string;
+  tags: string;
+  title: string;
+  label: string;
+  degree: number;
+  created_at: string;
+}
+
+export interface GraphEdge {
+  id: number;
+  from_uid: string;
+  to_uid: string;
+  relation_type: string;
+  note: string;
+}
+
 export interface Graph {
   domain_scope?: string[];
-  nodes: Record<string, unknown>[];
-  edges: Record<string, unknown>[];
+  nodes: GraphNode[];
+  edges: GraphEdge[];
   total: number;
   truncated: boolean;
+}
+
+export interface DiagramIssue {
+  kind: string;
+  keys: string[];
+}
+
+export interface DiagramRow {
+  uid: string;
+  kind: string;
+  title: string;
+  summary: string;
+  domain: string;
+  status: string;
+  confidence: string;
+  tags: string;
+  created_at: string;
+  updated_at: string;
+  also: string[];
+  nodes: number;
+  edges: number;
+  links: number;
+  jumps: number;
+  documented: number;
+  issues: DiagramIssue[];
+  issue_count: number;
 }
 
 export interface DiagramPage {
   domain_scope?: string[];
   total: number;
   with_issues: number;
-  items: Record<string, unknown>[];
+  items: DiagramRow[];
 }
 
 export interface DiagramCreated {
@@ -260,9 +499,22 @@ export interface UpdateState {
   commands: string[];
 }
 
+export interface ReleaseSection {
+  title: string;
+  entries: string[];
+}
+
+export interface Release {
+  version: string;
+  date: string;
+  url: string;
+  sections: ReleaseSection[];
+  state: "installed" | "ahead" | "past";
+}
+
 export interface Changelog {
   current: string;
-  releases: Record<string, unknown>[];
+  releases: Release[];
   update: UpdateState;
   source: boolean;
 }
@@ -310,9 +562,9 @@ export interface DomainTree {
 
 export interface DomainDetail {
   domain: string;
-  filed: Record<string, unknown>[];
+  filed: MemorySummary[];
   filed_total: number;
-  crossing: Record<string, unknown>[];
+  crossing: MemorySummary[];
 }
 
 export interface DomainRenamed {
@@ -323,10 +575,17 @@ export interface DomainRenamed {
   merged: unknown;
 }
 
+export interface NormalizeEntry {
+  from: string;
+  to: string;
+  count: number;
+  action: "rename" | "merge";
+}
+
 export interface NormalizePlan {
   mode: string;
   dry_run: true;
-  plan: Record<string, unknown>[];
+  plan: NormalizeEntry[];
   renames: number;
   merges: number;
 }
@@ -391,6 +650,12 @@ export interface Renders {
   path: string;
 }
 
+export interface BackupFile {
+  name: string;
+  size: number;
+  mtime: string;
+}
+
 export interface StoreFile {
   path: string;
   size: number;
@@ -408,7 +673,7 @@ export interface Health {
   title: TitleCount;
   renders: Renders;
   file: StoreFile;
-  backups: Record<string, unknown>[];
+  backups: BackupFile[];
 }
 
 export interface FtsRebuilt {
@@ -447,10 +712,34 @@ export interface BackupTaken {
   size: number;
 }
 
+export interface ShelfFile {
+  name: string;
+  size: number;
+  mtime: string;
+  label?: string;
+  pinned?: boolean;
+}
+
+export interface ArchiveMember {
+  name: string;
+  size: number;
+  mtime: string;
+  label?: string;
+}
+
+export interface ArchiveFile {
+  name: string;
+  size: number;
+  mtime: string;
+  count: number;
+  raw: number;
+  members: ArchiveMember[];
+}
+
 export interface Backups {
   project: string;
-  shelf: Record<string, unknown>[];
-  archives: Record<string, unknown>[];
+  shelf: ShelfFile[];
+  archives: ArchiveFile[];
 }
 
 export interface ArchivePlanEntry {
@@ -464,10 +753,16 @@ export interface ArchivePlan {
   plan: ArchivePlanEntry[];
 }
 
+export interface ArchiveWritten {
+  name: string;
+  added: number;
+  size: number;
+}
+
 export interface Archived {
   ok: true;
   archive: string;
-  archives: Record<string, unknown>[];
+  archives: ArchiveWritten[];
   added: number;
   raw: number;
   size: number;
@@ -514,9 +809,16 @@ export interface BackupRestored {
   kept: string;
 }
 
+export interface DedupPair {
+  a: MemorySummary;
+  b: MemorySummary;
+  ratio: number;
+  method: string;
+}
+
 export interface DedupPairs {
   domain_scope?: string[];
-  pairs: Record<string, unknown>[];
+  pairs: DedupPair[];
   threshold: number;
 }
 
@@ -529,11 +831,21 @@ export interface Sectionized {
   needs_review: number;
 }
 
+export interface SectionQueueEntry {
+  uid: string;
+  type: string;
+  domain: string;
+  status: string;
+  detail: string;
+  snippet: string;
+  created_at: string;
+}
+
 export interface SectionQueue {
   ok: true;
   migrated: boolean;
   unread: number;
-  queue: Record<string, unknown>[];
+  queue: SectionQueueEntry[];
 }
 
 export interface OptimizationRun {
@@ -544,14 +856,70 @@ export interface OptimizationRun {
   backup_path: string | null;
 }
 
+export interface RunKindCount {
+  kind: string;
+  total: number;
+  pending: number;
+  rejected: number;
+}
+
+export interface RunRow {
+  id: number;
+  created_at: string;
+  note: string;
+  status: string;
+  backup_path: string | null;
+  total: number;
+  pending: number;
+  applied: number;
+  rejected: number;
+  kinds: RunKindCount[];
+}
+
 export interface OptimizationRuns {
-  runs: Record<string, unknown>[];
+  runs: RunRow[];
+}
+
+export interface SuggestionTarget {
+  uid: string;
+  type: string;
+  domain: string;
+  title: string;
+  status: string;
+  confidence: string;
+  snippet: string;
+  created_at: string;
+  tags: string;
+  review_after: string;
+  also: string[];
+}
+
+export interface Suggestion {
+  id: number;
+  run_id: number;
+  kind: string;
+  target_uid: string | null;
+  rationale: string;
+  verified: string;
+  status: string;
+  decided_at: string | null;
+  created_at: string;
+  payload: Record<string, unknown>;
+  target?: SuggestionTarget;
+  content_before?: string;
+  text_before?: string;
+  chars_before?: number;
+  chars_after?: number;
+  peers?: Record<string, PeerCard | null>;
+  sources?: (PeerCard | MissingPeer)[];
+  new_uid?: string | null;
+  body_links?: Record<string, BodyLink>;
 }
 
 export interface Suggestions {
   run: OptimizationRun;
   runs: OptimizationRun[];
-  suggestions: Record<string, unknown>[];
+  suggestions: Suggestion[];
 }
 
 export interface Ledger {
@@ -564,13 +932,23 @@ export interface Ledger {
   chars: number;
 }
 
+export interface KindGroup {
+  kind: string;
+  total: number;
+  pending: number;
+  applied: number;
+  rejected: number;
+  verified: number;
+  facts: Record<string, number | string>;
+}
+
 export interface OptimizationSummary {
   run: OptimizationRun;
   total: number;
   pending: number;
   verified: number;
   ledger: Ledger;
-  groups: Record<string, unknown>[];
+  groups: KindGroup[];
 }
 
 export interface Applied {
@@ -578,10 +956,15 @@ export interface Applied {
   backup: unknown;
 }
 
+export interface FailedApply {
+  id: number;
+  error: string;
+}
+
 export interface AppliedAll {
   ok: true;
   applied: number;
-  failed: unknown[];
+  failed: FailedApply[];
   backup: string | null;
   backups: string[];
 }
@@ -591,8 +974,21 @@ export interface RejectedAll {
   rejected: number;
 }
 
+export interface AuditEntry {
+  id: number;
+  memory_uid: string;
+  edited_at: string;
+  note: string;
+  prev_len: number | null;
+  new_len: number | null;
+  content_changed: number | null;
+  type: string;
+  domain: string;
+  status: string;
+}
+
 export interface AuditLog {
-  entries: Record<string, unknown>[];
+  entries: AuditEntry[];
 }
 
 export interface Lookup {

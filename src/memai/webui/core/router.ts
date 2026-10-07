@@ -5,9 +5,13 @@ import { $ } from './dom.ts';
 import { teardownView } from './lifecycle.ts';
 import { closeCtxMenu, modalOpen } from './ui.js';
 import { failedHTML } from './shared.js';
+import { mountView } from './vue.ts';
+import type { Component } from 'vue';
 
 export interface ViewContext { stale: () => boolean }
-export type View = (host: HTMLElement, params: URLSearchParams, ctx: ViewContext) => unknown;
+export type RenderView = (host: HTMLElement, params: URLSearchParams, ctx: ViewContext) => unknown;
+/* a render function that draws into the host, or a Vue component mounted there */
+export type View = RenderView | Component;
 export type Params = Record<string, string>;
 type RecordHook = (uid: string) => void;
 
@@ -94,7 +98,9 @@ export async function route({ focus = true }: { focus?: boolean } = {}): Promise
   view.innerHTML = '<div class="loading"><span class="spin"></span></div>';
   const ctx: ViewContext = { stale: () => mine !== generation };
   try {
-    await VIEWS[name](view, params, ctx);
+    const entry = VIEWS[name];
+    if (typeof entry === 'function') await (entry as RenderView)(view, params, ctx);
+    else await mountView(entry, view, params, ctx);
   } catch (err) {
     if (ctx.stale()) return;
     /* Not `.empty`: a failed load must not look like an empty store. Retry re-runs this route. */

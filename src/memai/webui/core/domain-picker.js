@@ -28,7 +28,7 @@ export const domainPickerHTML = ({ id, value = '', ariaLabel, anyLabel = '', cls
 export function wireDomainPicker(root, { id, domains, onPick, anyLabel = '' }) {
   wirePicker(root, {
     id,
-    items: query => rows(domains, query, anyLabel),
+    items: query => domainRows(domains, query, anyLabel),
     onPick,
     search: true,
     minWidth: 280,
@@ -52,7 +52,7 @@ function matching(domains, query) {
 
 /* No twist slot, since nothing here expands: rails anchor on the name of the level above, which
    .pick-row.dom-row declares with --dom-line. */
-function rows(domains, query, anyLabel = '') {
+export function domainRows(domains, query, anyLabel = '') {
   const shown = matching(domains, query);
   const guides = domainGuides(shown);
   const none = anyLabel || t('common.allDomains');

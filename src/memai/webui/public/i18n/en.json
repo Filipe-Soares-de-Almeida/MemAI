@@ -424,6 +424,7 @@
     "err.save": "That change was not saved.",
     "err.status": "The status was not changed.",
     "err.update": "The release check did not finish.",
+    "err.unexpected": "Something went wrong.",
     "g.alsoIn": "in {n} more",
     "g.banner.source": "Link mode: click the SOURCE memory",
     "g.banner.target": "Source: {uid} — now click the target",
