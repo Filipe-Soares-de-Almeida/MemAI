@@ -220,19 +220,6 @@ class TaskRecord(TypedDict):
     notes: list[TaskNote]
 
 
-class DiagramRecord(TypedDict):
-    uid: str
-    kind: str
-    title: str
-    summary: str
-    font_scale: float
-    nodes: list[Row]
-    edges: list[Row]
-    links: list[Row]
-    jumps: list[Row]
-    mermaid: str
-
-
 class EditEntry(TypedDict):
     id: int
     memory_uid: str
@@ -261,6 +248,62 @@ class PeerCard(TypedDict):
 class MissingPeer(TypedDict):
     uid: str
     missing: Literal[True]
+
+
+class DiagramNodeRow(TypedDict):
+    key: str
+    label: str
+    shape: str
+    note: str
+    seq: int
+    x: float
+    y: float
+    w: float | None
+    h: float | None
+
+
+# `from` is a keyword, hence the functional form; `loops` says the edge closes a cycle.
+DiagramEdgeRow = TypedDict("DiagramEdgeRow", {
+    "from": str, "to": str, "label": str, "seq": int, "loops": bool})
+
+
+class DiagramNodeLink(TypedDict):
+    """A step's tie to a memory, with the card the editor shows for it."""
+    node_key: str
+    target_uid: str
+    relation_type: str
+    created_at: str
+    target_type: str
+    target_domain: str
+    target_status: str
+    target_confidence: str
+    peer: PeerCard | MissingPeer
+
+
+class DiagramJump(TypedDict):
+    """A jump seen from this diagram: `node_key` is the step here ('' for the whole diagram)."""
+    direction: str
+    node_key: str
+    peer_uid: str
+    peer_node: str
+    peer_title: str
+    peer_node_label: str
+    peer_status: str
+    label: str
+    created_at: str
+
+
+class DiagramRecord(TypedDict):
+    uid: str
+    kind: str
+    title: str
+    summary: str
+    font_scale: float
+    nodes: list[DiagramNodeRow]
+    edges: list[DiagramEdgeRow]
+    links: list[DiagramNodeLink]
+    jumps: list[DiagramJump]
+    mermaid: str
 
 
 class RecordRelation(TypedDict):

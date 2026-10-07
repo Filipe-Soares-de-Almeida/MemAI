@@ -228,19 +228,6 @@ export interface TaskRecord {
   notes: TaskNote[];
 }
 
-export interface DiagramRecord {
-  uid: string;
-  kind: string;
-  title: string;
-  summary: string;
-  font_scale: number;
-  nodes: Record<string, unknown>[];
-  edges: Record<string, unknown>[];
-  links: Record<string, unknown>[];
-  jumps: Record<string, unknown>[];
-  mermaid: string;
-}
-
 export interface EditEntry {
   id: number;
   memory_uid: string;
@@ -269,6 +256,63 @@ export interface PeerCard {
 export interface MissingPeer {
   uid: string;
   missing: true;
+}
+
+export interface DiagramNodeRow {
+  key: string;
+  label: string;
+  shape: string;
+  note: string;
+  seq: number;
+  x: number;
+  y: number;
+  w: number | null;
+  h: number | null;
+}
+
+export interface DiagramEdgeRow {
+  from: string;
+  to: string;
+  label: string;
+  seq: number;
+  loops: boolean;
+}
+
+export interface DiagramNodeLink {
+  node_key: string;
+  target_uid: string;
+  relation_type: string;
+  created_at: string;
+  target_type: string;
+  target_domain: string;
+  target_status: string;
+  target_confidence: string;
+  peer: PeerCard | MissingPeer;
+}
+
+export interface DiagramJump {
+  direction: string;
+  node_key: string;
+  peer_uid: string;
+  peer_node: string;
+  peer_title: string;
+  peer_node_label: string;
+  peer_status: string;
+  label: string;
+  created_at: string;
+}
+
+export interface DiagramRecord {
+  uid: string;
+  kind: string;
+  title: string;
+  summary: string;
+  font_scale: number;
+  nodes: DiagramNodeRow[];
+  edges: DiagramEdgeRow[];
+  links: DiagramNodeLink[];
+  jumps: DiagramJump[];
+  mermaid: string;
 }
 
 export interface RecordRelation {

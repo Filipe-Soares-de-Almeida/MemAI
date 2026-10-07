@@ -17,7 +17,7 @@ import OverviewView from './views/overview/OverviewView.vue';
 import MemoriesView from './views/memories/MemoriesView.vue';
 import GraphView from './views/graph/GraphView.vue';
 import DiagramsView from './views/diagrams/DiagramsView.vue';
-import { renderDiagram } from './views/diagram.js';
+import DiagramView from './views/diagram/DiagramView.vue';
 import DomainsView from './views/domains/DomainsView.vue';
 import MaintenanceView from './views/maintenance/MaintenanceView.vue';
 import OptimizationView from './views/optimization/OptimizationView.vue';
@@ -31,7 +31,7 @@ registerViews({
   memories: MemoriesView,
   graph: GraphView,
   diagrams: DiagramsView,
-  diagram: renderDiagram,
+  diagram: DiagramView,
   domains: DomainsView,
   maintenance: MaintenanceView,
   optimization: OptimizationView,

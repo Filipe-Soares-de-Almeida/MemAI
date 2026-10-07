@@ -99,6 +99,13 @@ def store(tmp_path_factory):
                    {"key": "b", "shape": "end", "label": "End"}],
             edges=[{"from": "a", "to": "b", "label": "done"}])
         db.add_node_link(conn, diagram, "a", note, "explains")
+        handoff, _ = db.insert_diagram(
+            conn, title="Wick routine", domain="acme/x200",
+            nodes=[{"key": "s", "shape": "start", "label": "Start"},
+                   {"key": "e", "shape": "end", "label": "End"}],
+            edges=[{"from": "s", "to": "e"}])
+        db.add_diagram_jump(conn, diagram, "a", handoff, "s", "the wick comes next")
+        db.add_diagram_jump(conn, handoff, "e", diagram, "", "back to the refill")
         run = db.stage_optimization(conn, "tidy the tags", [
             {"kind": "retag", "target_uid": note, "payload": {"tags": "lantern, fuel"},
              "rationale": "a synonym", "verified": "checked"},
