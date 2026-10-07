@@ -5,31 +5,19 @@ history, a relations graph, and the node/edge tables behind type='diagram'
 memories together under one set of ACID transactions, so there is nothing
 that can desync from the metadata on a hard-kill. One such file is a
 PROJECT: a home directory holds any number of them and names the one every
-connect() opens by default -- see the project functions after SCHEMA.
+connect() opens by default.
 
 Retrieval is FTS5 BM25 keyword search. It only widens the candidate set --
 semantic judgment is left to the calling agent, which reads the candidates
 back and decides relevance itself.
-
-A store can carry a sqlite-vec virtual table, meta keys naming an embedding
-model, and two usage counters beside via_fts. Nothing here reads them and
-nothing registers the vec0 module, so _drop_vector_store removes all three
-at connect time -- which is also what sanitizes a `VACUUM INTO` backup
-carrying them, since a restore is a copy into place and nothing else.
 """
 
 from __future__ import annotations
 
 import difflib
 import json
-import os
 import re
-import secrets
 import sqlite3
-import zipfile
-from contextlib import contextmanager
-from datetime import UTC, date, datetime, timedelta
-from pathlib import Path
 from typing import Any
 
 from memai import contract, guard, sections
@@ -41,6 +29,110 @@ from memai.lite import (  # noqa: F401
     normalize_domain,
     now_iso,
     split_domain,
+)
+from memai.store.backups import (  # noqa: F401
+    ARCHIVE_GROUPS,
+    ARCHIVE_LABEL_MAX,
+    ARCHIVES_DIRNAME,
+    BACKUPS_DIRNAME,
+    SHELF_META_FILE,
+    archive_backups,
+    archive_files,
+    archive_group_name,
+    archive_grouped,
+    archive_label,
+    archive_label_name,
+    archive_members,
+    archive_name,
+    archive_plan,
+    archives_dir,
+    backup_files,
+    backup_name,
+    backup_to,
+    backups_dir,
+    delete_archive,
+    delete_backups,
+    forget_shelf_meta,
+    rename_archive,
+    restore_backup,
+    set_shelf_meta,
+    shelf_meta,
+    unarchive,
+)
+from memai.store.connection import (  # noqa: F401
+    _FTS_COLUMNS,
+    CHARS_PER_TOKEN,
+    COMPACT_REASON_KEY,
+    COMPACT_REASON_VECTORS,
+    SCHEMA,
+    _drop_vector_store,
+    _ensure_columns,
+    clear_compact_reason,
+    connect,
+    est_tokens,
+    get_compact_reason,
+    new_uid,
+)
+from memai.store.health import (  # noqa: F401
+    STALE_DAYS,
+    _due_clause,
+    health_axes,
+    health_since,
+    health_snapshot,
+    normalize_review_after,
+    today_iso,
+)
+from memai.store.paths import (  # noqa: F401
+    ACTIVE_FILE,
+    GENERAL_FILE,
+    GENERAL_PROJECT,
+    PROJECT_NAME_MAX,
+    PROJECTS_DIRNAME,
+    active_project,
+    default_db_path,
+    find_project,
+    project_exists,
+    project_name,
+    project_name_error,
+    project_path,
+    set_active_project,
+)
+from memai.store.projects import (  # noqa: F401
+    create_project,
+    delete_project,
+    list_projects,
+)
+from memai.store.renders import (  # noqa: F401
+    RENDER_SUFFIXES,
+    prune_renders,
+    prune_renders_all,
+    renders_dir,
+    renders_usage,
+)
+from memai.store.settings import (  # noqa: F401
+    SVG_RETENTION_DEFAULT,
+    SVG_RETENTION_KEY,
+    SVG_RETENTION_MODES,
+    TASK_ASK_ENABLED_DEFAULT,
+    TASK_ASK_ENABLED_KEY,
+    TASK_ASK_MINUTES_KEY,
+    TASK_ASK_MINUTES_RANGE,
+    WARDEN_ENABLED_DEFAULT,
+    WARDEN_ENABLED_KEY,
+    WARDEN_MINUTES_KEY,
+    WARDEN_MINUTES_RANGE,
+    _get_meta,
+    _set_meta,
+    get_svg_retention,
+    get_task_ask_enabled,
+    get_task_ask_minutes,
+    get_warden_enabled,
+    get_warden_minutes,
+    set_svg_retention,
+    set_task_ask_enabled,
+    set_task_ask_minutes,
+    set_warden_enabled,
+    set_warden_minutes,
 )
 
 # Domain-casing policy, stored in `meta` under DOMAIN_CASE_KEY and enforced on every domain write:
@@ -63,1175 +155,11 @@ CONFIDENCE_CONTRADICTED = "contradicted"
 # Characters a stripped title may hold: past this it restates the memory instead of naming it.
 TITLE_MAX = contract.TITLE_MAX
 
-# The FTS index and its triggers, kept separate because they are also what a
-# store built before a new indexed column has to be rebuilt from (_ensure_fts).
-_FTS_COLUMNS = ("title", "content", "tags", "domain", "also_domains")
-
 # BM25 weights in _FTS_COLUMNS order, keyed by name so an unweighted new column fails at import.
 # Paths stay findable but never outrank a memory about the subject; a title outranks the body.
 _FTS_WEIGHTS = {"title": 1.5, "content": 1.0, "tags": 0.8,
                 "domain": 0.3, "also_domains": 0.3}
 _BM25 = f"bm25(memories_fts, {', '.join(str(_FTS_WEIGHTS[c]) for c in _FTS_COLUMNS)})"
-
-_FTS_SCHEMA = """
-CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(
-    title, content, tags, domain, also_domains,
-    content='memories', content_rowid='rowid_pk',
-    tokenize='porter unicode61'
-);
-
-CREATE TRIGGER IF NOT EXISTS memories_ai AFTER INSERT ON memories BEGIN
-    INSERT INTO memories_fts(rowid, title, content, tags, domain, also_domains)
-    VALUES (new.rowid_pk, new.title, new.content, new.tags, new.domain, new.also_domains);
-END;
-
-CREATE TRIGGER IF NOT EXISTS memories_ad AFTER DELETE ON memories BEGIN
-    INSERT INTO memories_fts(memories_fts, rowid, title, content, tags, domain, also_domains)
-    VALUES ('delete', old.rowid_pk, old.title, old.content, old.tags, old.domain, old.also_domains);
-END;
-
-CREATE TRIGGER IF NOT EXISTS memories_au AFTER UPDATE ON memories BEGIN
-    INSERT INTO memories_fts(memories_fts, rowid, title, content, tags, domain, also_domains)
-    VALUES ('delete', old.rowid_pk, old.title, old.content, old.tags, old.domain, old.also_domains);
-    INSERT INTO memories_fts(rowid, title, content, tags, domain, also_domains)
-    VALUES (new.rowid_pk, new.title, new.content, new.tags, new.domain, new.also_domains);
-END;
-"""
-
-SCHEMA = """
-CREATE TABLE IF NOT EXISTS memories (
-    rowid_pk        INTEGER PRIMARY KEY AUTOINCREMENT,
-    uid             TEXT UNIQUE NOT NULL,
-    type            TEXT NOT NULL,
-    domain          TEXT NOT NULL DEFAULT '',
-    also_domains    TEXT NOT NULL DEFAULT '',   -- indexing mirror of memory_domains
-    session         TEXT NOT NULL DEFAULT '',
-    tags            TEXT NOT NULL DEFAULT '',
-    -- One line naming what the memory is about. Every writing tool requires
-    -- one; a row holding none is listed by the opening line of its body.
-    title           TEXT NOT NULL DEFAULT '',
-    content         TEXT NOT NULL,
-    status          TEXT NOT NULL DEFAULT 'active',
-    confidence      TEXT NOT NULL DEFAULT 'unverified',
-    -- '' not pinned, 'global' every scope, 'domain' its domain and also paths
-    pin             TEXT NOT NULL DEFAULT '',
-    superseded_by   TEXT,
-    created_at      TEXT NOT NULL,
-    updated_at      TEXT NOT NULL
-);
-
-CREATE INDEX IF NOT EXISTS idx_memories_domain ON memories(domain);
-CREATE INDEX IF NOT EXISTS idx_memories_type ON memories(type);
-CREATE INDEX IF NOT EXISTS idx_memories_status ON memories(status);
-CREATE INDEX IF NOT EXISTS idx_memories_created ON memories(created_at);
-
--- One row per extra domain a memory belongs to, beside the one it is filed
--- at. No row here is ever a memory's own path or an ancestor of it: the
--- prefix arm of a domain filter already covers those, and recording one
--- would count the memory twice in its own branch (see apply_link_policy).
-CREATE TABLE IF NOT EXISTS memory_domains (
-    memory_uid  TEXT NOT NULL REFERENCES memories(uid),
-    domain      TEXT NOT NULL,
-    created_at  TEXT NOT NULL,
-    PRIMARY KEY (memory_uid, domain)
-);
-
-CREATE INDEX IF NOT EXISTS idx_memory_domains_domain ON memory_domains(domain);
-
--- The named fields a body is made of, for the types memai.sections gives a
--- spec (see SECTION_SPEC). One row per field, `seq` in spec order.
---
--- Read out of `memories.content`, which stays the record: the only writer
--- here is _write_sections, and every writer of a body calls it with the
--- body it just wrote. A query that edits these rows on their own moves the
--- fields away from the text they were read from.
-CREATE TABLE IF NOT EXISTS memory_sections (
-    memory_uid  TEXT NOT NULL REFERENCES memories(uid),
-    seq         INTEGER NOT NULL,
-    key         TEXT NOT NULL,
-    text        TEXT NOT NULL,
-    PRIMARY KEY (memory_uid, key)
-);
-
--- One row per body that has a spec and does not meet it. `detail` is what
--- memai.sections.read said stops it; the dashboard lists these for a human.
--- A body that conforms has no row, so this table is the queue and its
--- emptiness is the store being clean.
-CREATE TABLE IF NOT EXISTS section_migration (
-    memory_uid  TEXT PRIMARY KEY REFERENCES memories(uid),
-    verdict     TEXT NOT NULL,          -- 'needs_review'
-    detail      TEXT NOT NULL DEFAULT '',
-    decided_at  TEXT NOT NULL
-);
-
-CREATE INDEX IF NOT EXISTS idx_section_migration_verdict
-    ON section_migration(verdict);
-
--- How often a memory was actually READ BACK, which is the only evidence
--- that writing it was worth anything. A curation pass without this judges
--- text: it can see that a memory is old, duplicated or vague, and cannot
--- see that one nobody has needed in six months is the store's dead weight
--- while the vague-looking one is answered with three times a week.
---
--- Its own table, not two columns on `memories`, for one concrete reason:
--- the FTS trigger fires on ANY update of that table, so counting a recall
--- there would delete and reinsert the row's index entry on every search.
--- It also keeps usage droppable without touching a memory, and keeps
--- `updated_at` meaning "the content changed".
---
--- NOTHING HERE MAY EVER REACH A RANKING. It is tempting -- boost what gets
--- read, obviously -- and it is wrong: a memory read twice a year is not
--- worse than one read weekly, it is about a rarer subject. Some of what a
--- store exists FOR is the thing nobody remembers to look up, and ranking by
--- popularity buries exactly that, then buries it deeper every time it loses.
--- Usage answers "was this ever worth anything", for a human curating. It
--- does not answer "is this the answer", which is the query's job.
--- test_usage.py holds that line.
---
--- via_fts counts the reads a search produced, so "was this found, or only
--- listed" stays answerable without parsing session transcripts. A read with
--- no search behind it (pulse, a list, get_memory) counts in recall_count and
--- not here.
-CREATE TABLE IF NOT EXISTS memory_usage (
-    memory_uid        TEXT PRIMARY KEY REFERENCES memories(uid),
-    recall_count      INTEGER NOT NULL DEFAULT 0,
-    last_recalled_at  TEXT NOT NULL,
-    via_fts           INTEGER NOT NULL DEFAULT 0
-);
-""" + _FTS_SCHEMA + """
-CREATE TABLE IF NOT EXISTS edits (
-    id            INTEGER PRIMARY KEY AUTOINCREMENT,
-    memory_uid    TEXT NOT NULL REFERENCES memories(uid),
-    edited_at     TEXT NOT NULL,
-    prev_content  TEXT NOT NULL,
-    new_content   TEXT NOT NULL,
-    note          TEXT NOT NULL DEFAULT ''
-);
-
-CREATE TABLE IF NOT EXISTS relations (
-    id             INTEGER PRIMARY KEY AUTOINCREMENT,
-    from_uid       TEXT NOT NULL REFERENCES memories(uid),
-    to_uid         TEXT NOT NULL REFERENCES memories(uid),
-    relation_type  TEXT NOT NULL,
-    note           TEXT NOT NULL DEFAULT '',
-    created_at     TEXT NOT NULL
-);
-
-CREATE INDEX IF NOT EXISTS idx_relations_from ON relations(from_uid);
-CREATE INDEX IF NOT EXISTS idx_relations_to ON relations(to_uid);
-
--- A type='diagram' memory keeps its structure here instead of in
--- `content`: one row per step, so a step can carry its own note and its
--- own links. `memories.content` still holds a generated prose rendering
--- of the same graph, which is what FTS sees.
-CREATE TABLE IF NOT EXISTS diagrams (
-    memory_uid  TEXT PRIMARY KEY REFERENCES memories(uid),
-    kind        TEXT NOT NULL DEFAULT 'flowchart',
-    title       TEXT NOT NULL DEFAULT '',
-    summary     TEXT NOT NULL DEFAULT '',
-    font_scale  REAL NOT NULL DEFAULT 1          -- how big the text is drawn
-);
-
-CREATE TABLE IF NOT EXISTS diagram_nodes (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    memory_uid  TEXT NOT NULL REFERENCES memories(uid),
-    node_key    TEXT NOT NULL,                  -- stable id the edges refer to
-    shape       TEXT NOT NULL DEFAULT 'step',   -- start|step|decision|io|end
-    label       TEXT NOT NULL,                  -- objective: what happens here
-    note        TEXT NOT NULL DEFAULT '',       -- optional long explanation
-    seq         INTEGER NOT NULL DEFAULT 0,     -- authoring order
-    x           REAL NOT NULL,                  -- always set: server-computed
-    y           REAL NOT NULL,                  -- layout, overwritten by drags
-    w           REAL,                           -- NULL = the shape's default
-    h           REAL                            -- NULL = the shape's default
-);
-
-CREATE UNIQUE INDEX IF NOT EXISTS idx_diagram_nodes_key
-    ON diagram_nodes(memory_uid, node_key);
-
-CREATE TABLE IF NOT EXISTS diagram_edges (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    memory_uid  TEXT NOT NULL REFERENCES memories(uid),
-    from_key    TEXT NOT NULL,
-    to_key      TEXT NOT NULL,
-    label       TEXT NOT NULL DEFAULT '',       -- branch condition
-    seq         INTEGER NOT NULL DEFAULT 0
-);
-
-CREATE INDEX IF NOT EXISTS idx_diagram_edges_mem ON diagram_edges(memory_uid);
-CREATE UNIQUE INDEX IF NOT EXISTS idx_diagram_edges_pair
-    ON diagram_edges(memory_uid, from_key, to_key);
-
-CREATE TABLE IF NOT EXISTS diagram_node_links (
-    memory_uid     TEXT NOT NULL REFERENCES memories(uid),  -- the diagram
-    node_key       TEXT NOT NULL,
-    target_uid     TEXT NOT NULL REFERENCES memories(uid),  -- linked memory
-    relation_type  TEXT NOT NULL DEFAULT 'explains',
-    created_at     TEXT NOT NULL,
-    PRIMARY KEY (memory_uid, node_key, target_uid)
-);
-
-CREATE INDEX IF NOT EXISTS idx_diagram_links_target
-    ON diagram_node_links(target_uid);
-
--- A step of one flow continuing into ANOTHER flow. Deliberately not a
--- diagram_node_links row: that table attaches PROSE to a step ("here is
--- why this step is the way it is"), this one is a way THROUGH ("the rest
--- of this branch is documented over there"). `to_node` is optional -- ''
--- means the target diagram as a whole -- and one row is read from BOTH
--- ends, so the trip back needs no second row (see get_diagram_jumps).
-CREATE TABLE IF NOT EXISTS diagram_jumps (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    from_uid    TEXT NOT NULL REFERENCES memories(uid),  -- diagram jumped from
-    from_node   TEXT NOT NULL,
-    to_uid      TEXT NOT NULL REFERENCES memories(uid),  -- diagram jumped to
-    to_node     TEXT NOT NULL DEFAULT '',               -- '' = the whole diagram
-    label       TEXT NOT NULL DEFAULT '',               -- why it continues there
-    created_at  TEXT NOT NULL
-);
-
-CREATE UNIQUE INDEX IF NOT EXISTS idx_diagram_jumps_pair
-    ON diagram_jumps(from_uid, from_node, to_uid, to_node);
-CREATE INDEX IF NOT EXISTS idx_diagram_jumps_to ON diagram_jumps(to_uid);
-
-CREATE TABLE IF NOT EXISTS tasks (
-    memory_uid   TEXT PRIMARY KEY REFERENCES memories(uid),
-    goal         TEXT NOT NULL,
-    state        TEXT NOT NULL DEFAULT 'open',    -- open | completed | cancelled
-    completed_at TEXT NOT NULL DEFAULT '',
-    item_seq     INTEGER NOT NULL DEFAULT 0       -- highest item seq ever deleted
-);
-
-CREATE TABLE IF NOT EXISTS task_items (
-    id              INTEGER PRIMARY KEY AUTOINCREMENT,
-    memory_uid      TEXT NOT NULL REFERENCES memories(uid),
-    item_key        TEXT NOT NULL,                -- i1, i2, ... never reused
-    seq             INTEGER NOT NULL,
-    text            TEXT NOT NULL,
-    state           TEXT NOT NULL DEFAULT 'todo', -- todo | doing | done | dropped
-    updated_at      TEXT NOT NULL,
-    updated_session TEXT NOT NULL DEFAULT '',
-    UNIQUE (memory_uid, item_key)
-);
-
-CREATE INDEX IF NOT EXISTS idx_task_items_mem ON task_items(memory_uid);
-
-CREATE TABLE IF NOT EXISTS task_item_links (
-    memory_uid TEXT NOT NULL REFERENCES memories(uid),
-    item_key   TEXT NOT NULL,
-    target_uid TEXT NOT NULL REFERENCES memories(uid),
-    created_at TEXT NOT NULL,
-    PRIMARY KEY (memory_uid, item_key, target_uid)
-);
-
-CREATE TABLE IF NOT EXISTS task_comments (
-    id         INTEGER PRIMARY KEY AUTOINCREMENT,
-    memory_uid TEXT NOT NULL REFERENCES memories(uid),
-    item_key   TEXT NOT NULL DEFAULT '',          -- '' = on the task as a whole
-    body       TEXT NOT NULL,
-    author     TEXT NOT NULL DEFAULT 'agent',     -- agent | person
-    session    TEXT NOT NULL DEFAULT '',
-    created_at TEXT NOT NULL
-);
-
-CREATE INDEX IF NOT EXISTS idx_task_comments_mem ON task_comments(memory_uid);
-
-CREATE TABLE IF NOT EXISTS task_notes (
-    id         INTEGER PRIMARY KEY AUTOINCREMENT,
-    memory_uid TEXT NOT NULL REFERENCES memories(uid),
-    title      TEXT NOT NULL,
-    body       TEXT NOT NULL,
-    session    TEXT NOT NULL DEFAULT '',
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
-);
-
-CREATE INDEX IF NOT EXISTS idx_task_notes_mem ON task_notes(memory_uid);
-
-CREATE TABLE IF NOT EXISTS task_note_items (
-    note_id  INTEGER NOT NULL REFERENCES task_notes(id),
-    item_key TEXT NOT NULL,
-    PRIMARY KEY (note_id, item_key)
-);
-
-CREATE TABLE IF NOT EXISTS meta (
-    key    TEXT PRIMARY KEY,
-    value  TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS optimization_runs (
-    id           INTEGER PRIMARY KEY AUTOINCREMENT,
-    created_at   TEXT NOT NULL,
-    note         TEXT NOT NULL DEFAULT '',
-    status       TEXT NOT NULL DEFAULT 'open',
-    backup_path  TEXT
-);
-
-CREATE TABLE IF NOT EXISTS optimization_suggestions (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    run_id      INTEGER NOT NULL REFERENCES optimization_runs(id),
-    kind        TEXT NOT NULL,
-    target_uid  TEXT,
-    payload     TEXT NOT NULL,
-    rationale   TEXT NOT NULL DEFAULT '',
-    verified    TEXT NOT NULL DEFAULT '',
-    status      TEXT NOT NULL DEFAULT 'pending',
-    prev_state  TEXT,
-    decided_at  TEXT,
-    created_at  TEXT NOT NULL
-);
-
-CREATE INDEX IF NOT EXISTS idx_optsug_run ON optimization_suggestions(run_id);
-CREATE INDEX IF NOT EXISTS idx_optsug_status ON optimization_suggestions(status);
-
--- One row per day the dashboard was opened, holding that day's health index
--- and its four axes. The store keeps no history of a confidence or a
--- relation, so "is this getting better" cannot be reconstructed after the
--- fact -- it has to be written down as it happens. The writer is
--- health_snapshot(); a day already written is left alone, so the number is
--- the first reading of the day and not the last.
-CREATE TABLE IF NOT EXISTS health_daily (
-    day            TEXT PRIMARY KEY,          -- YYYY-MM-DD, UTC
-    score          INTEGER NOT NULL,
-    curation       INTEGER NOT NULL,
-    connectivity   INTEGER NOT NULL,
-    freshness      INTEGER NOT NULL,
-    organization   INTEGER NOT NULL
-);
-"""
-
-
-# ---------------------------------------------------------------- projects
-
-# One project is one SQLite file: GENERAL_FILE for GENERAL_PROJECT, projects/<name>.db for others.
-# ACTIVE_FILE in the home names the one connect() opens, re-read each call so a switch spreads.
-GENERAL_PROJECT = "General"
-GENERAL_FILE = "memai.db"
-PROJECTS_DIRNAME = "projects"
-ACTIVE_FILE = "active"
-BACKUPS_DIRNAME = "backups"
-ARCHIVES_DIRNAME = "archive"
-SHELF_META_FILE = "shelf.json"
-PROJECT_NAME_MAX = 80
-# A project name is a file name, so it follows Windows rules: no reserved or control characters,
-# no edge spaces, no trailing dot, no device names, and names differing only in case are one.
-_PROJECT_BAD_CHARS = frozenset('<>:"/\\|?*') | frozenset(chr(c) for c in range(32))
-_PROJECT_DEVICES = frozenset(
-    ["con", "prn", "aux", "nul",
-     *(f"com{i}" for i in range(1, 10)), *(f"lpt{i}" for i in range(1, 10))])
-
-
-def project_name_error(name: object) -> str | None:
-    """Why `name` cannot name a project, or None when it can."""
-    text = str(name or "")
-    if not text.strip():
-        return "a project needs a name"
-    if text != text.strip() or text.endswith("."):
-        return "a project name cannot start or end with a space, or end with a dot"
-    if len(text) > PROJECT_NAME_MAX:
-        return f"a project name has at most {PROJECT_NAME_MAX} characters"
-    bad = sorted(c for c in set(text) if c in _PROJECT_BAD_CHARS)
-    if bad:
-        shown = " ".join(repr(c) if ord(c) < 32 else c for c in bad)
-        return f"a project name cannot contain {shown}"
-    if text.split(".")[0].casefold() in _PROJECT_DEVICES:
-        return f"'{text}' is a device name on Windows"
-    return None
-
-
-def _checked_project(name: object) -> str:
-    error = project_name_error(name)
-    if error:
-        raise ValueError(error)
-    return str(name)
-
-
-def _same_project(a: str, b: str) -> bool:
-    return a.casefold() == b.casefold()
-
-
-def _projects_dir() -> Path:
-    folder = home() / PROJECTS_DIRNAME
-    folder.mkdir(parents=True, exist_ok=True)
-    return folder
-
-
-def find_project(name: str) -> str | None:
-    """The project called `name`, spelled the way its file is, or None when
-    there is none. Matched without regard to case; GENERAL_PROJECT is always
-    there."""
-    if _same_project(name, GENERAL_PROJECT):
-        return GENERAL_PROJECT
-    for path in _projects_dir().glob("*.db"):
-        if path.is_file() and _same_project(path.stem, name):
-            return path.stem
-    return None
-
-
-def project_name(name: str) -> str:
-    """`name` spelled the way the project is, or ValueError when there is no
-    such project."""
-    found = find_project(_checked_project(name))
-    if found is None:
-        raise ValueError(f"no project named '{name}'")
-    return found
-
-
-def project_exists(name: str) -> bool:
-    return project_name_error(name) is None and find_project(name) is not None
-
-
-def project_path(name: str) -> Path:
-    """The file behind a project name. GENERAL_PROJECT is `memai.db` in the
-    home root; any other is `projects/<name>.db`, spelled as the file is when
-    one exists."""
-    name = _checked_project(name)
-    if _same_project(name, GENERAL_PROJECT):
-        return home() / GENERAL_FILE
-    return _projects_dir() / f"{find_project(name) or name}.db"
-
-
-def active_project() -> str:
-    """The project connect() opens when handed no path.
-
-    Read from ACTIVE_FILE in the home; GENERAL_PROJECT when the file is
-    absent, or names something that is not a project here.
-    """
-    try:
-        name = (home() / ACTIVE_FILE).read_text(encoding="utf-8").strip()
-    except OSError:
-        return GENERAL_PROJECT
-    if project_name_error(name):
-        return GENERAL_PROJECT
-    return find_project(name) or GENERAL_PROJECT
-
-
-def set_active_project(name: str) -> str:
-    """Point every later connect() at `name`, which has to exist already.
-
-    Written to a sibling file and renamed into place: a concurrent reader
-    gets the old name or the new one, never part of either.
-    """
-    name = project_name(name)
-    target = home() / ACTIVE_FILE
-    tmp = target.with_name(f"{ACTIVE_FILE}.tmp")
-    tmp.write_text(f"{name}\n", encoding="utf-8")
-    os.replace(tmp, target)
-    return name
-
-
-def create_project(name: str) -> Path:
-    """A new, empty project with the schema in place. Refuses a name already
-    taken, in any casing."""
-    name = _checked_project(name)
-    if find_project(name) is not None:
-        raise ValueError(f"project '{name}' already exists")
-    path = project_path(name)
-    with connect(path):
-        pass
-    return path
-
-
-def delete_project(name: str) -> None:
-    """Remove a project that holds no memory and is not the active one.
-
-    GENERAL_PROJECT is never removed. The WAL and shared-memory files go with
-    the database.
-    """
-    name = project_name(name)
-    if name == GENERAL_PROJECT:
-        raise ValueError("the General project cannot be deleted")
-    if name == active_project():
-        raise ValueError("switch to another project before deleting the active one")
-    path = project_path(name)
-    with connect(path) as conn:
-        held = conn.execute("SELECT COUNT(*) FROM memories").fetchone()[0]
-    if held:
-        raise ValueError(f"project '{name}' holds {held} memories; move them out first")
-    for suffix in ("", "-wal", "-shm"):
-        try:
-            path.with_name(path.name + suffix).unlink()
-        except FileNotFoundError:
-            pass
-
-
-def list_projects(*, counts: bool = False) -> list[dict]:
-    """Every project in the home: GENERAL_PROJECT first, the rest by name.
-
-    Per entry: `name`, `path`, `size` in bytes (0 until the first connect
-    creates the file), `active` and `general`. With `counts`, also
-    `memories` -- the active rows, which opens each project to ask.
-    """
-    active = active_project()
-    found = [(GENERAL_PROJECT, home() / GENERAL_FILE)]
-    found += sorted(((p.stem, p) for p in _projects_dir().glob("*.db")
-                     if p.is_file() and project_name_error(p.stem) is None
-                     and not _same_project(p.stem, GENERAL_PROJECT)),
-                    key=lambda item: item[0].casefold())
-    out = []
-    for name, path in found:
-        try:
-            size = path.stat().st_size
-        except OSError:
-            size = 0
-        entry = {"name": name, "path": str(path), "size": size,
-                 "active": name == active, "general": name == GENERAL_PROJECT}
-        if counts:
-            with connect(path) as conn:
-                entry["memories"] = conn.execute(
-                    "SELECT COUNT(*) FROM memories WHERE status = 'active'").fetchone()[0]
-        out.append(entry)
-    return out
-
-
-def default_db_path() -> Path:
-    """The active project's file: what connect() opens when handed no path."""
-    return project_path(active_project())
-
-
-def renders_dir() -> Path:
-    """Where generated SVG files go: a subdirectory, never the home root.
-
-    The home root holds the database, its WAL and the backups, and a
-    housekeeping sweep that deletes by age has no business running in a
-    directory containing those. Keeping the renders in their own folder is
-    what lets prune_renders() be a simple rule instead of a careful one.
-    """
-    out = home() / "renders"
-    out.mkdir(parents=True, exist_ok=True)
-    return out
-
-
-# ----------------------------------------------------------------- backups
-
-def backups_dir(project: str = GENERAL_PROJECT) -> Path:
-    """Where a project's backups go, created if needed: `<home>/backups` for
-    GENERAL_PROJECT, `<home>/backups/<name>` for any other project."""
-    root = home() / BACKUPS_DIRNAME
-    if _same_project(project, GENERAL_PROJECT):
-        out = root
-    else:
-        out = root / (find_project(project) or project)
-    out.mkdir(parents=True, exist_ok=True)
-    return out
-
-
-def backup_name(project: str, kind: str = "") -> str:
-    """`<project>-[<kind>-]<UTC stamp>.db`: the file a backup of `project` is
-    written as."""
-    stamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
-    return f"{project}-{kind}-{stamp}.db" if kind else f"{project}-{stamp}.db"
-
-
-def backup_files(project: str) -> list[Path]:
-    """The backups of one project, newest first: the `.db` files in its
-    backups_dir(), whatever they are named."""
-    files = [p for p in backups_dir(project).glob("*.db") if p.is_file()]
-    return sorted(files, key=lambda p: p.stat().st_mtime, reverse=True)
-
-
-def _shelf_meta_path(project: str) -> Path:
-    return backups_dir(project) / SHELF_META_FILE
-
-
-def shelf_meta(project: str = GENERAL_PROJECT) -> dict:
-    """What has been written ABOUT a project's backups: `{filename: {...}}`.
-
-    A backup's own name carries when it was taken and what took it; a name
-    somebody typed for it, and whether it is pinned, have nowhere in the file
-    to live. They sit beside the shelf in `shelf.json`, keyed by filename --
-    so an entry follows its file into an archive and back out.
-
-    Missing or unreadable, the shelf simply has nothing written about it.
-    """
-    path = _shelf_meta_path(project)
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return {}
-    return data if isinstance(data, dict) else {}
-
-
-def _write_shelf_meta(project: str, data: dict) -> None:
-    """Replace the sidecar, or remove it once nothing is written about the
-    shelf. Written to a temp file and moved into place, so a reader never
-    sees half of it."""
-    path = _shelf_meta_path(project)
-    if not data:
-        path.unlink(missing_ok=True)
-        return
-    tmp = path.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(data, indent=2, sort_keys=True), encoding="utf-8")
-    tmp.replace(path)
-
-
-def set_shelf_meta(project: str, name: str, **fields) -> dict:
-    """Write `fields` about one backup and return what it now holds.
-
-    A field set back to its default -- an empty label, an unpinned file --
-    is removed rather than stored, and an entry with nothing left in it goes
-    with it, so the sidecar never grows a row per backup ever taken.
-    """
-    _inside(Path(name), backups_dir(project))
-    data = shelf_meta(project)
-    entry = dict(data.get(name) or {})
-    for key, value in fields.items():
-        if value in ("", None, False):
-            entry.pop(key, None)
-        else:
-            entry[key] = value
-    if entry:
-        data[name] = entry
-    else:
-        data.pop(name, None)
-    _write_shelf_meta(project, data)
-    return entry
-
-
-def forget_shelf_meta(project: str, names: list[str]) -> None:
-    """Drop what was written about backups that are gone."""
-    data = shelf_meta(project)
-    if not any(n in data for n in names):
-        return
-    for n in names:
-        data.pop(n, None)
-    _write_shelf_meta(project, data)
-
-
-def archives_dir(project: str = GENERAL_PROJECT) -> Path:
-    """Where a project's zipped backups go, created if needed:
-    `<backups_dir>/archive`. A subfolder, so backup_files() -- which globs
-    `*.db` one level deep -- never sees what has been archived."""
-    out = backups_dir(project) / ARCHIVES_DIRNAME
-    out.mkdir(parents=True, exist_ok=True)
-    return out
-
-
-def archive_files(project: str) -> list[Path]:
-    """A project's archives, newest first: the `.zip` files in archives_dir()."""
-    files = [p for p in archives_dir(project).glob("*.zip") if p.is_file()]
-    return sorted(files, key=lambda p: p.stat().st_mtime, reverse=True)
-
-
-def archive_name(project: str, when: date | None = None) -> str:
-    """`<project>-<YYYY-MM>.zip`: the archive a backup taken in that month
-    joins. One per month per project, so archiving twice in September adds to
-    the same file rather than making a second one."""
-    stamp = (when or datetime.now(UTC).date()).strftime("%Y-%m")
-    return f"{project}-{stamp}.zip"
-
-
-# How a batch of backups is split into zips when none is named: by the ISO
-# week or the calendar month each was taken in.
-ARCHIVE_GROUPS = ("week", "month")
-ARCHIVE_LABEL_MAX = contract.ARCHIVE_LABEL_MAX
-_ARCHIVE_LABEL = re.compile(r"[\w]([\w .\-]*[\w])?")
-
-
-def archive_label(label: str) -> str:
-    """A zip's name as typed, or ValueError when it is not a plain name.
-
-    Letters, digits, spaces, `_`, `-` and `.` inside it, starting and ending
-    on a letter or digit, at most ARCHIVE_LABEL_MAX long: nothing that is a
-    path, a hidden file or a character Windows refuses in a file name.
-    """
-    label = (label or "").strip()
-    if not label or len(label) > ARCHIVE_LABEL_MAX or not _ARCHIVE_LABEL.fullmatch(label):
-        raise ValueError(
-            f"zip name must be 1-{ARCHIVE_LABEL_MAX} letters, digits, spaces, '_', '-' or '.'")
-    return label
-
-
-def archive_label_name(project: str, label: str) -> str:
-    """`<project>-<label>.zip`: the file a named archive is stored as."""
-    return f"{project}-{archive_label(label)}.zip"
-
-
-def archive_group_name(project: str, group: str, taken: datetime) -> str:
-    """The archive a backup taken at `taken` joins under `group`:
-    `<project>-<YYYY>-W<WW>.zip` by ISO week, `<project>-<YYYY>-<MM>.zip` by
-    month."""
-    if group == "week":
-        year, week, _ = taken.isocalendar()
-        return f"{project}-{year}-W{week:02d}.zip"
-    if group == "month":
-        return archive_name(project, taken.date())
-    raise ValueError(f"group must be one of {ARCHIVE_GROUPS}")
-
-
-def _inside(path: Path, root: Path) -> Path:
-    """`path` resolved, or ValueError when it lands outside `root`.
-
-    Every name below arrives from an HTTP payload, so a name is treated as
-    hostile until it resolves under the folder it is supposed to be in.
-    """
-    full = (root / path).resolve()
-    if not full.is_relative_to(root.resolve()):
-        raise ValueError(f"path escapes its folder: {path}")
-    return full
-
-
-def _member_mtime(info: zipfile.ZipInfo) -> datetime:
-    """A member's timestamp as an aware datetime.
-
-    A zip stores a DOS timestamp: local wall-clock time, no zone, rounded to
-    two seconds. It is read back as local, which is the only reading that
-    round-trips the file it was written from.
-    """
-    return datetime(*info.date_time).astimezone()
-
-
-def archive_members(path: Path) -> list[dict]:
-    """What one archive holds: name, uncompressed size and stored timestamp
-    per member, in the order the zip lists them."""
-    with zipfile.ZipFile(path) as zf:
-        return [{"name": i.filename, "size": i.file_size,
-                 "mtime": _member_mtime(i).isoformat()}
-                for i in zf.infolist() if not i.is_dir()]
-
-
-def _shelf_sources(project: str, names: list[str]) -> list[Path]:
-    """The named backups as files on the shelf, or ValueError for any name
-    that is not one. Nothing is touched until every name has been checked."""
-    if not names:
-        raise ValueError("no backups named")
-    shelf = backups_dir(project)
-    sources = []
-    for name in names:
-        full = _inside(Path(name), shelf)
-        if full.suffix != ".db" or not full.is_file():
-            raise ValueError(f"not a backup on this shelf: {name}")
-        sources.append(full)
-    return sources
-
-
-def _zip_into(dest: Path, sources: list[Path]) -> None:
-    """Append `sources` to the zip at `dest` (created if absent), then take
-    them off the shelf. A file is deleted only after it is in the zip, so an
-    interrupted run leaves it on the shelf rather than nowhere."""
-    with zipfile.ZipFile(dest, "a", zipfile.ZIP_DEFLATED) as zf:
-        held = set(zf.namelist())
-        for src in sources:
-            if src.name in held:
-                raise ValueError(f"already archived: {src.name}")
-            zf.write(src, src.name)
-    for src in sources:
-        src.unlink()
-
-
-def archive_backups(project: str, names: list[str], when: date | None = None, *,
-                    into: str | None = None, label: str | None = None) -> Path:
-    """Move the named backups into ONE archive and return it.
-
-    Each name is a file in the project's backups_dir; anything that is not
-    there, or that resolves outside it, raises. Which zip receives them:
-
-    - `into`: an archive that already exists in archives_dir(), appended to.
-    - `label`: a new archive of that name; one by that name already existing
-      raises, since `into` is how a zip is added to.
-    - neither: the month of `when` (today by default), created on first use
-      and appended to afterwards.
-    """
-    sources = _shelf_sources(project, names)
-    archives = archives_dir(project)
-    if into is not None:
-        dest = _inside(Path(into), archives)
-        if dest.suffix != ".zip" or not dest.is_file():
-            raise ValueError(f"not an archive: {into}")
-    elif label is not None:
-        dest = archives / archive_label_name(project, label)
-        if dest.exists():
-            raise ValueError(f"an archive named '{dest.name}' already exists")
-    else:
-        dest = archives / archive_name(project, when)
-    _zip_into(dest, sources)
-    return dest
-
-
-def _group_buckets(project: str, names: list[str], group: str) -> dict[Path, list[Path]]:
-    """Which archive each named backup would join under `group`.
-
-    A backup goes where the moment it was taken puts it (its file time, in
-    UTC), not where today falls, so archiving old backups later leaves each
-    in the period it belongs to.
-    """
-    if group not in ARCHIVE_GROUPS:
-        raise ValueError(f"group must be one of {ARCHIVE_GROUPS}")
-    archives = archives_dir(project)
-    buckets: dict[Path, list[Path]] = {}
-    for src in _shelf_sources(project, names):
-        taken = datetime.fromtimestamp(src.stat().st_mtime, tz=UTC)
-        buckets.setdefault(archives / archive_group_name(project, group, taken), []).append(src)
-    return buckets
-
-
-def archive_plan(project: str, names: list[str], group: str) -> dict[Path, list[str]]:
-    """`{archive: [names it would receive]}` for archive_grouped, writing nothing."""
-    return {dest: [m.name for m in members]
-            for dest, members in _group_buckets(project, names, group).items()}
-
-
-def archive_grouped(project: str, names: list[str], group: str) -> dict[Path, list[str]]:
-    """Move the named backups into one archive per `group` and return
-    `{archive: [names it received]}`. An archive that exists already is
-    appended to."""
-    buckets = _group_buckets(project, names, group)
-    for dest, members in buckets.items():
-        held = set()
-        if dest.exists():
-            with zipfile.ZipFile(dest) as zf:
-                held = set(zf.namelist())
-        clash = next((m.name for m in members if m.name in held), None)
-        if clash:
-            raise ValueError(f"already archived: {clash}")
-    for dest, members in buckets.items():
-        _zip_into(dest, members)
-    return {dest: [m.name for m in members] for dest, members in buckets.items()}
-
-
-def rename_archive(project: str, name: str, label: str) -> Path:
-    """Rename an archive to `<project>-<label>.zip` and return its path.
-
-    Renaming onto the name it already has changes nothing; onto another
-    archive's name raises. What was written about the backups inside is
-    keyed by their own filenames, so it stays attached.
-    """
-    archives = archives_dir(project)
-    full = _inside(Path(name), archives)
-    if full.suffix != ".zip" or not full.is_file():
-        raise ValueError(f"not an archive: {name}")
-    dest = archives / archive_label_name(project, label)
-    if dest.exists():
-        if not os.path.samefile(dest, full):
-            raise ValueError(f"an archive named '{dest.name}' already exists")
-        if dest.name == full.name:
-            return full
-    full.rename(dest)
-    return dest
-
-
-def delete_backups(project: str, names: list[str]) -> int:
-    """Remove the named backups from the shelf, and what was written about
-    them. Returns how many files went. Nothing is deleted until every name
-    has been checked."""
-    if not names:
-        raise ValueError("no backups named")
-    shelf = backups_dir(project)
-    targets = []
-    for name in names:
-        full = _inside(Path(name), shelf)
-        if full.suffix != ".db" or not full.is_file():
-            raise ValueError(f"not a backup on this shelf: {name}")
-        targets.append(full)
-    for path in targets:
-        path.unlink()
-    forget_shelf_meta(project, [p.name for p in targets])
-    return len(targets)
-
-
-def restore_backup(project: str, name: str) -> None:
-    """Copy a backup over the project it belongs to, through SQLite.
-
-    Uses the online backup API rather than replacing the file: the live
-    database has a WAL beside it and readers open on it, and a file swapped
-    underneath that leaves the two out of step. The caller takes a copy of
-    the current state first -- restoring is not undoable from here.
-    """
-    full = _inside(Path(name), backups_dir(project))
-    if full.suffix != ".db" or not full.is_file():
-        raise ValueError(f"not a backup on this shelf: {name}")
-    src = sqlite3.connect(str(full), timeout=30.0)
-    try:
-        dst = sqlite3.connect(str(project_path(project)), timeout=30.0)
-        try:
-            src.backup(dst)
-        finally:
-            dst.close()
-    finally:
-        src.close()
-
-
-def unarchive(project: str, name: str) -> list[str]:
-    """Put an archive's files back on the shelf and remove the archive.
-
-    Returns the names restored. A member whose name is a path, or that would
-    land on a file already on the shelf, raises before anything is written.
-    """
-    archives = archives_dir(project)
-    full = _inside(Path(name), archives)
-    if full.suffix != ".zip" or not full.is_file():
-        raise ValueError(f"not an archive: {name}")
-    shelf = backups_dir(project)
-    with zipfile.ZipFile(full) as zf:
-        members = [i for i in zf.infolist() if not i.is_dir()]
-        for i in members:
-            member = Path(i.filename)
-            if member.name != i.filename:
-                raise ValueError(f"archive holds a path, not a name: {i.filename}")
-            if (shelf / member.name).exists():
-                raise ValueError(f"already on the shelf: {member.name}")
-        for i in members:
-            zf.extract(i, shelf)
-            # extract() stamps the file with now; restore the backup's own time so the shelf sorts right.
-            stamp = _member_mtime(i).timestamp()
-            os.utime(shelf / i.filename, (stamp, stamp))
-    full.unlink()
-    return [i.filename for i in members]
-
-
-def delete_archive(project: str, name: str) -> int:
-    """Remove an archive and everything in it. Returns how many files went."""
-    full = _inside(Path(name), archives_dir(project))
-    if full.suffix != ".zip" or not full.is_file():
-        raise ValueError(f"not an archive: {name}")
-    count = len(archive_members(full))
-    full.unlink()
-    return count
-
-
-def backup_to(dest: Path, *, project: str | None = None) -> Path:
-    """Copy a project into `dest` with VACUUM INTO: `project`, or the active one.
-
-    Runs on an autocommit connection, since the statement refuses to run
-    inside a transaction. Fails when `dest` already exists.
-    """
-    src = project_path(project) if project else default_db_path()
-    conn = sqlite3.connect(str(src), timeout=30.0, isolation_level=None)
-    try:
-        conn.execute("VACUUM INTO ?", (str(dest),))
-    finally:
-        conn.close()
-    return dest
-
-
-# How long a generated SVG is kept. A render is a cache of the diagram, so this is a disk budget.
-SVG_RETENTION_KEY = "svg_retention"
-SVG_RETENTION_MODES = ("1d", "7d", "30d", "never")
-SVG_RETENTION_DEFAULT = "7d"
-_RETENTION_DAYS = {"1d": 1, "7d": 7, "30d": 30}
-# the two things this folder ever holds: a bare SVG, and the same drawing
-# wrapped in a pan/zoom shell
-RENDER_SUFFIXES = (".svg", ".html")
-
-
-def get_svg_retention(conn: sqlite3.Connection) -> str:
-    mode = _get_meta(conn, SVG_RETENTION_KEY)
-    return mode if mode in SVG_RETENTION_MODES else SVG_RETENTION_DEFAULT
-
-
-def set_svg_retention(conn: sqlite3.Connection, mode: str) -> str:
-    mode = (mode or "").strip().lower()
-    if mode not in SVG_RETENTION_MODES:
-        raise ValueError(
-            f"svg_retention must be one of {', '.join(SVG_RETENTION_MODES)}")
-    _set_meta(conn, SVG_RETENTION_KEY, mode)
-    return mode
-
-
-WARDEN_ENABLED_KEY = "warden_enabled"
-WARDEN_ENABLED_DEFAULT = True
-WARDEN_MINUTES_KEY = "warden_minutes"
-# A session is one conversation, so an interval longer than a working day
-# would only ever fire once; below a minute the ask lands on every turn.
-WARDEN_MINUTES_RANGE = (1, 480)
-
-
-def get_warden_enabled(conn: sqlite3.Connection) -> bool:
-    """Whether the Stop hook may ask a session to launch the warden.
-
-    Read from the project `conn` is on: each project carries its own switch,
-    and the hook consults the active one.
-    """
-    value = _get_meta(conn, WARDEN_ENABLED_KEY)
-    return WARDEN_ENABLED_DEFAULT if value is None else value == "1"
-
-
-def set_warden_enabled(conn: sqlite3.Connection, enabled: object) -> bool:
-    """Persist the warden switch. Accepts a bool or the strings a form sends."""
-    if isinstance(enabled, str):
-        enabled = enabled.strip().lower() not in ("", "0", "false", "off", "no")
-    _set_meta(conn, WARDEN_ENABLED_KEY, "1" if enabled else "0")
-    return bool(enabled)
-
-
-def get_warden_minutes(conn: sqlite3.Connection) -> int:
-    """How long a session goes before the warden is asked for again.
-
-    A floor on the cost, not a schedule: the warden reads whole turns and
-    costs a subagent run, and the ask lands on the first Stop after the
-    interval, never between turns.
-    """
-    try:
-        value = int(_get_meta(conn, WARDEN_MINUTES_KEY) or "")
-    except ValueError:
-        return WARDEN_MINUTES_DEFAULT
-    low, high = WARDEN_MINUTES_RANGE
-    return value if low <= value <= high else WARDEN_MINUTES_DEFAULT
-
-
-def set_warden_minutes(conn: sqlite3.Connection, minutes: object) -> int:
-    """Persist the warden interval, in minutes."""
-    low, high = WARDEN_MINUTES_RANGE
-    try:
-        value = int(str(minutes).strip())
-    except (TypeError, ValueError) as exc:
-        raise ValueError(f"warden_minutes must be a whole number of minutes "
-                         f"between {low} and {high}") from exc
-    if not low <= value <= high:
-        raise ValueError(f"warden_minutes must be between {low} and {high}")
-    _set_meta(conn, WARDEN_MINUTES_KEY, str(value))
-    return value
-
-
-TASK_ASK_ENABLED_KEY = "task_ask_enabled"
-TASK_ASK_ENABLED_DEFAULT = True
-TASK_ASK_MINUTES_KEY = "task_ask_minutes"
-# Same bounds as the warden's: a session is one conversation, and below a
-# minute the ask would land on every turn.
-TASK_ASK_MINUTES_RANGE = (1, 480)
-
-
-def get_task_ask_enabled(conn: sqlite3.Connection) -> bool:
-    """Whether the Stop hook may block a session to ask about its open tasks.
-
-    Read from the project `conn` is on, like the warden's switch.
-    """
-    value = _get_meta(conn, TASK_ASK_ENABLED_KEY)
-    return TASK_ASK_ENABLED_DEFAULT if value is None else value == "1"
-
-
-def set_task_ask_enabled(conn: sqlite3.Connection, enabled: object) -> bool:
-    """Persist the task-ask switch. Accepts a bool or the strings a form sends."""
-    if isinstance(enabled, str):
-        enabled = enabled.strip().lower() not in ("", "0", "false", "off", "no")
-    _set_meta(conn, TASK_ASK_ENABLED_KEY, "1" if enabled else "0")
-    return bool(enabled)
-
-
-def get_task_ask_minutes(conn: sqlite3.Connection) -> int:
-    """How long a session goes before the Stop hook asks about tasks again."""
-    try:
-        value = int(_get_meta(conn, TASK_ASK_MINUTES_KEY) or "")
-    except ValueError:
-        return TASK_ASK_MINUTES_DEFAULT
-    low, high = TASK_ASK_MINUTES_RANGE
-    return value if low <= value <= high else TASK_ASK_MINUTES_DEFAULT
-
-
-def set_task_ask_minutes(conn: sqlite3.Connection, minutes: object) -> int:
-    """Persist the task-ask interval, in minutes."""
-    low, high = TASK_ASK_MINUTES_RANGE
-    try:
-        value = int(str(minutes).strip())
-    except (TypeError, ValueError) as exc:
-        raise ValueError(f"task_ask_minutes must be a whole number of minutes "
-                         f"between {low} and {high}") from exc
-    if not low <= value <= high:
-        raise ValueError(f"task_ask_minutes must be between {low} and {high}")
-    _set_meta(conn, TASK_ASK_MINUTES_KEY, str(value))
-    return value
-
-
-def renders_usage() -> dict:
-    """What the render folder currently costs, for the maintenance view."""
-    files = [p for p in renders_dir().iterdir()
-             if p.is_file() and p.suffix in RENDER_SUFFIXES]
-    return {"files": len(files), "bytes": sum(p.stat().st_size for p in files)}
-
-
-def prune_renders_all() -> dict:
-    """Empty the render folder regardless of age.
-
-    Separate from prune_renders rather than a magic mode, because "keep
-    nothing" and "keep for N days" are different intentions and folding
-    them together is how a retention setting of 1 day ends up meaning
-    'delete everything' by accident.
-    """
-    return {**_sweep_renders(lambda _stat: True, keep=None), "mode": "all"}
-
-
-def _sweep_renders(should_delete, *, keep: Path | None) -> dict:
-    """The one place that deletes a render, so the guards live once.
-
-    Narrow deliberately, because this removes files and MEMAI_HOME is
-    whatever an environment variable says it is: only inside renders/, only
-    a suffix in RENDER_SUFFIXES, only a real file, never a symlink, never
-    recursive, and never `keep` -- the render being written right now.
-    """
-    pruned = 0
-    freed = 0
-    for path in renders_dir().iterdir():
-        if path.suffix not in RENDER_SUFFIXES:
-            continue
-        if path.is_symlink() or not path.is_file():
-            continue
-        if keep is not None and path.resolve() == keep.resolve():
-            continue
-        try:
-            stat = path.stat()
-            if not should_delete(stat):
-                continue
-            path.unlink()
-        except OSError:
-            # a file another process is holding is not this sweep's problem
-            continue
-        pruned += 1
-        freed += stat.st_size
-    return {"pruned": pruned, "bytes": freed}
-
-
-def prune_renders(mode: str, *, keep: Path | None = None) -> dict:
-    """Delete generated renders older than the retention window.
-
-    'never' removes nothing. Returns what it did rather than staying quiet:
-    a sweep that silently deletes is one the user stops trusting.
-    """
-    days = _RETENTION_DAYS.get(mode)
-    if days is None:
-        return {"pruned": 0, "bytes": 0, "mode": mode}
-    cutoff = datetime.now(UTC).timestamp() - days * 86400
-    swept = _sweep_renders(lambda stat: stat.st_mtime < cutoff, keep=keep)
-    return {**swept, "mode": mode}
-
-
-# ------------------------------------------------------------- going stale
-
-# `review_after` is the writer's estimate of when a claim stops being safe unchecked; a date, so
-# "what is overdue" is a comparison a warm-up can make without reading.
-_REVIEW_RELATIVE = re.compile(r"^(\d{1,4})\s*d$", re.I)
-
-
-def today_iso() -> str:
-    return now_iso()[:10]
-
-
-def normalize_review_after(value: str, *, today: str | None = None) -> str:
-    """A review date as 'YYYY-MM-DD', from a date or from '90d'.
-
-    The relative form is there because that is how the answer arrives: a
-    writer knows "this is worth rechecking in a quarter" and does not know
-    today's date without asking. Empty means never -- most memories are not
-    about anything that goes stale, and a store that made everyone pick a
-    date would get dates nobody meant.
-    """
-    v = (value or "").strip()
-    if not v:
-        return ""
-    rel = _REVIEW_RELATIVE.match(v)
-    if rel:
-        return (date.fromisoformat(today or today_iso())
-                + timedelta(days=int(rel.group(1)))).isoformat()
-    try:
-        return date.fromisoformat(v[:10]).isoformat()
-    except ValueError as exc:
-        raise ValueError(
-            f"review_after must be a date ('2026-11-01') or a span ('90d'); got {value!r}"
-        ) from exc
-
-
-def _due_clause(at: str | None = None) -> tuple[str, list]:
-    """"this memory is overdue for a recheck", as SQL."""
-    return "review_after <> '' AND review_after <= ?", [at or today_iso()]
 
 
 def due_for_review(
@@ -1251,103 +179,6 @@ def due_for_review(
     sql.append("ORDER BY review_after ASC LIMIT ?")
     params.append(limit)
     return conn.execute(" ".join(sql), params).fetchall()
-
-
-# ---------------------------------------------------------------- health
-
-# How long a memory nobody has vetted may sit before it counts as stale.
-# Deliberately the same span the writing tools suggest for review_after.
-STALE_DAYS = 90
-
-# The health axes, each the share of ACTIVE memories satisfying its SQL (written out to be read):
-# curation (confirmed), connectivity, freshness (STALE_DAYS) and organization.
-_HEALTH_AXES: tuple[tuple[str, str], ...] = (
-    ("curation", "confidence = 'confirmed'"),
-    ("connectivity",
-     "uid IN (SELECT from_uid FROM relations UNION SELECT to_uid FROM relations)"),
-    ("freshness",
-     "(review_after = '' OR review_after > :today) "
-     "AND NOT (confidence = 'unverified' AND updated_at < :stale)"),
-    ("organization",
-     "TRIM(title) <> '' AND TRIM(tags) <> '' AND TRIM(tags) <> type "
-     "AND TRIM(domain) <> ''"),
-)
-
-
-def health_axes(conn: sqlite3.Connection, *, at: str | None = None) -> dict:
-    """The four axes and the index over them, each 0-100 over active memories.
-
-    `at` is the day the spans are measured from (YYYY-MM-DD), defaulting to
-    today. An empty store scores 100 on every axis: nothing is wrong with
-    it, and 0 would read as a store in trouble on the day it is created.
-    """
-    today = at or today_iso()
-    stale = (datetime.fromisoformat(today) - timedelta(days=STALE_DAYS)).isoformat()
-    active = conn.execute(
-        "SELECT COUNT(*) FROM memories WHERE status = 'active'").fetchone()[0]
-    axes = {}
-    for name, clause in _HEALTH_AXES:
-        if not active:
-            axes[name] = 100
-            continue
-        met = conn.execute(
-            f"SELECT COUNT(*) FROM memories WHERE status = 'active' AND ({clause})",
-            {"today": today, "stale": stale}).fetchone()[0]
-        axes[name] = round(met * 100 / active)
-    return {"score": round(sum(axes.values()) / len(axes)), "axes": axes, "active": active}
-
-
-def health_snapshot(conn: sqlite3.Connection, health: dict, *, day: str = "") -> None:
-    """Record today's index, once. A day already written is left as it was."""
-    conn.execute(
-        """INSERT OR IGNORE INTO health_daily
-           (day, score, curation, connectivity, freshness, organization)
-           VALUES (?, ?, ?, ?, ?, ?)""",
-        (day or today_iso(), health["score"], health["axes"]["curation"],
-         health["axes"]["connectivity"], health["axes"]["freshness"],
-         health["axes"]["organization"]))
-
-
-def health_since(conn: sqlite3.Connection, days: int = 30) -> sqlite3.Row | None:
-    """The newest snapshot at least `days` old, or None if none is that old.
-
-    A delta against a younger reading would say "over the {days} days" about
-    a shorter window, so a store the dashboard has not been open on for long
-    enough reports no delta rather than a misdated one.
-    """
-    cutoff = (datetime.fromisoformat(today_iso()) - timedelta(days=days)).date().isoformat()
-    return conn.execute(
-        "SELECT * FROM health_daily WHERE day <= ? ORDER BY day DESC LIMIT 1",
-        (cutoff,)).fetchone()
-
-
-def new_uid() -> str:
-    return secrets.token_hex(8)
-
-
-# Characters per token in est_tokens: a fixed-ratio estimate, since no host tokenizer is reachable.
-CHARS_PER_TOKEN = 4
-
-
-def est_tokens(chars: int) -> int:
-    """Estimated token count for a body of `chars` characters.
-
-    chars / CHARS_PER_TOKEN, rounded up; 0 characters is 0 tokens. Good for
-    budgeting a fetch, not for predicting a host's own accounting.
-    """
-    return (max(chars, 0) + CHARS_PER_TOKEN - 1) // CHARS_PER_TOKEN
-
-
-def _get_meta(conn: sqlite3.Connection, key: str) -> str | None:
-    row = conn.execute("SELECT value FROM meta WHERE key = ?", (key,)).fetchone()
-    return row["value"] if row else None
-
-
-def _set_meta(conn: sqlite3.Connection, key: str, value: str) -> None:
-    conn.execute(
-        "INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-        (key, value),
-    )
 
 
 def get_domain_case(conn: sqlite3.Connection) -> str:
@@ -1470,91 +301,6 @@ def apply_link_policy(
         if path and not in_domain(primary, path) and path not in out:
             out.append(path)
     return sorted(out)
-
-
-# Columns added to existing tables, since CREATE TABLE IF NOT EXISTS never adds a column. Each must
-# be nullable or carry a default: ADD COLUMN fills existing rows with it.
-_ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
-    ("diagrams", "font_scale", "REAL NOT NULL DEFAULT 1"),
-    ("tasks", "item_seq", "INTEGER NOT NULL DEFAULT 0"),
-    ("diagram_nodes", "w", "REAL"),
-    ("diagram_nodes", "h", "REAL"),
-    ("memories", "also_domains", "TEXT NOT NULL DEFAULT ''"),
-    ("memories", "review_after", "TEXT NOT NULL DEFAULT ''"),
-    ("memories", "title", "TEXT NOT NULL DEFAULT ''"),
-    ("memories", "source_ref", "TEXT NOT NULL DEFAULT ''"),
-    ("memory_usage", "via_fts", "INTEGER NOT NULL DEFAULT 0"),
-    ("memories", "pin", "TEXT NOT NULL DEFAULT ''"),
-)
-
-
-def _ensure_columns(conn: sqlite3.Connection) -> None:
-    """Add any column in _ADDED_COLUMNS the store does not have yet."""
-    for table, column, decl in _ADDED_COLUMNS:
-        have = {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}
-        if not have:
-            continue  # table itself is new; the schema above already has it
-        if column not in have:
-            conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
-
-
-def _repair_task_states(conn: sqlite3.Connection) -> None:
-    """Cancel an open task whose memory is not active.
-
-    A writer that archives a memory without knowing tasks leaves its state
-    open; nothing else would close it.
-    """
-    conn.execute(
-        "UPDATE tasks SET state = 'cancelled' WHERE state = 'open' AND memory_uid IN "
-        "(SELECT uid FROM memories WHERE status <> 'active')")
-
-
-def _ensure_diagram_titles(conn: sqlite3.Connection) -> None:
-    """Give a diagram memory the name its graph already carries.
-
-    A diagram's title is one name stored twice: `diagrams.title` and
-    `memories.title` (see update_diagram). A store whose diagrams predate
-    the `memories.title` column has the name on the graph only, and every
-    listing falls back to the opening line of the generated body.
-
-    Copies, never invents: the length cap that title_error applies to a new
-    title is not applied here, or a name already in the store would be
-    unrecoverable.
-
-    Runs after _ensure_fts: this UPDATE fires the index triggers, and on a
-    store whose index predates the column they name a field memories_fts
-    does not have yet.
-    """
-    conn.execute(
-        "UPDATE memories SET title = ("
-        "  SELECT TRIM(d.title) FROM diagrams d WHERE d.memory_uid = memories.uid)"
-        " WHERE TRIM(title) = ''"
-        "   AND EXISTS (SELECT 1 FROM diagrams d"
-        "               WHERE d.memory_uid = memories.uid AND TRIM(d.title) <> '')")
-
-
-def _ensure_fts(conn: sqlite3.Connection) -> None:
-    """Rebuild the FTS index when its columns are behind _FTS_SCHEMA.
-
-    fts5 has no ALTER, and `CREATE VIRTUAL TABLE IF NOT EXISTS` does
-    nothing at all for a store whose index predates a column -- so a newly
-    indexed field means dropping the index and rebuilding it from the
-    content table. Runs after _ensure_columns, which is what puts the new
-    column on `memories` for the rebuild to read.
-
-    The triggers go with it, and not as tidying: on an external-content
-    index, a `delete` command has to hand fts5 the OLD value of EVERY
-    column, so a trigger still naming three of four would corrupt the
-    index on the next edit rather than fail visibly.
-    """
-    have = tuple(r["name"] for r in conn.execute("PRAGMA table_info(memories_fts)"))
-    if have == _FTS_COLUMNS:
-        return
-    for trigger in ("memories_ai", "memories_ad", "memories_au"):
-        conn.execute(f"DROP TRIGGER IF EXISTS {trigger}")
-    conn.execute("DROP TABLE IF EXISTS memories_fts")
-    conn.executescript(_FTS_SCHEMA)
-    conn.execute("INSERT INTO memories_fts(memories_fts) VALUES ('rebuild')")
 
 
 # Whether every body in this store has been read into memory_sections. Set
@@ -1834,105 +580,6 @@ def get_sections(conn: sqlite3.Connection, uid: str) -> list[dict]:
             (uid,),
         )
     ]
-
-
-# Why the file holds free pages: removals free pages without shrinking the file, so the
-# dashboard's disk row names the space and its VACUUM clears it.
-COMPACT_REASON_KEY = "compact_reason"
-COMPACT_REASON_VECTORS = "vector_store"
-
-
-def get_compact_reason(conn: sqlite3.Connection) -> str:
-    """What freed the pages VACUUM would give back, empty when nothing did."""
-    return _get_meta(conn, COMPACT_REASON_KEY) or ""
-
-
-def clear_compact_reason(conn: sqlite3.Connection) -> None:
-    """Called after a VACUUM: the pages are back, so the reason is spent."""
-    conn.execute("DELETE FROM meta WHERE key = ?", (COMPACT_REASON_KEY,))
-
-
-# What a store can carry that nothing here reads: the sqlite-vec table and its vec0 shadow tables,
-# the embedding meta keys, and two usage counters beside via_fts.
-_VEC_TABLE = "memories_vec"
-_VEC_META_KEYS = ("embed_model", "embed_dim")
-_VEC_USAGE_COLUMNS = ("via_vec", "via_both")
-
-
-def _drop_vector_store(conn: sqlite3.Connection) -> bool:
-    """Remove the sqlite-vec table, its shadow tables and its counters.
-
-    Returns True when it removed something. Runs on every connect, so a
-    store carrying them is sanitized by being opened -- there is no separate
-    restore path anyone has to remember.
-
-    `DROP TABLE memories_vec` needs the vec0 module registered and nothing
-    registers it, so the virtual table's declaration is deleted from the
-    schema directly and the schema cookie bumped, which is what tells every
-    other connection to re-read it. The shadow tables are ordinary tables
-    and go the ordinary way once the declaration is gone.
-
-    ALTER TABLE ... DROP COLUMN is SQLite 3.35 and later.
-    """
-    names = [r[0] for r in conn.execute(
-        "SELECT name FROM sqlite_master WHERE type = 'table'")]
-    tables = [n for n in names if n == _VEC_TABLE or n.startswith(_VEC_TABLE + "_")]
-    usage = {r["name"] for r in conn.execute("PRAGMA table_info(memory_usage)")}
-    columns = [c for c in _VEC_USAGE_COLUMNS if c in usage]
-    keys = [k for k in _VEC_META_KEYS if _get_meta(conn, k) is not None]
-    if not tables and not columns and not keys:
-        return False
-
-    if _VEC_TABLE in tables:
-        version = conn.execute("PRAGMA schema_version").fetchone()[0]
-        conn.execute("PRAGMA writable_schema = ON")
-        conn.execute("DELETE FROM sqlite_master WHERE type = 'table' AND name = ?",
-                     (_VEC_TABLE,))
-        conn.execute(f"PRAGMA schema_version = {version + 1}")
-        conn.execute("PRAGMA writable_schema = OFF")
-        conn.commit()
-    for name in tables:
-        if name != _VEC_TABLE:
-            conn.execute(f'DROP TABLE IF EXISTS "{name}"')
-    for column in columns:
-        conn.execute(f"ALTER TABLE memory_usage DROP COLUMN {column}")
-    if keys:
-        conn.executemany("DELETE FROM meta WHERE key = ?", [(k,) for k in keys])
-    if _VEC_TABLE in tables:
-        # the columns and the meta keys free almost nothing; the table is
-        # what leaves a file full of pages nobody has claimed back
-        _set_meta(conn, COMPACT_REASON_KEY, COMPACT_REASON_VECTORS)
-    return True
-
-
-
-@contextmanager
-def connect(db_path: Path | None = None, *, project: str | None = None):
-    """A connection to one project's file, committed when the block exits cleanly.
-
-    `db_path` opens that file, `project` opens the project of that name (in
-    any casing), and neither opens the active project (see active_project).
-    The schema and the migrations run on every open.
-    """
-    if db_path is not None and project is not None:
-        raise ValueError("pass db_path or project, not both")
-    path = db_path or (project_path(project) if project else default_db_path())
-    conn = sqlite3.connect(str(path), timeout=30.0)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL;")
-    conn.execute("PRAGMA synchronous=NORMAL;")
-    conn.execute("PRAGMA foreign_keys=ON;")
-    conn.executescript(SCHEMA)
-    _ensure_columns(conn)
-    _drop_vector_store(conn)
-    _ensure_fts(conn)
-    _ensure_diagram_titles(conn)
-    _repair_task_states(conn)
-    try:
-        yield conn
-        conn.commit()
-    finally:
-        conn.close()
 
 
 def insert_memory(

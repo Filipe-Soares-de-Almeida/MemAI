@@ -17,6 +17,7 @@ import pytest
 
 from conftest import shaped
 from memai import brief, db, hook, hook_install, server, tasks, warden
+from memai.store import connection
 
 DOMAIN_CAP = brief.DOMAINS
 
@@ -866,7 +867,7 @@ def test_a_failing_task_read_asks_nothing_and_leaves_the_other_notes(
 
 def test_stop_does_not_block_over_a_task_archived_without_syncing_its_state(
         store, capsysbinary, monkeypatch):
-    monkeypatch.setattr(db, "_repair_task_states", lambda conn: None)
+    monkeypatch.setattr(connection, "_repair_task_states", lambda conn: None)
     with db.connect() as conn:
         uid = _seed_task(conn)
         conn.execute("UPDATE memories SET status = 'archived' WHERE uid = ?", (uid,))
