@@ -3,7 +3,8 @@
 release-please writes the next version into the files its configuration names,
 and a file it cannot find is not an error to it -- it is a version left behind.
 Below 1.0.0 its default sends a breaking change to 1.0.0, which
-`bump-minor-pre-major` holds back.
+`bump-minor-pre-major` holds back. A `changelog-sections` list replaces release-please's
+whole default, so every type it shows is listed, refactors among them.
 
 The workflow names the branch a release is cut from. Pointed at `main`, the
 version bump lands on a branch `dev` does not hold, and the fast-forward that
@@ -54,3 +55,10 @@ def test_the_release_is_cut_from_dev():
 
 def test_the_workflow_fast_forwards_main():
     assert "git push origin HEAD:main" in WORKFLOW
+
+
+def test_the_changelog_shows_refactors_and_hides_the_internal_types():
+    sections = {s["type"]: s for s in PACKAGE["changelog-sections"]}
+    shown = {t for t, s in sections.items() if not s.get("hidden")}
+    assert shown == {"feat", "fix", "perf", "deps", "revert", "refactor", "docs"}
+    assert set(sections) - shown == {"build", "ci", "test", "style", "chore"}
