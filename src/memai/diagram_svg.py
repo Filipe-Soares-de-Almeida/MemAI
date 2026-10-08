@@ -24,8 +24,8 @@ server side.
 =========================================================================
 
 What is NOT duplicated: node layout. The x/y of every node is computed
-once, in db.py, and both renderers read it. Only edge routing and text
-measurement live in two places.
+once, in memai.store.diagrams.layout, and both renderers read it. Only
+edge routing and text measurement live in two places.
 """
 
 from __future__ import annotations
@@ -36,7 +36,6 @@ import re
 from functools import lru_cache
 from pathlib import Path
 
-from . import db
 from .contract import (  # noqa: F401
     ARROW_FLARE,
     ARROW_GAP,
@@ -59,6 +58,17 @@ from .contract import (  # noqa: F401
     ORTH_SNAP,
     ORTH_STUB,
     RING_GROW,
+)
+from .store.diagrams.layout import (
+    DECISION_DEFAULT_H,
+    FONT_SCALE_MAX,
+    FONT_SCALE_MIN,
+    NODE_DEFAULT_H,
+    NODE_DEFAULT_W,
+    NODE_MAX_H,
+    NODE_MAX_W,
+    NODE_MIN_H,
+    NODE_MIN_W,
 )
 
 # ── text measurement ────────────────────────────────────────────────────
@@ -170,15 +180,15 @@ def _clamp(value: float, lo: float, hi: float) -> float:
 
 
 def node_size(node: dict, font_scale: float = 1.0) -> tuple[float, float]:
-    """Twin of nodeSize. Same bounds as db.node_box, font scale included."""
-    default_h = (db.DECISION_DEFAULT_H if node.get("shape") == "decision"
-                 else db.NODE_DEFAULT_H)
+    """Twin of nodeSize. Same bounds as store.diagrams.layout.node_box, font scale included."""
+    default_h = (DECISION_DEFAULT_H if node.get("shape") == "decision"
+                 else NODE_DEFAULT_H)
     # `or` rather than `is None`, matching JS `Number(n.w) || NODE_W`: a
     # stored zero is not a size, it is a missing one.
-    w = _clamp(float(node.get("w") or db.NODE_DEFAULT_W * font_scale),
-               db.NODE_MIN_W, db.NODE_MAX_W)
+    w = _clamp(float(node.get("w") or NODE_DEFAULT_W * font_scale),
+               NODE_MIN_W, NODE_MAX_W)
     h = _clamp(float(node.get("h") or default_h * font_scale),
-               db.NODE_MIN_H, db.NODE_MAX_H)
+               NODE_MIN_H, NODE_MAX_H)
     return w, h
 
 
@@ -367,7 +377,7 @@ class DiagramLayout:
 
     def __init__(self, data: dict) -> None:
         self.font_scale = _clamp(float(data.get("font_scale") or 1),
-                                 db.FONT_SCALE_MIN, db.FONT_SCALE_MAX)
+                                 FONT_SCALE_MIN, FONT_SCALE_MAX)
         self.nodes: list[dict] = []
         for n in data.get("nodes") or []:
             shape = n.get("shape") if n.get("shape") in NODE_SHAPES else "step"
