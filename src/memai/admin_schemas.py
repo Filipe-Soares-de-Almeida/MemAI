@@ -209,6 +209,7 @@ class TaskNote(TypedDict):
     items: list[str]
     updated_at: str
     body_links: dict[str, BodyLink]
+    brief: dict[str, str] | None
 
 
 class TaskRecord(TypedDict):

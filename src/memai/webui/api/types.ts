@@ -217,6 +217,7 @@ export interface TaskNote {
   items: string[];
   updated_at: string;
   body_links: Record<string, BodyLink>;
+  brief: Record<string, string> | null;
 }
 
 export interface TaskRecord {

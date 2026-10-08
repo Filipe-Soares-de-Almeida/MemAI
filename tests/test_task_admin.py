@@ -8,6 +8,7 @@ import json
 import pytest
 from starlette.testclient import TestClient
 
+from conftest import brief
 from memai import tasks
 from memai.admin.app import app as admin_app
 from memai.store import connection, memories
@@ -437,7 +438,7 @@ def test_a_task_write_from_a_foreign_origin_is_refused(client, method, path, bod
 def test_task_note_routes_round_trip(client):
     uid = _task(client)
     made = client.post(f"/api/tasks/{uid}/note",
-                       json={"title": "Chart rules", "body": "Depths in metres.", "items": ["i2"]})
+                       json={"title": "Chart rules", "body": brief("chart the depths"), "items": ["i2"]})
     assert made.status_code == 200, made.text
     note = made.json()["task"]["notes"][0]
     assert (note["title"], note["items"]) == ("Chart rules", ["i2"])
@@ -453,14 +454,14 @@ def test_a_bad_task_note_is_refused(client):
     uid = _task(client)
     res = client.post(f"/api/tasks/{uid}/note", json={"title": "T", "body": "", "items": []})
     assert res.status_code == 400
-    res = client.post(f"/api/tasks/{uid}/note", json={"title": "T", "body": "b", "items": ["i9"]})
+    res = client.post(f"/api/tasks/{uid}/note", json={"title": "T", "body": brief("b"), "items": ["i9"]})
     assert res.status_code == 400
 
 
 def test_the_record_carries_every_task_note(client):
     uid = _task(client)
     client.post(f"/api/tasks/{uid}/note", json={"title": "Top", "body": "b", "items": []})
-    client.post(f"/api/tasks/{uid}/note", json={"title": "On i1", "body": "b", "items": ["i1"]})
+    client.post(f"/api/tasks/{uid}/note", json={"title": "On i1", "body": brief("b"), "items": ["i1"]})
     record = client.get(f"/api/memories/{uid}").json()
     assert [n["title"] for n in record["task"]["notes"]] == ["Top", "On i1"]
 
@@ -473,3 +474,20 @@ def test_task_notes_carry_what_their_wikilinks_point_at(client):
     assert answer["task"]["notes"][0]["body_links"][fact]["type"] == "note"
     shown = client.get(f"/api/memories/{uid}").json()
     assert fact in shown["task"]["notes"][0]["body_links"]
+
+
+def test_a_note_carries_its_brief_fields_or_null(client):
+    uid = _task(client)
+    client.post(f"/api/tasks/{uid}/note", json={"title": "Top", "body": "free", "items": []})
+    client.post(f"/api/tasks/{uid}/note",
+                json={"title": "On i1", "body": brief("solder it", extra_info="flux first"), "items": ["i1"]})
+    notes = client.get(f"/api/memories/{uid}").json()["task"]["notes"]
+    assert notes[0]["brief"] is None
+    assert notes[1]["brief"]["goal"] == "solder it" and notes[1]["brief"]["extra_info"] == "flux first"
+
+
+def test_a_free_body_on_items_is_a_400_and_writes_nothing(client):
+    uid = _task(client)
+    res = client.post(f"/api/tasks/{uid}/note", json={"title": "T", "body": "free", "items": ["i1"]})
+    assert res.status_code == 400 and "a note on items is a brief" in res.text
+    assert client.get(f"/api/memories/{uid}").json()["task"]["notes"] == []
