@@ -101,11 +101,12 @@ What only makes sense inside the task — an item's brief, a rule several items
 share — is a task note, not a memory. A note on items is a brief: GOAL, CONTEXT,
 STEPS, PITFALLS, DONE WHEN and DEPENDS ON, with EXTRA INFO for anything else.
 Search, recall and the session brief never return it. `get_memory(uid)` on a
-task returns its head (goal, progress, counts),
-and `task_read(uid, part)` reads its items, notes, comments and links one page at
-a time. Every tool result stays under the size Claude Code shows inline: what can
-grow comes back in pages with a `next_offset`. `memai-store task-adopt` turns
-memories linked to a task's items into its notes.
+task returns its head (goal, progress, counts), and `task_read(uid, part)`
+reads its items, notes, comments and links one page at a time. Every tool
+result stays under the size Claude Code shows inline: what can grow comes back
+in pages with a `next_offset`. `memai-store task-adopt` turns memories linked to
+a task's items into its notes, and refuses one that would land on items
+without being a brief.
 
 Open tasks come first in the session-start brief. The PreToolUse hook notes the
 domains a session names in its memai calls, and at the end of a turn the `stop`

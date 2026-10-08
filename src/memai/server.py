@@ -299,8 +299,9 @@ def tool(group: str):
 
     Always returns the function, wrapped so a result over the output
     ceiling becomes an error, so the module-level name stays callable from
-    the admin surface and the tests whether or not the schema was published. Shared parameter text is expanded into `__doc__` first,
-    so FastMCP publishes the full description.
+    the admin surface and the tests whether or not the schema was published.
+    The published description is the docstring with its shared parameter text
+    expanded and its indentation removed.
     """
     def wrap(fn):
         doc = _expand_params(fn.__doc__)

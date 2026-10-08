@@ -8,14 +8,14 @@ of values into a body, and reads a body back into values.
 The body is the record. Sections are read out of it on every write, so no
 caller keeps the two in step by hand.
 
-A body CONFORMS when it opens with the first label, every label in the spec
-opens exactly one line, the labels appear in spec order, no field is empty,
-and no field runs past the ceiling its spec gives it. A label that opens two
-lines is not conforming: the second one reads as the start of a field and
-nothing tells it apart from the one that is.
+A body CONFORMS when it opens with the first label, every required label
+opens exactly one line, an optional label opens at most one, the labels appear
+in spec order, no field is empty, and no field runs past the ceiling its spec
+gives it. A label that opens two lines is not conforming: the second one reads
+as the start of a field and nothing tells it apart from the one that is.
 
-`read` reports what stops a body conforming instead of raising, so a caller
-can index a body it is not ready to refuse.
+`read` and `read_spec` report what stops a body conforming instead of raising,
+so a caller can index a body it is not ready to refuse.
 """
 
 from __future__ import annotations
