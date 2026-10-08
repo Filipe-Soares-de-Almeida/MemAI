@@ -35,7 +35,7 @@ export function progressOf(task: TaskRecord): { total: number; done: number; dro
   const done = count('done');
   const dropped = count('dropped');
   const live = total - dropped;
-  return { total, done, dropped, pct: live > 0 ? Math.floor((done / live) * 100) : 0 };
+  return { total, done, dropped, pct: live > 0 ? Math.floor((done * 100) / live) : 0 };
 }
 
 export const attr = (name: string, value: string | number): string => `[${name}="${CSS.escape(String(value))}"]`;

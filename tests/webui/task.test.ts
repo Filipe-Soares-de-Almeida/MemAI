@@ -59,6 +59,15 @@ describe('the checklist arithmetic', () => {
     expect(progressOf(taskOf([item('i1', 'a', 'done'), item('i2', 'b'), item('i3', 'c')])).pct).toBe(33);
   });
 
+  it('pct floors the exact ratio, with no floating-point slip', () => {
+    const items = [
+      ...Array.from({ length: 29 }, (_, i) => item(`d${i}`, 'a', 'done')),
+      ...Array.from({ length: 21 }, (_, i) => item(`t${i}`, 'b')),
+      item('x1', 'c', 'dropped'), item('x2', 'd', 'dropped'),
+    ];
+    expect(progressOf(taskOf(items)).pct).toBe(58);
+  });
+
   it('peeks at a note as plain words', () => {
     expect(notePeek('| a | b |\n|---|---|\n**Bold** `code`\n== Head ==')).toBe('a b Bold code Head');
   });
