@@ -172,14 +172,19 @@ def _require_item(conn: sqlite3.Connection, uid: str, item: str) -> str:
     return key
 
 
-def _regenerate(conn: sqlite3.Connection, uid: str, note: str, *, record_edit: bool) -> None:
-    """Rewrite the memory's content from the goal and items when it changed."""
+def _regenerate(
+    conn: sqlite3.Connection, uid: str, note: str, *, record_edit: bool, leaked_ok: bool = False,
+) -> None:
+    """Rewrite the memory's content from the goal and items when it changed.
+
+    leaked_ok skips the leak check on a recorded edit, for a write that adds no new text.
+    """
     goal = conn.execute("SELECT goal FROM tasks WHERE memory_uid = ?", (uid,)).fetchone()["goal"]
     content = task_items.render(goal, _items(conn, uid))
     if content == memories.memory_row(conn, uid)["content"]:
         return
     if record_edit:
-        memories.update_memory_content(conn, uid, content, note=note)
+        memories.update_memory_content(conn, uid, content, note=note, leaked_ok=leaked_ok)
     else:
         memories.set_generated_content(conn, uid, content)
 
@@ -269,14 +274,19 @@ def add_items(conn: sqlite3.Connection, uid: str, items: list[str], *, session: 
     return {"uid": uid, "keys": keys, **_outcome(conn, uid)}
 
 
-def delete_item(conn: sqlite3.Connection, uid: str, item: str, *, session: str = "") -> dict:
+def delete_item(
+    conn: sqlite3.Connection, uid: str, item: str, *, expect: str | None = None, session: str = "",
+) -> dict:
     """Remove one item with its comments and links, renumber the items after it, then settle an open task.
 
     Every item after it moves up one key, and its links, comments and note
     attachments move with it; `renumbered` maps each old key to its new one.
     The deletion enters the edit history. A closed task keeps its state.
-    Raises ValueError for a non-task, an unknown item, or the task's only
-    item, before anything is written.
+    Raises ValueError for a non-task, an unknown item, the task's only item,
+    or an item whose text differs from `expect` (the text the caller saw,
+    since a key names whichever item holds that position now), before
+    anything is written. The deletion adds no text, so it is not held to
+    the leak check.
 
     `session` is accepted for signature parity with the other writers; the
     item it would stamp is the one removed, so nothing records it.
@@ -287,6 +297,8 @@ def delete_item(conn: sqlite3.Connection, uid: str, item: str, *, session: str =
     if len(rows) == 1:
         raise ValueError("a task keeps at least one item")
     gone = next(r for r in rows if r["key"] == key)
+    if expect is not None and gone["text"] != expect:
+        raise ValueError(f"item {key} is no longer {expect!r}; reload the task before deleting")
     conn.execute(
         "DELETE FROM task_note_items WHERE item_key = ? AND note_id IN "
         "(SELECT id FROM task_notes WHERE memory_uid = ?)", (key, uid))
@@ -297,7 +309,7 @@ def delete_item(conn: sqlite3.Connection, uid: str, item: str, *, session: str =
     note = f"item {key} deleted: {gone['text']}"
     if moved:
         note += f"; {_span(list(moved))} renumbered to {_span(list(moved.values()))}"
-    _regenerate(conn, uid, note, record_edit=True)
+    _regenerate(conn, uid, note, record_edit=True, leaked_ok=True)
     state = conn.execute("SELECT state FROM tasks WHERE memory_uid = ?", (uid,)).fetchone()["state"]
     if state == "open":
         _settle(conn, uid)
@@ -383,15 +395,21 @@ def unlink_item(conn: sqlite3.Connection, uid: str, item: str, target: str) -> b
 BRIEF_KEYS: tuple[str, ...] = tuple(s.key for s in sections.BRIEF_SPEC)
 
 
-def brief_error(body: str) -> str | None:
-    """Why `body` is not a brief, or None when it is one."""
+def brief_error(body: str, *, on_items: bool = True) -> str | None:
+    """Why `body` is not a brief, or None when it is one.
+
+    on_items says whether the note lands on items; a note on the whole task
+    is only held to a brief when it is built from brief fields.
+    """
     problems = sections.read_spec(sections.BRIEF_SPEC, body).problems
     if not problems:
         return None
     required = ", ".join(s.label for s in sections.BRIEF_SPEC if not s.optional)
     optional = ", ".join(s.label for s in sections.BRIEF_SPEC if s.optional)
-    return (f"a note on items is a brief: {required}, then optionally {optional}; "
-            f"this one does not read that way: {'; '.join(problems)}")
+    shape = f"{required}, then optionally {optional}"
+    if on_items:
+        return f"a note on items is a brief: {shape}; this one does not read that way: {'; '.join(problems)}"
+    return f"brief fields must form a whole brief: {shape}; these do not: {'; '.join(problems)}"
 
 
 def brief_fields(body: str) -> dict[str, str] | None:
@@ -400,30 +418,30 @@ def brief_fields(body: str) -> dict[str, str] | None:
     return reading.sections if reading.conforms else None
 
 
-def brief_body(fields: dict[str, str], stored: str = "") -> str:
+def brief_body(fields: dict[str, str], stored: str = "", *, on_items: bool = True) -> str:
     """A brief built from `fields`; over a `stored` brief, each field given replaces only its own."""
     unknown = sorted(set(fields) - set(BRIEF_KEYS))
     if unknown:
         raise ValueError(f"{', '.join(unknown)} is not a brief field; use {', '.join(BRIEF_KEYS)}")
     given = {k: str(v).strip() for k, v in fields.items() if str(v).strip()}
     body = sections.render_spec(sections.BRIEF_SPEC, {**(brief_fields(stored) or {}), **given})
-    _require_brief(body)
+    _require_brief(body, on_items=on_items)
     return body
 
 
-def _require_brief(body: str) -> None:
-    error = brief_error(body)
+def _require_brief(body: str, *, on_items: bool = True) -> None:
+    error = brief_error(body, on_items=on_items)
     if error:
         raise ValueError(error)
 
 
-def _compose(body: str, brief: dict[str, str] | None, stored: str) -> str:
+def _compose(body: str, brief: dict[str, str] | None, stored: str, *, on_items: bool) -> str:
     """The body a write supplies: `body` as given, or one built from brief fields."""
     if not any(str(v).strip() for v in (brief or {}).values()):
         return str(body)
     if str(body).strip():
         raise ValueError("give a note's body or its brief fields, not both")
-    return brief_body(brief or {}, stored)
+    return brief_body(brief or {}, stored, on_items=on_items)
 
 
 def _note_fields(title: str, body: str) -> tuple[str, str]:
@@ -434,7 +452,7 @@ def _note_fields(title: str, body: str) -> tuple[str, str]:
         raise ValueError(f"title is {len(title)} characters; the limit is {store_sections.TITLE_MAX}")
     if len(body) > NOTE_MAX:
         raise ValueError(f"body is {len(body)} characters; the limit is {NOTE_MAX}")
-    store_sections._refuse_leak(memories.TASK_TYPE, f"{title}\n{body}")
+    store_sections._refuse_leak("task_note", f"{title}\n{body}")
     return title, body
 
 
@@ -480,7 +498,8 @@ def add_note(conn: sqlite3.Connection, uid: str, *, title: str, body: str = "",
 
     A note on items is a brief, given as `body` or built from `brief` fields.
     """
-    title, body = _note_fields(title, _compose(body, brief, ""))
+    on_items = any(str(i).strip() for i in items)
+    title, body = _note_fields(title, _compose(body, brief, "", on_items=on_items))
     _lock(conn, uid)
     keys = _note_keys(conn, uid, items)
     if keys:
@@ -508,10 +527,10 @@ def edit_note(conn: sqlite3.Connection, uid: str, note_id: int, *, title: str = 
     note_id = _require_note(conn, uid, note_id)
     row = conn.execute("SELECT title, body FROM task_notes WHERE id = ?", (note_id,)).fetchone()
     had = conn.execute("SELECT 1 FROM task_note_items WHERE note_id = ?", (note_id,)).fetchone() is not None
-    given = _compose(body, brief, row["body"])
-    title, body = _note_fields(title or row["title"], given or row["body"])
     keys = None if items is None else _note_keys(conn, uid, items)
     on_items = bool(keys) if keys is not None else had
+    given = _compose(body, brief, row["body"], on_items=on_items)
+    title, body = _note_fields(title or row["title"], given or row["body"])
     if on_items and (given or not had):
         _require_brief(body)
     conn.execute("UPDATE task_notes SET title = ?, body = ?, updated_at = ? WHERE id = ?",
@@ -611,7 +630,7 @@ def restore_task(conn: sqlite3.Connection, record: dict) -> None:
              n.get("created_at") or lite.now_iso(), n.get("updated_at") or lite.now_iso()))
         _set_note_items(conn, cur.lastrowid or 0, [k for k in n.get("items") or [] if k in known])
     if task_items.compact(conn, uid):
-        task_items.regenerate(conn, uid)
+        task_items.regenerate(conn, uid, touch=False)
 
 
 PARTS = ("items", "notes", "comments", "links")

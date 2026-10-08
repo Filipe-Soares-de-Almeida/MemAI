@@ -42,9 +42,12 @@ def compact(conn: sqlite3.Connection, uid: str) -> dict[str, str]:
     return moved
 
 
-def regenerate(conn: sqlite3.Connection, uid: str) -> None:
-    """Rewrite the task's content from its goal and items, recording no edit."""
+def regenerate(conn: sqlite3.Connection, uid: str, *, touch: bool = True) -> None:
+    """Rewrite the task's content from its goal and items, recording no edit.
+
+    touch=False leaves the task's updated_at where it was.
+    """
     goal = conn.execute("SELECT goal FROM tasks WHERE memory_uid = ?", (uid,)).fetchone()["goal"]
     items = [{"key": r["item_key"], "state": r["state"], "text": r["text"]} for r in conn.execute(
         "SELECT item_key, state, text FROM task_items WHERE memory_uid = ? ORDER BY seq, id", (uid,))]
-    set_generated_content(conn, uid, render(goal, items))
+    set_generated_content(conn, uid, render(goal, items), touch=touch)

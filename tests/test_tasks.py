@@ -216,7 +216,7 @@ def test_adding_an_item_reopens_a_completed_task(conn):
     assert "item i3 added" not in notes and notes[-1] == "reopened"
 
 
-def test_keys_are_never_reused(conn):
+def test_consecutive_adds_take_consecutive_positions(conn):
     uid = _make(conn)
     assert tasks.add_items(conn, uid, ["third"])["keys"] == ["i3"]
     assert tasks.add_items(conn, uid, ["fourth"])["keys"] == ["i4"]
@@ -777,7 +777,7 @@ def test_the_next_add_takes_the_position_a_deleted_last_item_left(conn):
     assert [i["key"] for i in tasks.get_task(conn, uid)["items"]] == ["i1", "i2", "i3"]
 
 
-def test_the_item_limit_counts_items_not_retired_keys(conn):
+def test_the_item_limit_counts_the_items_a_task_holds_after_adds_and_deletes(conn):
     uid = _three(conn)
     for _ in range(3):
         key = tasks.add_items(conn, uid, ["extra"])["keys"][0]
@@ -861,7 +861,7 @@ def test_a_refusal_after_the_rows_changed_rolls_them_back(tmp_path, monkeypatch)
         tasks.link_item(c, uid, "i3", [note])
         tasks.add_comment(c, uid, "about the parser", item="i3")
 
-    def refuse(conn, uid, note, *, record_edit):
+    def refuse(conn, uid, note, **_):
         raise ValueError("refused after the rows changed")
     monkeypatch.setattr(tasks, "_regenerate", refuse)
     with pytest.raises(ValueError), connection.connect(path) as c:

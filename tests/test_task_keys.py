@@ -102,6 +102,31 @@ def test_a_store_with_gaps_opens_compacted(tmp_path):
         assert memories.get_edit_history(c, uid) == []
 
 
+def test_a_stray_item_row_does_not_stop_a_store_opening(tmp_path):
+    path = tmp_path / "stray.db"
+    with connection.connect(path) as c:
+        uid = _four(c)
+        other = memories.insert_memory(c, type="note", content="beam spec", domain="acme/lantern")
+        c.execute("INSERT INTO task_items (memory_uid, item_key, seq, text, state, updated_at) "
+                  "VALUES (?, 'i4', 4, 'stray', 'todo', '2026-01-01T00:00:00')", (other,))
+        c.execute("UPDATE task_items SET item_key = 'i7', seq = 7 WHERE memory_uid = ? AND item_key = 'i4'",
+                  (uid,))
+    with connection.connect(path) as c:
+        assert _keys(c, uid) == ["i1", "i2", "i3", "i4"]
+
+
+def test_a_store_with_gaps_keeps_each_task_updated_stamp_when_it_opens(tmp_path):
+    path = tmp_path / "stamps.db"
+    with connection.connect(path) as c:
+        uid = _four(c)
+        c.execute("UPDATE task_items SET item_key = 'i7', seq = 7 WHERE memory_uid = ? AND item_key = 'i4'",
+                  (uid,))
+        c.execute("UPDATE memories SET updated_at = '2026-01-02T03:04:05' WHERE uid = ?", (uid,))
+    with connection.connect(path) as c:
+        assert _keys(c, uid) == ["i1", "i2", "i3", "i4"]
+        assert memories.get_memory(c, uid)["updated_at"] == "2026-01-02T03:04:05"
+
+
 def test_a_clean_store_opens_untouched(tmp_path):
     path = tmp_path / "clean.db"
     with connection.connect(path) as c:
@@ -125,6 +150,49 @@ def test_an_export_with_gaps_restores_contiguous(tmp_path):
         assert [i["key"] for i in task["items"]] == ["i1", "i2", "i3", "i4"]
         assert task["comments"][0]["item"] == "i4"
         assert "[ ] i4 test the beam" in memories.get_memory(b, uid)["content"]
+
+
+def test_an_export_with_gaps_keeps_the_task_updated_stamp(tmp_path):
+    with connection.connect(tmp_path / "a.db") as a:
+        uid = _four(a)
+        a.execute("UPDATE memories SET updated_at = '2026-01-02T03:04:05' WHERE uid = ?", (uid,))
+        records = list(portable.export_records(a, include_archived=True))
+    for r in records:
+        if r["record"] == "task":
+            r["items"][3] |= {"key": "i9", "seq": 9}
+    with connection.connect(tmp_path / "b.db") as b:
+        assert portable.import_records(b, records)["errors"] == []
+        assert memories.get_memory(b, uid)["updated_at"] == "2026-01-02T03:04:05"
+
+
+def test_a_deletion_stamps_the_task_updated_now(conn):
+    uid = _four(conn)
+    conn.execute("UPDATE memories SET updated_at = '2026-01-02T03:04:05' WHERE uid = ?", (uid,))
+    tasks.delete_item(conn, uid, "i1")
+    assert memories.get_memory(conn, uid)["updated_at"] > "2026-01-02T03:04:05"
+
+
+def test_a_delete_is_not_blocked_by_a_flagged_tag_in_another_item(conn):
+    uid = _four(conn)
+    tasks.add_items(conn, uid, ["quote the </goal> tag"])
+    result = tasks.delete_item(conn, uid, "i1")
+    assert result["renumbered"] == {"i2": "i1", "i3": "i2", "i4": "i3", "i5": "i4"}
+    assert tasks.get_task(conn, uid)["items"][-1]["text"] == "quote the </goal> tag"
+
+
+def test_a_delete_with_a_stale_expectation_is_refused_before_anything_is_written(conn):
+    uid = _four(conn)
+    with pytest.raises(ValueError, match=r"i2.*reload"):
+        tasks.delete_item(conn, uid, "i2", expect="seal the case")
+    assert _keys(conn, uid) == ["i1", "i2", "i3", "i4"]
+    assert memories.get_edit_history(conn, uid) == []
+
+
+def test_a_delete_whose_expectation_matches_goes_through(conn):
+    uid = _four(conn)
+    assert tasks.delete_item(conn, uid, "i2", expect="flash the board")["item"] == "i2"
+    assert tasks.delete_item(conn, uid, "i1", expect=None)["item"] == "i1"
+    assert _keys(conn, uid) == ["i1", "i2"]
 
 
 def test_the_task_item_docstring_says_a_key_is_a_position():

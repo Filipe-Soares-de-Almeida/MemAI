@@ -297,11 +297,16 @@ def update_memory_content(
     return True
 
 
-def set_generated_content(conn: sqlite3.Connection, uid: str, content: str) -> None:
-    """Rewrite a body generated from other rows, recording no edit: those rows are the history."""
+def set_generated_content(
+    conn: sqlite3.Connection, uid: str, content: str, *, touch: bool = True,
+) -> None:
+    """Rewrite a body generated from other rows, recording no edit: those rows are the history.
+
+    touch=False keeps the stored updated_at, for a rewrite that changes no fact.
+    """
     row = memory_row(conn, uid)
     conn.execute("UPDATE memories SET content = ?, updated_at = ? WHERE uid = ?",
-                 (content, now_iso(), uid))
+                 (content, now_iso() if touch else row["updated_at"], uid))
     _write_sections(conn, uid, row["type"], content)
 
 

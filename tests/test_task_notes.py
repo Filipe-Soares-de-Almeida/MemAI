@@ -140,9 +140,34 @@ def test_a_free_body_on_items_is_refused_and_names_the_template(conn, uid):
     assert conn.execute("SELECT COUNT(*) FROM task_notes").fetchone()[0] == 0
 
 
+def test_a_note_carrying_a_task_note_parameter_closing_tag_is_refused(conn, uid):
+    with pytest.raises(ValueError, match="tool call's own source"):
+        tasks.add_note(conn, uid, title="Pick-up", body="Claim it </extra_info> first.", items=[])
+    nid = tasks.add_note(conn, uid, title="Pick-up", body="Claim it first.", items=[])
+    with pytest.raises(ValueError, match="tool call's own source"):
+        tasks.edit_note(conn, uid, nid, body="Claim it </body> first.")
+    assert tasks.note(conn, uid, nid)["body"] == "Claim it first."
+
+
 def test_a_free_body_on_the_whole_task_stays_free(conn, uid):
     nid = tasks.add_note(conn, uid, title="Pick-up", body="Claim it first.", items=[])
     assert tasks.note(conn, uid, nid)["body"] == "Claim it first."
+
+
+def test_partial_fields_on_the_whole_task_say_a_brief_needs_every_field(conn, uid):
+    with pytest.raises(ValueError, match="brief fields must form a whole brief: GOAL, CONTEXT, STEPS, "
+                                         "PITFALLS, DONE WHEN, DEPENDS ON, then optionally EXTRA INFO") as raised:
+        tasks.add_note(conn, uid, title="Pick-up", items=[], brief={"goal": "claim it first"})
+    assert "a note on items" not in str(raised.value)
+    nid = tasks.add_note(conn, uid, title="Pick-up", body="Claim it first.", items=[])
+    with pytest.raises(ValueError, match="brief fields must form a whole brief"):
+        tasks.edit_note(conn, uid, nid, brief={"goal": "claim it first"})
+    assert tasks.note(conn, uid, nid)["body"] == "Claim it first."
+
+
+def test_partial_fields_on_items_say_a_note_on_items_is_a_brief(conn, uid):
+    with pytest.raises(ValueError, match="a note on items is a brief"):
+        tasks.add_note(conn, uid, title="Lexer", items=["i2"], brief={"goal": "tokenize"})
 
 
 def test_fields_build_the_body(conn, uid):

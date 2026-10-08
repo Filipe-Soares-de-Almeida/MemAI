@@ -405,11 +405,12 @@ def _compact_task_keys(conn: sqlite3.Connection) -> None:
         """SELECT DISTINCT memory_uid FROM (
              SELECT memory_uid, item_key, seq,
                     ROW_NUMBER() OVER (PARTITION BY memory_uid ORDER BY seq, id) AS n
-             FROM task_items)
+             FROM task_items
+             WHERE memory_uid IN (SELECT memory_uid FROM tasks))
            WHERE item_key <> 'i' || n OR seq <> n""")]
     for uid in stale:
         task_items.compact(conn, uid)
-        task_items.regenerate(conn, uid)
+        task_items.regenerate(conn, uid, touch=False)
 
 
 def _ensure_diagram_titles(conn: sqlite3.Connection) -> None:

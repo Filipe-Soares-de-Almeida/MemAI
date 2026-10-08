@@ -142,7 +142,7 @@ def test_a_refusal_after_rows_changed_rolls_them_back(client, monkeypatch):
     uid = _task(client)
     before = _snapshot(uid)
 
-    def refuse(conn, uid, note, *, record_edit):
+    def refuse(conn, uid, note, **_):
         raise ValueError("refused after the item row changed")
 
     monkeypatch.setattr(tasks, "_regenerate", refuse)
@@ -341,6 +341,17 @@ def test_delete_item_happy_path(client):
     assert [i["key"] for i in added["task"]["items"]] == ["i1", "i2", "i3"]
 
 
+def test_a_delete_naming_stale_text_is_refused_and_writes_nothing(client):
+    uid = _task(client, items=["draft the plan", "review the plan", "ship the plan"])
+    before = _snapshot(uid)
+    res = client.request("DELETE", f"/api/tasks/{uid}/item", json={"item": "i2", "text": "ship the plan"})
+    assert res.status_code == 400 and "reload" in res.json()["error"]
+    assert _snapshot(uid) == before
+    res = client.request("DELETE", f"/api/tasks/{uid}/item", json={"item": "i2", "text": "review the plan"})
+    assert res.status_code == 200, res.text
+    assert [i["text"] for i in res.json()["task"]["items"]] == ["draft the plan", "ship the plan"]
+
+
 def test_delete_item_completes_the_task_like_closing_the_last_item(client):
     uid = _task(client)
     client.post(f"/api/tasks/{uid}/item", json={"item": "i1", "state": "done"})
@@ -373,7 +384,7 @@ def test_a_delete_item_refusal_after_rows_changed_rolls_them_back(client, monkey
     uid = _task(client)
     before = _snapshot(uid)
 
-    def refuse(conn, uid, note, *, record_edit):
+    def refuse(conn, uid, note, **_):
         raise ValueError("refused after the item row was deleted")
 
     monkeypatch.setattr(tasks, "_regenerate", refuse)
