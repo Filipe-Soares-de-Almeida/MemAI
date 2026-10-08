@@ -100,9 +100,8 @@ The checkpoint's `domain` is what joins it to that work. A ticket or issue is
 
 ## 3. Casing and the `preserve` store
 
-**Reads fold case** (`db._fold`, `db.resolve_domain_scopes`): a filter written
-in any case finds the path, and a resolved scope comes back spelled **as
-stored**. **Writes are coerced** to the store's policy and the writer echoes
+**Reads fold case**: a filter written in any case finds the path, and a
+resolved scope comes back spelled **as stored**. **Writes are coerced** to the store's policy and the writer echoes
 `domain_adjusted` ([[memai-memory]] §2.3). So a checkpoint filed at
 `acme/cache` is found by a filter on `acme/Cache`, and a wrong-case query is
 not the reason a triage came back empty.
@@ -130,7 +129,7 @@ keeping. Judge by reuse, not by date alone.
 > `dedup_scan` **drops checkpoint × checkpoint pairs of the same domain or
 > session** deliberately — consecutive checkpoints of one effort share a
 > skeleton and score high while narrating different moments, so they are a
-> timeline, not a duplicate (`db._timeline_pair`). The trail decision is
+> timeline, not a duplicate. The trail decision is
 > therefore **the reader's**, from the bodies, and never the scan's. It scans
 > the path **and its subtree** (`acme/x100` brings in `acme/x100/p200`), so
 > nested work has its children's checkpoints in the same scan.
