@@ -1575,7 +1575,7 @@ def test_a_preview_shows_prose_not_the_markup_around_it(body, shown):
     Flattened BEFORE the cut, so a 160-character snippet cannot sever a
     `**` and leave the stray half on the screen.
     """
-    assert admin._plain(body) == shown
+    assert admin.shared._plain(body) == shown
 
 
 def test_a_peer_snippet_is_flattened_before_it_is_cut(client):

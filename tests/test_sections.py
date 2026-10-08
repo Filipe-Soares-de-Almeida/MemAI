@@ -552,7 +552,7 @@ def _catalogs() -> tuple[dict, dict]:
     from pathlib import Path
 
     from memai import admin
-    i18n = Path(admin.WEBUI_DIR) / "i18n"
+    i18n = Path(admin.pages.WEBUI_DIR) / "i18n"
     return (json.loads((i18n / "en.json").read_text(encoding="utf-8"))["strings"],
             json.loads((i18n / "pt-BR.json").read_text(encoding="utf-8"))["strings"])
 

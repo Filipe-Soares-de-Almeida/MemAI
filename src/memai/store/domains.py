@@ -126,7 +126,7 @@ def apply_link_policy(
     coerce=False keeps the casing as given, for a caller rewriting exact
     stored strings rather than accepting new ones -- move_domain leaves the
     primary domain's casing alone for the same reason, and the pass that
-    repairs casing (admin.normalize_domains) decides which strings it
+    repairs casing (the dashboard's normalize_domains) decides which strings it
     touches and reports them.
 
     Sorted, because this is a set and the order it arrives in means nothing.

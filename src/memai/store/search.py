@@ -144,7 +144,7 @@ def search_ranked(
     same fact was written five times, which is what the dedup queue is for.
     """
     # A uid query matches only [[uid]] in other bodies, so the named row is pinned above its
-    # referrers here, for every caller, as admin.py does for a pasted uid.
+    # referrers here, for every caller, as queries.list_memories does for a pasted uid.
     pinned: dict | None = None
     if is_opaque_query(query):
         row = get_memory(conn, query.strip())
