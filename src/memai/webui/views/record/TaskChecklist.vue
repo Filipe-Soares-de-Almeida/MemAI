@@ -46,7 +46,8 @@ const hidden = computed(() => (ui.allComments ? 0 : Math.max(0, thread.value.len
       <TaskGoal :c="c" />
     </div>
     <div class="tk-list tk-card">
-      <ul class="tk-items"><TaskItemRow v-for="item in current.items" :key="item.key" :c="c" :item="item" /></ul>
+      <ul class="tk-items"><TaskItemRow v-for="(item, at) in current.items" :key="item.key" :c="c" :item="item"
+                                      :n="at + 1" /></ul>
       <div v-if="ui.adding" class="tk-add is-open">
         <textarea id="tkAddBox" v-model="adding" class="tk-box" rows="4" :placeholder="t('task.add.placeholder')"
                   :aria-label="t('task.add.placeholder')" @keydown.esc="c.closeAdd()" @keydown.ctrl.enter.prevent="c.sendAdd()"

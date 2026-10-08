@@ -145,13 +145,17 @@ export function useChecklist(uid: string, task: TaskRecord, status: string, hook
   async function deleteItem(key: string) {
     const item = current.value.items.find(i => i.key === key);
     if (!item || busy) return;
-    const ok = await confirmModal({
-      title: t('task.delete.title'), body: t('task.delete.body', { text: esc(item.text) }),
-      okLabel: t('task.item.delete'), danger: true });
-    if (!ok) return;
     const items = current.value.items;
     const at = items.findIndex(i => i.key === key);
     if (at < 0) return;
+    const after = items.length - at - 1;
+    const moves = after === 0 ? ''
+      : after === 1 ? ` ${t('task.delete.renumber.one', { from: at + 2, to: at + 1 })} ${t('task.delete.cites')}`
+      : ` ${t('task.delete.renumber.many', { from: at + 2, last: items.length, to: at + 1, toLast: items.length - 1 })} ${t('task.delete.cites')}`;
+    const ok = await confirmModal({
+      title: t('task.delete.title'), body: t('task.delete.body', { text: esc(item.text) }) + moves,
+      okLabel: t('task.item.delete'), danger: true });
+    if (!ok) return;
     const wasOpen = current.value.state === 'open';
     focusAfter(...[items[at + 1], items[at - 1]].filter(Boolean).map(i => attr('data-step', i.key)), '#tkAddOpen');
     const res = await write(client.tasks.deleteItem, { item: key }, {
@@ -165,8 +169,8 @@ export function useChecklist(uid: string, task: TaskRecord, status: string, hook
     });
     ui.leaving = '';
     if (!res?.task) return;
-    toast(t(wasOpen && res.task.state !== 'open' ? `task.toast.${res.task.state}` as I18nKey : 'task.toast.deleted'),
-          'ok');
+    toast(t(wasOpen && res.task.state !== 'open' ? `task.toast.${res.task.state}` as I18nKey
+            : after > 0 ? 'task.toast.renumbered' : 'task.toast.deleted'), 'ok');
   }
 
   function toggle(key: string) {

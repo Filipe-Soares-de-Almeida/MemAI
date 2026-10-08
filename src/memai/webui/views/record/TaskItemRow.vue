@@ -15,7 +15,7 @@ import TaskNotes from './TaskNotes.vue';
 import { NEXT, STATES, spinAt } from './checklist.ts';
 import type { Checklist } from './checklist.ts';
 
-const props = defineProps<{ c: Checklist; item: TaskItem }>();
+const props = defineProps<{ c: Checklist; item: TaskItem; n: number }>();
 const { current, ui, enter } = props.c;
 
 const MARK: Record<string, string> = { doing: 'ongoing', done: 'check', dropped: 'minus' };
@@ -53,9 +53,10 @@ function menu(e: MouseEvent) {
   <li class="tk-item" :class="{ 'is-open': open, 'is-new': enter.items.has(item.key), 'is-leaving': ui.leaving === item.key }"
       :data-s="item.state" :data-key="item.key">
     <div class="tk-row">
+      <span class="tk-num" aria-hidden="true">{{ n }}</span>
       <button type="button" class="tk-state" :class="{ 'is-pulse': enter.pulse === item.key }" :data-s="item.state"
               :data-step="item.key" :title="action"
-              :aria-label="t('task.state.aria', { text: item.text, state: t(`task.state.${item.state}` as I18nKey), action })"
+              :aria-label="t('task.state.aria', { n, text: item.text, state: t(`task.state.${item.state}` as I18nKey), action })"
               @click="c.setItem(item.key, NEXT[item.state])">
         <span :key="item.state" v-spin="item.state === 'doing'" class="tk-ring"><AppIcon v-if="MARK[item.state]"
               :name="MARK[item.state]" /></span>

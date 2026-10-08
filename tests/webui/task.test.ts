@@ -107,6 +107,22 @@ describe('an item row', () => {
   });
 });
 
+describe('item numbers', () => {
+  it('shows each item its position before the state mark, and names it to a screen reader', async () => {
+    const { host } = await mount(taskOf([item('i1', 'Solder the header'), item('i2', 'Flash the board')]));
+    const rows = [...host.querySelectorAll('.tk-row')];
+    expect(rows.map(r => r.querySelector('.tk-num')?.textContent)).toEqual(['1', '2']);
+    expect(rows[1].firstElementChild?.classList.contains('tk-num')).toBe(true);
+    expect(host.querySelector('[data-step="i2"]')?.getAttribute('aria-label')).toMatch(/^2\. Flash the board:/);
+  });
+
+  it('numbers the items a note can apply to', async () => {
+    const { host } = await mount(taskOf([item('i1', 'Solder the header'), item('i2', 'Flash the board')]));
+    await press(host.querySelector('[data-note-add=""]'));
+    expect([...host.querySelectorAll('.tk-scope-n')].map(n => n.textContent)).toEqual(['1', '2']);
+  });
+});
+
 describe('an item state', () => {
   it('moves along todo, doing, done from its mark, repainted from the answer', async () => {
     serveApi((path: string, { body }: { body: { item: string; state: string } }) =>
@@ -164,6 +180,42 @@ describe('deleting an item', () => {
     expect(document.querySelector('.modal')?.textContent).toContain(en['task.delete.title']);
     ok.click();
   }
+
+  async function ask(host: HTMLElement, key: string) {
+    await press(menuOf(host, key));
+    entry(en['task.item.delete']).click();
+    return until(() => document.querySelector<HTMLElement>('.modal'));
+  }
+  const cancel = () => (document.querySelector('[data-x]') as HTMLElement).click();
+
+  it('says which items move up when it is not the last one', async () => {
+    serveApi(() => { throw new Error('unexpected write'); });
+    const { host } = await mount(taskOf([item('i1', 'a'), item('i2', 'b'), item('i3', 'c'), item('i4', 'd')]));
+    expect((await ask(host, 'i2')).textContent).toContain('Items 3–4 become 2–3.');
+    cancel();
+  });
+
+  it('says nothing about numbers when the last item goes', async () => {
+    serveApi(() => { throw new Error('unexpected write'); });
+    const { host } = await mount(taskOf([item('i1', 'a'), item('i2', 'b')]));
+    expect((await ask(host, 'i2')).textContent).not.toContain('become');
+    cancel();
+  });
+
+  it('says the rest moved up once a middle item is gone, and plainly deleted for the last', async () => {
+    const items = [item('i1', 'a'), item('i2', 'b'), item('i3', 'c')];
+    let left = [...items];
+    serveApi((path: string, { body }: { body: { item: string } }) => {
+      left = left.filter(i => i.key !== body.item);
+      return { task: taskOf(left), status: 'active' };
+    });
+    const { host } = await mount(taskOf(items));
+    await remove(host, 'i2');
+    await until(() => document.querySelector('.toast')?.textContent?.includes(en['task.toast.renumbered']));
+    await remove(host, 'i3');
+    await until(() => host.querySelectorAll('.tk-item').length === 1);
+    expect([...document.querySelectorAll('.toast')].some(t => t.textContent?.startsWith(en['task.toast.deleted'] + '×'))).toBe(true);
+  });
 
   it('asks first, and does nothing when the question is cancelled', async () => {
     serveApi(() => { throw new Error('unexpected write'); });

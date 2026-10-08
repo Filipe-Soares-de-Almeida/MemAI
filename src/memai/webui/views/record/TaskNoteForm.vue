@@ -48,10 +48,11 @@ function key(e: KeyboardEvent) {
         <span class="tk-scope-sum" data-note-scope-sum>{{ sum }}</span>
       </div>
       <div class="tk-scope-list" role="group" :aria-label="t('task.note.scope.aria')">
-        <label v-for="i in current.items" :key="i.key" class="tk-scope-row" :title="i.text"><input type="checkbox"
+        <label v-for="(i, at) in current.items" :key="i.key" class="tk-scope-row" :title="i.text"><input type="checkbox"
                :data-note-scope="i.key" :checked="d.items.includes(i.key)"
                @change="c.scopeNote(i.key, ($event.target as HTMLInputElement).checked)"> <span
-               class="tk-scope-text">{{ i.text }}</span></label>
+               class="tk-scope-text"><span class="tk-scope-n"
+               aria-hidden="true">{{ at + 1 }}</span>{{ i.text }}</span></label>
       </div>
     </div>
     <div class="rf-save">
