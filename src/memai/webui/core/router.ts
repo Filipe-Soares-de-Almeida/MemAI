@@ -9,20 +9,17 @@ import { mountView } from './vue.ts';
 import type { Component } from 'vue';
 
 export interface ViewContext { stale: () => boolean }
-export type RenderView = (host: HTMLElement, params: URLSearchParams, ctx: ViewContext) => unknown;
-/* a render function that draws into the host, or a Vue component mounted there */
-export type View = RenderView | Component;
 export type Params = Record<string, string>;
 type RecordHook = (uid: string) => void;
 
-let VIEWS: Record<string, View> = {};
+let VIEWS: Record<string, Component> = {};
 let onRecord: RecordHook | null = null;
 
 /* Views laid out as window-filling panes instead of a scrolling page. */
 const FILLS = new Set(['memories', 'diagrams', 'domains', 'memory', 'maintenance',
                        'optimization']);
 
-export function registerViews(map: Record<string, View>,
+export function registerViews(map: Record<string, Component>,
                               { onRecord: recordHook = null }: { onRecord?: RecordHook | null } = {}): void {
   VIEWS = map;
   onRecord = recordHook;
@@ -98,9 +95,7 @@ export async function route({ focus = true }: { focus?: boolean } = {}): Promise
   view.innerHTML = '<div class="loading"><span class="spin"></span></div>';
   const ctx: ViewContext = { stale: () => mine !== generation };
   try {
-    const entry = VIEWS[name];
-    if (typeof entry === 'function') await (entry as RenderView)(view, params, ctx);
-    else await mountView(entry, view, params, ctx);
+    await mountView(VIEWS[name], view, params, ctx);
   } catch (err) {
     if (ctx.stale()) return;
     /* Not `.empty`: a failed load must not look like an empty store. Retry re-runs this route. */

@@ -1,8 +1,7 @@
-/* Floating chrome for the views that build HTML: toasts, the hover tip, dialogs and menus, drawn
-   by their components/ under the function names those views call. */
+/* Floating chrome opened by a function call: toasts, the hover tip, dialogs and menus, each drawn
+   by its component in components/. */
 
 import { createApp } from 'vue';
-import { esc } from './dom.ts';
 import { tipHide } from './tip.ts';
 import AppModal from '../components/AppModal.vue';
 import ConfirmDialog from '../components/ConfirmDialog.vue';
@@ -12,27 +11,13 @@ import ActionMenu from '../components/ActionMenu.vue';
 
 export { toast, failed } from './toasts.ts';
 export { tipShow, tipHide } from './tip.ts';
-export { copyText, copyUid, copyCode } from './copy.ts';
+export { copyUid } from './copy.ts';
 export { closeModal, modalOpen } from './modal-stack.ts';
 
-/* ─── a keyboard shortcut, each key a keycap, then what it does */
+/* ─── the platform's modifier key, as a keycap shows it */
 
 const MAC = /Mac|iPhone|iPad/.test(navigator.userAgentData?.platform || navigator.platform || '');
 export const MOD_KEY = MAC ? '⌘' : 'Ctrl';
-
-export const keysHTML = (keys, action) => `<span class="key-hint">${keys
-  .map(k => `<kbd>${esc(k)}</kbd>`).join('<span class="key-plus" aria-hidden="true">+</span>')}
-  <span class="key-what">${esc(action)}</span></span>`;
-
-export const saveKeysHTML = action => keysHTML([MOD_KEY, 'Enter'], action);
-
-/* ─── toggle state: a pressed .btn also sets aria-pressed; a .seg button handles its own. */
-
-export const setPressed = (el, on) => {
-  if (!el) return;
-  el.setAttribute('aria-pressed', on ? 'true' : 'false');
-  el.classList.toggle('btn-solid', !!on);
-};
 
 /* ─── dialogs: each one a component on the shared modal stack, mounted in a detached host that it
    teleports out of. */
