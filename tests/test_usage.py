@@ -16,12 +16,14 @@ from __future__ import annotations
 import pytest
 from starlette.testclient import TestClient
 
-from memai import admin, db, server
+from memai import server
+from memai.admin.app import app as admin_app
+from memai.store import connection, domains, memories, search
 
 
 @pytest.fixture
 def conn(tmp_path):
-    with db.connect(tmp_path / "test.db") as c:
+    with connection.connect(tmp_path / "test.db") as c:
         yield c
 
 
@@ -34,13 +36,13 @@ def store(tmp_path, monkeypatch):
 @pytest.fixture
 def client(tmp_path, monkeypatch):
     monkeypatch.setenv("MEMAI_HOME", str(tmp_path))
-    with TestClient(admin.app) as c:
+    with TestClient(admin_app) as c:
         yield c
 
 
 def _usage(uid: str) -> dict:
-    with db.connect() as conn:
-        return db.usage_for(conn, [uid]).get(uid) or {}
+    with connection.connect() as conn:
+        return memories.usage_for(conn, [uid]).get(uid) or {}
 
 
 # ------------------------------------------------------------- the counting
@@ -78,8 +80,8 @@ def test_listing_counts(store):
 
 def test_a_warm_up_counts_the_checkpoint_and_not_what_it_only_counts(store):
     note = server.note("fixture title", content="the export window is inclusive", domain="acme/x100")["uid"]
-    with db.connect() as conn:
-        hand = db.insert_memory(conn, type="handoff", content="pick up at the retry path",
+    with connection.connect() as conn:
+        hand = memories.insert_memory(conn, type="handoff", content="pick up at the retry path",
                                 title="fixture title", domain="acme/x100")
     cp = server.checkpoint("fixture title", intent="i", established="e", pursuing="p",
                            open_questions="q", domain="acme/x100")["uid"]
@@ -95,7 +97,7 @@ def test_a_search_that_missed_counts_nothing(store):
 
 
 def test_an_unknown_uid_does_not_break_the_read(conn):
-    assert db.record_recall(conn, ["no-such-uid"]) == 0
+    assert memories.record_recall(conn, ["no-such-uid"]) == 0
 
 
 def test_the_dashboard_does_not_inflate_the_count(client):
@@ -132,7 +134,7 @@ def test_purging_a_memory_takes_its_usage_with_it(store):
     uid = server.note("fixture title", content="cache warmup runs nightly")["uid"]
     server.search("cache warmup")
     server.purge_memory(uid, f"DELETE {uid}")
-    with db.connect() as conn:
+    with connection.connect() as conn:
         assert conn.execute("SELECT COUNT(*) FROM memory_usage").fetchone()[0] == 0
 
 
@@ -143,9 +145,9 @@ def test_the_list_exposes_and_orders_by_recalls(client, monkeypatch, tmp_path):
                         json={"title": "fixture title", "type": "note", "content": "the digest mailout"}).json()["uid"]
     busy = client.post("/api/memories",
                        json={"title": "fixture title", "type": "note", "content": "cache warmup runs nightly"}).json()["uid"]
-    with db.connect() as conn:
-        db.record_recall(conn, [busy])
-        db.record_recall(conn, [busy])
+    with connection.connect() as conn:
+        memories.record_recall(conn, [busy])
+        memories.record_recall(conn, [busy])
 
     items = client.get("/api/memories?sort=recalls&dir=desc").json()["items"]
     assert [i["uid"] for i in items] == [busy, quiet]
@@ -170,32 +172,32 @@ def test_a_much_read_memory_does_not_outrank_a_better_match(conn):
     a popularity term buries the rare thing further every time it loses.
     Some of what a store is FOR is the thing nobody remembers to look up.
     """
-    popular = db.insert_memory(conn, type="note",
+    popular = memories.insert_memory(conn, type="note",
                                content="cache warmup notes, general")
-    exact = db.insert_memory(conn, type="note",
+    exact = memories.insert_memory(conn, type="note",
                              content="cache warmup runs nightly at midnight sharp")
     for _ in range(500):
-        db.record_recall(conn, [popular])
-    order = [r["uid"] for r in db.search_ranked(conn, "nightly midnight sharp")]
+        memories.record_recall(conn, [popular])
+    order = [r["uid"] for r in search.search_ranked(conn, "nightly midnight sharp")]
     assert order[0] == exact
 
 
 def test_recording_a_read_does_not_change_what_a_search_returns(conn):
     for i in range(6):
-        db.insert_memory(conn, type="note", content=f"queue drain finding {i}")
-    before = [r["uid"] for r in db.search_ranked(conn, "queue drain")]
+        memories.insert_memory(conn, type="note", content=f"queue drain finding {i}")
+    before = [r["uid"] for r in search.search_ranked(conn, "queue drain")]
     for uid in before[3:]:
-        db.record_recall(conn, [uid])
-        db.record_recall(conn, [uid])
-    assert [r["uid"] for r in db.search_ranked(conn, "queue drain")] == before
+        memories.record_recall(conn, [uid])
+        memories.record_recall(conn, [uid])
+    assert [r["uid"] for r in search.search_ranked(conn, "queue drain")] == before
 
 
 def test_no_ranking_query_reads_the_usage_table():
     """Cheaper than trusting the two tests above to catch every future
     wiring: the SQL that orders results must not name the table at all."""
     import inspect
-    for fn in (db.search_memories, db.search_ranked,
-               db.list_by_domain, db.list_recent, db.domain_census):
+    for fn in (search.search_memories, search.search_ranked,
+               search.list_by_domain, search.list_recent, domains.domain_census):
         src = inspect.getsource(fn)
         assert "memory_usage" not in src and "recall_count" not in src, fn.__name__
 
@@ -205,8 +207,8 @@ def test_no_ranking_query_reads_the_usage_table():
 def test_a_search_credits_the_index_that_surfaced_the_row(store):
     server.note("fixture title", content="cache warmup runs nightly", tags="warmup")
     server.search("cache warmup")
-    with db.connect() as conn:
-        share = db.search_share(conn)
+    with connection.connect() as conn:
+        share = memories.search_share(conn)
     assert share["from_search"] == 1 and share["fts"] == 1
 
 
@@ -214,8 +216,8 @@ def test_a_read_with_no_search_behind_it_credits_nobody(store):
     uid = server.note("fixture title", content="row merge keeps the older id", domain="acme/x100")["uid"]
     server.get_memory(uid)
     server.must_read(domain="acme/x100", type="note")
-    with db.connect() as conn:
-        share = db.search_share(conn)
+    with connection.connect() as conn:
+        share = memories.search_share(conn)
     assert share["reads"] == 2 and share["from_search"] == 0
 
 
@@ -226,7 +228,7 @@ def test_the_tally_survives_a_store_that_predates_it(conn):
     conn.execute("CREATE TABLE memory_usage (memory_uid TEXT PRIMARY KEY "
                  "REFERENCES memories(uid), recall_count INTEGER NOT NULL DEFAULT 0, "
                  "last_recalled_at TEXT NOT NULL)")
-    db._ensure_columns(conn)
-    uid = db.insert_memory(conn, type="note", content="x")
-    assert db.record_recall(conn, [uid], sources={uid: "fts"}) == 1
-    assert db.search_share(conn)["fts"] == 1
+    connection._ensure_columns(conn)
+    uid = memories.insert_memory(conn, type="note", content="x")
+    assert memories.record_recall(conn, [uid], sources={uid: "fts"}) == 1
+    assert memories.search_share(conn)["fts"] == 1

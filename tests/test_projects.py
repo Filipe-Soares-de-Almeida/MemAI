@@ -14,7 +14,9 @@ from pathlib import Path
 import pytest
 from starlette.testclient import TestClient
 
-from memai import admin, autostart, brief, db, server, warden
+from memai import autostart, brief, server, warden
+from memai.admin.app import app as admin_app
+from memai.store import backups, connection, memories, paths, projects, renders
 
 
 @pytest.fixture
@@ -25,29 +27,29 @@ def home(tmp_path, monkeypatch):
 
 @pytest.fixture
 def client(home):
-    with TestClient(admin.app) as c:
+    with TestClient(admin_app) as c:
         yield c
 
 
 def _count(project: str) -> int:
-    with db.connect(project=project) as conn:
+    with connection.connect(project=project) as conn:
         return conn.execute("SELECT COUNT(*) FROM memories").fetchone()[0]
 
 
 # ── which project a connect() opens ─────────────────────────────────────
 
 def test_a_home_with_no_pointer_opens_the_general_project(home):
-    assert db.active_project() == "General"
-    assert db.default_db_path() == home / "memai.db"
-    assert db.list_projects() == [{
+    assert paths.active_project() == "General"
+    assert paths.default_db_path() == home / "memai.db"
+    assert projects.list_projects() == [{
         "name": "General", "path": str(home / "memai.db"), "size": 0,
         "active": True, "general": True}]
 
 
 def test_a_new_project_is_its_own_file_with_the_schema_in_place(home):
-    path = db.create_project("Acme Billing")
+    path = projects.create_project("Acme Billing")
     assert path == home / "projects" / "Acme Billing.db"
-    with db.connect(project="Acme Billing") as conn:
+    with connection.connect(project="Acme Billing") as conn:
         tables = {r[0] for r in conn.execute(
             "SELECT name FROM sqlite_master WHERE type = 'table'")}
     assert {"memories", "memories_fts", "relations", "diagrams"} <= tables
@@ -55,11 +57,11 @@ def test_a_new_project_is_its_own_file_with_the_schema_in_place(home):
 
 
 def test_a_project_is_found_whatever_the_casing(home):
-    db.create_project("Acme Billing")
-    assert db.find_project("acme billing") == "Acme Billing"
-    assert db.project_path("ACME BILLING") == home / "projects" / "Acme Billing.db"
-    assert db.project_exists("acme billing")
-    assert db.find_project("zeta") is None
+    projects.create_project("Acme Billing")
+    assert paths.find_project("acme billing") == "Acme Billing"
+    assert paths.project_path("ACME BILLING") == home / "projects" / "Acme Billing.db"
+    assert paths.project_exists("acme billing")
+    assert paths.find_project("zeta") is None
 
 
 @pytest.mark.parametrize("name", [
@@ -68,60 +70,60 @@ def test_a_project_is_found_whatever_the_casing(home):
 ])
 def test_a_name_that_cannot_be_a_file_is_refused(home, name):
     with pytest.raises(ValueError):
-        db.create_project(name)
+        projects.create_project(name)
     assert not list(home.rglob("*.db"))
 
 
 def test_a_name_already_taken_in_any_casing_is_refused(home):
-    db.create_project("Acme")
+    projects.create_project("Acme")
     with pytest.raises(ValueError, match="already exists"):
-        db.create_project("acme")
+        projects.create_project("acme")
     with pytest.raises(ValueError, match="already exists"):
-        db.create_project("general")
+        projects.create_project("general")
 
 
 def test_connect_takes_a_path_or_a_project_but_not_both(home):
-    db.create_project("Acme")
-    with pytest.raises(ValueError, match="not both"), db.connect(home / "memai.db", project="Acme"):
+    projects.create_project("Acme")
+    with pytest.raises(ValueError, match="not both"), connection.connect(home / "memai.db", project="Acme"):
         pass
 
 
 def test_switching_redirects_every_connect_without_a_path(home):
-    db.create_project("Acme")
-    assert db.set_active_project("acme") == "Acme"
+    projects.create_project("Acme")
+    assert paths.set_active_project("acme") == "Acme"
     assert (home / "active").read_text(encoding="utf-8").strip() == "Acme"
-    assert db.active_project() == "Acme"
-    assert db.default_db_path() == home / "projects" / "Acme.db"
-    with db.connect() as conn:
-        db.insert_memory(conn, type="note", content="filed in acme", domain="acme/x100")
+    assert paths.active_project() == "Acme"
+    assert paths.default_db_path() == home / "projects" / "Acme.db"
+    with connection.connect() as conn:
+        memories.insert_memory(conn, type="note", content="filed in acme", domain="acme/x100")
     assert _count("Acme") == 1
     assert _count("General") == 0
-    assert db.set_active_project("general") == "General"
-    with db.connect() as conn:
+    assert paths.set_active_project("general") == "General"
+    with connection.connect() as conn:
         assert conn.execute("SELECT COUNT(*) FROM memories").fetchone()[0] == 0
 
 
 def test_the_pointer_has_to_name_an_existing_project(home):
     with pytest.raises(ValueError, match="no project named"):
-        db.set_active_project("zeta")
-    assert db.active_project() == "General"
+        paths.set_active_project("zeta")
+    assert paths.active_project() == "General"
 
 
 def test_a_pointer_to_a_project_that_is_not_there_falls_back_to_general(home):
     (home / "active").write_text("Zeta\n", encoding="utf-8")
-    assert db.active_project() == "General"
+    assert paths.active_project() == "General"
     (home / "active").write_text("a*b\n", encoding="utf-8")
-    assert db.active_project() == "General"
-    assert db.default_db_path() == home / "memai.db"
+    assert paths.active_project() == "General"
+    assert paths.default_db_path() == home / "memai.db"
 
 
 def test_list_projects_puts_general_first_and_the_rest_by_name(home):
-    db.create_project("zeta")
-    db.create_project("Acme")
-    db.set_active_project("zeta")
-    with db.connect() as conn:
-        db.insert_memory(conn, type="note", content="one", domain="zeta")
-    rows = db.list_projects(counts=True)
+    projects.create_project("zeta")
+    projects.create_project("Acme")
+    paths.set_active_project("zeta")
+    with connection.connect() as conn:
+        memories.insert_memory(conn, type="note", content="one", domain="zeta")
+    rows = projects.list_projects(counts=True)
     assert [r["name"] for r in rows] == ["General", "Acme", "zeta"]
     assert [r["active"] for r in rows] == [False, False, True]
     assert [r["general"] for r in rows] == [True, False, False]
@@ -129,33 +131,33 @@ def test_list_projects_puts_general_first_and_the_rest_by_name(home):
 
 
 def test_deleting_a_project_needs_it_empty_and_inactive(home):
-    db.create_project("Acme")
-    db.set_active_project("Acme")
+    projects.create_project("Acme")
+    paths.set_active_project("Acme")
     with pytest.raises(ValueError, match="active"):
-        db.delete_project("Acme")
-    with db.connect() as conn:
-        uid = db.insert_memory(conn, type="note", content="kept", domain="acme")
-    db.set_active_project("General")
+        projects.delete_project("Acme")
+    with connection.connect() as conn:
+        uid = memories.insert_memory(conn, type="note", content="kept", domain="acme")
+    paths.set_active_project("General")
     with pytest.raises(ValueError, match="holds 1"):
-        db.delete_project("Acme")
-    with db.connect(project="Acme") as conn:
-        db.purge_memory(conn, uid)
-    db.delete_project("acme")
+        projects.delete_project("Acme")
+    with connection.connect(project="Acme") as conn:
+        memories.purge_memory(conn, uid)
+    projects.delete_project("acme")
     assert not (home / "projects" / "Acme.db").exists()
-    assert [r["name"] for r in db.list_projects()] == ["General"]
+    assert [r["name"] for r in projects.list_projects()] == ["General"]
 
 
 def test_the_general_project_cannot_be_deleted(home):
     with pytest.raises(ValueError, match="General"):
-        db.delete_project("general")
+        projects.delete_project("general")
     with pytest.raises(ValueError, match="no project named"):
-        db.delete_project("zeta")
+        projects.delete_project("zeta")
 
 
 def test_the_side_folders_stay_in_the_home_whichever_project_is_active(home):
-    db.create_project("Acme")
-    db.set_active_project("Acme")
-    assert db.renders_dir() == home / "renders"
+    projects.create_project("Acme")
+    paths.set_active_project("Acme")
+    assert renders.renders_dir() == home / "renders"
     assert warden.state_dir() == home / "warden"
     assert autostart.home() == home
 
@@ -163,30 +165,30 @@ def test_the_side_folders_stay_in_the_home_whichever_project_is_active(home):
 # ── backups ─────────────────────────────────────────────────────────────
 
 def test_backups_live_in_the_root_for_general_and_in_a_folder_per_project(home):
-    db.create_project("Acme Billing")
-    assert db.backups_dir("General") == home / "backups"
-    assert db.backups_dir("acme billing") == home / "backups" / "Acme Billing"
-    assert db.backup_name("Acme Billing").startswith("Acme Billing-")
-    assert db.backup_name("Acme Billing", "move").startswith("Acme Billing-move-")
+    projects.create_project("Acme Billing")
+    assert backups.backups_dir("General") == home / "backups"
+    assert backups.backups_dir("acme billing") == home / "backups" / "Acme Billing"
+    assert backups.backup_name("Acme Billing").startswith("Acme Billing-")
+    assert backups.backup_name("Acme Billing", "move").startswith("Acme Billing-move-")
 
 
 def test_each_project_lists_its_own_backups(home):
-    db.create_project("Acme")
-    root, mine = db.backups_dir("General"), db.backups_dir("Acme")
+    projects.create_project("Acme")
+    root, mine = backups.backups_dir("General"), backups.backups_dir("Acme")
     for folder, name in ((root, "memai-20260101-000000.db"), (root, "General-20260102-000000.db"),
                          (root, "notes.txt"), (mine, "Acme-20260103-000000.db")):
         (folder / name).write_bytes(b"")
-    assert {p.name for p in db.backup_files("General")} == {
+    assert {p.name for p in backups.backup_files("General")} == {
         "memai-20260101-000000.db", "General-20260102-000000.db"}
-    assert [p.name for p in db.backup_files("acme")] == ["Acme-20260103-000000.db"]
+    assert [p.name for p in backups.backup_files("acme")] == ["Acme-20260103-000000.db"]
 
 
 def test_backup_to_copies_the_project_it_is_asked_for(home):
-    db.create_project("Acme")
-    with db.connect(project="Acme") as conn:
-        db.insert_memory(conn, type="note", content="in the copy", domain="acme")
-    dest = db.backup_to(home / "copy.db", project="acme")
-    with db.connect(dest) as conn:
+    projects.create_project("Acme")
+    with connection.connect(project="Acme") as conn:
+        memories.insert_memory(conn, type="note", content="in the copy", domain="acme")
+    dest = backups.backup_to(home / "copy.db", project="acme")
+    with connection.connect(dest) as conn:
         assert conn.execute("SELECT content FROM memories").fetchone()[0] == "in the copy"
 
 
@@ -235,7 +237,7 @@ def test_a_backup_lands_in_the_active_projects_folder_and_health_lists_only_its_
 # ── the MCP tools and the brief ─────────────────────────────────────────
 
 def test_the_mcp_tools_follow_the_switch_without_a_restart(client, home):
-    """Every tool opens db.connect() per call, so a switch made in the
+    """Every tool opens connection.connect() per call, so a switch made in the
     dashboard reaches the very next call of a server already running."""
     first = server.note(title="filed before the switch", content="in general",
                         domain="acme/x100")
@@ -252,7 +254,7 @@ def test_the_mcp_tools_follow_the_switch_without_a_restart(client, home):
 
 
 def test_the_brief_names_the_project_it_read(home):
-    with db.connect() as conn:
-        db.insert_memory(conn, type="note", content="a fact", domain="acme/x100")
+    with connection.connect() as conn:
+        memories.insert_memory(conn, type="note", content="a fact", domain="acme/x100")
         assert "1 memories in project 'Acme'." in brief.session_brief(conn, project="Acme")
         assert "1 memories in the whole store." in brief.session_brief(conn)

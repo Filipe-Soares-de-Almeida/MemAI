@@ -16,15 +16,17 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from conftest import shaped
-from memai import brief, db, hook, hook_install, server, tasks, warden
-from memai.store import connection
+from memai import brief, hook, hook_install, server, tasks, warden
+from memai.store import connection, memories
+from memai.store import domains as store_domains
+from memai.store import settings as store_settings
 
 DOMAIN_CAP = brief.DOMAINS
 
 
 @pytest.fixture
 def conn(tmp_path):
-    with db.connect(tmp_path / "test.db") as c:
+    with connection.connect(tmp_path / "test.db") as c:
         yield c
 
 
@@ -36,16 +38,16 @@ def store(tmp_path, monkeypatch):
 
 def _seed(conn, *, created_at: str | None = None) -> dict:
     return {
-        "note": db.insert_memory(conn, type="note", domain="acme/x100",
+        "note": memories.insert_memory(conn, type="note", domain="acme/x100",
                                  content="cache warmup runs before the first request",
                                  created_at=created_at),
-        "pitfall": db.insert_memory(conn, type="anti_pattern", domain="acme/x100",
+        "pitfall": memories.insert_memory(conn, type="anti_pattern", domain="acme/x100",
                                     content=shaped("anti_pattern", "retry without backoff"),
                                     created_at=created_at),
-        "hand": db.insert_memory(conn, type="handoff", domain="omni/x900",
+        "hand": memories.insert_memory(conn, type="handoff", domain="omni/x900",
                                  content="pick up at the token refresh path",
                                  created_at=created_at),
-        "cp": db.insert_memory(conn, type="checkpoint", domain="acme/x100",
+        "cp": memories.insert_memory(conn, type="checkpoint", domain="acme/x100",
                                content=shaped("checkpoint", "ship the retry path"),
                                created_at=created_at),
     }
@@ -110,7 +112,7 @@ def test_the_brief_can_be_scoped(conn):
 
 def test_the_brief_pluralizes_the_counts(conn):
     for i in range(3):
-        db.insert_memory(conn, type="note", domain="acme/x100", content=f"fact {i}")
+        memories.insert_memory(conn, type="note", domain="acme/x100", content=f"fact {i}")
     _seed_task(conn)
     _seed_task(conn)
     text = brief.session_brief(conn)
@@ -118,7 +120,7 @@ def test_the_brief_pluralizes_the_counts(conn):
 
 
 def test_the_brief_calls_a_diagram_a_flow(conn):
-    uid = db.insert_memory(conn, type="diagram", domain="acme/x100",
+    uid = memories.insert_memory(conn, type="diagram", domain="acme/x100",
                            content="export routine")
     text = brief.session_brief(conn)
     assert "1 flow." in text
@@ -126,7 +128,7 @@ def test_the_brief_calls_a_diagram_a_flow(conn):
 
 
 def test_the_brief_has_no_pending_line_when_nothing_is_pending(conn):
-    db.insert_memory(conn, type="checkpoint", domain="acme/x100",
+    memories.insert_memory(conn, type="checkpoint", domain="acme/x100",
                      content=shaped("checkpoint", "ship the retry path"))
     text = brief.session_brief(conn)
     assert "Pending in" not in text
@@ -153,12 +155,12 @@ def test_a_long_section_cannot_starve_the_ones_after_it(conn):
     line and a long domains line would leave the pending line less than it
     needs; its even share keeps it."""
     for i in range(DOMAIN_CAP):
-        db.insert_memory(conn, type="note",
+        memories.insert_memory(conn, type="note",
                          domain=f"acme/a-very-long-product-name-{i}/with/a/deep/path/to/walk",
                          content=f"fact {i}")
-    db.insert_memory(conn, type="checkpoint", domain="acme/x100",
+    memories.insert_memory(conn, type="checkpoint", domain="acme/x100",
                      content=shaped("checkpoint", "ship the retry path " + "spelled out at length " * 12))
-    db.insert_memory(conn, type="anti_pattern", domain="acme/x100",
+    memories.insert_memory(conn, type="anti_pattern", domain="acme/x100",
                      content=shaped("anti_pattern", "retry without backoff"))
     whole = brief.session_brief(conn, budget=10_000).split("\n")
     opening = whole[0]
@@ -178,7 +180,7 @@ def test_a_long_section_cannot_starve_the_ones_after_it(conn):
 def test_a_trimmed_domain_line_still_reports_its_total(conn):
     """The domains named are capped, and the line says how many it left out."""
     for i in range(DOMAIN_CAP + 1):  # plus the shared parent, two over the cap
-        db.insert_memory(conn, type="note", domain=f"acme/p{i}", content=f"fact {i}")
+        memories.insert_memory(conn, type="note", domain=f"acme/p{i}", content=f"fact {i}")
     text = brief.session_brief(conn)
     assert "+2 more" in text
 
@@ -199,7 +201,7 @@ def test_the_instruction_states_the_active_casing_policy(conn, mode, said, not_s
     """Under lower/upper a path is folded on the way in and on the way
     through a read; under preserve two spellings are two domains."""
     _seed(conn)
-    db.set_domain_case(conn, mode)
+    store_domains.set_domain_case(conn, mode)
     text = brief.session_brief(conn)
     assert said in text
     assert not_said not in text
@@ -207,10 +209,10 @@ def test_the_instruction_states_the_active_casing_policy(conn, mode, said, not_s
 
 def test_a_contradicted_pitfall_is_not_counted(conn):
     ids = _seed(conn)
-    db.insert_memory(conn, type="anti_pattern", domain="acme/x100",
+    memories.insert_memory(conn, type="anti_pattern", domain="acme/x100",
                      content=shaped("anti_pattern", "sleep instead of waiting on a signal"))
     assert "2 pitfalls" in brief.session_brief(conn)
-    db.set_confidence(conn, ids["pitfall"], "contradicted")
+    memories.set_confidence(conn, ids["pitfall"], "contradicted")
     text = brief.session_brief(conn)
     assert "1 pitfall," in text and "2 pitfalls" not in text
 
@@ -218,7 +220,7 @@ def test_a_contradicted_pitfall_is_not_counted(conn):
 # ------------------------------------------------------------------ the hooks
 
 def test_session_start_emits_the_brief(store, capsysbinary):
-    with db.connect() as conn:
+    with connection.connect() as conn:
         _seed(conn)
     out = _run("session-start", {}, capsysbinary)
     assert out["hookSpecificOutput"]["hookEventName"] == "SessionStart"
@@ -235,7 +237,7 @@ def test_session_start_on_an_empty_store_emits_nothing(store, capsysbinary):
 
 def test_session_start_also_carries_the_instruction(store, capsysbinary):
     """One hook emits the context and the instruction to act on it."""
-    with db.connect() as conn:
+    with connection.connect() as conn:
         _seed(conn)
     out = _run("session-start", {}, capsysbinary)
     assert "pulse(domain)" in out["hookSpecificOutput"]["additionalContext"]
@@ -247,14 +249,14 @@ def test_pre_compact_asks_for_the_durable_part(store, capsysbinary):
 
 
 def test_stop_is_quiet_when_the_session_wrote_something(store, capsysbinary):
-    with db.connect() as conn:
+    with connection.connect() as conn:
         _seed(conn)
     assert _run("stop", {}, capsysbinary) is None
 
 
 def test_stop_asks_when_nothing_was_written(store, capsysbinary):
     old = (datetime.now(UTC) - timedelta(days=3)).isoformat()
-    with db.connect() as conn:
+    with connection.connect() as conn:
         _seed(conn, created_at=old)
     out = _run("stop", {}, capsysbinary)
     assert "note()" in out["hookSpecificOutput"]["additionalContext"]
@@ -264,7 +266,7 @@ def test_stop_asks_when_nothing_was_written(store, capsysbinary):
 def test_stop_does_not_answer_its_own_nudge(store, capsysbinary):
     """stop_hook_active means this run was triggered by the last one."""
     old = (datetime.now(UTC) - timedelta(days=3)).isoformat()
-    with db.connect() as conn:
+    with connection.connect() as conn:
         _seed(conn, created_at=old)
     assert _run("stop", {"stop_hook_active": True}, capsysbinary) is None
 
@@ -294,7 +296,7 @@ def test_stop_does_not_ask_for_an_agent_the_host_does_not_have(store, capsysbina
                                                                tmp_path):
     """An uninstalled warden would spend the next turn on a launch error."""
     settings = tmp_path / "host" / "settings.json"
-    with db.connect() as conn:
+    with connection.connect() as conn:
         _seed(conn)
     out = _run("stop", {"session_id": "session-1"}, capsysbinary,
                argv=("--settings", str(settings)))
@@ -318,7 +320,7 @@ def test_an_agent_installed_after_the_session_started_is_not_asked_for(
         json.dumps({"started_at": earlier}), encoding="utf-8")
     hook_install.install_agents(hook_install.agents_dir(settings))
 
-    with db.connect() as conn:
+    with connection.connect() as conn:
         _seed(conn)
     assert _run("stop", {"session_id": "session-1"}, capsysbinary,
                 argv=("--settings", str(settings))) is None
@@ -331,7 +333,7 @@ def test_a_session_that_never_reported_starting_is_not_asked(store, capsysbinary
     settings = tmp_path / "host" / "settings.json"
     settings.parent.mkdir(parents=True, exist_ok=True)
     hook_install.install_agents(hook_install.agents_dir(settings))
-    with db.connect() as conn:
+    with connection.connect() as conn:
         _seed(conn)
     assert _run("stop", {"session_id": "session-1"}, capsysbinary,
                 argv=("--settings", str(settings))) is None
@@ -339,7 +341,7 @@ def test_a_session_that_never_reported_starting_is_not_asked(store, capsysbinary
 
 def test_session_start_records_that_the_session_began(store, capsysbinary):
     """It is what a later Stop compares the agent's install time against."""
-    with db.connect() as conn:
+    with connection.connect() as conn:
         _seed(conn)
     _run("session-start", {"session_id": "session-1"}, capsysbinary)
     assert warden.read("session-1")["started_at"]
@@ -347,14 +349,14 @@ def test_session_start_records_that_the_session_began(store, capsysbinary):
 
 def test_recording_the_start_does_not_count_as_asking(store, capsysbinary):
     """A session that just began is still owed its first warden run."""
-    with db.connect() as conn:
+    with connection.connect() as conn:
         _seed(conn)
     _run("session-start", {"session_id": "session-1"}, capsysbinary)
     assert warden.due("session-1") is True
 
 
 def test_stop_asks_for_the_warden_once_it_is_installed(store, capsysbinary, tmp_path):
-    with db.connect() as conn:
+    with connection.connect() as conn:
         _seed(conn)
     out = _run("stop", {"session_id": "session-1",
                         "transcript_path": "/tmp/a.jsonl"},
@@ -367,7 +369,7 @@ def test_the_warden_is_not_asked_for_twice_in_one_interval(store, capsysbinary,
                                                             tmp_path):
     """The ask is recorded when it is made, so the next turn is silent."""
     argv = _with_agent(tmp_path)
-    with db.connect() as conn:
+    with connection.connect() as conn:
         _seed(conn)
     assert _run("stop", {"session_id": "session-1"}, capsysbinary, argv=argv)
     assert _run("stop", {"session_id": "session-1"}, capsysbinary, argv=argv) is None
@@ -379,7 +381,7 @@ def test_a_second_session_is_asked_while_the_first_is_in_its_interval(
     session, and each request names the transcript of the session it is for."""
     argv = _with_agent(tmp_path)
     warden.began("session-2")
-    with db.connect() as conn:
+    with connection.connect() as conn:
         _seed(conn)
     assert _run("stop", {"session_id": "session-1"}, capsysbinary, argv=argv)
     assert _run("stop", {"session_id": "session-1"}, capsysbinary, argv=argv) is None
@@ -391,7 +393,7 @@ def test_a_second_session_is_asked_while_the_first_is_in_its_interval(
 
 def test_a_session_without_an_id_is_never_asked(store, capsysbinary, tmp_path):
     """Nothing can record the ask, so making it would repeat it every turn."""
-    with db.connect() as conn:
+    with connection.connect() as conn:
         _seed(conn)
     assert _run("stop", {}, capsysbinary, argv=_with_agent(tmp_path)) is None
 
@@ -399,7 +401,7 @@ def test_a_session_without_an_id_is_never_asked(store, capsysbinary, tmp_path):
 def test_both_notes_travel_in_one_result(store, capsysbinary, tmp_path):
     """A turn that owes a checkpoint and a warden run emits one object."""
     old = (datetime.now(UTC) - timedelta(days=3)).isoformat()
-    with db.connect() as conn:
+    with connection.connect() as conn:
         _seed(conn, created_at=old)
     out = _run("stop", {"session_id": "session-1"}, capsysbinary,
                argv=_with_agent(tmp_path))
@@ -413,7 +415,7 @@ def test_the_second_ask_tells_the_warden_where_it_stopped(store, capsysbinary,
                                                            tmp_path):
     """The stamp of the previous ask is what bounds the turns to read."""
     argv = _with_agent(tmp_path)
-    with db.connect() as conn:
+    with connection.connect() as conn:
         _seed(conn)
     _run("stop", {"session_id": "session-1"}, capsysbinary, argv=argv)
     first = warden.read("session-1")["asked_at"]
@@ -426,7 +428,7 @@ def test_the_second_ask_tells_the_warden_where_it_stopped(store, capsysbinary,
 
 def test_the_statusline_carries_the_count_the_domain_and_the_checkpoint_age(
         store, capsysbinary):
-    with db.connect() as conn:
+    with connection.connect() as conn:
         _seed(conn)
     line = _status(capsysbinary)
     assert "4 mem" in line
@@ -437,7 +439,7 @@ def test_the_statusline_carries_the_count_the_domain_and_the_checkpoint_age(
 def test_the_statusline_is_one_bare_line_under_eighty_characters(store, capsysbinary):
     """Plain text closed by a single newline, not the JSON a hook event emits."""
     import sys
-    with db.connect() as conn:
+    with connection.connect() as conn:
         _seed(conn)
     sys.stdin = io.StringIO("{}")
     try:
@@ -451,8 +453,8 @@ def test_the_statusline_is_one_bare_line_under_eighty_characters(store, capsysbi
 
 
 def test_a_long_domain_path_does_not_push_the_line_over_the_limit(store, capsysbinary):
-    with db.connect() as conn:
-        db.insert_memory(conn, type="note", domain="acme/" + "x100/" * 20 + "p200",
+    with connection.connect() as conn:
+        memories.insert_memory(conn, type="note", domain="acme/" + "x100/" * 20 + "p200",
                          content="the index rebuild runs after the row merge")
     line = _status(capsysbinary)
     assert len(line) < 80
@@ -461,22 +463,22 @@ def test_a_long_domain_path_does_not_push_the_line_over_the_limit(store, capsysb
 
 def test_the_busiest_domain_wins_over_the_parent_holding_nothing(store, capsysbinary):
     """A path is ranked on the memories naming it, not on its subtree."""
-    with db.connect() as conn:
+    with connection.connect() as conn:
         for i in range(3):
-            db.insert_memory(conn, type="note", domain="acme/x100/p200",
+            memories.insert_memory(conn, type="note", domain="acme/x100/p200",
                              content=f"queue drain step {i}")
     assert "acme/x100/p200" in _status(capsysbinary)
 
 
 def test_a_store_with_no_checkpoint_says_so(store, capsysbinary):
-    with db.connect() as conn:
-        db.insert_memory(conn, type="note", domain="acme/x100",
+    with connection.connect() as conn:
+        memories.insert_memory(conn, type="note", domain="acme/x100",
                          content="the report export window is inclusive")
     assert "no checkpoint" in _status(capsysbinary)
 
 
 def test_the_statusline_can_be_scoped(store, capsysbinary):
-    with db.connect() as conn:
+    with connection.connect() as conn:
         _seed(conn)
     line = _status(capsysbinary, ["--domain", "omni/x900"])
     assert "1 mem" in line and "omni/x900" in line
@@ -488,19 +490,19 @@ def test_an_empty_store_has_no_statusline(store, capsysbinary):
 
 
 def test_an_empty_scope_has_no_statusline(store, capsysbinary):
-    with db.connect() as conn:
+    with connection.connect() as conn:
         _seed(conn)
     assert _status(capsysbinary, ["--domain", "zeta/x200"]) == ""
 
 
 def test_a_store_that_cannot_be_opened_has_no_statusline(monkeypatch, capsysbinary):
-    monkeypatch.setattr(db, "connect", lambda *a, **k: (_ for _ in ()).throw(OSError("nope")))
+    monkeypatch.setattr(connection, "connect", lambda *a, **k: (_ for _ in ()).throw(OSError("nope")))
     assert _status(capsysbinary) == ""
 
 
 def test_a_payload_that_is_not_json_does_not_stop_the_statusline(store, capsysbinary):
     """The status line does not depend on stdin, so junk on it changes nothing."""
-    with db.connect() as conn:
+    with connection.connect() as conn:
         _seed(conn)
     assert "4 mem" in _status(capsysbinary, stdin="this is not json")
 
@@ -538,14 +540,14 @@ def test_an_unreadable_payload_is_not_an_error(store, capsysbinary):
 
 
 def test_a_store_that_cannot_be_opened_is_not_an_error(monkeypatch, capsysbinary):
-    monkeypatch.setattr(db, "connect", lambda *a, **k: (_ for _ in ()).throw(OSError("nope")))
+    monkeypatch.setattr(connection, "connect", lambda *a, **k: (_ for _ in ()).throw(OSError("nope")))
     assert _run("session-start", {}, capsysbinary) is None
 
 
 # ------------------------------------------------------------ the MCP surface
 
 def test_the_warm_up_prompt_returns_the_same_brief(store):
-    with db.connect() as conn:
+    with connection.connect() as conn:
         _seed(conn)
     text = server.warm_up()
     assert "Pending in this project: 1 pitfall, 1 handoff, 1 note." in text
@@ -576,18 +578,18 @@ def test_an_explicit_session_still_wins(store):
 def test_the_switch_silences_the_ask(store, capsysbinary, tmp_path):
     """Off means the Stop hook never asks, which is what makes it cost nothing."""
     argv = _with_agent(tmp_path)
-    with db.connect() as conn:
+    with connection.connect() as conn:
         _seed(conn)
-        db.set_warden_enabled(conn, False)
+        store_settings.set_warden_enabled(conn, False)
     assert _run("stop", {"session_id": "session-1"}, capsysbinary, argv=argv) is None
 
 
 def test_the_switch_does_not_silence_the_checkpoint_nudge(store, capsysbinary, tmp_path):
     """It turns off one note, not the hook."""
     old = (datetime.now(UTC) - timedelta(days=3)).isoformat()
-    with db.connect() as conn:
+    with connection.connect() as conn:
         _seed(conn, created_at=old)
-        db.set_warden_enabled(conn, False)
+        store_settings.set_warden_enabled(conn, False)
     out = _run("stop", {"session_id": "session-1"}, capsysbinary,
                argv=_with_agent(tmp_path))
     assert "note()" in _context(out)
@@ -597,9 +599,9 @@ def test_the_switch_does_not_silence_the_checkpoint_nudge(store, capsysbinary, t
 def test_the_stored_interval_is_what_the_hook_uses(store, capsysbinary, tmp_path):
     """The dashboard writes it; the hook reads it without a flag."""
     argv = _with_agent(tmp_path)
-    with db.connect() as conn:
+    with connection.connect() as conn:
         _seed(conn)
-        db.set_warden_minutes(conn, 60)
+        store_settings.set_warden_minutes(conn, 60)
     assert _run("stop", {"session_id": "session-1"}, capsysbinary, argv=argv)
     # 30 minutes on, the stored 60 has not elapsed, so nothing is asked
     later = (datetime.now(UTC) - timedelta(minutes=30)).isoformat()
@@ -611,9 +613,9 @@ def test_the_stored_interval_is_what_the_hook_uses(store, capsysbinary, tmp_path
 def test_the_flag_overrides_the_stored_interval(store, capsysbinary, tmp_path):
     """`--warden-minutes` is for one run, the store holds the standing answer."""
     argv = _with_agent(tmp_path)
-    with db.connect() as conn:
+    with connection.connect() as conn:
         _seed(conn)
-        db.set_warden_minutes(conn, 480)
+        store_settings.set_warden_minutes(conn, 480)
     assert _run("stop", {"session_id": "session-1"}, capsysbinary, argv=argv)
     assert _run("stop", {"session_id": "session-1"}, capsysbinary,
                 argv=(*argv, "--warden-minutes", "1")) is None
@@ -632,7 +634,7 @@ SESSION = "session-1"
 def _open_tasks(count: int = 2, *, backdate: bool = False, worked: bool = True) -> None:
     """`count` open tasks in `acme/x100`, and a session that worked there;
     `backdate` ages every memory so the checkpoint nudge is owed too."""
-    with db.connect() as conn:
+    with connection.connect() as conn:
         for _ in range(count):
             _seed_task(conn)
         if backdate:
@@ -684,7 +686,7 @@ def test_the_block_says_one_task_in_the_singular(store, capsysbinary):
 
 
 def _two_domains() -> None:
-    with db.connect() as conn:
+    with connection.connect() as conn:
         _seed_task(conn, "acme/harbor")
         _seed_task(conn, "acme/docks")
 
@@ -729,7 +731,7 @@ def test_a_session_that_named_no_domain_is_not_asked(store, capsysbinary):
 
 
 def test_a_task_listed_into_a_recorded_domain_is_counted(store, capsysbinary):
-    with db.connect() as conn:
+    with connection.connect() as conn:
         tasks.create_task(conn, title="Repair the pier", goal="The pier holds",
                           items=["replace the planks"], domain="acme/harbor",
                           also="acme/docks")
@@ -738,7 +740,7 @@ def test_a_task_listed_into_a_recorded_domain_is_counted(store, capsysbinary):
 
 
 def test_a_task_in_two_recorded_domains_counts_once(store, capsysbinary):
-    with db.connect() as conn:
+    with connection.connect() as conn:
         tasks.create_task(conn, title="Repair the pier", goal="The pier holds",
                           items=["replace the planks"], domain="acme/harbor",
                           also="acme/docks")
@@ -765,8 +767,8 @@ def test_stop_blocks_again_after_the_interval(store, capsysbinary):
 
 def test_the_task_flag_overrides_the_stored_interval(store, capsysbinary):
     _open_tasks(2)
-    with db.connect() as conn:
-        db.set_task_ask_minutes(conn, 480)
+    with connection.connect() as conn:
+        store_settings.set_task_ask_minutes(conn, 480)
     assert _run("stop", {"session_id": "session-1"}, capsysbinary)
     _age_task_ask("session-1", 2)
     assert _run("stop", {"session_id": "session-1"}, capsysbinary) is None
@@ -793,7 +795,7 @@ def test_the_block_carries_the_other_notes(store, capsysbinary, tmp_path):
 
 def test_no_block_without_open_tasks(store, capsysbinary):
     """A completed task is not open, so the output is what it was before."""
-    with db.connect() as conn:
+    with connection.connect() as conn:
         uid = tasks.create_task(conn, title="Ship the retry path", goal="Retries back off",
                                 items=["add the backoff"], domain="acme/x100")
         tasks.set_item_state(conn, uid, "i1", "done")
@@ -803,15 +805,15 @@ def test_no_block_without_open_tasks(store, capsysbinary):
 
 def test_no_block_when_switched_off(store, capsysbinary):
     _open_tasks(2)
-    with db.connect() as conn:
-        db.set_task_ask_enabled(conn, False)
+    with connection.connect() as conn:
+        store_settings.set_task_ask_enabled(conn, False)
     assert _run("stop", {"session_id": "session-1"}, capsysbinary) is None
 
 
 def test_the_task_switch_does_not_touch_the_warden_switch(store):
-    with db.connect() as conn:
-        db.set_task_ask_enabled(conn, False)
-        assert db.get_warden_enabled(conn) is True
+    with connection.connect() as conn:
+        store_settings.set_task_ask_enabled(conn, False)
+        assert store_settings.get_warden_enabled(conn) is True
 
 
 def test_no_block_without_a_session_id(store, capsysbinary):
@@ -843,7 +845,7 @@ def test_a_store_that_cannot_be_opened_does_not_block(store, capsysbinary, monke
     """The hook is attached to somebody's session: no store, no ask, exit 0."""
     def refuse(*args, **kwargs):
         raise OSError("store is not readable")
-    monkeypatch.setattr(db, "connect", refuse)
+    monkeypatch.setattr(connection, "connect", refuse)
     assert _run("stop", {"session_id": "session-1"}, capsysbinary) is None
 
 
@@ -868,7 +870,7 @@ def test_a_failing_task_read_asks_nothing_and_leaves_the_other_notes(
 def test_stop_does_not_block_over_a_task_archived_without_syncing_its_state(
         store, capsysbinary, monkeypatch):
     monkeypatch.setattr(connection, "_repair_task_states", lambda conn: None)
-    with db.connect() as conn:
+    with connection.connect() as conn:
         uid = _seed_task(conn)
         conn.execute("UPDATE memories SET status = 'archived' WHERE uid = ?", (uid,))
     warden.record_domain("session-1", "acme/x100")

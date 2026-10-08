@@ -1,9 +1,5 @@
-/* Reports what the dashboard's highlighter can do, as JSON, so
-   tests/test_richtext.py can hold it to working: every language the engine
-   registers, the aliases it answers to, and one coloured snippet per
-   language there is a snippet for.
-
-   Usage: node tools/highlight-cases.mjs */
+/* The highlighter's languages, aliases and one coloured snippet per language, as JSON for
+   tests/test_richtext.py. Usage: node tools/highlight-cases.mjs */
 
 const hljs = (await import('highlight.js')).default;
 hljs.configure({ ignoreUnescapedHTML: true });

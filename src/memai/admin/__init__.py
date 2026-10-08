@@ -25,14 +25,3 @@ reversible option, and deleting it asks for "DELETE <domain>".
 Run with `memai-admin` (default http://127.0.0.1:8888); binds to
 loopback unless --host says otherwise. Honors MEMAI_HOME.
 """
-
-from memai.admin.api import api
-from memai.admin.app import app
-from memai.admin.cli import build_parser, main
-from memai.admin.pages import WEBFONTS
-from memai.admin.routes.memories import CONFIDENCES
-from memai.admin.routes.overview import HEALTH_DELTA_DAYS
-from memai.admin.shared import BULK_MAX
-
-__all__ = ["BULK_MAX", "CONFIDENCES", "HEALTH_DELTA_DAYS", "WEBFONTS", "api", "app",
-           "build_parser", "main"]

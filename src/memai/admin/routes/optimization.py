@@ -9,10 +9,9 @@ from typing import cast
 from starlette.routing import Route
 
 from memai import admin_schemas as schema
-from memai import db
 from memai.admin.api import api
 from memai.admin.shared import _backup, _peer_card
-from memai.store import queries
+from memai.store import connection, corpus, memories, optimizer, queries, sections
 
 # The kinds whose payload rewrites the body, so a character count means
 # something for them and for nothing else.
@@ -31,7 +30,7 @@ def _suggestion_json(conn, row) -> dict:
     if row["target_uid"]:
         target = _peer_card(conn, row["target_uid"])
         if target is not None:
-            trow = db.memory_row(conn, row["target_uid"])
+            trow = memories.memory_row(conn, row["target_uid"])
             target["tags"] = trow["tags"]
             target["review_after"] = trow["review_after"]
             # Before is the whole body: a cut snippet against a full After would read as removed
@@ -45,8 +44,8 @@ def _suggestion_json(conn, row) -> dict:
                 d["chars_after"] = len(d["payload"].get("new_content", ""))
             # An unleak pair is of the one field the payload names, not of the content.
             if row["kind"] == "unleak":
-                field = str(d["payload"].get("field", db.LEAK_FIELDS[0]))
-                before = trow[field] if field in db.LEAK_FIELDS else ""
+                field = str(d["payload"].get("field", corpus.LEAK_FIELDS[0]))
+                before = trow[field] if field in corpus.LEAK_FIELDS else ""
                 if row["status"] == "applied" and row["prev_state"]:
                     before = json.loads(row["prev_state"]).get(field, before)
                 d["text_before"] = before or ""
@@ -54,7 +53,7 @@ def _suggestion_json(conn, row) -> dict:
                 d["chars_after"] = len(str(d["payload"].get("new_text", "")))
             # a crosslist suggestion replaces the whole set, so the Before
             # pane needs the whole set, not only the filed path
-            target["also"] = db.get_domain_links(conn, row["target_uid"])
+            target["also"] = memories.get_domain_links(conn, row["target_uid"])
             # Applied: prev_state is the Before. `_revert_kind` keys match this card's fields, so
             # one overlay serves every kind; keys the card lacks are ignored.
             if row["status"] == "applied" and row["prev_state"]:
@@ -84,16 +83,16 @@ def _suggestion_json(conn, row) -> dict:
         d["rationale"], d.get("content_before", ""),
         str(d["payload"].get("new_content", "")),
     ) if p)
-    links = db.body_links(conn, row["target_uid"] or "", prose)
+    links = sections.body_links(conn, row["target_uid"] or "", prose)
     if links:
         d["body_links"] = links
     return d
 
 
 def optimization_runs(request, payload) -> schema.OptimizationRuns:
-    with db.connect() as conn:
-        rows = db.list_optimization_runs(conn)
-        kind_rows = db.optimization_run_kind_counts(conn)
+    with connection.connect() as conn:
+        rows = optimizer.list_optimization_runs(conn)
+        kind_rows = optimizer.optimization_run_kind_counts(conn)
     kinds_by_run: dict[int, list[dict]] = {}
     for k in kind_rows:
         kinds_by_run.setdefault(k["run_id"], []).append(
@@ -137,13 +136,13 @@ def optimization_suggestions(request, payload) -> schema.Suggestions:
     # one kind at a time, as the dashboard pages them, so a run's other bodies are not fetched
     kind = request.query_params.get("kind", "")
     items, runs = [], []
-    with db.connect() as conn:
+    with connection.connect() as conn:
         for rid in run_ids:
-            run = db.get_optimization_run(conn, rid)
+            run = optimizer.get_optimization_run(conn, rid)
             if run is None:
                 raise ValueError(f"unknown run: {rid}")
             runs.append(dict(run))
-            for row in db.get_optimization_suggestions(conn, rid, status=status, kind=kind):
+            for row in optimizer.get_optimization_suggestions(conn, rid, status=status, kind=kind):
                 items.append(_suggestion_json(conn, row))
     # `run` stays for the single-run callers that have always read it; `runs`
     # is the whole set, in the order asked for.
@@ -169,17 +168,17 @@ def _run_ledger(conn: sqlite3.Connection, pending: list) -> dict:
         kind, target = row["kind"], row["target_uid"]
         if target:
             uids.add(target)
-            trow = db.get_memory(conn, target)
+            trow = memories.get_memory(conn, target)
             if trow is not None and trow["domain"]:
                 domains.add(trow["domain"])
         if kind in _CONTENT_KINDS and target:
-            trow = db.get_memory(conn, target)
+            trow = memories.get_memory(conn, target)
             if trow is not None:
                 chars += len(payload.get("new_content", "")) - len(trow["content"])
         elif kind == "unleak":
-            field = str(payload.get("field", db.LEAK_FIELDS[0]))
-            trow = db.get_memory(conn, target) if target else None
-            if trow is not None and field in db.LEAK_FIELDS:
+            field = str(payload.get("field", corpus.LEAK_FIELDS[0]))
+            trow = memories.get_memory(conn, target) if target else None
+            if trow is not None and field in corpus.LEAK_FIELDS:
                 chars += len(str(payload.get("new_text", ""))) - len(trow[field] or "")
         elif kind == "redomain":
             domains.add(str(payload.get("domain", "")).strip())
@@ -221,22 +220,22 @@ def _group_facts(conn: sqlite3.Connection, kind: str, rows: list) -> dict:
     if kind in _CONTENT_KINDS:
         chars = 0
         for row, payload in zip(rows, payloads, strict=True):
-            trow = db.get_memory(conn, row["target_uid"]) if row["target_uid"] else None
+            trow = memories.get_memory(conn, row["target_uid"]) if row["target_uid"] else None
             if trow is not None:
                 chars += len(payload.get("new_content", "")) - len(trow["content"])
         return {"chars": chars}
     if kind == "unleak":
         chars = 0
         for row, payload in zip(rows, payloads, strict=True):
-            trow = db.get_memory(conn, row["target_uid"]) if row["target_uid"] else None
-            field = str(payload.get("field", db.LEAK_FIELDS[0]))
-            if trow is not None and field in db.LEAK_FIELDS:
+            trow = memories.get_memory(conn, row["target_uid"]) if row["target_uid"] else None
+            field = str(payload.get("field", corpus.LEAK_FIELDS[0]))
+            if trow is not None and field in corpus.LEAK_FIELDS:
                 chars += len(str(payload.get("new_text", ""))) - len(trow[field] or "")
         return {"chars": chars}
     if kind == "retag":
         terms = 0
         for row, payload in zip(rows, payloads, strict=True):
-            trow = db.get_memory(conn, row["target_uid"]) if row["target_uid"] else None
+            trow = memories.get_memory(conn, row["target_uid"]) if row["target_uid"] else None
             before = _tag_terms(trow["tags"]) if trow is not None else set()
             terms += len(_tag_terms(payload.get("tags", "")) - before)
         return {"terms": terms}
@@ -270,11 +269,11 @@ def optimization_summary(request, payload) -> schema.OptimizationSummary:
         run_id = int(request.query_params.get("run", ""))
     except (TypeError, ValueError) as exc:
         raise ValueError("run query param (int) required") from exc
-    with db.connect() as conn:
-        run = db.get_optimization_run(conn, run_id)
+    with connection.connect() as conn:
+        run = optimizer.get_optimization_run(conn, run_id)
         if run is None:
             raise ValueError(f"unknown run: {run_id}")
-        rows = db.get_optimization_suggestions(conn, run_id)
+        rows = optimizer.get_optimization_suggestions(conn, run_id)
         pending = [r for r in rows if r["status"] == "pending"]
         ledger = _run_ledger(conn, pending)
         groups = []
@@ -301,41 +300,41 @@ def optimization_summary(request, payload) -> schema.OptimizationSummary:
 def _ensure_run_backup(run_id: int) -> str | None:
     """Take a whole-DB backup for a run once, before its first apply.
 
-    The copy is taken between two short db.connect() reads/writes, on its
-    own autocommit connection (see db.backup_to). Returns the backup path
+    The copy is taken between two short connection.connect() reads/writes, on its
+    own autocommit connection (see store.backups.backup_to). Returns the backup path
     (existing or freshly created).
     """
-    with db.connect() as conn:
-        run = db.get_optimization_run(conn, run_id)
+    with connection.connect() as conn:
+        run = optimizer.get_optimization_run(conn, run_id)
         if run is None:
             raise ValueError(f"unknown run: {run_id}")
         if run["backup_path"]:
             return run["backup_path"]
     dest = _backup(f"optimize-run{run_id}")
-    with db.connect() as conn:
-        db.set_run_backup(conn, run_id, str(dest))
+    with connection.connect() as conn:
+        optimizer.set_run_backup(conn, run_id, str(dest))
     return str(dest)
 
 
 def _has_pending(run_id: int) -> bool:
-    with db.connect() as conn:
-        if db.get_optimization_run(conn, run_id) is None:
+    with connection.connect() as conn:
+        if optimizer.get_optimization_run(conn, run_id) is None:
             raise ValueError(f"unknown run: {run_id}")
-        return bool(db.get_optimization_suggestions(conn, run_id, status="pending"))
+        return bool(optimizer.get_optimization_suggestions(conn, run_id, status="pending"))
 
 
 def optimization_apply(request, payload) -> schema.Applied:
     sug_id = payload.get("id")
     if not isinstance(sug_id, int):
         raise ValueError("id (int) required")
-    with db.connect() as conn:
-        row = db.get_suggestion(conn, sug_id)
+    with connection.connect() as conn:
+        row = optimizer.get_suggestion(conn, sug_id)
         if row is None:
             raise ValueError(f"unknown suggestion: {sug_id}")
         run_id = row["run_id"]
     backup = _ensure_run_backup(run_id)
-    with db.connect() as conn:
-        db.apply_suggestion(conn, sug_id)
+    with connection.connect() as conn:
+        optimizer.apply_suggestion(conn, sug_id)
     return {"ok": True, "backup": backup}
 
 
@@ -374,9 +373,9 @@ def _decision_scope(payload) -> tuple[list[int], str, list[int] | None]:
 def _pending_in_scope(conn, run_ids: list[int], kind: str, ids: list[int] | None) -> list:
     rows = []
     for rid in run_ids:
-        if db.get_optimization_run(conn, rid) is None:
+        if optimizer.get_optimization_run(conn, rid) is None:
             raise ValueError(f"unknown run: {rid}")
-        rows.extend(db.get_optimization_suggestions(conn, rid, status="pending", kind=kind))
+        rows.extend(optimizer.get_optimization_suggestions(conn, rid, status="pending", kind=kind))
     if ids is not None:
         chosen = set(ids)
         rows = [s for s in rows if s["id"] in chosen]
@@ -393,9 +392,9 @@ def optimization_apply_all(request, payload) -> schema.AppliedAll:
     `backups` lists the copies in run order; `backup` is the first.
     """
     run_ids, kind, ids = _decision_scope(payload)
-    with db.connect() as conn:
+    with connection.connect() as conn:
         pending = _pending_in_scope(conn, run_ids, kind, ids)
-        run = db.get_optimization_run(conn, run_ids[0])
+        run = optimizer.get_optimization_run(conn, run_ids[0])
     if not pending:
         return {"ok": True, "applied": 0, "failed": [],
                 "backup": run["backup_path"] if run else None, "backups": []}
@@ -410,8 +409,8 @@ def optimization_apply_all(request, payload) -> schema.AppliedAll:
         backups.append(_ensure_run_backup(rid))
         for s in rows:
             try:
-                with db.connect() as conn:
-                    db.apply_suggestion(conn, s["id"])
+                with connection.connect() as conn:
+                    optimizer.apply_suggestion(conn, s["id"])
                 applied += 1
             except ValueError as e:
                 failed.append({"id": s["id"], "error": str(e)})
@@ -423,8 +422,8 @@ def optimization_reject(request, payload) -> schema.Ok:
     sug_id = payload.get("id")
     if not isinstance(sug_id, int):
         raise ValueError("id (int) required")
-    with db.connect() as conn:
-        db.reject_suggestion(conn, sug_id)
+    with connection.connect() as conn:
+        optimizer.reject_suggestion(conn, sug_id)
     return {"ok": True}
 
 
@@ -435,10 +434,10 @@ def optimization_reject_all(request, payload) -> schema.RejectedAll:
     the suggestion as answered.
     """
     run_ids, kind, ids = _decision_scope(payload)
-    with db.connect() as conn:
+    with connection.connect() as conn:
         pending = _pending_in_scope(conn, run_ids, kind, ids)
         for s in pending:
-            db.reject_suggestion(conn, s["id"])
+            optimizer.reject_suggestion(conn, s["id"])
     return {"ok": True, "rejected": len(pending)}
 
 
@@ -446,15 +445,15 @@ def optimization_revert(request, payload) -> schema.Ok:
     sug_id = payload.get("id")
     if not isinstance(sug_id, int):
         raise ValueError("id (int) required")
-    with db.connect() as conn:
-        db.revert_suggestion(conn, sug_id)
+    with connection.connect() as conn:
+        optimizer.revert_suggestion(conn, sug_id)
     return {"ok": True}
 
 
 def optimization_delete_run(request, payload) -> schema.Ok:
     run_id = request.path_params["run_id"]
-    with db.connect() as conn:
-        ok = db.delete_optimization_run(conn, run_id)
+    with connection.connect() as conn:
+        ok = optimizer.delete_optimization_run(conn, run_id)
     if not ok:
         raise ValueError(f"unknown run: {run_id}")
     return {"ok": True}

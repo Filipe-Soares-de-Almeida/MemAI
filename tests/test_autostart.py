@@ -23,7 +23,10 @@ from pathlib import Path
 import pytest
 from starlette.testclient import TestClient
 
-from memai import admin, autostart, update
+from memai import autostart, update
+from memai.admin import cli
+from memai.admin.app import app as admin_app
+from memai.admin.cli import build_parser
 
 
 @pytest.fixture(autouse=True)
@@ -135,9 +138,8 @@ def test_refuses_a_non_loopback_host(monkeypatch, spawned, dead_port, capsys):
     monkeypatch.setenv("MEMAI_ADMIN_PORT", str(dead_port))
     autostart.ensure_admin_running()
     assert spawned == []
-    # the dashboard has no authentication, and nobody reads the stderr of
-    # a process the agent host started -- so this one refuses rather than
-    # warning the way main() does for a human who typed it
+    # no authentication and nobody reads an autostarted process's stderr, so it
+    # refuses where main() only warns a human
     assert "loopback-only" in capsys.readouterr().err
 
 
@@ -212,7 +214,7 @@ def test_an_unreadable_registry_is_ignored(monkeypatch, spawned, home,
 
 def test_ping_identifies_itself(tmp_path, monkeypatch):
     monkeypatch.setenv("MEMAI_HOME", str(tmp_path))
-    with TestClient(admin.app) as client:
+    with TestClient(admin_app) as client:
         body = client.get("/api/ping").json()
     assert body["app"] == "memai"
     assert isinstance(body["pid"], int)
@@ -221,7 +223,7 @@ def test_ping_identifies_itself(tmp_path, monkeypatch):
 
 def test_ping_names_the_checkout_it_runs_from(tmp_path, monkeypatch):
     monkeypatch.setenv("MEMAI_HOME", str(tmp_path))
-    with TestClient(admin.app) as client:
+    with TestClient(admin_app) as client:
         body = client.get("/api/ping").json()
     assert body["root"] == str(update.checkout_root() or "")
 
@@ -274,12 +276,12 @@ def test_admin_and_autostart_agree_on_the_port(monkeypatch):
     """Two defaults would mean the guard looking for the dashboard on a
     port the dashboard never binds."""
     monkeypatch.delenv("MEMAI_ADMIN_PORT", raising=False)
-    args = admin.build_parser().parse_args([])
+    args = build_parser().parse_args([])
     assert args.port == autostart.configured_port() == autostart.DEFAULT_PORT
 
     monkeypatch.setenv("MEMAI_ADMIN_PORT", "9002")
-    assert admin.build_parser().parse_args([]).port == 9002
-    assert admin.build_parser().parse_args(["--port", "9003"]).port == 9003
+    assert build_parser().parse_args([]).port == 9002
+    assert build_parser().parse_args(["--port", "9003"]).port == 9003
 
 
 # --- it may never cost the caller its memory tools -------------------
@@ -384,11 +386,11 @@ def test_bind_returns_none_when_the_port_is_taken(busy_port):
 
     admin.cli._bind is the arbiter, which is why there is no lock file.
     """
-    assert admin.cli._bind("127.0.0.1", busy_port) is None
+    assert cli._bind("127.0.0.1", busy_port) is None
 
 
 def test_bind_succeeds_on_a_free_port(dead_port):
-    sock = admin.cli._bind("127.0.0.1", dead_port)
+    sock = cli._bind("127.0.0.1", dead_port)
     assert sock is not None
     try:
         assert sock.getsockname()[1] == dead_port

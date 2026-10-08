@@ -12,8 +12,9 @@ import sys
 
 import uvicorn
 
-from memai import __version__, autostart, db, webui_build
+from memai import __version__, autostart, webui_build
 from memai.admin.app import app
+from memai.store import paths
 
 LOOPBACK_HOSTS = {"localhost", "127.0.0.1", "::1", "[::1]"}
 
@@ -158,7 +159,7 @@ def main() -> None:
               f"(memai-admin --status says what is there)")
         raise SystemExit(1)
 
-    print(f"memai admin · project {db.active_project()} · db {db.default_db_path()} "
+    print(f"memai admin · project {paths.active_project()} · db {paths.default_db_path()} "
           f"· http://{args.host}:{args.port}")
     if args.host not in LOOPBACK_HOSTS:
         print(f"  WARNING: {args.host} is not loopback. This API has NO authentication:"

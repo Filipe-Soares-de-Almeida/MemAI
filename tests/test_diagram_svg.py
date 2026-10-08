@@ -41,11 +41,8 @@ ADVANCE_2048 = {
     " ": 508, "ç": 1072, "ã": 1114, "é": 1086,
 }
 
-# Whole strings, ctx.measureText at the sizes the diagram actually draws.
-# Deliberately synthetic, and chosen to bracket the failure mode: prose,
-# a CamelCase token with no break opportunity, repeated narrow and wide
-# glyphs, accented latin, and strings loaded with the pairs Roboto kerns
-# hardest (AV, AW, AT, Ta).
+# ctx.measureText of whole strings at the drawn sizes: prose, an unbreakable CamelCase token,
+# narrow and wide runs, accented latin, and the pairs Roboto kerns hardest (AV, AW, AT, Ta).
 CANVAS_UI_12PX = {
     "Load the export window": 127.8047,
     "ValidateReceiverAccount": 133.2070,
@@ -83,10 +80,8 @@ CANVAS_UI_12PX_KERNED = {
     "F100_TOTAL USE_NEW_PARSER": 173.2441,
 }
 
-# Half a pixel on a 12px label. Big enough to absorb the fraction that
-# advance-summing loses on ordinary text, small enough that a wrong glyph
-# width or a wrong units_per_em cannot hide under it -- the narrowest
-# glyph in the table is still ~2.9px at this size.
+# Absorbs what advance-summing loses on prose; the narrowest glyph is ~2.9px at 12px, so a
+# wrong glyph width or units_per_em cannot hide under it.
 PROSE_TOLERANCE_PX = 0.5
 
 
@@ -221,17 +216,7 @@ def test_short_label_does_not_leave_punctuation_before_the_ellipsis():
 
 
 # ── edge routing, against what the canvas routes ────────────────────────
-#
-# route-golden.json is RECORDED FROM THE CANVAS by tools/route-parity.mjs;
-# it is not this module's output. So these tests are the Python half of the
-# parity check: the JS half is that same script re-run without --write,
-# which fails if the canvas stops agreeing with the recording.
-#
-# Both halves matter, and neither is enough alone. Without the recording,
-# Python would only be tested against itself; without the script, the
-# canvas could drift away from the recording and nothing would say so.
-# Editing either implementation means: re-record, run pytest, fix the side
-# that is now wrong.
+# route-golden.json is recorded from the canvas by tools/route-parity.mjs: this is the Python half.
 
 
 def _load(name: str) -> dict:
@@ -363,10 +348,8 @@ def test_the_fixture_exercises_every_routing_branch(golden):
     assert {n["shape"] for n in golden["nodes"]} == set(ds.NODE_SHAPES)
 
 
-# Nudged by one unit each: enough to move a route, small enough that a
-# fixture only covering the comfortable middle of every threshold would
-# not notice. Both ORTH_RADIUS and ORTH_SNAP DID slip through the first
-# fixture, which is why this test exists rather than being assumed.
+# Nudged by one unit each: enough to move a route, small enough that a fixture covering only
+# the middle of every threshold would not notice.
 MIRRORED_CONSTANTS = {
     "IO_SKEW": 15.0, "ARROW_GAP": 6.0, "ORTH_STUB": 27.0,
     "FAN_GAP": 23.0, "FAN_STUB": 15.0, "MERGE_GAP": 31.0,
@@ -375,17 +358,7 @@ MIRRORED_CONSTANTS = {
 
 
 # ── the emitted markup ──────────────────────────────────────────────────
-#
-# A separate layer of tests, because the route golden CANNOT see this one:
-# it records the polyline, so anything that goes wrong turning that polyline
-# into SVG is invisible to it. Both bugs found by eye in the first working
-# render lived here, and both have a test below:
-#
-#   * rounded corners insetting by r instead of r/tan(alpha/2), which looks
-#     right on every 90-degree corner and draws a loop on a diagonal;
-#   * stroke widths in world units instead of screen pixels, which makes
-#     every line vanish at the scale a long flow fits into while the
-#     arrowheads and labels stay.
+# The route golden records polylines, so turning one into SVG needs tests of its own.
 
 
 @pytest.fixture(scope="module")
@@ -498,11 +471,8 @@ def test_a_badge_clears_the_selection_ring_of_every_shape():
         for row in (-1, 1):
             left, mid_y = ds.badge_anchor(n, row, bpx)
             dy = mid_y - n["y"]
-            # over the badge's WHOLE height, not just its centre line: the
-            # ring is a curve across it, and on a diamond the row centre
-            # clears by BADGE_OUT while the corner nearest the card's middle
-            # is well inside. Sampled densely so a one-extreme check cannot
-            # pass by picking the end that happens to be narrower.
+            # over the badge's whole height: on a diamond the row centre clears by BADGE_OUT
+            # while the corner nearest the card's middle is well inside
             half = bpx * 0.8
             for i in range(9):
                 at = dy - half + i * (half / 4)

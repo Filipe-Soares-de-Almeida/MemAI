@@ -2,12 +2,10 @@
    function, and the filter field always on. */
 
 import { esc } from './dom.ts';
-import { closePicker, pickerHTML, wirePicker } from './pick.js';
+import { pickerHTML, wirePicker } from './pick.js';
 import { DOMAIN_SEP, byDomainPath, domainGuides, domainLeaf, domainRailHTML,
          domainSegments } from './shared.js';
 import { t } from '../i18n.ts';
-
-export { closePicker as closeDomainPicker };
 
 /* `anyLabel` is what the empty value says: "All domains" for a filter, something else where ''
    means otherwise (the bulk re-home field: "leave each memory where it is"). */

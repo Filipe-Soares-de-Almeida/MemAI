@@ -125,7 +125,19 @@ def test_vendored_and_generated_paths_are_skipped():
     assert not lint.checked(ROOT / "src" / "memai" / "webui" / "public" / "x.js")
     assert not lint.checked(ROOT / "src" / "memai" / "webui" / "dist" / "x.js")
     assert not lint.checked(ROOT / "CHANGELOG.md")
-    assert lint.checked(ROOT / "src" / "memai" / "db.py")
+    assert lint.checked(ROOT / "src" / "memai" / "store" / "connection.py")
+
+
+def test_all_without_files_checks_every_tracked_file(tmp_path, monkeypatch, capsys):
+    def git(*args):
+        subprocess.run(["git", *args], cwd=tmp_path, check=True, capture_output=True)
+    git("init", "-q")
+    (tmp_path / "tracked.py").write_text("x = 1  # the pump no longer stalls\n", encoding="utf-8")
+    (tmp_path / "loose.py").write_text("y = 2  # the valve used to leak\n", encoding="utf-8")
+    git("add", "tracked.py")
+    monkeypatch.setattr(lint, "ROOT", tmp_path)
+    assert lint.main(["--all"]) == 1
+    assert capsys.readouterr().out.splitlines() == ["tracked.py:1: history: 'no longer'"]
 
 
 def test_the_hook_reports_on_stderr_with_exit_2(tmp_path):

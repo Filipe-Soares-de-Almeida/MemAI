@@ -7,8 +7,9 @@ goal and items, the way a diagram's content is generated from its graph.
 import re
 import sqlite3
 
-from . import budget, db
+from . import budget, lite
 from .contract import GOAL_MAX, ITEM_MAX, ITEM_STATES, ITEMS_MAX, NOTE_MAX, TASK_STATES
+from .store import connection, memories, sections
 
 COMMENT_MAX = 2000
 
@@ -77,12 +78,12 @@ def create_task(
         {"key": f"i{n}", "seq": n, "text": text, "state": "todo"}
         for n, text in enumerate(items, start=1)
     ]
-    uid = db.insert_memory(
-        conn, type=db.TASK_TYPE, content=render(goal, rows), title=title,
+    uid = memories.insert_memory(
+        conn, type=memories.TASK_TYPE, content=render(goal, rows), title=title,
         domain=domain, also=also, session=session, tags=tags,
     )
     conn.execute("INSERT INTO tasks (memory_uid, goal) VALUES (?, ?)", (uid, goal))
-    stamp = db.now_iso()
+    stamp = lite.now_iso()
     conn.executemany(
         """INSERT INTO task_items
            (memory_uid, item_key, seq, text, state, updated_at, updated_session)
@@ -94,8 +95,8 @@ def create_task(
 
 def is_task(conn: sqlite3.Connection, uid: str) -> bool:
     """True when `uid` is a task memory."""
-    row = db.get_memory(conn, uid)
-    return row is not None and row["type"] == db.TASK_TYPE
+    row = memories.get_memory(conn, uid)
+    return row is not None and row["type"] == memories.TASK_TYPE
 
 
 def get_task(conn: sqlite3.Connection, uid: str) -> dict | None:
@@ -183,12 +184,12 @@ def _regenerate(conn: sqlite3.Connection, uid: str, note: str, *, record_edit: b
     """Rewrite the memory's content from the goal and items when it changed."""
     goal = conn.execute("SELECT goal FROM tasks WHERE memory_uid = ?", (uid,)).fetchone()["goal"]
     content = render(goal, _items(conn, uid))
-    if content == db.memory_row(conn, uid)["content"]:
+    if content == memories.memory_row(conn, uid)["content"]:
         return
     if record_edit:
-        db.update_memory_content(conn, uid, content, note=note)
+        memories.update_memory_content(conn, uid, content, note=note)
     else:
-        db.set_generated_content(conn, uid, content)
+        memories.set_generated_content(conn, uid, content)
 
 
 def _settle(conn: sqlite3.Connection, uid: str) -> None:
@@ -205,13 +206,13 @@ def _settle(conn: sqlite3.Connection, uid: str) -> None:
         return
     if wanted == "open":
         conn.execute("UPDATE tasks SET state = 'open', completed_at = '' WHERE memory_uid = ?", (uid,))
-        db.set_status(conn, uid, "active", note="reopened")
+        memories.set_status(conn, uid, "active", note="reopened")
         return
-    stamp = db.now_iso() if wanted == "completed" else ""
+    stamp = lite.now_iso() if wanted == "completed" else ""
     conn.execute(
         "UPDATE tasks SET state = ?, completed_at = ? WHERE memory_uid = ?", (wanted, stamp, uid)
     )
-    db.set_status(conn, uid, "archived", note=wanted)
+    memories.set_status(conn, uid, "archived", note=wanted)
 
 
 def _outcome(conn: sqlite3.Connection, uid: str) -> dict:
@@ -219,7 +220,7 @@ def _outcome(conn: sqlite3.Connection, uid: str) -> dict:
     return {
         "progress": progress(conn, uid),
         "task_state": state,
-        "archived": db.memory_row(conn, uid)["status"] == "archived",
+        "archived": memories.memory_row(conn, uid)["status"] == "archived",
     }
 
 
@@ -243,7 +244,7 @@ def set_item_state(
         conn.execute(
             """UPDATE task_items SET state = ?, updated_at = ?, updated_session = ?
                WHERE memory_uid = ? AND item_key = ?""",
-            (state, db.now_iso(), session, uid, key),
+            (state, lite.now_iso(), session, uid, key),
         )
         _regenerate(conn, uid, f"item {key}: {old} -> {state}", record_edit=False)
         _settle(conn, uid)
@@ -267,7 +268,7 @@ def add_items(conn: sqlite3.Connection, uid: str, items: list[str], *, session: 
     count = len(_items(conn, uid))
     if count + len(items) > ITEMS_MAX:
         raise ValueError(f"a task holds at most {ITEMS_MAX} items; it has {count}")
-    stamp = db.now_iso()
+    stamp = lite.now_iso()
     keys = [f"i{n}" for n in range(last + 1, last + len(items) + 1)]
     conn.executemany(
         """INSERT INTO task_items
@@ -338,7 +339,7 @@ def add_comment(
         raise ValueError("a comment needs a body")
     if len(body) > COMMENT_MAX:
         raise ValueError(f"comment is {len(body)} characters; the limit is {COMMENT_MAX}")
-    db._refuse_leak(db.TASK_TYPE, body)
+    sections._refuse_leak(memories.TASK_TYPE, body)
     if author not in ("agent", "person"):
         raise ValueError(f"{author!r} is not a comment author; use agent or person")
     _lock(conn, uid)
@@ -346,7 +347,7 @@ def add_comment(
     cur = conn.execute(
         """INSERT INTO task_comments (memory_uid, item_key, body, author, session, created_at)
            VALUES (?, ?, ?, ?, ?, ?)""",
-        (uid, key, body, author, session, db.now_iso()),
+        (uid, key, body, author, session, lite.now_iso()),
     )
     return cur.lastrowid or 0
 
@@ -360,14 +361,14 @@ def link_item(conn: sqlite3.Connection, uid: str, item: str, targets: list[str])
     key = _require_item(conn, uid, item)
     wanted = list(dict.fromkeys(str(t).strip() for t in targets))
     for target in wanted:
-        if db.get_memory(conn, target) is None:
+        if memories.get_memory(conn, target) is None:
             raise ValueError(f"no memory {target}")
     linked = []
     for target in wanted:
         cur = conn.execute(
             """INSERT OR IGNORE INTO task_item_links (memory_uid, item_key, target_uid, created_at)
                VALUES (?, ?, ?, ?)""",
-            (uid, key, target, db.now_iso()),
+            (uid, key, target, lite.now_iso()),
         )
         if cur.rowcount:
             linked.append(target)
@@ -389,11 +390,11 @@ def _note_fields(title: str, body: str) -> tuple[str, str]:
     title, body = str(title).strip(), str(body).strip()
     if not title or not body:
         raise ValueError("a task note needs a title and a body")
-    if len(title) > db.TITLE_MAX:
-        raise ValueError(f"title is {len(title)} characters; the limit is {db.TITLE_MAX}")
+    if len(title) > sections.TITLE_MAX:
+        raise ValueError(f"title is {len(title)} characters; the limit is {sections.TITLE_MAX}")
     if len(body) > NOTE_MAX:
         raise ValueError(f"body is {len(body)} characters; the limit is {NOTE_MAX}")
-    db._refuse_leak(db.TASK_TYPE, f"{title}\n{body}")
+    sections._refuse_leak(memories.TASK_TYPE, f"{title}\n{body}")
     return title, body
 
 
@@ -439,7 +440,7 @@ def add_note(conn: sqlite3.Connection, uid: str, *, title: str, body: str,
     title, body = _note_fields(title, body)
     _lock(conn, uid)
     keys = _note_keys(conn, uid, items)
-    stamp = db.now_iso()
+    stamp = lite.now_iso()
     cur = conn.execute(
         """INSERT INTO task_notes (memory_uid, title, body, session, created_at, updated_at)
            VALUES (?, ?, ?, ?, ?, ?)""", (uid, title, body, session, stamp, stamp))
@@ -457,7 +458,7 @@ def edit_note(conn: sqlite3.Connection, uid: str, note_id: int, *, title: str = 
     title, body = _note_fields(title or row["title"], body or row["body"])
     keys = None if items is None else _note_keys(conn, uid, items)
     conn.execute("UPDATE task_notes SET title = ?, body = ?, updated_at = ? WHERE id = ?",
-                 (title, body, db.now_iso(), note_id))
+                 (title, body, lite.now_iso(), note_id))
     if keys is not None:
         _set_note_items(conn, note_id, keys)
 
@@ -523,7 +524,7 @@ def restore_task(conn: sqlite3.Connection, record: dict) -> None:
            VALUES (?, ?, ?, ?, ?, ?, ?)""",
         [
             (uid, i["key"], i["seq"], i["text"], i.get("state", "todo"),
-             i.get("updated_at") or db.now_iso(), i.get("updated_session", ""))
+             i.get("updated_at") or lite.now_iso(), i.get("updated_session", ""))
             for i in record.get("items") or []
         ],
     )
@@ -531,9 +532,9 @@ def restore_task(conn: sqlite3.Connection, record: dict) -> None:
         """INSERT OR IGNORE INTO task_item_links (memory_uid, item_key, target_uid, created_at)
            VALUES (?, ?, ?, ?)""",
         [
-            (uid, link["item_key"], link["target_uid"], link.get("created_at") or db.now_iso())
+            (uid, link["item_key"], link["target_uid"], link.get("created_at") or lite.now_iso())
             for link in record.get("links") or []
-            if db.get_memory(conn, link["target_uid"]) is not None
+            if memories.get_memory(conn, link["target_uid"]) is not None
         ],
     )
     conn.executemany(
@@ -541,7 +542,7 @@ def restore_task(conn: sqlite3.Connection, record: dict) -> None:
            VALUES (?, ?, ?, ?, ?, ?)""",
         [
             (uid, c.get("item_key", ""), c["body"], c.get("author", "agent"),
-             c.get("session", ""), c.get("created_at") or db.now_iso())
+             c.get("session", ""), c.get("created_at") or lite.now_iso())
             for c in record.get("comments") or []
         ],
     )
@@ -551,7 +552,7 @@ def restore_task(conn: sqlite3.Connection, record: dict) -> None:
             """INSERT INTO task_notes (memory_uid, title, body, session, created_at, updated_at)
                VALUES (?, ?, ?, ?, ?, ?)""",
             (uid, n["title"], n["body"], n.get("session", ""),
-             n.get("created_at") or db.now_iso(), n.get("updated_at") or db.now_iso()))
+             n.get("created_at") or lite.now_iso(), n.get("updated_at") or lite.now_iso()))
         _set_note_items(conn, cur.lastrowid or 0, [k for k in n.get("items") or [] if k in known])
 
 
@@ -610,7 +611,7 @@ def _records(conn: sqlite3.Connection, uid: str, part: str, key: str) -> list[di
                     "SELECT * FROM task_comments WHERE memory_uid = ? AND item_key = ? "
                     "ORDER BY created_at, id", (uid, key))]
     return [{"uid": r["target_uid"], "type": r["type"], "title": r["title"],
-             "est_tokens": db.est_tokens(r["n"])}
+             "est_tokens": connection.est_tokens(r["n"])}
             for r in conn.execute(
                 """SELECT l.target_uid, m.type, m.title, LENGTH(m.content) AS n
                    FROM task_item_links l JOIN memories m ON m.uid = l.target_uid

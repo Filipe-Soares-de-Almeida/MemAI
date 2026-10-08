@@ -11,7 +11,8 @@ from __future__ import annotations
 
 import pytest
 
-from memai import db, server
+from memai import server
+from memai.store import connection, memories
 
 
 def _long(text: str) -> str:
@@ -32,17 +33,17 @@ def store(tmp_path, monkeypatch):
 
 
 def _full_estimate(text: str) -> int:
-    return db.est_tokens(len(text))
+    return connection.est_tokens(len(text))
 
 
 # --------------------------------------------------------------- the estimator
 
 def test_the_estimate_is_the_character_length_over_a_fixed_ratio():
-    assert db.est_tokens(0) == 0
-    assert db.est_tokens(1) == 1                          # rounds up
-    assert db.est_tokens(db.CHARS_PER_TOKEN) == 1
-    assert db.est_tokens(db.CHARS_PER_TOKEN + 1) == 2
-    assert db.est_tokens(400) == 400 // db.CHARS_PER_TOKEN
+    assert connection.est_tokens(0) == 0
+    assert connection.est_tokens(1) == 1                          # rounds up
+    assert connection.est_tokens(connection.CHARS_PER_TOKEN) == 1
+    assert connection.est_tokens(connection.CHARS_PER_TOKEN + 1) == 2
+    assert connection.est_tokens(400) == 400 // connection.CHARS_PER_TOKEN
 
 
 # ------------------------------------------------- the full record, not the snippet
@@ -52,13 +53,13 @@ def test_a_search_result_is_priced_by_the_full_record(store):
     hit = server.search("export window")["results"][0]
     assert len(hit["content"]) < len(EXPORT)              # snippet-truncated
     assert hit["est_tokens"] == _full_estimate(EXPORT)
-    assert hit["est_tokens"] > db.est_tokens(len(hit["content"]))
+    assert hit["est_tokens"] > connection.est_tokens(len(hit["content"]))
 
 
 def test_the_estimate_matches_what_the_full_record_holds(store):
     uid = server.note("fixture title", content=EXPORT)["uid"]
     hit = server.search("export window")["results"][0]
-    assert hit["est_tokens"] == db.est_tokens(len(server.get_memory(uid)["content"]))
+    assert hit["est_tokens"] == connection.est_tokens(len(server.get_memory(uid)["content"]))
 
 
 @pytest.mark.parametrize("read", [
@@ -121,8 +122,8 @@ def test_a_pulse_prices_the_checkpoint_it_hands_over(store):
     server.checkpoint("fixture title", intent=EXPORT, established="the index is rebuilt",
                       pursuing="the batch retry", open_questions="none",
                       domain="acme/x100")
-    with db.connect() as conn:
-        db.insert_memory(conn, type="handoff", content=RETRY,
+    with connection.connect() as conn:
+        memories.insert_memory(conn, type="handoff", content=RETRY,
                          title="fixture title", domain="acme/x100")
     server.anti_pattern("fixture title", pattern=RETRY, why_wrong="it drops rows",
                         instead="drain the queue first", domain="acme/x100")

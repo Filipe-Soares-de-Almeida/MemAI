@@ -29,7 +29,7 @@ applied by a human in the dashboard.
 | Value | When |
 |---|---|
 | **`confirmed`** | A `note`/`reasoning`/`anti_pattern`/`diagram` whose **structural anchors** were checked **live**: the file and line exist, the symbol is there, the table/column exists, the domain resolves, the URL answers. |
-| **`contradicted`** | The claim is **false today** — the fact no longer holds. Requires a non-empty `verified`; normally staged next to a `reword` or an `archive`. |
+| **`contradicted`** | The claim is **false today** — the fact does not hold. Requires a non-empty `verified`; normally staged next to a `reword` or an `archive`. |
 | **`unverified`** | Nothing to check it against: **ephemeral** or point-in-time (a count, a value, "open this month"), external, or a **`checkpoint` still bearing live work**. |
 
 > **A checkpoint stays `unverified`.** Its content is where the work stood, not
@@ -137,9 +137,9 @@ the decay but not resolve it: `pulse` counts the overdue rows in a scope as
   anchor its own writer chose, so the target is already named.
 - **After the recheck, move the date** — `review` with
   `{"review_after": "180d"}` (or a date, or `''` to clear it for a claim that
-  no longer tracks anything that moves). A memory confirmed and left on a
+  tracks nothing that moves). A memory confirmed and left on a
   passed date comes back `due` on every later scan and reads as never checked.
-- **A reference that no longer resolves is fixed, not worked around.** When
+- **A reference that does not resolve is fixed, not worked around.** When
   the recheck finds the file renamed or moved, `edit_memory(uid,
   source_ref=<the path today>)` repoints it without touching the body — an
   anchor pointing at nothing makes the next pass re-derive the target from

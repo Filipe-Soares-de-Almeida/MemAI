@@ -10,12 +10,13 @@ from __future__ import annotations
 
 import pytest
 
-from memai import db, server
+from memai import server
+from memai.store import connection, memories, relations
 
 
 @pytest.fixture
 def conn(tmp_path):
-    with db.connect(tmp_path / "test.db") as c:
+    with connection.connect(tmp_path / "test.db") as c:
         yield c
 
 
@@ -42,30 +43,30 @@ def test_get_memory_still_returns_the_record_it_has(store):
 # ------------------------------------------------------------------ relations
 
 def test_relation_to_an_unknown_uid_is_refused(conn):
-    uid = db.insert_memory(conn, type="note", content="a")
+    uid = memories.insert_memory(conn, type="note", content="a")
     with pytest.raises(ValueError, match="unknown memory"):
-        db.add_relation(conn, uid, "no-such-uid", "relates_to")
+        relations.add_relation(conn, uid, "no-such-uid", "relates_to")
 
 
 def test_relation_to_itself_is_refused(conn):
-    uid = db.insert_memory(conn, type="note", content="a")
+    uid = memories.insert_memory(conn, type="note", content="a")
     with pytest.raises(ValueError, match="cannot relate to itself"):
-        db.add_relation(conn, uid, uid, "relates_to")
+        relations.add_relation(conn, uid, uid, "relates_to")
 
 
 def test_an_identical_relation_is_refused(conn):
-    a = db.insert_memory(conn, type="note", content="a")
-    b = db.insert_memory(conn, type="note", content="b")
-    db.add_relation(conn, a, b, "supersedes")
+    a = memories.insert_memory(conn, type="note", content="a")
+    b = memories.insert_memory(conn, type="note", content="b")
+    relations.add_relation(conn, a, b, "supersedes")
     with pytest.raises(ValueError, match="already exists"):
-        db.add_relation(conn, a, b, "supersedes")
+        relations.add_relation(conn, a, b, "supersedes")
 
 
 def test_a_second_relation_of_another_type_is_fine(conn):
-    a = db.insert_memory(conn, type="note", content="a")
-    b = db.insert_memory(conn, type="note", content="b")
-    db.add_relation(conn, a, b, "supersedes")
-    assert db.add_relation(conn, a, b, "relates_to")
+    a = memories.insert_memory(conn, type="note", content="a")
+    b = memories.insert_memory(conn, type="note", content="b")
+    relations.add_relation(conn, a, b, "supersedes")
+    assert relations.add_relation(conn, a, b, "relates_to")
 
 
 def test_link_memories_reports_a_bad_uid_instead_of_raising(store):
@@ -106,9 +107,9 @@ def test_an_append_keeps_the_previous_version(store):
 
 
 def test_appending_to_an_empty_body_does_not_lead_with_a_blank_line(conn):
-    uid = db.insert_memory(conn, type="note", content="")
-    db.update_memory_content(conn, uid, "the first thing known", append=True)
-    assert db.get_memory(conn, uid)["content"] == "the first thing known"
+    uid = memories.insert_memory(conn, type="note", content="")
+    memories.update_memory_content(conn, uid, "the first thing known", append=True)
+    assert memories.get_memory(conn, uid)["content"] == "the first thing known"
 
 
 def test_an_unknown_mode_is_refused(store):

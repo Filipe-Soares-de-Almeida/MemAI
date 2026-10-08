@@ -8,31 +8,32 @@ from typing import cast
 from starlette.routing import Route
 
 from memai import admin_schemas as schema
-from memai import db
 from memai.admin.api import api
 from memai.admin.shared import _file_size, _int_param, _scope_echo, _subtree_param, _summary
-from memai.store import maintenance, queries
+from memai.store import backups as store_backups
+from memai.store import connection, maintenance, paths, queries, renders, settings
+from memai.store import dedup as store_dedup
 
 DEDUP_SNIPPET = 480
 
 
 def health(request, payload) -> schema.Health:
-    project = db.active_project()
-    dbfile = db.default_db_path()
-    with db.connect() as conn:
+    project = paths.active_project()
+    dbfile = paths.default_db_path()
+    with connection.connect() as conn:
         report = maintenance.integrity_report(conn)
         quick = report["quick_check"]
         integrity_ok = quick == ["ok"]
         active_count = queries.count_active(conn)
         untagged = queries.count_active(conn, "untagged")
         untitled = queries.count_active(conn, "untitled")
-        compact_reason = db.get_compact_reason(conn)
-        render_retention = db.get_svg_retention(conn)
+        compact_reason = connection.get_compact_reason(conn)
+        render_retention = settings.get_svg_retention(conn)
     # the active project's own backups; another project's are listed when it is
     backups = [
         {"name": p.name, "size": _file_size(p),
          "mtime": datetime.fromtimestamp(p.stat().st_mtime, tz=UTC).isoformat()}
-        for p in db.backup_files(project)]
+        for p in store_backups.backup_files(project)]
     return cast(schema.Health, {
         "project": project,
         # same rule as maintenance.fts_integrity: "ok" is quick_check's way of
@@ -50,8 +51,8 @@ def health(request, payload) -> schema.Health:
         "title": {"untitled": untitled, "active": active_count},
         # generated SVGs are a cache, so what matters is what they cost and
         # whether the retention rule is actually clearing them
-        "renders": {**db.renders_usage(), "retention": render_retention,
-                    "path": str(db.renders_dir())},
+        "renders": {**renders.renders_usage(), "retention": render_retention,
+                    "path": str(renders.renders_dir())},
         "file": {
             "path": str(dbfile),
             "size": _file_size(dbfile),
@@ -66,13 +67,13 @@ def health(request, payload) -> schema.Health:
 
 
 def fts_rebuild(request, payload) -> schema.FtsRebuilt:
-    with db.connect() as conn:
+    with connection.connect() as conn:
         count = maintenance.rebuild_fts(conn)
     return {"ok": True, "rows": count}
 
 
 def clean_orphans(request, payload) -> schema.OrphansCleaned:
-    with db.connect() as conn:
+    with connection.connect() as conn:
         removed = maintenance.clean_orphans(conn)
     return {"ok": True, "relations_removed": removed["relations"],
             "suggestions_removed": removed["suggestions"],
@@ -87,31 +88,31 @@ def prune_renders(request, payload) -> schema.RendersPruned:
     answers "how long to keep them", this answers "get rid of them". The
     diagrams themselves are untouched either way: a render is a cache.
     """
-    before = db.renders_usage()
+    before = renders.renders_usage()
     if payload.get("all"):
-        swept = db.prune_renders_all()
+        swept = renders.prune_renders_all()
     else:
-        with db.connect() as conn:
-            swept = db.prune_renders(db.get_svg_retention(conn))
-    return cast(schema.RendersPruned, {"ok": True, **swept, "before": before, "after": db.renders_usage()})
+        with connection.connect() as conn:
+            swept = renders.prune_renders(settings.get_svg_retention(conn))
+    return cast(schema.RendersPruned, {"ok": True, **swept, "before": before, "after": renders.renders_usage()})
 
 
 def vacuum(request, payload) -> schema.Vacuumed:
-    dbfile = db.default_db_path()
+    dbfile = paths.default_db_path()
     before = _file_size(dbfile) + _file_size(dbfile.with_name(dbfile.name + "-wal"))
     maintenance.vacuum(dbfile)
     after = _file_size(dbfile) + _file_size(dbfile.with_name(dbfile.name + "-wal"))
-    with db.connect() as conn:
-        db.clear_compact_reason(conn)
+    with connection.connect() as conn:
+        connection.clear_compact_reason(conn)
     return {"ok": True, "before": before, "after": after}
 
 
 def dedup(request, payload) -> schema.DedupPairs:
     threshold = min(max(float(request.query_params.get("threshold", 0.6)), 0.3), 0.99)
     domain = request.query_params.get("domain", "")
-    with db.connect() as conn:
+    with connection.connect() as conn:
         scope = _scope_echo(conn, domain)
-        pairs = db.dedup_candidates(
+        pairs = store_dedup.dedup_candidates(
             conn,
             domain=domain,
             type=request.query_params.get("type", ""),
@@ -125,7 +126,7 @@ def dedup(request, payload) -> schema.DedupPairs:
 
 def audit(request, payload) -> schema.AuditLog:
     limit = _int_param(request, "limit", 100, 1, 400)
-    with db.connect() as conn:
+    with connection.connect() as conn:
         entries = queries.edit_log(conn, limit)
     return cast(schema.AuditLog, {"entries": entries})
 

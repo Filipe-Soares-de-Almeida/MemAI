@@ -2,7 +2,7 @@
 
 Same hermetic setup as the rest of the suite. MEMAI_HOME is pointed at a
 tmp dir per test, which is all the isolation the app needs -- every
-endpoint opens its own db.connect() against default_db_path().
+endpoint opens its own connection.connect() against default_db_path().
 """
 
 from __future__ import annotations
@@ -17,13 +17,19 @@ from starlette.routing import Route
 from starlette.testclient import TestClient
 
 from conftest import unmigrated
-from memai import admin, db, sections
+from memai import sections
+from memai.admin import pages
+from memai.admin.api import api as admin_api
+from memai.admin.app import app as admin_app
+from memai.admin.pages import WEBFONTS
+from memai.admin.shared import BULK_MAX
+from memai.store import connection, memories, paths, settings
 
 
 @pytest.fixture()
 def client(tmp_path, monkeypatch):
     monkeypatch.setenv("MEMAI_HOME", str(tmp_path))
-    with TestClient(admin.app) as c:
+    with TestClient(admin_app) as c:
         yield c
 
 
@@ -47,9 +53,9 @@ def _unread(type_: str, content: str, domain: str = "acme/x100") -> str:
     sectioned body has been read refuses one that does not conform, which
     is the whole point of it.
     """
-    with db.connect() as conn:
+    with connection.connect() as conn:
         unmigrated(conn)
-        uid = db.insert_memory(conn, type=type_, content=content, domain=domain)
+        uid = memories.insert_memory(conn, type=type_, content=content, domain=domain)
         conn.execute("DELETE FROM memory_sections WHERE memory_uid = ?", (uid,))
         conn.execute("DELETE FROM section_migration WHERE memory_uid = ?", (uid,))
     return uid
@@ -224,9 +230,9 @@ def test_bulk_purge_refuses_a_malformed_list(client, uids):
 
 
 def test_bulk_purge_refuses_more_than_bulk_accepts(client):
-    uids = [f"{i:016x}" for i in range(admin.BULK_MAX + 1)]
+    uids = [f"{i:016x}" for i in range(BULK_MAX + 1)]
     res = _purge_many(client, uids)
-    assert res.status_code == 400 and str(admin.BULK_MAX) in res.json()["error"]
+    assert res.status_code == 400 and str(BULK_MAX) in res.json()["error"]
 
 
 def test_bulk_purge_removes_what_hangs_off_a_memory(client):
@@ -241,9 +247,9 @@ def test_bulk_purge_removes_what_hangs_off_a_memory(client):
 
 
 def test_the_memory_list_serves_a_page_as_large_as_bulk_takes(client):
-    with db.connect() as conn:
+    with connection.connect() as conn:
         for i in range(205):
-            db.insert_memory(conn, type="note", content=f"fact {i}", title=f"t{i}")
+            memories.insert_memory(conn, type="note", content=f"fact {i}", title=f"t{i}")
 
     body = client.get("/api/memories?limit=500").json()
 
@@ -353,10 +359,10 @@ def test_the_disk_row_names_what_freed_its_pages(client):
     """A removal leaves free pages behind without shrinking the file, so
     health carries what freed them and a compaction spends it."""
     _create(client, content="a row to leave pages behind")
-    with db.connect() as conn:
-        db._set_meta(conn, db.COMPACT_REASON_KEY, db.COMPACT_REASON_VECTORS)
+    with connection.connect() as conn:
+        settings._set_meta(conn, connection.COMPACT_REASON_KEY, connection.COMPACT_REASON_VECTORS)
     h = client.get("/api/maintenance/health").json()
-    assert h["file"]["compact_reason"] == db.COMPACT_REASON_VECTORS
+    assert h["file"]["compact_reason"] == connection.COMPACT_REASON_VECTORS
 
     assert client.post("/api/maintenance/vacuum", json={}).json()["ok"]
     h = client.get("/api/maintenance/health").json()
@@ -376,8 +382,8 @@ def test_health_counts_the_memories_no_tag_can_reach(client):
 def test_health_counts_the_memories_with_no_name_of_their_own(client):
     """A row with no title is listed by the opening line of its body."""
     _create(client, content="a named row", title="How the drain retries")
-    with db.connect() as conn:
-        db.insert_memory(conn, type="note", content="a row nothing names")
+    with connection.connect() as conn:
+        memories.insert_memory(conn, type="note", content="a row nothing names")
 
     title = client.get("/api/maintenance/health").json()["title"]
 
@@ -412,7 +418,7 @@ def test_maintenance_suite(client):
     assert entries[0]["content_changed"] == 1
 
 
-@pytest.mark.skipif(not (admin.pages.WEBUI_DIR / "index.html").is_file(),
+@pytest.mark.skipif(not (pages.WEBUI_DIR / "index.html").is_file(),
                     reason="dashboard not built (npm run build)")
 def test_static_ui_served(client):
     """The built page, and every asset it names, come back over /static.
@@ -433,7 +439,7 @@ def test_static_ui_served(client):
 def test_the_index_says_what_to_run_when_there_is_no_build(client, tmp_path, monkeypatch):
     """An install that skipped the build answers with the command, not a
     stack trace from FileResponse on a path that is not there."""
-    monkeypatch.setattr(admin.pages, "WEBUI_DIR", tmp_path / "dist")
+    monkeypatch.setattr(pages, "WEBUI_DIR", tmp_path / "dist")
     res = client.get("/")
     assert res.status_code == 503
     assert "npm run build" in res.text
@@ -448,11 +454,11 @@ def test_fonts_css_never_names_a_missing_file(client):
     assert res.status_code == 200
     assert "text/css" in res.headers["content-type"]
     body = res.text
-    assert body.count("@font-face") == len(admin.WEBFONTS)
+    assert body.count("@font-face") == len(WEBFONTS)
     assert "local('Roboto')" in body
 
-    fonts_dir = admin.pages.WEBUI_DIR / "fonts"
-    for _family, _weight, filename, _locals in admin.WEBFONTS:
+    fonts_dir = pages.WEBUI_DIR / "fonts"
+    for _family, _weight, filename, _locals in WEBFONTS:
         if (fonts_dir / filename).is_file():
             assert f"url('/static/fonts/{filename}')" in body
         else:
@@ -463,7 +469,7 @@ def test_fonts_css_uses_a_face_once_fetched(client, tmp_path, monkeypatch):
     webui = tmp_path / "webui"
     (webui / "fonts").mkdir(parents=True)
     (webui / "fonts" / "roboto-400.woff2").write_bytes(b"not really a font")
-    monkeypatch.setattr(admin.pages, "WEBUI_DIR", webui)
+    monkeypatch.setattr(pages, "WEBUI_DIR", webui)
 
     body = client.get("/fonts.css").text
     assert "url('/static/fonts/roboto-400.woff2') format('woff2')" in body
@@ -500,8 +506,8 @@ def test_graph_node_is_named_by_its_title_and_falls_back_to_the_body(client):
     """
     titled = _create(client, title="Cache warmup order",
                      content="the warmup runs before the first read")
-    with db.connect() as conn:
-        untitled = db.insert_memory(
+    with connection.connect() as conn:
+        untitled = memories.insert_memory(
             conn, type="note", domain="acme/x100",
             content="queue drain never retries\nsecond line")
 
@@ -532,7 +538,7 @@ def test_cross_origin_write_is_refused(client):
 
     There is no login on the admin API, so the browser's own labelling is
     the guard: Sec-Fetch-Site on everything, Origin on anything
-    cross-origin. See admin.SameOriginMiddleware.
+    cross-origin. See admin.security.SameOriginMiddleware.
     """
     uid = _create(client)
 
@@ -896,8 +902,8 @@ def test_handlers_run_off_the_event_loop():
         assert released.wait(timeout=10), "the second request never arrived"
         return {"slow": True}
 
-    app = Starlette(routes=[Route("/slow", admin.api(slow)),
-                            Route("/quick", admin.api(lambda req, pay: {"quick": True}))])
+    app = Starlette(routes=[Route("/slow", admin_api(slow)),
+                            Route("/quick", admin_api(lambda req, pay: {"quick": True}))])
     with TestClient(app) as c:
         answered: dict = {}
         worker = threading.Thread(target=lambda: answered.update(c.get("/slow").json()))
@@ -914,7 +920,7 @@ def test_handlers_run_off_the_event_loop():
 def _task(**kw) -> str:
     from memai import tasks
 
-    with db.connect() as conn:
+    with connection.connect() as conn:
         return tasks.create_task(
             conn, title="Ship the parser", goal="Parse every config file",
             items=["read the spec", "write the lexer"], domain="acme/parser", **kw)
@@ -923,11 +929,11 @@ def _task(**kw) -> str:
 def test_clean_orphans_removes_dangling_item_links(client):
     uid = _task()
     note = _create(client, content="the lexer reads one token")
-    with db.connect() as conn:
+    with connection.connect() as conn:
         conn.execute(
             "INSERT INTO task_item_links (memory_uid, item_key, target_uid, created_at) "
             "VALUES (?, 'i1', ?, '2026-01-01T00:00:00+00:00')", (uid, note))
-    raw = sqlite3.connect(db.default_db_path())
+    raw = sqlite3.connect(paths.default_db_path())
     try:
         raw.execute("PRAGMA foreign_keys=OFF")
         raw.execute(
@@ -938,7 +944,7 @@ def test_clean_orphans_removes_dangling_item_links(client):
         raw.close()
     res = client.post("/api/maintenance/clean-orphans", json={}).json()
     assert res["ok"] and res["task_links_removed"] == 1
-    with db.connect() as conn:
+    with connection.connect() as conn:
         assert [r["target_uid"] for r in conn.execute("SELECT target_uid FROM task_item_links")] == [note]
 
 
@@ -962,7 +968,7 @@ def test_dashboard_refuses_to_create_a_task_as_a_plain_memory(client):
         "title": "a would-be task", "type": "task", "content": "- [ ] step"})
     assert res.status_code == 400
     assert "/api/tasks" in res.json()["error"]
-    with db.connect() as conn:
+    with connection.connect() as conn:
         assert conn.execute("SELECT COUNT(*) FROM memories").fetchone()[0] == 0
 
 
@@ -984,8 +990,8 @@ def test_dashboard_does_not_create_or_retype_to_handoff(client):
     note = _create(client, content="a plain note")
     assert client.post(f"/api/memories/{note}/meta", json={"type": "handoff"}).status_code == 400
     assert client.get(f"/api/memories/{note}").json()["type"] == "note"
-    with db.connect() as conn:
-        old = db.insert_memory(conn, type="handoff", title="an existing handoff",
+    with connection.connect() as conn:
+        old = memories.insert_memory(conn, type="handoff", title="an existing handoff",
                                content="the lexer is next")
     assert client.post(f"/api/memories/{old}/content", json={"content": "the parser is next"}).status_code == 200
     assert client.post(f"/api/memories/{old}/meta", json={"tags": "parser"}).status_code == 200

@@ -236,7 +236,7 @@ the user never arranged; `'svg-interactive'` only when the user wants to
 
 Typical diagram maintenance: a step that names a memory and has no
 `diagram_link`; a flow that ends where another begins and has no
-`diagram_jump`; a title or domain that no longer matches the routine.
+`diagram_jump`; a title or domain that does not match the routine.
 
 > **Database and index health** (integrity, FTS rebuild, orphaned relations,
 > pruning SVG renders, vacuum, backup) is the dashboard's
@@ -263,7 +263,7 @@ the graph is stitched last, when content and type are stable.
    drift or imprecision. It also owns **decay**: every memory the scan marked
    **`due`** gets its `source_ref` rechecked, then a **`review`** suggestion
    pushing the date out — or `set_confidence=contradicted` and a reword when
-   the claim no longer holds. A `due` memory nobody rechecks stays due.
+   the claim fails the recheck. A `due` memory nobody rechecks stays due.
 4. **[[memai-link]]** — stitches the **graph** (`dedup_scan`, which scans the
    path **and its subtree**; materializes the wikilinks written inside memory
    bodies; checkpoint→note lineage; same-domain clusters). Last, with content
@@ -316,7 +316,7 @@ Reviewed: <N> memories (<X notes / Y checkpoints / Z diagrams / …>).  Staged: 
 
 ### Decay               [memai-confidence]
 - review <uid> — was due <2026-11-01>, source_ref rechecked → pushed out <180d>
-- (a due memory whose claim no longer holds goes under Confidence, not here)
+- (a due memory whose claim fails its recheck goes under Confidence, not here)
 
 ### Domains             [orchestrator]
 - redomain <uid> — acme-x100-p200-cache-warmup → acme/x100/p200/cache-warmup  (domain_nesting checked)

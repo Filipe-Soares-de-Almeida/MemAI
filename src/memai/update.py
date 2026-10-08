@@ -32,7 +32,7 @@ import urllib.request
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from memai import __version__, changelog, db
+from memai import __version__, changelog, lite
 
 REPO = "Filipe-Soares-de-Almeida/MemAI"
 RELEASES_PAGE = f"https://github.com/{REPO}/releases/latest"
@@ -103,7 +103,7 @@ def is_newer(candidate: object, current: str = __version__) -> bool:
 
 
 def cache_path() -> Path:
-    return db.home() / CACHE_NAME
+    return lite.home() / CACHE_NAME
 
 
 def cached() -> dict:
@@ -129,7 +129,7 @@ def interval() -> int:
     read or holds a value outside HOURS_RANGE.
     """
     try:
-        value = int(json.loads((db.home() / SETTINGS_NAME).read_text("utf-8"))["hours"])
+        value = int(json.loads((lite.home() / SETTINGS_NAME).read_text("utf-8"))["hours"])
     except (OSError, ValueError, KeyError, TypeError):
         return TTL_HOURS
     low, high = HOURS_RANGE
@@ -148,7 +148,7 @@ def set_interval(hours: object) -> int:
                          f"between {low} and {high}") from None
     if not low <= value <= high:
         raise ValueError(f"update_check_hours must be between {low} and {high}")
-    (db.home() / SETTINGS_NAME).write_text(
+    (lite.home() / SETTINGS_NAME).write_text(
         json.dumps({"hours": value}) + "\n", encoding="utf-8")
     return value
 

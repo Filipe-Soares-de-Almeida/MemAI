@@ -9,6 +9,7 @@
   <a href="LICENSE"><img alt="Licence: MIT" src="https://img.shields.io/badge/licence-MIT-blue.svg"></a>
   <img alt="Python 3.12-3.14" src="https://img.shields.io/badge/python-3.12--3.14-blue.svg">
   <img alt="Node 22.18+" src="https://img.shields.io/badge/node-22.18%2B-5fa04e.svg">
+  <img alt="Dashboard: Vue 3 + TypeScript" src="https://img.shields.io/badge/dashboard-Vue%203%20%2B%20TypeScript-42b883.svg">
   <img alt="MCP server" src="https://img.shields.io/badge/MCP-server-6f4ff2.svg">
   <img alt="Storage: SQLite + FTS5" src="https://img.shields.io/badge/storage-SQLite%20%2B%20FTS5-003b57.svg">
 </p>
@@ -118,8 +119,9 @@ status="archived")` lists the completed and cancelled ones.
 python -m venv .venv
 .venv/Scripts/pip install --no-deps -e .   # .venv/bin/pip off Windows
 .venv/Scripts/pip install --require-hashes -r requirements-dev.txt
-npm ci && npm run build                 # the admin dashboard
+.venv/Scripts/python tools/install-webui.py   # the admin dashboard
 .venv/Scripts/python -m pytest
+npm run typecheck && npm test           # the dashboard's own checks
 ```
 
 Register the server with your host, then let it reach a session by itself — the
@@ -231,9 +233,12 @@ mark in its app bar — where the release history is read.
 
 `memai-admin --status` says where it is, `memai-admin --stop` stops it.
 
-On start it rebuilds the dashboard when the sources in a checkout are newer than
-the build, running `npm ci` too when the lockfile changed; it serves the build it
-has when npm is missing or fails. `MEMAI_ADMIN_BUILD=0` turns that off.
+The dashboard is a Vue 3 and TypeScript app that Vite builds into
+`src/memai/webui/dist/`. Without Node 22.18+ or a reachable npm registry, the
+install takes the prebuilt one from the release instead. On start, `memai-admin`
+rebuilds it when its sources differ from the ones the build was stamped with,
+running `npm ci` too when the lockfile changed; it serves the build it has when
+npm is missing or fails. `MEMAI_ADMIN_BUILD=0` turns that off.
 
 A memory can be pinned from its record: for every domain, or for its own
 domain only (its subdomains and cross-listed paths included). `must_read()` and

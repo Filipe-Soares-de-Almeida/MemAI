@@ -234,9 +234,8 @@ def test_prose_after_a_fence_is_prose_again(drawn):
 CSS = ROOT / "src" / "memai" / "webui" / "admin.css"
 HIGHLIGHT_CASES = ROOT / "tools" / "highlight-cases.mjs"
 
-# Scopes left to inherit the block's colour on purpose: containers that wrap
-# the parts that ARE coloured, and punctuation, which reads as noise in five
-# colours and as code in one.
+# Scopes that inherit the block's colour on purpose: containers of coloured parts, and
+# punctuation, which reads as noise in five colours and as code in one.
 INHERITS = {"hljs-function", "hljs-params", "hljs-punctuation", "hljs-operator",
             "hljs-property", "hljs-tag"}
 

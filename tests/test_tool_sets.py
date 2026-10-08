@@ -17,7 +17,7 @@ import sys
 
 import pytest
 
-from memai import db
+from memai.store import optimizer
 
 
 def _load(monkeypatch, setting: str | None):
@@ -132,6 +132,6 @@ def test_the_skill_names_every_suggestion_kind():
              / "memai-maintenance" / "SKILL.md").read_text(encoding="utf-8")
     table = re.search(r"## 1\. The \w+ suggestion kinds.*?\n\n(.+?)\n\n", skill, re.S)
     assert table, "the maintenance skill carries no payload table"
-    missing = [kind for kind in db.SUGGESTION_KINDS
+    missing = [kind for kind in optimizer.SUGGESTION_KINDS
                if not re.search(rf"`{kind}`", table.group(1))]
     assert not missing, missing

@@ -16,7 +16,8 @@ import pytest
 from starlette.testclient import TestClient
 
 import memai
-from memai import admin, changelog, update
+from memai import changelog, update
+from memai.admin.app import app as admin_app
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -53,7 +54,7 @@ def store(tmp_path, monkeypatch):
 @pytest.fixture
 def client(tmp_path, monkeypatch):
     monkeypatch.setenv("MEMAI_HOME", str(tmp_path))
-    with TestClient(admin.app) as c:
+    with TestClient(admin_app) as c:
         yield c
 
 

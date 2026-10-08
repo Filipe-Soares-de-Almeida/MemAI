@@ -14,7 +14,7 @@ import sqlite3
 
 import pytest
 
-from memai import db
+from memai.store import connection, memories, search
 
 _SHADOW = ("memories_vec_chunks", "memories_vec_rowids", "memories_vec_vector_chunks00")
 
@@ -43,10 +43,10 @@ def _plant_vector_table(conn) -> None:
 
 def _store_with_vectors(path) -> str:
     """A store carrying all four leftovers. Returns the uid it holds."""
-    with db.connect(path) as conn:
-        uid = db.insert_memory(conn, type="note", domain="acme/x100", tags="cache",
+    with connection.connect(path) as conn:
+        uid = memories.insert_memory(conn, type="note", domain="acme/x100", tags="cache",
                                content="cache warmup runs before the first request")
-        db.record_recall(conn, [uid], sources={uid: "fts"})
+        memories.record_recall(conn, [uid], sources={uid: "fts"})
         conn.execute("ALTER TABLE memory_usage ADD COLUMN via_vec INTEGER NOT NULL DEFAULT 0")
         conn.execute("ALTER TABLE memory_usage ADD COLUMN via_both INTEGER NOT NULL DEFAULT 0")
         conn.execute("UPDATE memory_usage SET via_vec = 3, via_both = 2")
@@ -74,7 +74,7 @@ def carrier(tmp_path):
 
 def test_opening_the_store_removes_the_vector_table(carrier):
     path, _ = carrier
-    with db.connect(path) as conn:
+    with connection.connect(path) as conn:
         tables = _tables(conn)
     assert "memories_vec" not in tables
     assert not [t for t in tables if t.startswith("memories_vec")]
@@ -82,14 +82,14 @@ def test_opening_the_store_removes_the_vector_table(carrier):
 
 def test_it_removes_the_counters_beside_via_fts(carrier):
     path, _ = carrier
-    with db.connect(path) as conn:
+    with connection.connect(path) as conn:
         assert _columns(conn, "memory_usage") == {
             "memory_uid", "recall_count", "last_recalled_at", "via_fts"}
 
 
 def test_it_removes_the_meta_keys_naming_the_model(carrier):
     path, _ = carrier
-    with db.connect(path) as conn:
+    with connection.connect(path) as conn:
         keys = {r[0] for r in conn.execute("SELECT key FROM meta")}
     assert "embed_model" not in keys and "embed_dim" not in keys
 
@@ -97,59 +97,59 @@ def test_it_removes_the_meta_keys_naming_the_model(carrier):
 def test_the_memories_survive_it(carrier):
     """The vectors go; nothing a person wrote does."""
     path, uid = carrier
-    with db.connect(path) as conn:
-        row = db.get_memory(conn, uid)
+    with connection.connect(path) as conn:
+        row = memories.get_memory(conn, uid)
         assert row["content"] == "cache warmup runs before the first request"
         assert row["domain"] == "acme/x100"
-        assert [r["uid"] for r in db.search_ranked(conn, "cache warmup")] == [uid]
-        assert db.usage_for(conn, [uid])[uid]["recalls"] == 1
-        assert db.search_share(conn)["fts"] == 1
+        assert [r["uid"] for r in search.search_ranked(conn, "cache warmup")] == [uid]
+        assert memories.usage_for(conn, [uid])[uid]["recalls"] == 1
+        assert memories.search_share(conn)["fts"] == 1
 
 
 def test_it_says_what_the_free_pages_are(carrier):
     """Dropping the table frees pages without shrinking the file, so the
     dashboard's disk row has something to name."""
     path, _ = carrier
-    with db.connect(path) as conn:
-        assert db.get_compact_reason(conn) == db.COMPACT_REASON_VECTORS
+    with connection.connect(path) as conn:
+        assert connection.get_compact_reason(conn) == connection.COMPACT_REASON_VECTORS
 
 
 def test_clearing_the_reason_leaves_nothing_to_name(carrier):
     """What a compaction does to it -- the dashboard's VACUUM calls this,
     and test_admin covers that path end to end."""
     path, _ = carrier
-    with db.connect(path) as conn:
-        db.clear_compact_reason(conn)
-    with db.connect(path) as conn:
-        assert db.get_compact_reason(conn) == ""
+    with connection.connect(path) as conn:
+        connection.clear_compact_reason(conn)
+    with connection.connect(path) as conn:
+        assert connection.get_compact_reason(conn) == ""
 
 
 # ------------------------------------------------------------- running twice
 
 def test_a_second_open_finds_nothing_left_to_do(carrier):
     path, _ = carrier
-    with db.connect(path) as conn:
+    with connection.connect(path) as conn:
         pass
-    with db.connect(path) as conn:
-        assert db._drop_vector_store(conn) is False
+    with connection.connect(path) as conn:
+        assert connection._drop_vector_store(conn) is False
 
 
 def test_a_store_without_them_is_left_alone(tmp_path):
-    with db.connect(tmp_path / "fresh.db") as conn:
-        db.insert_memory(conn, type="note", content="row merge keeps the older id")
-        assert db._drop_vector_store(conn) is False
+    with connection.connect(tmp_path / "fresh.db") as conn:
+        memories.insert_memory(conn, type="note", content="row merge keeps the older id")
+        assert connection._drop_vector_store(conn) is False
 
 
 def test_the_columns_alone_are_enough_to_clean(tmp_path):
     """A counter arrives by ALTER TABLE, so a store can carry one with no
     vector table beside it."""
     path = tmp_path / "half.db"
-    with db.connect(path) as conn:
+    with connection.connect(path) as conn:
         conn.execute("ALTER TABLE memory_usage ADD COLUMN via_vec INTEGER NOT NULL DEFAULT 0")
-    with db.connect(path) as conn:
+    with connection.connect(path) as conn:
         assert "via_vec" not in _columns(conn, "memory_usage")
         # a column frees no pages worth compacting for
-        assert db.get_compact_reason(conn) == ""
+        assert connection.get_compact_reason(conn) == ""
 
 
 # ----------------------------------------------------------- what it leaves
@@ -159,7 +159,7 @@ def test_the_schema_is_readable_by_a_fresh_connection(carrier):
     be bumped -- otherwise another connection keeps a schema naming a module
     it cannot load."""
     path, _ = carrier
-    with db.connect(path):
+    with connection.connect(path):
         pass
     raw = sqlite3.connect(str(path))
     try:

@@ -19,9 +19,7 @@ globalThis.fetch = async (input, init) => {
 /* the locale under test comes from storage, the same way the browser picks it */
 globalThis.localStorage = { getItem: () => locale, setItem: () => {} };
 globalThis.document = { documentElement: {}, querySelectorAll: () => [] };
-/* core/shared.js reads the type colours out of CSS custom properties at
-   module load; there is no stylesheet here and none of the cases below
-   depend on a colour */
+/* core/shared.js reads type colours from CSS at module load; no case here depends on one */
 globalThis.getComputedStyle = () => ({ getPropertyValue: () => '' });
 
 const { t } = await import('../src/memai/webui/i18n.ts');

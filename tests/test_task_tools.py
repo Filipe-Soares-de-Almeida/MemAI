@@ -9,7 +9,8 @@ from __future__ import annotations
 
 import pytest
 
-from memai import db, server
+from memai import server
+from memai.store import connection, memories
 
 
 @pytest.fixture
@@ -33,8 +34,8 @@ def test_task_creates_and_reports_item_keys(store):
 
 def test_task_never_adds_the_type_name_to_tags(store):
     uid = _task(tags="parser, lexer")["uid"]
-    with db.connect() as conn:
-        assert "task" not in db.get_memory(conn, uid)["tags"].split(",")
+    with connection.connect() as conn:
+        assert "task" not in memories.get_memory(conn, uid)["tags"].split(",")
 
 
 def test_task_refuses_bad_input_as_an_error_result(store):
@@ -47,7 +48,7 @@ def test_task_refuses_bad_input_as_an_error_result(store):
 
 def test_a_refused_task_writes_nothing(store):
     _task(items="read the spec</parameter>")
-    with db.connect() as conn:
+    with connection.connect() as conn:
         assert conn.execute("SELECT COUNT(*) FROM memories").fetchone()[0] == 0
         assert conn.execute("SELECT COUNT(*) FROM tasks").fetchone()[0] == 0
 
@@ -88,12 +89,12 @@ def test_task_item_with_a_comment_alone_reports_the_current_state(store):
 def test_task_item_with_an_unknown_related_uid_changes_nothing(store):
     uid = _task()["uid"]
     note_uid = server.note("Lexer design", content="a fact about the lexer")["uid"]
-    with db.connect() as conn:
+    with connection.connect() as conn:
         before = _snapshot(conn, uid)
     result = server.task_item(uid, "i1", state="done", comment="lexer merged",
                               related=f"{note_uid},no-such-uid")
     assert result["ok"] is False and "no-such-uid" in " ".join(result["errors"])
-    with db.connect() as conn:
+    with connection.connect() as conn:
         assert _snapshot(conn, uid) == before
     assert server.task_read(uid, "items")["records"][0]["state"] == "todo"
     assert server.task_read(uid, "comments", item="i1")["total"] == 0
@@ -102,11 +103,11 @@ def test_task_item_with_an_unknown_related_uid_changes_nothing(store):
 def test_task_item_with_a_bad_state_rolls_back_the_link_and_comment(store):
     uid = _task()["uid"]
     note_uid = server.note("Lexer design", content="a fact about the lexer")["uid"]
-    with db.connect() as conn:
+    with connection.connect() as conn:
         before = _snapshot(conn, uid)
     result = server.task_item(uid, "i1", state="finished", comment="x", related=note_uid)
     assert result["ok"] is False
-    with db.connect() as conn:
+    with connection.connect() as conn:
         assert _snapshot(conn, uid) == before
 
 
@@ -171,7 +172,7 @@ def _snapshot(conn, uid: str) -> dict:
         "comments": rows("SELECT id, item_key, body FROM task_comments WHERE memory_uid = ?"),
         "links": rows("SELECT item_key, target_uid FROM task_item_links WHERE memory_uid = ?"),
         "edits": rows("SELECT id, note, new_content FROM edits WHERE memory_uid = ?"),
-        "memory": tuple(db.get_memory(conn, uid)),
+        "memory": tuple(memories.get_memory(conn, uid)),
     }
 
 
@@ -179,7 +180,7 @@ LEAK = "see the call </parameter> that ended early"
 
 
 def _comments(uid: str) -> list:
-    with db.connect() as conn:
+    with connection.connect() as conn:
         return conn.execute("SELECT body FROM task_comments WHERE memory_uid = ?",
                             (uid,)).fetchall()
 
@@ -193,7 +194,7 @@ def test_the_comment_tools_refuse_a_tool_calls_closing_tag(store):
         assert result["ok"] is False
         assert "tool call" in result["errors"][0]
     assert _comments(uid) == []
-    with db.connect() as conn:
+    with connection.connect() as conn:
         assert [i["state"] for i in server.tasks.get_task(conn, uid)["items"]] == ["todo", "todo"]
 
 

@@ -45,15 +45,32 @@ from memai import (
     autostart,
     brief,
     budget,
-    db,
     diagram_svg,
     hook_install,
+    lite,
     portable,
     sections,
     tasks,
     update,
 )
 from memai import pending as pending_lists
+from memai.store import (
+    connection,
+    dedup,
+    domains,
+    memories,
+    optimizer,
+    paths,
+    projects,
+    relations,
+    renders,
+    settings,
+)
+from memai.store import corpus as store_corpus
+from memai.store import search as store_search
+from memai.store import sections as store_sections
+from memai.store.diagrams import persist as diagram_persist
+from memai.store.diagrams import render as diagram_render
 
 # Sent in the initialize handshake and injected into context by hosts that support it. One
 # paragraph: it is paid on every request, and its job is to get the first pulse() call.
@@ -192,7 +209,7 @@ def _new_session_id() -> str:
     agent remembering to pass a consistent id on every call is not. An
     explicit `session=` still wins.
     """
-    stamp = db.now_iso()[:16].replace("-", "").replace(":", "")
+    stamp = lite.now_iso()[:16].replace("-", "").replace(":", "")
     return f"{stamp}-{os.getpid():04x}"
 
 
@@ -317,7 +334,7 @@ def _row_to_dict(row) -> dict:
     d = dict(row)
     blob = d.pop("also_domains", "")
     if blob:
-        d["also"] = db.parse_domains(blob)
+        d["also"] = domains.parse_domains(blob)
     # Blank on most rows -- and a field that is empty nine times out of ten
     # still costs its name in every result of every search.
     for optional in ("review_after", "source_ref", "pin"):
@@ -337,7 +354,7 @@ TYPE_CHECKPOINT = "checkpoint"      # checkpoint()
 TYPE_ANTI_PATTERN = "anti_pattern"  # anti_pattern()
 TYPE_REASONING = "reasoning"        # reasoning()
 TYPE_DIAGRAM = "diagram"            # diagram()
-TYPE_TASK = db.TASK_TYPE            # task()
+TYPE_TASK = memories.TASK_TYPE      # task()
 
 
 def _with_est_tokens(d: dict) -> dict:
@@ -346,7 +363,7 @@ def _with_est_tokens(d: dict) -> dict:
     Call before truncating: the number a caller budgets a get_memory(uid)
     with is what the whole record costs, not what the snippet cost.
     """
-    d["est_tokens"] = db.est_tokens(len(d.get("content", "")))
+    d["est_tokens"] = connection.est_tokens(len(d.get("content", "")))
     return d
 
 
@@ -417,7 +434,7 @@ def _read(conn, rows):
     """
     sources = {r["uid"]: r["match_source"] for r in rows
                if isinstance(r, dict) and r.get("match_source")}
-    db.record_recall(conn, [r["uid"] for r in rows], sources=sources or None)
+    memories.record_recall(conn, [r["uid"] for r in rows], sources=sources or None)
     return rows
 
 
@@ -430,7 +447,7 @@ def _coerce_domain(conn, domain: str) -> tuple[str, dict | None]:
     is also how an agent learns that 'acme / x100' was filed as
     'acme/x100'.
     """
-    coerced, mode = db.coerce_domain(conn, domain)
+    coerced, mode = domains.coerce_domain(conn, domain)
     if coerced == domain:
         return coerced, None
     return coerced, {"from": domain, "to": coerced, "policy": mode}
@@ -475,7 +492,7 @@ def _write_result(conn, uid: str, warning: dict | None, also: str,
     """
     # the project too: the dashboard switches it under a running server, so this is where a
     # writer learns which file its memory landed in
-    result: dict[str, object] = {"uid": uid, "project": db.active_project()}
+    result: dict[str, object] = {"uid": uid, "project": paths.active_project()}
     # the count is the feedback: a writer sees what it indexed while it
     # still holds the context that would supply the missing words
     result["tags_indexed"] = len([t for t in tags.split(",") if t.strip()])
@@ -484,8 +501,8 @@ def _write_result(conn, uid: str, warning: dict | None, also: str,
     if warning:
         result["domain_adjusted"] = warning
     if also:
-        result["also"] = db.get_domain_links(conn, uid)
-    similar = db.similar_memories(conn, uid)
+        result["also"] = memories.get_domain_links(conn, uid)
+    similar = dedup.similar_memories(conn, uid)
     if similar:
         result["similar"] = similar
         result["similar_hint"] = SIMILAR_HINT
@@ -522,9 +539,9 @@ def note(title: str, content: str, domain: str = "", also: str = "", tags: str =
 
     @param source_ref
     """
-    with db.connect() as conn:
+    with connection.connect() as conn:
         domain, warning = _coerce_domain(conn, domain)
-        uid = db.insert_memory(conn, type=TYPE_NOTE, content=content, title=title,
+        uid = memories.insert_memory(conn, type=TYPE_NOTE, content=content, title=title,
                                domain=domain, also=also, session=session or SESSION,
                                tags=tags, review_after=review_after,
                                source_ref=source_ref)
@@ -565,9 +582,9 @@ def checkpoint(
     content = sections.render(TYPE_CHECKPOINT, {
         "intent": intent, "established": established,
         "pursuing": pursuing, "open_questions": open_questions})
-    with db.connect() as conn:
+    with connection.connect() as conn:
         domain, warning = _coerce_domain(conn, domain)
-        uid = db.insert_memory(
+        uid = memories.insert_memory(
             conn, type=TYPE_CHECKPOINT, content=content, title=title,
             domain=domain, also=also, session=session or SESSION, tags=tags,
         )
@@ -599,9 +616,9 @@ def anti_pattern(
     """
     content = sections.render(TYPE_ANTI_PATTERN, {
         "pattern": pattern, "why_wrong": why_wrong, "instead": instead})
-    with db.connect() as conn:
+    with connection.connect() as conn:
         domain, warning = _coerce_domain(conn, domain)
-        uid = db.insert_memory(
+        uid = memories.insert_memory(
             conn, type=TYPE_ANTI_PATTERN, content=content, title=title,
             domain=domain, also=also, session=session or SESSION, tags=tags,
             review_after=review_after, source_ref=source_ref,
@@ -650,9 +667,9 @@ def reasoning(
     content = sections.render(TYPE_REASONING, {
         "hypothesis": hypothesis, "reasoning": reasoning, "result": result,
         "revised_belief": revised_belief, "next_time": next_time})
-    with db.connect() as conn:
+    with connection.connect() as conn:
         domain, warning = _coerce_domain(conn, domain)
-        uid = db.insert_memory(conn, type=TYPE_REASONING, content=content, title=title,
+        uid = memories.insert_memory(conn, type=TYPE_REASONING, content=content, title=title,
                                domain=domain, also=also, session=session or SESSION,
                                tags=tags,
                                review_after=review_after, source_ref=source_ref)
@@ -695,7 +712,7 @@ def task(title: str, goal: str, items: str, domain: str = "", also: str = "",
     See note() for what belongs there.
     """
     try:
-        with db.connect() as conn:
+        with connection.connect() as conn:
             domain, warning = _coerce_domain(conn, domain)
             lines = tasks.split_items(items)
             uid = tasks.create_task(conn, title=title, goal=goal, items=lines,
@@ -730,7 +747,7 @@ def task_item(uid: str, item: str, state: str = "", comment: str = "",
     if not any(str(v).strip() for v in (state, comment, related)):
         return _errors(["give at least one of state, comment and related"])
     try:
-        with db.connect() as conn:
+        with connection.connect() as conn:
             key = tasks.item_key(item)
             targets = [t.strip() for t in related.split(",") if t.strip()]
             if targets:
@@ -746,7 +763,7 @@ def task_item(uid: str, item: str, state: str = "", comment: str = "",
             result = {
                 "uid": uid, "item": key, "state": current,
                 "progress": tasks.progress(conn, uid), "task_state": head["state"],
-                "archived": db.memory_row(conn, uid)["status"] == "archived",
+                "archived": memories.memory_row(conn, uid)["status"] == "archived",
             }
     except ValueError as exc:
         return _errors([str(exc)])
@@ -760,7 +777,7 @@ def task_add(uid: str, items: str) -> dict:
     Returns the keys the new items got, and the progress.
     """
     try:
-        with db.connect() as conn:
+        with connection.connect() as conn:
             added = tasks.add_items(conn, uid, tasks.split_items(items), session=SESSION)
     except ValueError as exc:
         return _errors([str(exc)])
@@ -776,7 +793,7 @@ def task_comment(uid: str, body: str, item: str = "") -> dict:
     checklist cannot: why an item is blocked, what a review said.
     """
     try:
-        with db.connect() as conn:
+        with connection.connect() as conn:
             comment_id = tasks.add_comment(conn, uid, body, item=item, session=SESSION)
     except ValueError as exc:
         return _errors([str(exc)])
@@ -792,7 +809,7 @@ def task_read(uid: str, part: str, item: str = "", offset: int = 0) -> dict:
     linked to `item`). Follow `next_offset` until it is absent.
     """
     try:
-        with db.connect() as conn:
+        with connection.connect() as conn:
             return tasks.read_part(conn, uid, part, item, offset)
     except ValueError as exc:
         return _errors([str(exc)])
@@ -810,7 +827,7 @@ def task_note(uid: str, title: str = "", body: str = "", items: str = "", note_i
     """
     keys = [k.strip() for k in items.split(",") if k.strip() and k.strip() != "-"]
     try:
-        with db.connect() as conn:
+        with connection.connect() as conn:
             if delete:
                 tasks.delete_note(conn, uid, note_id)
                 return {"uid": uid, "note_id": note_id, "deleted": True}
@@ -880,9 +897,9 @@ def diagram(
     written at all. Node positions are computed and stored server-side,
     so the flow renders identically for every reader -- see get_diagram().
     """
-    with db.connect() as conn:
+    with connection.connect() as conn:
         domain, warning = _coerce_domain(conn, domain)
-        uid, errors = db.insert_diagram(
+        uid, errors = diagram_persist.insert_diagram(
             conn, title=title, nodes=nodes, edges=edges, summary=summary,
             kind=kind, domain=domain, also=also, session=session or SESSION, tags=tags,
             review_after=review_after, source_ref=source_ref,
@@ -911,11 +928,11 @@ def diagram_node(
     unattached until you add its edges, which is what lets a flow be
     built up across several calls. diagram() enforces them.
     """
-    with db.connect() as conn:
+    with connection.connect() as conn:
         if delete:
-            ok, errors = db.delete_diagram_node(conn, uid, key)
+            ok, errors = diagram_persist.delete_diagram_node(conn, uid, key)
         else:
-            ok, errors = db.upsert_diagram_node(conn, uid, key, label=label, shape=shape, note=note)
+            ok, errors = diagram_persist.upsert_diagram_node(conn, uid, key, label=label, shape=shape, note=note)
     return {"ok": True, "node_key": key} if ok else _errors(errors)
 
 
@@ -929,11 +946,11 @@ def diagram_edge(
     ('yes', 'no', 'on timeout'). Calling again with the same endpoints
     updates the label instead of adding a second edge between them.
     """
-    with db.connect() as conn:
+    with connection.connect() as conn:
         if delete:
-            ok, errors = db.delete_diagram_edge(conn, uid, from_key, to_key)
+            ok, errors = diagram_persist.delete_diagram_edge(conn, uid, from_key, to_key)
         else:
-            ok, errors = db.upsert_diagram_edge(conn, uid, from_key, to_key, label=label)
+            ok, errors = diagram_persist.upsert_diagram_edge(conn, uid, from_key, to_key, label=label)
     return {"ok": True} if ok else _errors(errors)
 
 
@@ -952,12 +969,12 @@ def diagram_link(
     get_memory() on the linked memory reports the diagrams that reference
     it, so the connection is visible from both ends.
     """
-    with db.connect() as conn:
+    with connection.connect() as conn:
         if delete:
-            ok = db.delete_node_link(conn, uid, node_key, target_uid)
+            ok = diagram_persist.delete_node_link(conn, uid, node_key, target_uid)
             errors = [] if ok else [f"no link from node {node_key!r} to {target_uid!r}"]
         else:
-            ok, errors = db.add_node_link(conn, uid, node_key, target_uid, relation_type)
+            ok, errors = diagram_persist.add_node_link(conn, uid, node_key, target_uid, relation_type)
     return {"ok": True} if ok else _errors(errors)
 
 
@@ -979,12 +996,12 @@ def diagram_jump(
     `node_key` are this diagram's side either way, which is also how a jump
     is deleted from the receiving end.
     """
-    with db.connect() as conn:
+    with connection.connect() as conn:
         if delete:
-            ok = db.delete_diagram_jump(conn, uid, node_key, peer_uid, peer_node)
+            ok = diagram_persist.delete_diagram_jump(conn, uid, node_key, peer_uid, peer_node)
             errors = [] if ok else [f"no jump between {node_key!r} and {peer_uid!r}"]
         else:
-            ok, errors = db.add_diagram_jump(
+            ok, errors = diagram_persist.add_diagram_jump(
                 conn, uid, node_key, peer_uid, peer_node, label=label)
     return {"ok": True} if ok else _errors(errors)
 
@@ -998,8 +1015,8 @@ def diagram_relayout(uid: str) -> dict:
     persist. This discards those adjustments and rebuilds the layered
     arrangement -- the fix for a diagram dragged into a mess.
     """
-    with db.connect() as conn:
-        moved = db.relayout_diagram(conn, uid)
+    with connection.connect() as conn:
+        moved = diagram_persist.relayout_diagram(conn, uid)
     return {"ok": moved > 0, "nodes": moved}
 
 
@@ -1030,17 +1047,17 @@ def get_diagram(uid: str, format: str = "mermaid", offset: int = 0) -> dict:
                         f"{', '.join(repr(f) for f in _DIAGRAM_FORMATS)}"])
     if error := _offset_error(offset):
         return _errors([error])
-    with db.connect() as conn:
-        data = db.get_diagram(conn, uid)
+    with connection.connect() as conn:
+        data = diagram_persist.get_diagram(conn, uid)
         if data is None:
             return _errors([f"{uid} is not a diagram"])
-        db.record_recall(conn, [uid])
+        memories.record_recall(conn, [uid])
         if format in ("svg", "svg-interactive"):
             return _write_render(conn, uid, data, format, offset)
         body = (
             json.dumps(data, ensure_ascii=False, indent=1) if format == "json"
-            else db.render_diagram_text(conn, uid) if format == "text"
-            else db.render_diagram_mermaid(conn, uid)
+            else diagram_persist.render_diagram_text(conn, uid) if format == "text"
+            else diagram_persist.render_diagram_mermaid(conn, uid)
         )
     text, nxt = budget.text_chunk(body, offset)
     out = {"uid": uid, "title": data["title"], "format": format, "offset": offset,
@@ -1071,14 +1088,14 @@ def _write_render(conn, uid: str, data: dict, format: str, offset: int = 0) -> d
         # inline embedding needs no doctype, no body and no styling that leaks into the host page.
         markup = diagram_svg.render_interactive(data, standalone=True)
         viewbox = diagram_svg.render_svg(data)[1]
-        inline_target = db.renders_dir() / f"diagram-{uid}.inline.html"
+        inline_target = renders.renders_dir() / f"diagram-{uid}.inline.html"
         inline_target.write_text(
             diagram_svg.render_interactive(data), encoding="utf-8")
     else:
         markup, viewbox = diagram_svg.render_svg(data)
-    target = db.renders_dir() / f"diagram-{uid}.{'html' if interactive else 'svg'}"
+    target = renders.renders_dir() / f"diagram-{uid}.{'html' if interactive else 'svg'}"
     target.write_text(markup, encoding="utf-8")
-    swept = db.prune_renders(db.get_svg_retention(conn), keep=target)
+    swept = renders.prune_renders(settings.get_svg_retention(conn), keep=target)
     links: dict[str, list[str]] = {}
     for link in data.get("links") or []:
         links.setdefault(link["node_key"], []).append(link["target_uid"])
@@ -1168,10 +1185,10 @@ def search(query: str, domain: str = "", type: str = "", limit: int = 10, offset
 
     @param offset_page
     """
-    if error := db.type_error(type) or _offset_error(offset):
+    if error := memories.type_error(type) or _offset_error(offset):
         return _errors([error])
-    with db.connect() as conn:
-        return _listing(conn, db.search_ranked(conn, query, domain=domain, type=type,
+    with connection.connect() as conn:
+        return _listing(conn, store_search.search_ranked(conn, query, domain=domain, type=type,
                                                limit=limit, collapse=True), offset)
 
 
@@ -1197,8 +1214,8 @@ def recall(query: str, domain: str = "", limit: int = 10, offset: int = 0) -> di
     """
     if error := _offset_error(offset):
         return _errors([error])
-    with db.connect() as conn:
-        return _listing(conn, db.search_ranked(conn, query, domain=domain, type=TYPE_NOTE,
+    with connection.connect() as conn:
+        return _listing(conn, store_search.search_ranked(conn, query, domain=domain, type=TYPE_NOTE,
                                                limit=limit, collapse=True), offset)
 
 
@@ -1234,17 +1251,17 @@ def list_by_domain(
 
     @param offset_page
     """
-    if error := db.type_error(type):
+    if error := memories.type_error(type):
         return _errors([error])
     if status not in LIST_STATUSES:
         return _errors([f"{status!r} is not a status; use one of {', '.join(LIST_STATUSES)}"])
-    with db.connect() as conn:
-        rows = db.list_by_domain(
+    with connection.connect() as conn:
+        rows = store_search.list_by_domain(
             conn, domain, type=type, status="" if status == "all" else status,
             limit=limit, subtree=subtree)
         listing = _listing(conn, rows, offset)
         for result in listing["results"]:
-            if result["type"] == db.TASK_TYPE:
+            if result["type"] == memories.TASK_TYPE:
                 state = pending_lists.task_state(conn, result["uid"])
                 if state is not None:
                     result["state"] = state
@@ -1269,10 +1286,10 @@ def list_recent(
 
     @param offset_page
     """
-    if error := db.type_error(type):
+    if error := memories.type_error(type):
         return _errors([error])
-    with db.connect() as conn:
-        rows = db.list_recent(conn, type=type, domain=domain, limit=limit,
+    with connection.connect() as conn:
+        rows = store_search.list_recent(conn, type=type, domain=domain, limit=limit,
                                          subtree=subtree)
         return _listing(conn, rows, offset)
 
@@ -1315,23 +1332,23 @@ def timeline(
     if not uid and not query:
         return _errors(["timeline needs uid or query: one names the anchor, "
                         "the other searches for it"])
-    if error := db.type_error(type):
+    if error := memories.type_error(type):
         return _errors([error])
-    with db.connect() as conn:
+    with connection.connect() as conn:
         if uid:
             anchored_by = "uid"
-            anchor = db.get_memory(conn, uid)
+            anchor = memories.get_memory(conn, uid)
             if anchor is None:
                 return _errors([f"no memory {uid}"])
         else:
             anchored_by = "query"
-            hits = db.search_ranked(conn, query, domain=domain, type=type, limit=1)
+            hits = store_search.search_ranked(conn, query, domain=domain, type=type, limit=1)
             if not hits:
                 return _errors([f"no memory matches query: {query}"])
             # Re-read as a record: a search hit carries retrieval annotations
             # (match_source, ranks) that are not part of the memory.
-            anchor = db.memory_row(conn, hits[0]["uid"])
-        older, newer = db.timeline_neighbours(
+            anchor = memories.memory_row(conn, hits[0]["uid"])
+        older, newer = store_search.timeline_neighbours(
             conn, anchor, before=before, after=after, domain=domain, type=type)
         # Each side keeps the records nearest the anchor that fit half a page.
         near_old, _ = budget.page([_snippet_dict(_row_to_dict(r)) for r in reversed(older)], 0,
@@ -1362,9 +1379,9 @@ def list_projects() -> dict:
     matched without regard to case wherever a tool takes one.
     """
     return {
-        "active": db.active_project(),
+        "active": paths.active_project(),
         "projects": [{"name": s["name"], "memories": s["memories"], "active": s["active"]}
-                   for s in db.list_projects(counts=True)],
+                   for s in projects.list_projects(counts=True)],
     }
 
 
@@ -1397,8 +1414,8 @@ def list_domains(offset: int = 0) -> dict:
     """
     if error := _offset_error(offset):
         return _errors([error])
-    with db.connect() as conn:
-        return _page(db.list_domains(conn), offset, key="domains")
+    with connection.connect() as conn:
+        return _page(domains.list_domains(conn), offset, key="domains")
 
 
 @tool("core")
@@ -1414,11 +1431,11 @@ def also_domain(uid: str, domain: str) -> dict:
     the memory's own domain already sits under is dropped as redundant, so
     the echo is what actually holds.
     """
-    with db.connect() as conn:
-        if db.get_memory(conn, uid) is None:
+    with connection.connect() as conn:
+        if memories.get_memory(conn, uid) is None:
             return _errors([f"no memory {uid}"])
         try:
-            return {"uid": uid, "also": db.add_domain_link(conn, uid, domain)}
+            return {"uid": uid, "also": memories.add_domain_link(conn, uid, domain)}
         except ValueError as exc:
             return _errors([str(exc)])
 
@@ -1431,10 +1448,10 @@ def unfile_domain(uid: str, domain: str) -> dict:
     in 'acme/x100' alone, because that is a different scope. Returns
     {"uid": ..., "also": [...]} with what remains.
     """
-    with db.connect() as conn:
-        if db.get_memory(conn, uid) is None:
+    with connection.connect() as conn:
+        if memories.get_memory(conn, uid) is None:
             return _errors([f"no memory {uid}"])
-        return {"uid": uid, "also": db.remove_domain_link(conn, uid, domain)}
+        return {"uid": uid, "also": memories.remove_domain_link(conn, uid, domain)}
 
 
 @tool("curation")
@@ -1447,8 +1464,8 @@ def get_domain_case() -> dict:
     writer's result carries a `domain_adjusted` note). Read this before
     coining a new domain so its casing matches what will be stored.
     """
-    with db.connect() as conn:
-        return {"mode": db.get_domain_case(conn)}
+    with connection.connect() as conn:
+        return {"mode": domains.get_domain_case(conn)}
 
 
 @tool("curation")
@@ -1462,8 +1479,8 @@ def set_domain_case(mode: str) -> dict:
     collisions before merging variant spellings). Returns the stored
     {"mode": ...}.
     """
-    with db.connect() as conn:
-        return {"mode": db.set_domain_case(conn, mode)}
+    with connection.connect() as conn:
+        return {"mode": domains.set_domain_case(conn, mode)}
 
 
 @tool("core")
@@ -1496,9 +1513,9 @@ def must_read(domain: str = "", type: str = "", limit: int = 10, offset: int = 0
     is an error.
     """
     allowed = pending_lists.PINNED_TYPES if pinned else pending_lists.CATEGORIES
-    if error := db.type_error(type, allowed=allowed):
+    if error := memories.type_error(type, allowed=allowed):
         return _errors([error])
-    with db.connect() as conn:
+    with connection.connect() as conn:
         if not type:
             result = {"categories": pending_lists.counts(conn, domain)}
             pins = pending_lists.pinned_counts(conn, domain)
@@ -1601,9 +1618,9 @@ def pulse(domain: str = "", offset: int = 0) -> dict:
     """
     if error := _offset_error(offset):
         return _errors([error])
-    with db.connect() as conn:
-        census = db.domain_census(conn, domain)
-        latest_checkpoint = db.latest_by_type(conn, TYPE_CHECKPOINT, domain=domain,
+    with connection.connect() as conn:
+        census = domains.domain_census(conn, domain)
+        latest_checkpoint = store_search.latest_by_type(conn, TYPE_CHECKPOINT, domain=domain,
                                               exclude_contradicted=True)
         categories = pending_lists.counts(conn, domain)
         pins = pending_lists.pinned_counts(conn, domain)
@@ -1618,10 +1635,10 @@ def pulse(domain: str = "", offset: int = 0) -> dict:
                 checkpoint_dict["content"] = text
                 checkpoint_dict["next"] = (f"get_memory(uid='{checkpoint_dict['uid']}', "
                                            f"content_offset={more})")
-            checkpoint_dict["relation_count"] = len(db.get_relations(conn, checkpoint_dict["uid"]))
+            checkpoint_dict["relation_count"] = len(relations.get_relations(conn, checkpoint_dict["uid"]))
             _read(conn, [latest_checkpoint])
     return {
-        "project": db.active_project(),
+        "project": paths.active_project(),
         "latest_checkpoint": checkpoint_dict,
         "must_read": categories,
         "pinned": pins,
@@ -1658,8 +1675,8 @@ def warm_up(domain: str = "") -> str:
     the person, which makes it the one place in the MCP protocol where the
     store can be READ without the agent having decided to read it.
     """
-    with db.connect() as conn:
-        text = brief.session_brief(conn, domain=domain, project=db.active_project())
+    with connection.connect() as conn:
+        text = brief.session_brief(conn, domain=domain, project=paths.active_project())
     return text or "The memai store is empty -- nothing to warm up from yet."
 
 
@@ -1700,13 +1717,13 @@ def get_memory(uid: str, edits_offset: int = -1, content_offset: int = -1) -> di
     for a body too long for one response.
     """
     try:
-        with db.connect() as conn:
-            row = db.get_memory(conn, uid)
+        with connection.connect() as conn:
+            row = memories.get_memory(conn, uid)
             if row is None:
                 # Not {}: an empty dict reads as an empty record, when the uid names no memory at all.
                 return _errors([f"no memory {uid}"])
             if edits_offset != -1:
-                edits = [_edit_record(e) for e in db.get_edit_history(conn, uid)]
+                edits = [_edit_record(e) for e in memories.get_edit_history(conn, uid)]
                 return _paged(uid, "edits", edits, edits_offset)
             if content_offset != -1:
                 text, more = budget.text_chunk(row["content"], content_offset)
@@ -1716,22 +1733,22 @@ def get_memory(uid: str, edits_offset: int = -1, content_offset: int = -1) -> di
                     out["next_offset"] = more
                 return out
             _read(conn, [row])
-            count = db.edit_count(conn, uid)
-            relation_count = len(db.get_relations(conn, uid))
+            count = memories.edit_count(conn, uid)
+            relation_count = len(relations.get_relations(conn, uid))
             result = _row_to_dict(row)
             nxt: dict = {}
             if row["type"] == TYPE_DIAGRAM:
                 result.pop("content", None)
-                mermaid, more = budget.text_chunk(db.render_diagram_mermaid(conn, uid), 0,
-                                                  db.DIAGRAM_BODY_BUDGET)
+                mermaid, more = budget.text_chunk(diagram_persist.render_diagram_mermaid(conn, uid), 0,
+                                                  diagram_render.DIAGRAM_BODY_BUDGET)
                 result["mermaid"] = mermaid
-                result["node_link_count"] = len(db.get_node_links(conn, uid))
-                result["jump_count"] = len(db.get_diagram_jumps(conn, uid))
+                result["node_link_count"] = len(diagram_persist.get_node_links(conn, uid))
+                result["jump_count"] = len(diagram_persist.get_diagram_jumps(conn, uid))
                 nxt["diagram"] = f"get_diagram(uid='{uid}', format='json')"
                 if more is not None:
                     nxt["mermaid"] = f"get_diagram(uid='{uid}', format='mermaid', offset={more})"
             else:
-                diagrams = len(db.diagrams_referencing(conn, uid))
+                diagrams = len(diagram_persist.diagrams_referencing(conn, uid))
                 result["referenced_by_diagrams"] = diagrams
                 if diagrams:
                     nxt["diagrams"] = f"get_relations(uid='{uid}', part='diagrams')"
@@ -1810,9 +1827,9 @@ def edit_memory(uid: str, new_content: str = "", note: str = "", mode: str = "re
     if not (new_content.strip() or source_ref.strip() or title.strip() or tags.strip()):
         return _errors(["nothing to change: pass new_content, source_ref, title or tags"])
     changed = []
-    with db.connect() as conn:
+    with connection.connect() as conn:
         if new_content.strip():
-            if db.is_diagram(conn, uid):
+            if diagram_persist.is_diagram(conn, uid):
                 return _errors([
                     f"{uid} is a diagram: its content is generated from the graph. "
                     "Use diagram_node/diagram_edge to change the flow."
@@ -1823,7 +1840,7 @@ def edit_memory(uid: str, new_content: str = "", note: str = "", mode: str = "re
                     "items. Change them through the task tools."
                 ])
             try:
-                if not db.update_memory_content(conn, uid, new_content, note=note,
+                if not memories.update_memory_content(conn, uid, new_content, note=note,
                                                 append=mode == "append"):
                     return _errors([f"no memory {uid}"])
             except ValueError as exc:
@@ -1832,24 +1849,24 @@ def edit_memory(uid: str, new_content: str = "", note: str = "", mode: str = "re
                 return _errors([str(exc)])
             changed.append("content")
         if source_ref.strip():
-            if not db.set_source_ref(conn, uid, source_ref, note=note):
+            if not memories.set_source_ref(conn, uid, source_ref, note=note):
                 return _errors([f"no memory {uid}"])
             changed.append("source_ref")
         if title.strip():
-            if db.is_diagram(conn, uid):
+            if diagram_persist.is_diagram(conn, uid):
                 return _errors([
                     f"{uid} is a diagram: its title is part of what generates its "
                     "body, so a rename here would be overwritten by the next "
                     "structural change. Rename it in the dashboard."
                 ])
-            too_long = db.title_error(title)
+            too_long = store_sections.title_error(title)
             if too_long:
                 return _errors([too_long])
-            if not db.set_title(conn, uid, title, note=note):
+            if not memories.set_title(conn, uid, title, note=note):
                 return _errors([f"no memory {uid}"])
             changed.append("title")
         if tags.strip():
-            if not db.set_tags(conn, uid, tags, note=note):
+            if not memories.set_tags(conn, uid, tags, note=note):
                 return _errors([f"no memory {uid}"])
             changed.append("tags")
     return {"ok": True, "changed": changed}
@@ -1871,9 +1888,9 @@ def link_memories(from_uid: str, to_uid: str, relation_type: str, note: str = ""
     {"ok": False, "errors": [...]}, so a typo comes back as something to
     fix instead of a dangling edge or a raw database error.
     """
-    with db.connect() as conn:
+    with connection.connect() as conn:
         try:
-            rel_id = db.add_relation(conn, from_uid, to_uid, relation_type, note=note)
+            rel_id = relations.add_relation(conn, from_uid, to_uid, relation_type, note=note)
         except ValueError as exc:
             return _errors([str(exc)])
     return {"relation_id": rel_id}
@@ -1890,19 +1907,19 @@ def get_relations(uid: str, part: str = "relations", offset: int = 0) -> dict:
         return _errors([f"{part!r} is not a part; use 'relations' or 'diagrams'"])
     if error := _offset_error(offset):
         return _errors([error])
-    with db.connect() as conn:
-        rows = (db.get_relations(conn, uid) if part == "relations"
-                else db.diagrams_referencing(conn, uid))
+    with connection.connect() as conn:
+        rows = (relations.get_relations(conn, uid) if part == "relations"
+                else diagram_persist.diagrams_referencing(conn, uid))
     return _page([_row_to_dict(r) for r in rows], offset, uid=uid, part=part)
 
 
 @tool("core")
 def set_confidence(uid: str, confidence: str) -> dict:
     """Set a memory's confidence: unverified | confirmed | contradicted."""
-    if confidence not in db.CONFIDENCE_VALUES:
-        return {"ok": False, "error": f"confidence must be {'|'.join(db.CONFIDENCE_VALUES)}"}
-    with db.connect() as conn:
-        ok = db.set_confidence(conn, uid, confidence)
+    if confidence not in optimizer.CONFIDENCE_VALUES:
+        return {"ok": False, "error": f"confidence must be {'|'.join(optimizer.CONFIDENCE_VALUES)}"}
+    with connection.connect() as conn:
+        ok = memories.set_confidence(conn, uid, confidence)
     return {"ok": ok}
 
 
@@ -1913,8 +1930,8 @@ def forget(uid: str, reason: str = "", superseded_by: str = "") -> dict:
     A `reason` is recorded as a status-change audit entry, without touching
     the content. Archiving an open task cancels it; its items keep their states.
     """
-    with db.connect() as conn:
-        ok = db.set_status(
+    with connection.connect() as conn:
+        ok = memories.set_status(
             conn, uid, "archived",
             superseded_by=superseded_by or None,
             note=f"archived: {reason}" if reason else "",
@@ -1936,8 +1953,8 @@ def purge_memory(uid: str, confirm_phrase: str) -> dict:
     expected = f"DELETE {uid}"
     if confirm_phrase != expected:
         return {"ok": False, "error": f"confirm_phrase must exactly equal '{expected}'"}
-    with db.connect() as conn:
-        ok = db.purge_memory(conn, uid)
+    with connection.connect() as conn:
+        ok = memories.purge_memory(conn, uid)
     return {"ok": ok}
 
 
@@ -1962,7 +1979,7 @@ def move_to_project(target: str, uids: str = "", domain: str = "", dry_run: bool
     that does not exist yet. list_projects() names the projects there are.
     """
     wanted = [u.strip() for u in uids.split(",") if u.strip()]
-    return portable.move(db.active_project(), target, uids=wanted, domain=domain,
+    return portable.move(paths.active_project(), target, uids=wanted, domain=domain,
                          dry_run=dry_run, create=create)
 
 
@@ -1988,8 +2005,8 @@ def dedup_scan(domain: str = "", type: str = "", threshold: float = 0.6, limit: 
     """
     if error := _offset_error(offset):
         return _errors([error])
-    with db.connect() as conn:
-        pairs = db.dedup_candidates(conn, domain=domain, type=type, threshold=threshold,
+    with connection.connect() as conn:
+        pairs = dedup.dedup_candidates(conn, domain=domain, type=type, threshold=threshold,
                                     limit=limit)
     records = [
         {"a": _snippet_dict(_row_to_dict(a)), "b": _snippet_dict(_row_to_dict(b)),
@@ -2034,12 +2051,12 @@ def optimize_scan(
     rejected without it: cross-check newer memories in the corpus, verify
     code anchors against the live repo, web-check world facts.
     """
-    with db.connect() as conn:
-        corpus = db.optimization_corpus(
+    with connection.connect() as conn:
+        corpus = store_corpus.optimization_corpus(
             conn, domain=domain, type=type, since=since,
             include_archived=include_archived,
             limit=limit, offset=offset, full=full)
-        pairs = db.dedup_candidates(conn, domain=domain, type=type, since=since, limit=20)
+        pairs = dedup.dedup_candidates(conn, domain=domain, type=type, since=since, limit=20)
     corpus["dedup_hints"] = [
         {"a": a["uid"], "b": b["uid"], "ratio": round(score, 3), "method": method}
         for a, b, score, method in pairs
@@ -2076,8 +2093,8 @@ def optimize_stage(suggestions: list[dict], note: str = "") -> dict:
     said belongs in its own `rationale` and `verified`, which are not
     capped.
     """
-    with db.connect() as conn:
-        result = db.stage_optimization(conn, note, suggestions)
+    with connection.connect() as conn:
+        result = optimizer.stage_optimization(conn, note, suggestions)
     return result
 
 
@@ -2096,8 +2113,8 @@ def optimize_runs(offset: int = 0) -> dict:
     """
     if error := _offset_error(offset):
         return _errors([error])
-    with db.connect() as conn:
-        rows = db.list_optimization_runs(conn)
+    with connection.connect() as conn:
+        rows = optimizer.list_optimization_runs(conn)
     return _page([dict(r) for r in rows], offset, key="runs")
 
 
@@ -2115,11 +2132,11 @@ def optimize_status(run_id: int, offset: int = 0) -> dict:
     """
     if error := _offset_error(offset):
         return _errors([error])
-    with db.connect() as conn:
-        run = db.get_optimization_run(conn, run_id)
+    with connection.connect() as conn:
+        run = optimizer.get_optimization_run(conn, run_id)
         if run is None:
             return {"error": f"unknown run: {run_id}"}
-        sugs = db.get_optimization_suggestions(conn, run_id)
+        sugs = optimizer.get_optimization_suggestions(conn, run_id)
     return _page([{**dict(s), "payload": json.loads(s["payload"]) if s["payload"] else {}}
                   for s in sugs], offset, key="suggestions", run=dict(run))
 

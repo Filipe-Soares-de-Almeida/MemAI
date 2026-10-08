@@ -8,14 +8,15 @@ import json
 import pytest
 from starlette.testclient import TestClient
 
-from memai import admin, db, tasks
-from memai.store import connection
+from memai import tasks
+from memai.admin.app import app as admin_app
+from memai.store import connection, memories
 
 
 @pytest.fixture()
 def client(tmp_path, monkeypatch):
     monkeypatch.setenv("MEMAI_HOME", str(tmp_path))
-    with TestClient(admin.app) as c:
+    with TestClient(admin_app) as c:
         yield c
 
 
@@ -35,9 +36,9 @@ def _note(client) -> str:
 
 
 def _snapshot(uid: str) -> dict:
-    with db.connect() as conn:
-        return {"task": tasks.get_task(conn, uid), "content": db.get_memory(conn, uid)["content"],
-                "status": db.get_memory(conn, uid)["status"]}
+    with connection.connect() as conn:
+        return {"task": tasks.get_task(conn, uid), "content": memories.get_memory(conn, uid)["content"],
+                "status": memories.get_memory(conn, uid)["status"]}
 
 
 def test_create_task_from_text(client):
@@ -57,7 +58,7 @@ def test_create_task_from_text(client):
 
 def test_create_task_from_list(client):
     uid = _task(client, items=["one", "two", "three"])
-    with db.connect() as conn:
+    with connection.connect() as conn:
         assert [i["key"] for i in tasks.get_task(conn, uid)["items"]] == ["i1", "i2", "i3"]
 
 
@@ -295,7 +296,7 @@ def test_overview_counts_open_tasks(client):
 
 def _raw_archive(uid: str) -> None:
     """Archive without touching tasks.state, as a writer that does not know tasks does."""
-    with db.connect() as conn:
+    with connection.connect() as conn:
         conn.execute("UPDATE memories SET status = 'archived' WHERE uid = ?", (uid,))
 
 
@@ -307,7 +308,7 @@ def test_an_archived_task_is_not_an_open_task_in_the_overview_or_the_filter(
     # without it the status='active' condition on the dashboard's reads decides
     monkeypatch.setattr(connection, "_repair_task_states", lambda conn: None)
     _raw_archive(gone_uid)
-    with db.connect() as conn:
+    with connection.connect() as conn:
         assert tasks.get_task(conn, gone_uid)["state"] == "open"
     assert client.get("/api/overview").json()["open_tasks"] == 1
     uids = {r["uid"] for r in client.get("/api/memories?task_state=open").json()["items"]}

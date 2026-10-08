@@ -1,9 +1,5 @@
-/* The dashboard build stamp: which version and which sources made dist/.
-
-   vite.config.js writes it into dist/build.json; memai/webui_build.py
-   recomputes sourceHash() in Python and rebuilds when the two differ, so the
-   file set and the hashing here must match source_hash() there byte for
-   byte (tests/test_webui_build.py runs both on one tree). */
+/* The dashboard build stamp: which version and which sources made dist/. The hashing must match
+   source_hash() in memai/webui_build.py byte for byte (tests/test_webui_build.py runs both). */
 import { createHash } from 'node:crypto';
 import { readdir, readFile } from 'node:fs/promises';
 import { join, relative, sep } from 'node:path';

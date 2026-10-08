@@ -8,14 +8,15 @@ from typing import cast
 from starlette.routing import Route
 
 from memai import admin_schemas as schema
-from memai import db
 from memai.admin.api import api
 from memai.admin.shared import _backup, _file_size
+from memai.store import backups as store_backups
+from memai.store import paths
 
 
 def backup(request, payload) -> schema.BackupTaken:
     dest = _backup()
-    return {"ok": True, "project": db.active_project(), "path": str(dest),
+    return {"ok": True, "project": paths.active_project(), "path": str(dest),
             "size": _file_size(dest)}
 
 
@@ -39,19 +40,19 @@ def backups(request, payload) -> schema.Backups:
     what it costs on disk and what it holds uncompressed, because the second
     number is what archiving it saved.
     """
-    project = db.active_project()
-    meta = db.shelf_meta(project)
+    project = paths.active_project()
+    meta = store_backups.shelf_meta(project)
     archives = []
-    for path in db.archive_files(project):
+    for path in store_backups.archive_files(project):
         members = [{**m, **{k: v for k, v in (meta.get(m["name"]) or {}).items()
                             if k == "label"}}
-                   for m in db.archive_members(path)]
+                   for m in store_backups.archive_members(path)]
         archives.append({**_shelf_row(path), "count": len(members),
                          "raw": sum(m["size"] for m in members),
                          "members": members})
     return cast(schema.Backups, {
         "project": project,
-        "shelf": [_shelf_row(p, meta.get(p.name)) for p in db.backup_files(project)],
+        "shelf": [_shelf_row(p, meta.get(p.name)) for p in store_backups.backup_files(project)],
         "archives": archives})
 
 
@@ -72,14 +73,14 @@ def archive(request, payload) -> schema.ArchivePlan | schema.Archived:
         raise ValueError("names must be a non-empty list")
     names = [str(n) for n in names]
     group = payload.get("group") or "month"
-    project = db.active_project()
+    project = paths.active_project()
     if payload.get("dry_run"):
-        plan = db.archive_plan(project, names, group)
+        plan = store_backups.archive_plan(project, names, group)
         return {"ok": True, "plan": [
             {"name": dest.name, "added": len(got), "exists": dest.exists()}
             for dest, got in plan.items()]}
     raw = 0
-    shelf = db.backups_dir(project)
+    shelf = store_backups.backups_dir(project)
     for name in names:
         path = shelf / name
         if path.is_file():
@@ -88,14 +89,14 @@ def archive(request, payload) -> schema.ArchivePlan | schema.Archived:
         label = payload.get("label")
         if not isinstance(label, str):
             raise ValueError("label (string) required to name a zip")
-        landed = {db.archive_backups(project, names, label=label): names}
+        landed = {store_backups.archive_backups(project, names, label=label): names}
     elif group == "existing":
         into = payload.get("into")
         if not isinstance(into, str) or not into:
             raise ValueError("into (zip name) required to add to a zip")
-        landed = {db.archive_backups(project, names, into=into): names}
+        landed = {store_backups.archive_backups(project, names, into=into): names}
     else:
-        landed = db.archive_grouped(project, names, group)
+        landed = store_backups.archive_grouped(project, names, group)
     archives = [{"name": dest.name, "added": len(got), "size": _file_size(dest)}
                 for dest, got in landed.items()]
     return cast(schema.Archived, {"ok": True, "archive": archives[0]["name"], "archives": archives,
@@ -106,7 +107,7 @@ def archive(request, payload) -> schema.ArchivePlan | schema.Archived:
 def archive_rename(request, payload) -> schema.Renamed:
     """Give an archive another name; the file keeps its `<project>-` prefix."""
     name = str(payload.get("name") or "")
-    dest = db.rename_archive(db.active_project(), name, str(payload.get("label") or ""))
+    dest = store_backups.rename_archive(paths.active_project(), name, str(payload.get("label") or ""))
     return {"ok": True, "name": dest.name}
 
 
@@ -114,7 +115,7 @@ def name_backup(request, payload) -> schema.BackupNamed:
     """Give one backup a name, or take the one it has away."""
     name = str(payload.get("name") or "")
     label = str(payload.get("label") or "").strip()[:120]
-    entry = db.set_shelf_meta(db.active_project(), name, label=label)
+    entry = store_backups.set_shelf_meta(paths.active_project(), name, label=label)
     return {"ok": True, "name": name, "label": entry.get("label", "")}
 
 
@@ -123,7 +124,7 @@ def pin_backup(request, payload) -> schema.BackupPinned:
     that acts on a selection can reach it."""
     name = str(payload.get("name") or "")
     pinned = bool(payload.get("pinned"))
-    entry = db.set_shelf_meta(db.active_project(), name, pinned=pinned)
+    entry = store_backups.set_shelf_meta(paths.active_project(), name, pinned=pinned)
     return {"ok": True, "name": name, "pinned": bool(entry.get("pinned"))}
 
 
@@ -132,14 +133,14 @@ def delete_backups(request, payload) -> schema.BackupsDeleted:
     names = payload.get("names") or []
     if not isinstance(names, list) or not names:
         raise ValueError("names must be a non-empty list")
-    project = db.active_project()
+    project = paths.active_project()
     freed = 0
-    shelf = db.backups_dir(project)
+    shelf = store_backups.backups_dir(project)
     for name in names:
         path = shelf / str(name)
         if path.is_file():
             freed += _file_size(path)
-    count = db.delete_backups(project, [str(n) for n in names])
+    count = store_backups.delete_backups(project, [str(n) for n in names])
     return {"ok": True, "deleted": count, "freed": freed}
 
 
@@ -152,21 +153,21 @@ def restore_backup(request, payload) -> schema.BackupRestored:
     """
     name = str(payload.get("name") or "")
     kept = _backup("pre-restore")
-    db.restore_backup(db.active_project(), name)
+    store_backups.restore_backup(paths.active_project(), name)
     return {"ok": True, "name": name, "kept": kept.name}
 
 
 def unarchive(request, payload) -> schema.Unarchived:
     """Put an archive's files back on the shelf and remove the archive."""
     name = str(payload.get("name") or "")
-    restored = db.unarchive(db.active_project(), name)
+    restored = store_backups.unarchive(paths.active_project(), name)
     return {"ok": True, "name": name, "restored": restored}
 
 
 def archive_delete(request, payload) -> schema.ArchiveDeleted:
     """Remove an archive and everything inside it."""
     name = str(payload.get("name") or "")
-    count = db.delete_archive(db.active_project(), name)
+    count = store_backups.delete_archive(paths.active_project(), name)
     return {"ok": True, "name": name, "count": count}
 
 

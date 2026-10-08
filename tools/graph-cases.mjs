@@ -19,9 +19,8 @@ const hex = n => String(n).padStart(16, '0').replace(/0/g, '1').slice(-16);
 
 /* ------------------------------------------------------------- the store */
 
-/* Domains shaped the way a real tree is: a deep branch, a wide one, a root
-   holding a single memory, and a leaf domain holding a single memory under a
-   parent that holds more -- the one the hub arrangement has to collapse. */
+/* A deep branch, a wide one, a root holding one memory, and a one-memory leaf under a fuller
+   parent: the case the hub arrangement has to collapse. */
 const PLAN = [
   ['acme/x100/p200', 8],
   ['acme/x100/p300', 5],
@@ -191,9 +190,8 @@ for (const b of atlasA.bodies) {
 
 /* --------------------------------------------------------- domain hits */
 
-/* Every arrangement that draws a domain has to be able to say which one the
-   pointer is on: the engine tells a domain from a memory by the `domain` a
-   hit carries, and focuses everything filed under it. */
+/* An arrangement that draws a domain must hit-test it: the engine tells a domain from a memory
+   by the hit's `domain`, and focuses everything filed under it. */
 const hubBody = hubs.hubs.find(h => h.domain === 'acme/x100');
 const hubHit = hubs.hit(hubBody.x, hubBody.y, { k: 1 });
 
@@ -222,11 +220,7 @@ for (const c of ceiling.coasts) {
 }
 
 /* ------------------------------------------------------------ what draws
-
-   A recording canvas: enough of the 2D context for an arrangement to draw
-   into, counting the text it writes and the gradients it builds. What a
-   toggle does is a property of the drawing, and this is the only way to ask
-   the drawing without a browser. */
+   A recording canvas that counts the text and gradients an arrangement draws. */
 
 function fakeCtx() {
   const log = { texts: [], gradients: 0, strokes: 0, fills: 0 };
