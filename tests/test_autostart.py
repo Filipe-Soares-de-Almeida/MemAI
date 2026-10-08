@@ -382,13 +382,13 @@ def _pe_subsystem(path: Path) -> int:
 def test_bind_returns_none_when_the_port_is_taken(busy_port):
     """Several MCP servers start at once; the kernel picks the winner.
 
-    admin._bind is the arbiter, which is why there is no lock file.
+    admin.cli._bind is the arbiter, which is why there is no lock file.
     """
-    assert admin._bind("127.0.0.1", busy_port) is None
+    assert admin.cli._bind("127.0.0.1", busy_port) is None
 
 
 def test_bind_succeeds_on_a_free_port(dead_port):
-    sock = admin._bind("127.0.0.1", dead_port)
+    sock = admin.cli._bind("127.0.0.1", dead_port)
     assert sock is not None
     try:
         assert sock.getsockname()[1] == dead_port

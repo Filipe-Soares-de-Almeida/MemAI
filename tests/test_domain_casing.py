@@ -156,7 +156,7 @@ def test_normalize_plan_rename_and_merge():
     # 'proj-a' already conforms to upper's target 'PROJ-A'? no -- it renames;
     # 'Proj-A' and 'PROJ-A' both collapse onto 'PROJ-A' -> merge.
     counts = {"Proj-A": 2, "PROJ-A": 1, "other": 3}
-    plan = admin._normalize_plan("upper", counts)
+    plan = admin.routes.domains._normalize_plan("upper", counts)
     by_from = {e["from"]: e for e in plan}
     assert by_from["Proj-A"]["to"] == "PROJ-A"
     assert by_from["Proj-A"]["action"] == "merge"
@@ -166,7 +166,7 @@ def test_normalize_plan_rename_and_merge():
 
 
 def test_normalize_plan_preserve_is_empty():
-    assert admin._normalize_plan("preserve", {"Proj-A": 1, "other": 2}) == []
+    assert admin.routes.domains._normalize_plan("preserve", {"Proj-A": 1, "other": 2}) == []
 
 
 # ---------------------------------------------------------- admin endpoints

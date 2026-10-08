@@ -9,6 +9,7 @@ import pytest
 from starlette.testclient import TestClient
 
 from memai import admin, db, tasks
+from memai.store import connection
 
 
 @pytest.fixture()
@@ -304,7 +305,7 @@ def test_an_archived_task_is_not_an_open_task_in_the_overview_or_the_filter(
     gone_uid = _task(client, items="c\nd")
     # the repair that cancels an archived task's state runs on every connection;
     # without it the status='active' condition on the dashboard's reads decides
-    monkeypatch.setattr(db, "_repair_task_states", lambda conn: None)
+    monkeypatch.setattr(connection, "_repair_task_states", lambda conn: None)
     _raw_archive(gone_uid)
     with db.connect() as conn:
         assert tasks.get_task(conn, gone_uid)["state"] == "open"
