@@ -40,7 +40,7 @@ function key(e: KeyboardEvent) {
             <span class="rf-sub">{{ sectionLabel('task_note', f) }}<span v-if="f.optional" class="tk-opt"> · {{
               t('task.note.optional') }}</span></span>
             <textarea v-model="d.brief[f.key]" :data-note-field="f.key" rows="3" spellcheck="false"
-                      :aria-label="sectionLabel('task_note', f)"></textarea>
+                      :aria-required="f.optional ? undefined : 'true'"></textarea>
           </label>
         </template>
         <textarea v-else v-model="d.body" data-note-field="body" rows="12" spellcheck="false" :maxlength="NOTE_MAX"
@@ -59,7 +59,7 @@ function key(e: KeyboardEvent) {
       </div>
       <div class="tk-scope-list" role="group" :aria-label="t('task.note.scope.aria')">
         <label v-for="(i, at) in current.items" :key="i.key" class="tk-scope-row" :title="i.text"><input type="checkbox"
-               :data-note-scope="i.key" :checked="d.items.includes(i.key)"
+               :data-note-scope="i.key" :aria-label="`${at + 1}. ${i.text}`" :checked="d.items.includes(i.key)"
                @change="c.scopeNote(i.key, ($event.target as HTMLInputElement).checked)"> <span
                class="tk-scope-text"><span class="tk-scope-n"
                aria-hidden="true">{{ at + 1 }}</span>{{ i.text }}</span></label>

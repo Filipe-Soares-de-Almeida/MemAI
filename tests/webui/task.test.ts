@@ -242,7 +242,8 @@ describe('deleting an item', () => {
 
     await remove(host, 'i2');
     await until(() => host.querySelectorAll('.tk-item').length === 2);
-    expect(calls.at(-1)).toEqual({ path: `/api/tasks/${uid}/item`, method: 'DELETE', body: { item: 'i2' } });
+    expect(calls.at(-1)).toEqual({ path: `/api/tasks/${uid}/item`, method: 'DELETE',
+      body: { item: 'i2', text: 'Flash the board' } });
     expect(textOf(host, 'i2')).toBe('Seal the case');
     await until(() => document.activeElement === host.querySelector('[data-step="i2"]'));
 
@@ -500,6 +501,47 @@ describe('task notes', () => {
     await press(host.querySelector('[data-note-scope="i1"]'));
     expect(fieldOf(host, 'body').value).toBe('');
     expect((host.querySelector('[data-note-save]') as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it('restores the fields of a stored brief when its last item is unpicked and picked again', async () => {
+    const notes = [note(3, 'Header', ['i1'], BRIEF_BODY, FIELDS)];
+    const { host } = await mount(taskOf([item('i1', 'Solder the header')], { notes }));
+    await press(host.querySelector('[data-toggle="i1"]'));
+    await press(host.querySelector('[data-note-edit="3"]'));
+    await press(host.querySelector('[data-note-scope="i1"]'));
+    await press(host.querySelector('[data-note-scope="i1"]'));
+    expect(fieldOf(host, 'goal').value).toBe('Seat the header');
+    expect(fieldOf(host, 'extra_info').value).toBe('');
+  });
+
+  it('puts an edit made while no item was picked under extra info when one is picked again', async () => {
+    const notes = [note(3, 'Header', ['i1'], BRIEF_BODY, FIELDS)];
+    const { host } = await mount(taskOf([item('i1', 'Solder the header')], { notes }));
+    await press(host.querySelector('[data-toggle="i1"]'));
+    await press(host.querySelector('[data-note-edit="3"]'));
+    await press(host.querySelector('[data-note-scope="i1"]'));
+    await type(host, 'body', `${BRIEF_BODY}
+A late thought.`);
+    await press(host.querySelector('[data-note-scope="i1"]'));
+    expect(fieldOf(host, 'extra_info').value).toBe(`${BRIEF_BODY}
+A late thought.`);
+    expect(fieldOf(host, 'goal').value).toBe('');
+  });
+
+  it('marks the required brief fields and leaves extra info unmarked', async () => {
+    const notes = [note(3, 'Header', ['i1'], BRIEF_BODY, FIELDS)];
+    const { host } = await mount(taskOf([item('i1', 'Solder the header')], { notes }));
+    await press(host.querySelector('[data-toggle="i1"]'));
+    await press(host.querySelector('[data-note-edit="3"]'));
+    for (const key of Object.keys(FIELDS)) expect(fieldOf(host, key).getAttribute('aria-required')).toBe('true');
+    expect(fieldOf(host, 'extra_info').hasAttribute('aria-required')).toBe(false);
+    expect(fieldOf(host, 'extra_info').hasAttribute('aria-label')).toBe(false);
+  });
+
+  it('names each scope checkbox by its number and text', async () => {
+    const { host } = await mount(taskOf([item('i1', 'Solder the header'), item('i2', 'Flash the board')]));
+    await press(host.querySelector('[data-note-add=""]'));
+    expect(host.querySelector('[data-note-scope="i2"]')?.getAttribute('aria-label')).toBe('2. Flash the board');
   });
 
   it('keeps the brief a whole-task note holds when an item is picked and its body is unchanged', async () => {

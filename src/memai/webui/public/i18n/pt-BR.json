@@ -1202,7 +1202,7 @@
     "task.toast.cancelled": "Tarefa cancelada e arquivada",
     "task.toast.completed": "Tarefa concluída e arquivada",
     "task.toast.deleted": "Item excluído",
-    "task.toast.renumbered": "Item excluído; os seguintes subiram um número",
+    "task.toast.renumbered": "Item excluído; os seguintes subiram uma posição",
     "task.toast.reopened": "Tarefa reaberta",
     "toast.codeCopied": "Código copiado",
     "toast.copyUnavailable": "A área de transferência não está disponível neste navegador",

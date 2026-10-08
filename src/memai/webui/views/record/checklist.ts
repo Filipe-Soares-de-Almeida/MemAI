@@ -64,18 +64,18 @@ const bodyOf = (brief: Record<string, string>): string => {
 
 export interface NoteDraft { title: string; body: string; items: string[]; brief: Record<string, string> }
 
-/* The text moves between the draft's two shapes as its items go and come, so one holds it; a brief kept
-   alongside a body that still reads as it stays. */
+/* The text is held as brief fields on items and as a body off them. The fields stay while off, so an
+   untouched body restores them on re-tick; an edited one goes under EXTRA INFO. */
 function setScope(d: NoteDraft, items: string[]) {
   const had = d.items.length > 0;
   d.items = items;
   if (had && !items.length) {
     d.body = bodyOf(d.brief);
-    d.brief = {};
   } else if (!had && items.length && d.body.trim() !== bodyOf(d.brief)) {
     d.brief = d.body.trim() ? { extra_info: d.body } : {};
   }
 }
+
 interface Hooks { onStatus: (status: string) => void; onWrite: (answer: TaskAnswer) => void }
 type Call = (uid: string, body: Record<string, unknown>) => Promise<TaskAnswer>;
 
@@ -209,7 +209,7 @@ export function useChecklist(uid: string, task: TaskRecord, status: string, hook
     if (!ok) return;
     const wasOpen = current.value.state === 'open';
     focusAfter(...[after > 0 ? key : items[at - 1]?.key].filter(Boolean).map(k => attr('data-step', k)), '#tkAddOpen');
-    const res = await write(client.tasks.deleteItem, { item: key }, {
+    const res = await write(client.tasks.deleteItem, { item: key, text: item.text }, {
       errKey: 'task.err.delete',
       onOk: async () => {
         if (ui.open === key) ui.open = '';

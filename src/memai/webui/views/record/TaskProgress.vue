@@ -18,7 +18,8 @@ watch(p, () => requestAnimationFrame(() => requestAnimationFrame(() => {
   shown.dropped = frac(p.value.dropped);
 })));
 
-const valueText = computed(() => t('task.progress.text', { done: p.value.done, total: p.value.total })
+const valueText = computed(() => `${t('task.progress.pct', { n: p.value.pct })}, `
+  + t('task.progress.text', { done: p.value.done, total: p.value.total })
   + (p.value.dropped ? `, ${t('task.dropped', { n: p.value.dropped })}` : ''));
 </script>
 
@@ -33,7 +34,8 @@ const valueText = computed(() => t('task.progress.text', { done: p.value.done, t
       <span v-if="p.dropped" class="chip" :title="t('task.dropped.why')">{{
         t('task.dropped', { n: fmtInt(p.dropped) }) }}</span>
     </div>
-    <div class="bar-track tk-bar" role="progressbar" aria-valuemin="0" :aria-valuemax="p.total"
+    <div class="bar-track tk-bar" role="progressbar" :aria-label="t('task.progress.label')" aria-valuemin="0"
+         :aria-valuemax="p.total"
          :aria-valuenow="p.done" :aria-valuetext="valueText">
       <div class="bar-fill" :style="{ '--v': shown.done }"></div>
       <div v-if="p.dropped" class="tk-bar-drop" :style="{ '--v0': shown.done, '--v': shown.dropped }"></div>

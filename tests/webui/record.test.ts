@@ -185,9 +185,13 @@ describe('a task shown in its record, progress', () => {
     await nextTick();
     const pct = () => view.querySelector('.rec-side [data-progress-pct]')?.textContent;
     expect(pct()).toBe('0%');
+    const bar = () => view.querySelector('.rec-side [role="progressbar"]') as HTMLElement;
+    expect(bar().getAttribute('aria-label')).toBe(en['task.progress.label']);
+    expect(bar().getAttribute('aria-valuetext')).toBe('0%, 0 of 2 done, 1 dropped');
     expect(view.querySelector('.rec-main .tk-prog')).toBeNull();
     (view.querySelector('[data-step="i1"]') as HTMLElement).click();
     await until(() => pct() === '100%');
+    expect(bar().getAttribute('aria-valuetext')).toBe('100%, 1 of 2 done, 1 dropped');
     expect(view.querySelector('.tk-item.is-new')).toBeNull();
   });
 });
