@@ -18,6 +18,7 @@ from starlette.testclient import TestClient
 
 from conftest import shaped, webui_constants
 from memai import admin, db, sections, tasks
+from memai.store import optimizer
 
 
 @pytest.fixture
@@ -846,7 +847,7 @@ def test_corpus_truncates_long_tags(conn):
 
 
 def test_corpus_char_budget_caps_a_page(conn, monkeypatch):
-    monkeypatch.setattr(db, "CORPUS_CHAR_BUDGET", 1200)
+    monkeypatch.setattr(optimizer, "CORPUS_CHAR_BUDGET", 1200)
     for i in range(20):
         _mk(conn, content=f"memory number {i} with some padding text")
     page1 = db.optimization_corpus(conn)
