@@ -140,8 +140,24 @@ export function useChecklist(uid: string, task: TaskRecord, status: string, hook
     }
   }
 
-  /* Asks first, plays the row out, then focuses the next item's mark, else the previous one's, else
-     the add control. */
+  /* The server renumbers the items after a deleted one, each key moving down to its predecessor's;
+     state held under those keys follows, and state held under the deleted key goes. */
+  function followRenumber(items: TaskItem[], at: number) {
+    const gone = items[at].key;
+    const moved = new Map(items.slice(at + 1).map((i, n) => [i.key, items[at + n].key]));
+    const follow = (k: string) => moved.get(k) ?? k;
+    ui.open = follow(ui.open);
+    enter.opened = follow(enter.opened);
+    const drafts = [...ui.drafts];
+    ui.drafts.clear();
+    for (const [k, v] of drafts) if (k !== gone) ui.drafts.set(follow(k), v);
+    if (ui.noteEdit === `new:${gone}`) { ui.noteEdit = ''; ui.noteDraft = null; }
+    else if (ui.noteEdit.startsWith('new:')) ui.noteEdit = `new:${follow(ui.noteEdit.slice(4))}`;
+    if (ui.noteDraft) ui.noteDraft.items = ui.noteDraft.items.filter(k => k !== gone).map(follow);
+  }
+
+  /* Asks first, plays the row out, then focuses the mark that took the deleted item's place, else the
+     previous item's, else the add control. */
   async function deleteItem(key: string) {
     const item = current.value.items.find(i => i.key === key);
     if (!item || busy) return;
@@ -157,7 +173,7 @@ export function useChecklist(uid: string, task: TaskRecord, status: string, hook
       okLabel: t('task.item.delete'), danger: true });
     if (!ok) return;
     const wasOpen = current.value.state === 'open';
-    focusAfter(...[items[at + 1], items[at - 1]].filter(Boolean).map(i => attr('data-step', i.key)), '#tkAddOpen');
+    focusAfter(...[after > 0 ? key : items[at - 1]?.key].filter(Boolean).map(k => attr('data-step', k)), '#tkAddOpen');
     const res = await write(client.tasks.deleteItem, { item: key }, {
       errKey: 'task.err.delete',
       onOk: async () => {
@@ -169,6 +185,7 @@ export function useChecklist(uid: string, task: TaskRecord, status: string, hook
     });
     ui.leaving = '';
     if (!res?.task) return;
+    followRenumber(items, at);
     toast(t(wasOpen && res.task.state !== 'open' ? `task.toast.${res.task.state}` as I18nKey
             : after > 0 ? 'task.toast.renumbered' : 'task.toast.deleted'), 'ok');
   }

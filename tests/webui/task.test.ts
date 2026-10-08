@@ -226,23 +226,47 @@ describe('deleting an item', () => {
     expect(host.querySelectorAll('.tk-item')).toHaveLength(2);
   });
 
-  it('sends a DELETE for the item and moves focus to the next item, else the previous, else the add control', async () => {
-    const items = [item('i1', 'Solder the header'), item('i2', 'Flash the board'), item('i3', 'Seal the case')];
+  const serveRenumbering = (items: ReturnType<typeof item>[]) => {
     let left = [...items];
     serveApi((path: string, { body }: { body: { item: string } }) => {
-      left = left.filter(i => i.key !== body.item);
+      left = left.filter(i => i.key !== body.item).map((i, at) => ({ ...i, key: `i${at + 1}`, seq: at + 1 }));
       return { task: taskOf(left), status: 'active' };
     });
+  };
+  const textOf = (host: HTMLElement, key: string) => host.querySelector(`[data-key="${key}"] .tk-text`)?.textContent;
+
+  it('sends a DELETE for the item and moves focus to the item that took its place, else the previous, else the add control', async () => {
+    const items = [item('i1', 'Solder the header'), item('i2', 'Flash the board'), item('i3', 'Seal the case')];
+    serveRenumbering(items);
     const { host, uid } = await mount(taskOf(items));
 
     await remove(host, 'i2');
     await until(() => host.querySelectorAll('.tk-item').length === 2);
     expect(calls.at(-1)).toEqual({ path: `/api/tasks/${uid}/item`, method: 'DELETE', body: { item: 'i2' } });
-    await until(() => document.activeElement === host.querySelector('[data-step="i3"]'));
+    expect(textOf(host, 'i2')).toBe('Seal the case');
+    await until(() => document.activeElement === host.querySelector('[data-step="i2"]'));
 
-    await remove(host, 'i3');
+    await remove(host, 'i2');
     await until(() => host.querySelectorAll('.tk-item').length === 1);
     await until(() => document.activeElement === host.querySelector('[data-step="i1"]'));
+  });
+
+  it('keeps an open panel and a comment draft with the item they belong to when earlier keys shift', async () => {
+    const items = [item('i1', 'a'), item('i2', 'b'), item('i3', 'c'), item('i4', 'd')];
+    serveRenumbering(items);
+    const { host } = await mount(taskOf(items));
+    await press(host.querySelector('[data-toggle="i4"]'));
+    const box = host.querySelector('.tk-panel [data-draft="i4"]') as HTMLTextAreaElement;
+    box.value = 'Needs the second flux pen';
+    box.dispatchEvent(new Event('input'));
+    await nextTick();
+
+    await remove(host, 'i2');
+    await until(() => host.querySelectorAll('.tk-item').length === 3);
+    await until(() => host.querySelector('.tk-panel'));
+    expect(host.querySelector('.tk-panel')?.id).toBe('tkp-i3');
+    expect(textOf(host, 'i3')).toBe('d');
+    expect((host.querySelector('.tk-panel [data-draft="i3"]') as HTMLTextAreaElement).value).toBe('Needs the second flux pen');
   });
 
   it('is offered for the only item as a disabled entry that gives its reason', async () => {
