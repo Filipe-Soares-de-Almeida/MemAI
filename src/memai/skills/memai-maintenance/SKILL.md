@@ -102,7 +102,7 @@ sub-skill. Read each source once; nothing below is read twice.
      to write, reported only where that column is still **empty**. So one
      finding is usually an `unleak` per dirty field **plus** the `redomain` /
      `crosslist` / `retag` that finishes it. `stats.leaked_calls` counts every
-     one in the window; the list stops at `db.LEAK_SCAN_CAP`;
+     one in the window; the list itself is capped (`LEAK_SCAN_CAP`);
    - `dedup_hints` — pairs probed from the delta against the **whole** store;
    - `domain_hints` — spelling/separator/case variants of one domain,
      **cross-window**;

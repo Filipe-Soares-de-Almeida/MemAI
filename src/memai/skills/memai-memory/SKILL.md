@@ -638,8 +638,8 @@ always published, `diagrams` and `curation` only when named (or under the
 
 | Reading | | group |
 |---|---|---|
-| `pulse(domain)` | Warm-up: `{project, latest_checkpoint (+ relations), must_read (the `categories` list), read_next, scope}` — the `scope` census includes `stale` | core |
-| `must_read(domain, type, limit, offset)` | Without `type`: `{"categories": [{"type", "count"}, ...]}`, one per category with something waiting. With `type`: one page of headers (`uid`, `title`, `domain`, `est_tokens`; a task adds `progress` and `doing`) and `next_offset`. An unknown `type` is an error | core |
+| `pulse(domain, offset)` | Warm-up: `{project, latest_checkpoint (+ relations), must_read (the `categories` list), pinned, read_next, scope}` — the `scope` census includes `stale` | core |
+| `must_read(domain, type, limit, offset, pinned)` | Without `type`: `{"categories": [{"type", "count"}, ...]}`, one per category with something waiting. With `type`: one page of headers (`uid`, `title`, `domain`, `est_tokens`; a task adds `progress` and `doing`) and `next_offset`; `pinned=true` lists only the pins of that type. An unknown `type` is an error | core |
 | `search(query, domain, type, limit)` | BM25, annotated with `match_source`/`fts_rank` | core |
 | `recall(query, domain, limit)` | Relevance-ranked recall of `note()`d knowledge (`search` scoped to `type='note'`) | core |
 | `list_by_domain(domain, type, limit, subtree, status)` | Recency-ordered, scoped to a path and its subdomains; `status` is `active` (default), `archived` or `all`, and a task row carries `state` and `progress` | core |
@@ -649,7 +649,7 @@ always published, `diagrams` and `curation` only when named (or under the
 | `list_domains(offset)` | The domain **tree**, paged: `parent`/`depth`/`count`/`subtree`/`children`/`implicit` + `also`/`subtree_also` and latest activity — how to find the exact string | core |
 | `get_memory(uid, edits_offset, content_offset)` | One record + relations + edit count (+ the diagrams whose steps point at it; a task's head); edits and a long body page through the offsets | core |
 | `get_relations(uid, part, offset)` | A memory's relations, incoming and outgoing, or the diagrams pointing at it; paged | core |
-| `get_diagram(uid, format)` | Read a flow back: `json` · `text` · `svg-interactive` · `svg` · `mermaid` | core |
+| `get_diagram(uid, format, offset)` | Read a flow back: `json` · `text` · `svg-interactive` · `svg` · `mermaid` | core |
 
 | Writing | | group |
 |---|---|---|
@@ -684,17 +684,17 @@ always published, `diagrams` and `curation` only when named (or under the
 | `optimize_stage(suggestions, note)` | Stage a batch for human review; **nothing is applied here** | curation |
 | `optimize_runs(offset)` / `optimize_status(run_id, offset)` | What was staged, and what the human applied or rejected; paged | curation |
 
-**`optimize_stage` accepts 11 suggestion kinds:** `compact` and `reword`
-(`{"new_content"}`), `retag` (`{"tags"}`), `redomain` (`{"domain"}`),
-`crosslist` (`{"also": [...]}` — replaces the whole set), `set_confidence`
-(`{"confidence"}`), `review` (`{"review_after"}` — a date or a span like
-`'180d'`; `''` clears it), `archive` (`{"reason"}`), `link`
-(`{"from_uid","to_uid","relation_type"}`), `merge`
-(`{"keep_uid","drop_uid"}`), `distill`
-(`{"source_uids","new_type","new_content"}`, where `new_type` is one of `note`,
-`reasoning`, `anti_pattern`). `link`/`merge` derive
-`target_uid` from the payload and `distill` creates its target, so those omit
-it. The destructive kinds — `archive`, `set_confidence=contradicted`,
+**`optimize_stage` accepts 13 suggestion kinds:** `compact` and `reword`
+(`{"new_content"}`), `retag` (`{"tags"}`), `retitle` (`{"title"}`),
+`redomain` (`{"domain"}`), `crosslist` (`{"also": [...]}` — replaces the
+whole set), `set_confidence` (`{"confidence"}`), `review` (`{"review_after"}`
+— a date or a span like `'180d'`; `''` clears it), `archive` (`{"reason"}`),
+`link` (`{"from_uid","to_uid","relation_type"}`), `merge`
+(`{"keep_uid","drop_uid"}`), `distill` (`{"source_uids","new_type",
+"new_content","title"}`, where `new_type` is one of `note`, `reasoning`,
+`anti_pattern`), `unleak` (`{"field"}`). `link`/`merge` derive `target_uid`
+from the payload and `distill` creates its target, so those omit it. The
+destructive kinds — `archive`, `set_confidence=contradicted`, `merge`,
 `distill` — are rejected without a non-empty `verified` describing the
 live-facts check behind them. **Check every proposal against live facts before
 staging it.**
