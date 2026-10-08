@@ -2472,6 +2472,14 @@ textarea.tk-box {
   background: var(--inset); border-color: rgba(187, 134, 252, .45);
 }
 .tk-note .rf-pane textarea { min-height: 260px; }
+/* A brief reads as fields, each a label tight over its text with more air between fields than inside one;
+   the editor gives each field a short box that grows with what is typed. */
+.tk-brief-f + .tk-brief-f { margin-top: var(--sp-3); }
+.tk-brief-h { margin: 0 0 var(--sp-1); }
+.tk-brief-in { display: flex; flex-direction: column; gap: var(--sp-1); }
+.tk-brief-in + .tk-brief-in { margin-top: var(--sp-2); }
+.tk-note .tk-brief-in textarea { min-height: 5.5rem; field-sizing: content; }
+.tk-opt { color: var(--ink-3); font-weight: 400; }
 /* under the box: how to save on the left, how much room is left on the right */
 .tk-note-foot { display: flex; align-items: center; gap: var(--sp-3); }
 .tk-note-foot .rf-count { margin-left: auto; }

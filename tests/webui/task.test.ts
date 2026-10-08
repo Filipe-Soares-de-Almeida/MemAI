@@ -350,8 +350,13 @@ describe('the in-progress arc', () => {
 });
 
 describe('task notes', () => {
-  const note = (id: number, title: string, items: string[] = [], body = `${title} body`) =>
-    ({ id, title, body, items, updated_at: '', body_links: {} });
+  const note = (id: number, title: string, items: string[] = [], body = `${title} body`,
+                brief: Record<string, string> | null = null) =>
+    ({ id, title, body, items, updated_at: '', body_links: {}, brief });
+  const FIELDS = { goal: 'Seat the header', context: 'Pin 1 is square', steps: 'Tack two corners',
+                   pitfalls: 'Cold joints', done_when: 'Every pin is wet', depends_on: 'none' };
+  const BRIEF_BODY = 'GOAL: Seat the header\nCONTEXT: Pin 1 is square\nSTEPS: Tack two corners\n'
+    + 'PITFALLS: Cold joints\nDONE WHEN: Every pin is wet\nDEPENDS ON: none';
   const type = async (host: HTMLElement, field: string, value: string) => {
     const box = host.querySelector(`[data-note-field="${field}"]`) as HTMLInputElement;
     box.value = value;
@@ -406,11 +411,53 @@ describe('task notes', () => {
     await press(host.querySelector('.tk-panel [data-note-add="i1"]'));
     expect((host.querySelector('[data-note-scope="i1"]') as HTMLInputElement).checked).toBe(true);
     await type(host, 'title', 'Header pinout');
-    await type(host, 'body', 'Pin 1 is square.');
+    for (const [key, value] of Object.entries(FIELDS)) await type(host, key, value);
     await press(host.querySelector('[data-note-save]'));
     await until(() => host.querySelector('.tk-panel .tk-note-title'));
     expect(calls.at(-1)).toEqual({ path: `/api/tasks/${uid}/note`, method: 'POST',
-      body: { title: 'Header pinout', body: 'Pin 1 is square.', items: ['i1'] } });
+      body: { title: 'Header pinout', body: BRIEF_BODY, items: ['i1'] } });
+  });
+
+  it('draws a brief field by field, extra info last and only when present', async () => {
+    const notes = [note(1, 'Header', ['i1'], BRIEF_BODY, FIELDS)];
+    const { host } = await mount(taskOf([item('i1', 'Solder the header')], { notes }));
+    await press(host.querySelector('[data-toggle="i1"]'));
+    const keys = [...host.querySelectorAll('.tk-panel [data-brief]')].map(el => el.getAttribute('data-brief'));
+    expect(keys).toEqual(['goal', 'context', 'steps', 'pitfalls', 'done_when', 'depends_on']);
+    expect(host.querySelector('[data-brief="goal"] .tk-brief-h')?.textContent).toBe(en['sec.task_note.goal']);
+  });
+
+  it('peeks at a shut brief by its goal', async () => {
+    const notes = [note(1, 'Header', [], BRIEF_BODY, FIELDS), note(2, 'Parts')];
+    const { host } = await mount(taskOf([item('i1', 'Solder the header')], { notes }));
+    expect(host.querySelector('.tk-note-peek')?.textContent).toBe('Seat the header');
+  });
+
+  it('asks for every required field once an item is picked, and sends the brief as its body', async () => {
+    serveApi((path: string, { body }: { body: { title: string; items: string[] } }) =>
+      ({ task: taskOf([item('i1', 'Solder the header')], { notes: [note(7, body.title, body.items, BRIEF_BODY, FIELDS)] }), status: 'active' }));
+    const { host, uid } = await mount(taskOf([item('i1', 'Solder the header')]));
+    await press(host.querySelector('[data-toggle="i1"]'));
+    await press(host.querySelector('.tk-panel [data-note-add="i1"]'));
+    expect(host.querySelector('[data-note-field="body"]')).toBeNull();
+    const save = () => host.querySelector('[data-note-save]') as HTMLButtonElement;
+    await type(host, 'title', 'Header');
+    for (const [key, value] of Object.entries(FIELDS).slice(0, 5)) await type(host, key, value);
+    expect(save().disabled).toBe(true);
+    await type(host, 'depends_on', 'none');
+    expect(save().disabled).toBe(false);
+    await press(save());
+    await until(() => calls.length);
+    expect(calls.at(-1)).toEqual({ path: `/api/tasks/${uid}/note`, method: 'POST',
+      body: { title: 'Header', body: BRIEF_BODY, items: ['i1'] } });
+  });
+
+  it('opens a stored free item note with its text under extra info', async () => {
+    const { host } = await mount(taskOf([item('i1', 'Solder the header')], { notes: [note(3, 'Pinout', ['i1'])] }));
+    await press(host.querySelector('[data-toggle="i1"]'));
+    await press(host.querySelector('[data-note-edit="3"]'));
+    expect((host.querySelector('[data-note-field="extra_info"]') as HTMLTextAreaElement).value).toBe('Pinout body');
+    expect((host.querySelector('[data-note-field="goal"]') as HTMLTextAreaElement).value).toBe('');
   });
 
   it('moves a note to the whole task when its last item is unpicked', async () => {

@@ -3,6 +3,7 @@
 
 import { nextTick, onBeforeUnmount, reactive, ref, shallowRef } from 'vue';
 import { esc } from '../../core/dom.ts';
+import { sectionLabel } from '../../core/shared.js';
 import { confirmModal, failed, toast } from '../../core/ui.js';
 import { pickMemories } from '../../core/link-picker.js';
 import { parseHash, refreshBehind } from '../../core/router.ts';
@@ -40,7 +41,28 @@ export function progressOf(task: TaskRecord): { total: number; done: number; dro
 
 export const attr = (name: string, value: string | number): string => `[${name}="${CSS.escape(String(value))}"]`;
 
-export interface NoteDraft { title: string; body: string; items: string[] }
+export interface BriefField { key: string; label: string; optional?: boolean }
+export const BRIEF: BriefField[] = TASK.BRIEF;
+
+/* a brief's present fields in template order, each with its label as the dashboard names it */
+export const briefOf = (brief: Record<string, string>) => BRIEF.filter(f => brief[f.key])
+  .map(f => ({ key: f.key, raw: f.label, label: sectionLabel('task_note', f), text: brief[f.key] }));
+
+/* mirrors memai.sections.render_spec: a required field always written, an empty optional one left out */
+export const renderBrief = (brief: Record<string, string>): string => BRIEF
+  .filter(f => !f.optional || (brief[f.key] || '').trim())
+  .map(f => `${f.label}: ${(brief[f.key] || '').trim()}`).join('\n');
+
+const filled = (brief: Record<string, string>) => BRIEF.filter(f => (brief[f.key] || '').trim());
+
+/* a draft leaving its items: extra info alone is the text it came from, anything more keeps its labels */
+const bodyOf = (brief: Record<string, string>): string => {
+  const have = filled(brief);
+  if (have.length === 1 && have[0].key === 'extra_info') return brief.extra_info.trim();
+  return have.map(f => `${f.label}: ${brief[f.key].trim()}`).join('\n');
+};
+
+export interface NoteDraft { title: string; body: string; items: string[]; brief: Record<string, string> }
 interface Hooks { onStatus: (status: string) => void; onWrite: (answer: TaskAnswer) => void }
 type Call = (uid: string, body: Record<string, unknown>) => Promise<TaskAnswer>;
 
@@ -236,10 +258,12 @@ export function useChecklist(uid: string, task: TaskRecord, status: string, hook
   function editNote(which: string) {
     const note = current.value.notes.find(n => String(n.id) === which);
     const scope = which.startsWith('new:') ? which.slice(4) : '';
+    const brief = note?.brief ? { ...note.brief } : note?.items.length ? { extra_info: note.body } : {};
     ui.noteEdit = which;
-    ui.noteDraft = { title: note?.title || '', body: note?.body || '',
+    ui.noteDraft = { title: note?.title || '', body: note?.body || '', brief,
                      items: note ? [...note.items] : scope ? [scope] : [] };
-    focusAfter(note ? '[data-note-field="body"]' : '[data-note-field="title"]');
+    focusAfter(note ? (note.items.length ? '[data-note-field="goal"]' : '[data-note-field="body"]')
+                    : '[data-note-field="title"]');
     land();
   }
 
@@ -257,10 +281,23 @@ export function useChecklist(uid: string, task: TaskRecord, status: string, hook
   function scopeNote(key: string, on: boolean) {
     const d = ui.noteDraft;
     if (!d) return;
+    const had = d.items.length > 0;
     d.items = on ? [...d.items.filter(k => k !== key), key] : d.items.filter(k => k !== key);
+    if (!had && d.items.length && d.body.trim() && !filled(d.brief).length) d.brief = { extra_info: d.body };
+    if (had && !d.items.length && filled(d.brief).length) d.body = bodyOf(d.brief);
   }
 
-  const noteReady = () => Boolean(ui.noteDraft?.title.trim() && ui.noteDraft.body.trim());
+  const noteReady = () => {
+    const d = ui.noteDraft;
+    if (!d?.title.trim()) return false;
+    return d.items.length ? BRIEF.every(f => f.optional || (d.brief[f.key] || '').trim()) : Boolean(d.body.trim());
+  };
+
+  const noteLength = () => {
+    const d = ui.noteDraft;
+    if (!d) return 0;
+    return d.items.length ? renderBrief(d.brief).length : d.body.length;
+  };
 
   async function submitNote() {
     const d = ui.noteDraft;
@@ -268,7 +305,7 @@ export function useChecklist(uid: string, task: TaskRecord, status: string, hook
     const target = ui.noteEdit;
     const fresh = target.startsWith('new:');
     const payload: Record<string, unknown> = {
-      title: d.title.trim(), body: d.body.trim(),
+      title: d.title.trim(), body: d.items.length ? renderBrief(d.brief) : d.body.trim(),
       items: current.value.items.map(i => i.key).filter(k => d.items.includes(k)),
     };
     if (!fresh) payload.id = Number(target);
@@ -314,7 +351,7 @@ export function useChecklist(uid: string, task: TaskRecord, status: string, hook
   }
 
   return { current, ui, enter, host, sync, setItem, deleteItem, toggle, link, unlink, post,
-           noteOpen, toggleNote, editNote, leaveNote, scopeNote, noteReady, submitNote, deleteNote,
+           noteOpen, toggleNote, editNote, leaveNote, scopeNote, noteReady, noteLength, submitNote, deleteNote,
            editGoal, leaveGoal, saveGoal, openAdd, closeAdd, sendAdd };
 }
 

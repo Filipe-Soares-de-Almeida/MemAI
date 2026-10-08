@@ -1,12 +1,14 @@
 <script setup lang="ts">
-/* A task note's editor: the record field's card without its preview, since saving is what shows the
-   note as it reads; the items it applies to are picked from the checklist, none meaning the task. */
+/* A task note's editor: the record field's card without its preview; picking an item turns the body
+   into the brief's fields, picking none turns it back. */
 import { computed } from 'vue';
+import { sectionLabel } from '../../core/shared.js';
 import { t } from '../../i18n.ts';
 import { MEMORY, TASK } from '../../contract.ts';
 import type { TaskNote } from '../../api/types.ts';
 import AppIcon from '../../components/AppIcon.vue';
 import KeyHint from '../../components/KeyHint.vue';
+import { BRIEF } from './checklist.ts';
 import type { Checklist } from './checklist.ts';
 
 const props = withDefaults(defineProps<{ c: Checklist; note?: TaskNote | null; scope?: string }>(),
@@ -15,7 +17,7 @@ const { current, ui } = props.c;
 const { NOTE_MAX } = TASK;
 
 const id = computed(() => (props.note ? String(props.note.id) : `new:${props.scope}`));
-const d = computed(() => ui.noteDraft ?? { title: '', body: '', items: [] });
+const d = computed(() => ui.noteDraft ?? { title: '', body: '', items: [], brief: {} });
 const sum = computed(() => (d.value.items.length ? t('task.note.scope.n', { n: d.value.items.length })
   : t('task.note.scope.all')));
 
@@ -33,12 +35,20 @@ function key(e: KeyboardEvent) {
     </header>
     <div class="rf-split rf-solo">
       <div class="rf-pane">
-        <textarea v-model="d.body" data-note-field="body" rows="12" spellcheck="false" :maxlength="NOTE_MAX"
+        <template v-if="d.items.length">
+          <label v-for="f in BRIEF" :key="f.key" class="tk-brief-in">
+            <span class="rf-sub">{{ sectionLabel('task_note', f) }}<span v-if="f.optional" class="tk-opt"> · {{
+              t('task.note.optional') }}</span></span>
+            <textarea v-model="d.brief[f.key]" :data-note-field="f.key" rows="3" spellcheck="false"
+                      :aria-label="sectionLabel('task_note', f)"></textarea>
+          </label>
+        </template>
+        <textarea v-else v-model="d.body" data-note-field="body" rows="12" spellcheck="false" :maxlength="NOTE_MAX"
                   :aria-label="t('task.note.body')" :placeholder="t('task.note.body')"></textarea>
         <div class="tk-note-foot">
           <span class="tk-hint"><KeyHint save :action="t('dr.key.save')" /><KeyHint :keys="['Esc']"
                 :action="t('dr.key.close')" /></span>
-          <span class="rf-count" data-note-count>{{ t('dr.sections.count', { n: d.body.length, max: NOTE_MAX }) }}</span>
+          <span class="rf-count" data-note-count>{{ t('dr.sections.count', { n: c.noteLength(), max: NOTE_MAX }) }}</span>
         </div>
       </div>
     </div>
