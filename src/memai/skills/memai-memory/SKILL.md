@@ -443,11 +443,16 @@ Work it with:
 - **`task_comment(uid, body, item)`** — a comment on the task, or on one item
   when `item` names a key. A comment never edits the content, so it carries
   what a checklist cannot: why an item is blocked, what a review said.
-- **`task_note(uid, title, body, items, note_id, delete)`** — a note the task
-  owns: an item's brief, a recipe or a rule several items share. It is not a
-  memory, so search, recall, pulse and must_read never return it; write with
-  `note()` only what stands on its own outside the task. `items` puts it on
-  those items, empty puts it on the whole task; a `note_id` edits it in place.
+- **`task_note(uid, title, body, items, note_id, delete, goal, context, steps, pitfalls, done_when, depends_on, extra_info)`**
+  — a note the task owns. A note on items is that item's **brief**, written as
+  fields: `goal`, `context`, `steps`, `pitfalls`, `done_when` and `depends_on`
+  are required (`none` is an answer) and `extra_info` holds anything else. The
+  body reads `GOAL:` / `CONTEXT:` / `STEPS:` / `PITFALLS:` / `DONE WHEN:` /
+  `DEPENDS ON:` / `EXTRA INFO:`, and an edit that gives one field replaces only
+  that field. `body` is for a note on the whole task — a recipe or a rule every
+  item shares. It is not a memory, so search, recall, pulse and must_read never
+  return it; write with `note()` only what stands on its own outside the task.
+  A `note_id` edits it in place.
 - **`get_memory(uid)`** returns the task's head: goal, state, progress and the
   count of items, task notes and task comments, with `next` naming the
   `task_read` call for each. It lists no items.
@@ -661,7 +666,7 @@ always published, `diagrams` and `curation` only when named (or under the
 | `task_item(uid, item, state, comment, related)` | One item's state (`todo` \| `doing` \| `done` \| `dropped`), a comment on it, memories linked to it; the last close archives the task | core |
 | `task_add(uid, items)` | Append items to a task, one per line; a closed task reopens | core |
 | `task_comment(uid, body, item)` | A comment on a task, or on one item | core |
-| `task_note(uid, title, body, items, note_id, delete)` | A note owned by the task, on items or the whole task; never a memory | core |
+| `task_note(uid, title, body, items, note_id, delete, goal, context, steps, pitfalls, done_when, depends_on, extra_info)` | A note owned by the task: a brief on items, free text on the whole task; never a memory | core |
 | `task_read(uid, part, item, offset)` | One page of a task's items, notes, comments or an item's links | core |
 | `diagram(title, nodes, edges, summary, domain, also, session, tags, kind, review_after, source_ref)` | A routine as a flow/graph → `type='diagram'` | diagrams |
 | `diagram_node` / `diagram_edge` / `diagram_link` / `diagram_jump` / `diagram_relayout` | One step / one arrow / a memory on a step / a jump into another flow / rebuild positions | diagrams |

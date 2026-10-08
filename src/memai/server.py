@@ -817,15 +817,29 @@ def task_read(uid: str, part: str, item: str = "", offset: int = 0) -> dict:
 
 @tool("core")
 def task_note(uid: str, title: str = "", body: str = "", items: str = "", note_id: int = 0,
-              delete: bool = False) -> dict:
+              delete: bool = False, goal: str = "", context: str = "", steps: str = "",
+              pitfalls: str = "", done_when: str = "", depends_on: str = "",
+              extra_info: str = "") -> dict:
     """Write a note owned by a task: an item's brief, a rule its items share.
 
     Not a memory: only task_read() returns it. note_id=0 creates; a
     note_id edits in place (empty fields keep theirs) or, with delete,
     removes it. items: keys such as "i3,i7"; empty or "-" means the whole
     task. Title up to 120 characters, body up to 4000.
+
+    A note on items is a BRIEF, written as fields: goal, context, steps,
+    pitfalls, done_when and depends_on are required ("none" is an answer),
+    extra_info holds anything else and may stay empty. The body is built
+    from them in this order:
+        GOAL: / CONTEXT: / STEPS: / PITFALLS: / DONE WHEN: / DEPENDS ON: /
+        EXTRA INFO:
+    On an edit, each field given replaces only its own. `body` is for a
+    note on the whole task, or a whole brief already in that shape; giving
+    it with a field is an error.
     """
     keys = [k.strip() for k in items.split(",") if k.strip() and k.strip() != "-"]
+    brief = {"goal": goal, "context": context, "steps": steps, "pitfalls": pitfalls,
+             "done_when": done_when, "depends_on": depends_on, "extra_info": extra_info}
     try:
         with connection.connect() as conn:
             if delete:
@@ -833,10 +847,10 @@ def task_note(uid: str, title: str = "", body: str = "", items: str = "", note_i
                 return {"uid": uid, "note_id": note_id, "deleted": True}
             if note_id:
                 tasks.edit_note(conn, uid, note_id, title=title, body=body,
-                                items=keys if items.strip() else None)
+                                items=keys if items.strip() else None, brief=brief)
             else:
                 note_id = tasks.add_note(conn, uid, title=title, body=body, items=keys,
-                                         session=SESSION)
+                                         brief=brief, session=SESSION)
             on = tasks.note(conn, uid, note_id)["items"]
     except ValueError as exc:
         return _errors([str(exc)])

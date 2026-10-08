@@ -8,7 +8,7 @@ import re
 
 import pytest
 
-from memai import server
+from memai import sections, server
 
 WRITERS = ("note", "checkpoint", "anti_pattern", "reasoning", "task", "diagram")
 SHARED = ("title", "domain", "also", "tags", "review_after", "source_ref")
@@ -49,3 +49,10 @@ def test_an_entry_takes_the_indentation_of_its_marker():
 def test_an_unknown_marker_fails_at_import_time():
     with pytest.raises(KeyError):
         server._expand_params("    @param no_such_parameter\n")
+
+
+def test_task_note_documents_the_brief_it_takes():
+    params = inspect.signature(server.task_note).parameters
+    for s in sections.BRIEF_SPEC:
+        assert s.key in params and params[s.key].default == ""
+        assert f"{s.label}:" in server.task_note.__doc__
