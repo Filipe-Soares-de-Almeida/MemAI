@@ -87,7 +87,7 @@ belong ([[memai-memory]] §2.4) — and neither is settable in the distill
 payload:
 
 - **`review_after`** → an explicit `review` suggestion
-  (`{"review_after": '180d'}`, one of `optimize_stage`'s **11** kinds), in
+  (`{"review_after": '180d'}`, one of `optimize_stage`'s **13** kinds), in
   a **later** run. Every kind validates its uids at staging time against
   memories that already exist, so nothing in the same batch can point at
   the memory a `distill` is going to create — a follow-up `review`,

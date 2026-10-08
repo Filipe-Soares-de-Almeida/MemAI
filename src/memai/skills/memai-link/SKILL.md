@@ -99,7 +99,7 @@ else — the writer rejects any other value.
   shows. `link_memories` itself refuses an unknown uid, a memory linked to
   itself, and an edge that already exists with that same type, each as
   `{"ok": false, "errors": [...]}`.
-- Stage it as the `optimize_stage` kind **`link`**, one of its 11 kinds, with
+- Stage it as the `optimize_stage` kind **`link`**, one of its 13 kinds, with
   payload `{from_uid, to_uid, relation_type, note}`. It takes **no
   `target_uid`**: the kind derives that end from `payload.from_uid`, and a
   `target_uid` that names anything else is rejected. The payload's `note` is
