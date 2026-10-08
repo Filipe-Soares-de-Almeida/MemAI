@@ -12,6 +12,7 @@ import sys
 
 import pytest
 
+from conftest import brief
 from memai import budget, hook, sections, server, tasks
 from memai.store import connection, memories, relations, search
 
@@ -53,7 +54,8 @@ def worst(tmp_path_factory):
                                  domain="acme/m000")
         keys = [f"i{n}" for n in range(1, tasks.ITEMS_MAX + 1)]
         for n in range(300):
-            tasks.add_note(conn, task, title=_text(120, f"n{n} "), body=_text(tasks.NOTE_MAX),
+            tasks.add_note(conn, task, title=_text(120, f"n{n} "), body=_text(tasks.NOTE_MAX) if n % 5 == 0
+                           else brief(_text(tasks.NOTE_MAX - len(brief("")))),
                            items=[] if n % 5 == 0 else [keys[n % 50], keys[(n + 1) % 50]])
             tasks.add_comment(conn, task, _text(tasks.COMMENT_MAX, f"c{n} "),
                               item="" if n % 2 else keys[n % 50])

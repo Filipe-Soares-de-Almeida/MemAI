@@ -7,9 +7,10 @@ goal and items, the way a diagram's content is generated from its graph.
 import re
 import sqlite3
 
-from . import budget, lite
+from . import budget, lite, sections
 from .contract import GOAL_MAX, ITEM_MAX, ITEM_STATES, ITEMS_MAX, NOTE_MAX, TASK_STATES
-from .store import connection, memories, sections, task_items
+from .store import connection, memories, task_items
+from .store import sections as store_sections
 
 COMMENT_MAX = 2000
 
@@ -332,7 +333,7 @@ def add_comment(
         raise ValueError("a comment needs a body")
     if len(body) > COMMENT_MAX:
         raise ValueError(f"comment is {len(body)} characters; the limit is {COMMENT_MAX}")
-    sections._refuse_leak(memories.TASK_TYPE, body)
+    store_sections._refuse_leak(memories.TASK_TYPE, body)
     if author not in ("agent", "person"):
         raise ValueError(f"{author!r} is not a comment author; use agent or person")
     _lock(conn, uid)
@@ -379,15 +380,61 @@ def unlink_item(conn: sqlite3.Connection, uid: str, item: str, target: str) -> b
     return cur.rowcount > 0
 
 
+BRIEF_KEYS: tuple[str, ...] = tuple(s.key for s in sections.BRIEF_SPEC)
+
+
+def brief_error(body: str) -> str | None:
+    """Why `body` is not a brief, or None when it is one."""
+    problems = sections.read_spec(sections.BRIEF_SPEC, body).problems
+    if not problems:
+        return None
+    required = ", ".join(s.label for s in sections.BRIEF_SPEC if not s.optional)
+    optional = ", ".join(s.label for s in sections.BRIEF_SPEC if s.optional)
+    return (f"a note on items is a brief: {required}, then optionally {optional}; "
+            f"this one does not read that way: {'; '.join(problems)}")
+
+
+def brief_fields(body: str) -> dict[str, str] | None:
+    """The brief's fields by key, or None when `body` is not a brief."""
+    reading = sections.read_spec(sections.BRIEF_SPEC, body)
+    return reading.sections if reading.conforms else None
+
+
+def brief_body(fields: dict[str, str], stored: str = "") -> str:
+    """A brief built from `fields`; over a `stored` brief, each field given replaces only its own."""
+    unknown = sorted(set(fields) - set(BRIEF_KEYS))
+    if unknown:
+        raise ValueError(f"{', '.join(unknown)} is not a brief field; use {', '.join(BRIEF_KEYS)}")
+    given = {k: str(v).strip() for k, v in fields.items() if str(v).strip()}
+    body = sections.render_spec(sections.BRIEF_SPEC, {**(brief_fields(stored) or {}), **given})
+    _require_brief(body)
+    return body
+
+
+def _require_brief(body: str) -> None:
+    error = brief_error(body)
+    if error:
+        raise ValueError(error)
+
+
+def _compose(body: str, brief: dict[str, str] | None, stored: str) -> str:
+    """The body a write supplies: `body` as given, or one built from brief fields."""
+    if not any(str(v).strip() for v in (brief or {}).values()):
+        return str(body)
+    if str(body).strip():
+        raise ValueError("give a note's body or its brief fields, not both")
+    return brief_body(brief or {}, stored)
+
+
 def _note_fields(title: str, body: str) -> tuple[str, str]:
     title, body = str(title).strip(), str(body).strip()
     if not title or not body:
         raise ValueError("a task note needs a title and a body")
-    if len(title) > sections.TITLE_MAX:
-        raise ValueError(f"title is {len(title)} characters; the limit is {sections.TITLE_MAX}")
+    if len(title) > store_sections.TITLE_MAX:
+        raise ValueError(f"title is {len(title)} characters; the limit is {store_sections.TITLE_MAX}")
     if len(body) > NOTE_MAX:
         raise ValueError(f"body is {len(body)} characters; the limit is {NOTE_MAX}")
-    sections._refuse_leak(memories.TASK_TYPE, f"{title}\n{body}")
+    store_sections._refuse_leak(memories.TASK_TYPE, f"{title}\n{body}")
     return title, body
 
 
@@ -427,12 +474,17 @@ def _note_dict(row: sqlite3.Row, keys: dict[int, list[str]]) -> dict:
             "items": keys.get(row["id"], []), "updated_at": row["updated_at"]}
 
 
-def add_note(conn: sqlite3.Connection, uid: str, *, title: str, body: str,
-             items: list[str], session: str = "") -> int:
-    """A note owned by the task, on `items` or, with none, on the task as a whole; returns its id."""
-    title, body = _note_fields(title, body)
+def add_note(conn: sqlite3.Connection, uid: str, *, title: str, body: str = "",
+             items: list[str], brief: dict[str, str] | None = None, session: str = "") -> int:
+    """A note owned by the task, on `items` or, with none, on the task as a whole; returns its id.
+
+    A note on items is a brief, given as `body` or built from `brief` fields.
+    """
+    title, body = _note_fields(title, _compose(body, brief, ""))
     _lock(conn, uid)
     keys = _note_keys(conn, uid, items)
+    if keys:
+        _require_brief(body)
     stamp = lite.now_iso()
     cur = conn.execute(
         """INSERT INTO task_notes (memory_uid, title, body, session, created_at, updated_at)
@@ -443,13 +495,25 @@ def add_note(conn: sqlite3.Connection, uid: str, *, title: str, body: str,
 
 
 def edit_note(conn: sqlite3.Connection, uid: str, note_id: int, *, title: str = "",
-              body: str = "", items: list[str] | None = None) -> None:
-    """Overwrite a note; an empty title or body keeps the stored one, items=None keeps the set."""
+              body: str = "", items: list[str] | None = None,
+              brief: dict[str, str] | None = None) -> None:
+    """Overwrite a note; an empty title or body keeps the stored one, items=None keeps the set.
+
+    `brief` fields replace only their own in a stored brief. A note that ends
+    up on items must be a brief when the write gives it a body or moves it
+    there from the whole task; a title or scope edit of a stored note on
+    items leaves its body as it is.
+    """
     _lock(conn, uid)
     note_id = _require_note(conn, uid, note_id)
     row = conn.execute("SELECT title, body FROM task_notes WHERE id = ?", (note_id,)).fetchone()
-    title, body = _note_fields(title or row["title"], body or row["body"])
+    had = conn.execute("SELECT 1 FROM task_note_items WHERE note_id = ?", (note_id,)).fetchone() is not None
+    given = _compose(body, brief, row["body"])
+    title, body = _note_fields(title or row["title"], given or row["body"])
     keys = None if items is None else _note_keys(conn, uid, items)
+    on_items = bool(keys) if keys is not None else had
+    if on_items and (given or not had):
+        _require_brief(body)
     conn.execute("UPDATE task_notes SET title = ?, body = ?, updated_at = ? WHERE id = ?",
                  (title, body, lite.now_iso(), note_id))
     if keys is not None:
