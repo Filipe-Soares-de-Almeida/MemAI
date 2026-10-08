@@ -38,7 +38,7 @@ import signal
 import socket
 import sqlite3
 import sys
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
 from urllib.parse import urlsplit
@@ -65,6 +65,7 @@ from memai import (
     webui_build,
 )
 from memai import admin_schemas as schema
+from memai.store import maintenance, queries
 
 # Windows' registry-derived mimetypes map serves .js as text/plain, which
 # browsers refuse to execute as an ES module. Force the correct types.
@@ -171,16 +172,6 @@ def _summary(row, limit: int = SNIPPET_LIMIT) -> dict:
     return d
 
 
-# What a memory list may be ordered by. 'recalls' (db.memory_usage) is a way to look, not a
-# verdict, and retrieval never reads it (see the schema comment on memory_usage).
-_MEMORY_SORTS = {
-    "created_at": "created_at",
-    "updated_at": "updated_at",
-    "recalls": "recalls",
-    "last_recall": "last_recall",
-}
-
-
 def _with_usage(conn: sqlite3.Connection, items: list[dict]) -> list[dict]:
     """Attach recall counts to rows that were selected without the join."""
     usage = db.usage_for(conn, [i["uid"] for i in items])
@@ -191,28 +182,15 @@ def _with_usage(conn: sqlite3.Connection, items: list[dict]) -> list[dict]:
     return items
 
 
-# The uids of tasks in one state; "open" leaves out a task whose memory is archived.
-_TASK_STATE_UIDS = (
-    "SELECT t.memory_uid FROM tasks t JOIN memories m ON m.uid = t.memory_uid "
-    "WHERE t.state = ? AND (t.state <> 'open' OR m.status = 'active')")
-
-
 def _with_tasks(conn: sqlite3.Connection, items: list[dict]) -> list[dict]:
     """Give the rows that are tasks their `progress` ({done, total}) and `task_state`."""
-    uids = [i["uid"] for i in items if i.get("type") == db.TASK_TYPE]
-    if not uids:
-        return items
-    marks = ",".join("?" * len(uids))
-    states = dict(conn.execute(
-        f"SELECT memory_uid, state FROM tasks WHERE memory_uid IN ({marks})", uids))
-    counts = {r[0]: (r[1], r[2]) for r in conn.execute(
-        f"""SELECT memory_uid, SUM(state = 'done'), COUNT(*) FROM task_items
-            WHERE memory_uid IN ({marks}) GROUP BY memory_uid""", uids)}
+    progress = queries.task_progress(
+        conn, [i["uid"] for i in items if i.get("type") == db.TASK_TYPE])
     for i in items:
-        if i["uid"] in states:
-            done, total = counts.get(i["uid"], (0, 0))
+        if i["uid"] in progress:
+            state, done, total = progress[i["uid"]]
             i["progress"] = {"done": done, "total": total}
-            i["task_state"] = states[i["uid"]]
+            i["task_state"] = state
     return items
 
 
@@ -269,12 +247,6 @@ def _file_size(path: Path) -> int:
         return 0
 
 
-def _raw_connect() -> sqlite3.Connection:
-    """Autocommit connection to the active project, for statements that refuse
-    to run inside a transaction (VACUUM, wal_checkpoint)."""
-    return sqlite3.connect(str(db.default_db_path()), timeout=30.0, isolation_level=None)
-
-
 def _backup(kind: str = "") -> Path:
     """A fresh backup of the active project, in its own folder and named after
     it (db.backups_dir, db.backup_name)."""
@@ -321,28 +293,15 @@ def api(handler):
 
 # ---------------------------------------------------------------- overview
 
-# One countable defect each. `where` selects active memories and `params` is the list filter for
-# the same rows, so count and list match by construction. Ordered worst first, then by coverage.
-_SYMPTOMS: tuple[tuple[str, str, str, dict], ...] = (
-    ("contradicted", "bad",
-     "confidence = 'contradicted' AND (superseded_by IS NULL OR superseded_by = '')",
-     {"confidence": "contradicted"}),
-    ("stale", "warn",
-     "confidence = 'unverified' AND updated_at < :stale",
-     {"stale": "1", "sort": "updated_at", "dir": "asc"}),
-    ("due", "warn",
-     "review_after <> '' AND review_after <= :today",
-     {"due": "1"}),
-    ("unlinked", "warn",
-     "uid NOT IN (SELECT from_uid FROM relations UNION SELECT to_uid FROM relations)",
-     {"linked": "no"}),
-    ("untitled", "info",
-     "TRIM(title) = ''",
-     {"untitled": "1"}),
-    # Tags empty or only the type: no synonym, so BM25 reaches the row only by its own wording.
-    ("untagged", "info",
-     "TRIM(tags) = '' OR TRIM(tags) = type",
-     {"untagged": "1"}),
+# One countable defect each, counted by queries.symptom_counts; `params` is the memory-list filter
+# that opens the same rows. Ordered worst first, then by coverage.
+_SYMPTOMS: tuple[tuple[str, str, dict], ...] = (
+    ("contradicted", "bad", {"confidence": "contradicted"}),
+    ("stale", "warn", {"stale": "1", "sort": "updated_at", "dir": "asc"}),
+    ("due", "warn", {"due": "1"}),
+    ("unlinked", "warn", {"linked": "no"}),
+    ("untitled", "info", {"untitled": "1"}),
+    ("untagged", "info", {"untagged": "1"}),
 )
 
 
@@ -355,14 +314,10 @@ def _symptoms(conn: sqlite3.Connection, active: int) -> list[dict]:
     on every paint. The dashboard shows that row without a count until it
     has been scanned.
     """
-    today = db.today_iso()
-    stale = (datetime.fromisoformat(today)
-             - timedelta(days=db.STALE_DAYS)).isoformat()
+    counts = queries.symptom_counts(conn)
     out = []
-    for key, severity, clause, params in _SYMPTOMS:
-        count = conn.execute(
-            f"SELECT COUNT(*) FROM memories WHERE status = 'active' AND ({clause})",
-            {"today": today, "stale": stale}).fetchone()[0]
+    for key, severity, params in _SYMPTOMS:
+        count = counts[key]
         out.append({
             "key": key, "severity": severity, "count": count,
             "share": round(count / active, 4) if active else 0.0,
@@ -377,11 +332,7 @@ def _symptoms(conn: sqlite3.Connection, active: int) -> list[dict]:
     })
     # An edge whose endpoint does not exist. No list to open, so an empty filter; the view sends
     # its button to the operation that clears them.
-    total_rels = conn.execute("SELECT COUNT(*) FROM relations").fetchone()[0]
-    orphans = conn.execute(
-        """SELECT COUNT(*) FROM relations
-           WHERE from_uid NOT IN (SELECT uid FROM memories)
-              OR to_uid NOT IN (SELECT uid FROM memories)""").fetchone()[0]
+    total_rels, orphans = maintenance.relation_counts(conn)
     out.append({
         "key": "orphans", "severity": "warn", "count": orphans,
         "of": total_rels, "share": 0.0, "params": {},
@@ -392,33 +343,7 @@ def _symptoms(conn: sqlite3.Connection, active: int) -> list[dict]:
 def overview(request, payload) -> schema.Overview:
     dbfile = db.default_db_path()
     with db.connect() as conn:
-        total = conn.execute("SELECT COUNT(*) FROM memories").fetchone()[0]
-        by_status = dict(conn.execute(
-            "SELECT status, COUNT(*) FROM memories GROUP BY status").fetchall())
-        by_type = dict(conn.execute(
-            "SELECT type, COUNT(*) FROM memories WHERE status='active' GROUP BY type").fetchall())
-        by_confidence = dict(conn.execute(
-            "SELECT confidence, COUNT(*) FROM memories WHERE status='active' GROUP BY confidence").fetchall())
-        relations = conn.execute("SELECT COUNT(*) FROM relations").fetchone()[0]
-        edits = conn.execute("SELECT COUNT(*) FROM edits").fetchone()[0]
-        sessions = conn.execute(
-            "SELECT COUNT(DISTINCT session) FROM memories WHERE session <> ''").fetchone()[0]
-        activity = [
-            {"day": r[0], "count": r[1]}
-            for r in reversed(conn.execute(
-                """SELECT substr(created_at, 1, 10) AS day, COUNT(*)
-                   FROM memories GROUP BY day ORDER BY day DESC LIMIT 45""").fetchall())
-        ]
-        # Confidence within each type: where the vetting is behind, which
-        # the store-wide split cannot say.
-        by_type_conf: dict[str, dict[str, int]] = {}
-        for tp, conf, n in conn.execute(
-                """SELECT type, confidence, COUNT(*) FROM memories
-                   WHERE status = 'active' GROUP BY type, confidence"""):
-            by_type_conf.setdefault(tp, {})[conf] = n
-        open_tasks = conn.execute(
-            "SELECT COUNT(*) FROM tasks t JOIN memories m ON m.uid = t.memory_uid "
-            "WHERE t.state = 'open' AND m.status = 'active'").fetchone()[0]
+        counts = queries.overview_counts(conn)
         health = db.health_axes(conn)
         db.health_snapshot(conn, health)
         was = db.health_since(conn, HEALTH_DELTA_DAYS)
@@ -430,22 +355,22 @@ def overview(request, payload) -> schema.Overview:
         recent = [_summary(r, 150) for r in db.list_recent(conn, limit=8)]
     return cast(schema.Overview, {
         "totals": {
-            "memories": total,
-            "active": by_status.get("active", 0),
-            "archived": by_status.get("archived", 0),
-            "relations": relations,
-            "edits": edits,
-            "sessions": sessions,
+            "memories": counts["total"],
+            "active": counts["by_status"].get("active", 0),
+            "archived": counts["by_status"].get("archived", 0),
+            "relations": counts["relations"],
+            "edits": counts["edits"],
+            "sessions": counts["sessions"],
             # written-to paths only: an implicit ancestor is a level of the tree, not a named domain
             "domains": sum(1 for d in domains if not d["implicit"]),
         },
-        "by_type": by_type,
-        "by_confidence": by_confidence,
-        "by_type_confidence": by_type_conf,
-        "open_tasks": open_tasks,
+        "by_type": counts["by_type"],
+        "by_confidence": counts["by_confidence"],
+        "by_type_confidence": counts["by_type_confidence"],
+        "open_tasks": counts["open_tasks"],
         "health": health,
         "symptoms": symptoms,
-        "activity": activity,
+        "activity": counts["activity"],
         "domains": domains[:10],
         "recent": recent,
         "db": {
@@ -506,129 +431,17 @@ def project_move(request, payload) -> schema.ProjectMove:
 
 # ---------------------------------------------------------------- memories
 
-def _defect_clauses(qp) -> tuple[list[str], list]:
-    """The defect filters a health symptom hands over, as SQL and its params.
-
-    One predicate per symptom that names a set of MEMORIES, worded exactly
-    as _SYMPTOMS words it -- the number on the dashboard and the list its
-    button opens have to be the same rows, and two spellings of "stale" is
-    how they stop being.
-    """
-    today = db.today_iso()
-    stale = (datetime.fromisoformat(today) - timedelta(days=db.STALE_DAYS)).isoformat()
-    clauses: list[str] = []
-    params: list = []
-    if qp.get("linked") == "no":
-        clauses.append("AND uid NOT IN (SELECT from_uid FROM relations "
-                       "UNION SELECT to_uid FROM relations)")
-    if qp.get("due") == "1":
-        clauses.append("AND review_after <> '' AND review_after <= ?")
-        params.append(today)
-    if qp.get("stale") == "1":
-        clauses.append("AND confidence = 'unverified' AND updated_at < ?")
-        params.append(stale)
-    if qp.get("untitled") == "1":
-        clauses.append("AND TRIM(title) = ''")
-    if qp.get("untagged") == "1":
-        clauses.append("AND (TRIM(tags) = '' OR TRIM(tags) = type)")
-    return clauses, params
-
-
-# The pin filter: any pin, or one kind.
-_PIN_FILTERS = {"any": "AND pin <> ''", "global": "AND pin = 'global'",
-                "domain": "AND pin = 'domain'"}
-
-
 def list_memories(request, payload) -> schema.MemoryPage:
-    qp = request.query_params
-    q = qp.get("q", "").strip()
-    domain = qp.get("domain", "")
-    type_ = qp.get("type", "")
-    status = qp.get("status", "")           # "" = all
-    confidence = qp.get("confidence", "")
-    session = qp.get("session", "")
-    # 'linked=no', 'due=1', 'stale=1', 'untitled=1', 'untagged=1'
-    # -- see _defect_clauses
-    defects, defect_params = _defect_clauses(qp)
-    sort = qp.get("sort", "created_at")
-    if sort not in _MEMORY_SORTS:
-        sort = "created_at"
-    direction = "ASC" if qp.get("dir", "desc").lower() == "asc" else "DESC"
-    # A page can be as long as one bulk call takes, so "every row this filter
-    # matches" is a single request.
-    limit = _int_param(request, "limit", 50, 1, BULK_MAX)
-    offset = _int_param(request, "offset", 0, 0, 1_000_000)
-    subtree = _subtree_param(request)
-    task_state = qp.get("task_state", "")   # "" = any
-    if task_state and task_state not in tasks.TASK_STATES:
-        raise ValueError(f"task_state must be one of {', '.join(tasks.TASK_STATES)}")
-    pin = qp.get("pin", "")                 # "" = no filter, "any" = any pin
-    if pin and pin not in _PIN_FILTERS:
-        raise ValueError(f"pin must be one of {', '.join(_PIN_FILTERS)}")
-
+    f = queries.MemoryFilter.from_query_params(request.query_params)
     with db.connect() as conn:
-        scope = _scope_echo(conn, domain)
-        if q:
-            hits = db.search_ranked(conn, q, domain=domain, type=type_, status=status,
-                                    limit=200, subtree=subtree)
-            if confidence:
-                hits = [h for h in hits if h["confidence"] == confidence]
-            if session:
-                hits = [h for h in hits if h["session"] == session]
-            if defects:
-                keep = {r["uid"] for r in conn.execute(
-                    "SELECT uid FROM memories WHERE 1=1 " + " ".join(defects),
-                    defect_params)}
-                hits = [h for h in hits if h["uid"] in keep]
-            if task_state:
-                keep = {r[0] for r in conn.execute(_TASK_STATE_UIDS, (task_state,))}
-                hits = [h for h in hits if h["uid"] in keep]
-            if pin:
-                keep = {r[0] for r in conn.execute(
-                    "SELECT uid FROM memories WHERE 1=1 " + _PIN_FILTERS[pin])}
-                hits = [h for h in hits if h["uid"] in keep]
-            # A pasted uid matches only [[uid]] references in other bodies, so the named row is
-            # pinned above its referrers, past every filter, as the link picker does.
-            exact = db.get_memory(conn, q)
-            if exact is not None:
-                pinned = dict(exact)
-                # the one row in the list that did not match a word
-                pinned["match_source"] = "uid"
-                hits = [pinned] + [h for h in hits if h["uid"] != q]
-            total = len(hits)
-            items = _with_usage(conn, [_summary(h) for h in hits[offset:offset + limit]])
-            return cast(schema.MemoryPage, {"total": total, "items": _with_tasks(conn, items),
-                    "searched": True, **scope})
-
-        where, params = ["1=1"], []
-        if domain:
-            clause, values, _ = db.domain_scope_clause(conn, domain, alias="", subtree=subtree)
-            where.append(clause)
-            params.extend(values)
-        for field, value in (("type", type_), ("status", status),
-                             ("confidence", confidence), ("session", session)):
-            if value:
-                where.append(f"AND {field} = ?")
-                params.append(value)
-        if task_state:
-            where.append(f"AND uid IN ({_TASK_STATE_UIDS})")
-            params.append(task_state)
-        if pin:
-            where.append(_PIN_FILTERS[pin])
-        where.extend(defects)
-        params.extend(defect_params)
-        clause = " ".join(where)
-        total = conn.execute(f"SELECT COUNT(*) FROM memories WHERE {clause}", params).fetchone()[0]
-        # The join makes 'recalls' sortable; memory_usage shares no column with the filters
-        # above, and NULL sorts as never-recalled.
-        rows = conn.execute(
-            f"""SELECT m.*, COALESCE(u.recall_count, 0) AS recalls,
-                       u.last_recalled_at AS last_recall
-                FROM memories m LEFT JOIN memory_usage u ON u.memory_uid = m.uid
-                WHERE {clause} ORDER BY {_MEMORY_SORTS[sort]} {direction} LIMIT ? OFFSET ?""",
-            [*params, limit, offset]).fetchall()
-        items = _with_tasks(conn, [_summary(r) for r in rows])
-    return cast(schema.MemoryPage, {"total": total, "items": items, "searched": False, **scope})
+        scope = _scope_echo(conn, f.domain)
+        total, rows = queries.list_memories(conn, f)
+        items = [_summary(r) for r in rows]
+        if f.q:
+            items = _with_usage(conn, items)
+        items = _with_tasks(conn, items)
+    return cast(schema.MemoryPage, {"total": total, "items": items, "searched": bool(f.q),
+                                    **scope})
 
 
 def memory_detail(request, payload) -> schema.MemoryRecord:
@@ -913,18 +726,7 @@ def edit_meta(request, payload) -> schema.MetaSaved:
             updates["domain"] = db.apply_domain_policy(conn, updates["domain"])
         changed: dict[str, object] = {k: v for k, v in updates.items() if v != row[k]}
         if changed:
-            sets = ", ".join(f"{k} = ?" for k in changed)
-            conn.execute(
-                f"UPDATE memories SET {sets}, updated_at = ? WHERE uid = ?",
-                [*changed.values(), db.now_iso(), uid])
-            if "type" in changed:
-                # the body did not move, but which fields it is supposed to
-                # hold just did: re-read it under the type it now has
-                db._write_sections(conn, uid, str(changed["type"]), row["content"])
-            note = "meta: " + "; ".join(f"{k} '{row[k]}' → '{v}'" for k, v in changed.items())
-            conn.execute(
-                "INSERT INTO edits (memory_uid, edited_at, prev_content, new_content, note) VALUES (?, ?, ?, ?, ?)",
-                (uid, db.now_iso(), row["content"], row["content"], note))
+            db.set_meta_fields(conn, uid, row, changed)
         # a domain change re-runs the link policy even without `also`: the new path may cover a
         # membership the old one needed (db.apply_link_policy)
         before = db.get_domain_links(conn, uid)
@@ -1075,8 +877,8 @@ def create_relation(request, payload) -> schema.RelationCreated:
 def delete_relation(request, payload) -> schema.Ok:
     rel_id = request.path_params["rel_id"]
     with db.connect() as conn:
-        cur = conn.execute("DELETE FROM relations WHERE id = ?", (rel_id,))
-    if cur.rowcount == 0:
+        deleted = db.delete_relation(conn, rel_id)
+    if not deleted:
         raise ValueError(f"unknown relation: {rel_id}")
     return {"ok": True}
 
@@ -1089,33 +891,9 @@ def graph(request, payload) -> schema.Graph:
     limit = _int_param(request, "limit", 0, 0, GRAPH_LIMIT_MAX)
     with db.connect() as conn:
         scope = _scope_echo(conn, domain)
-        where, params = ["1=1"], []
-        if domain:
-            clause, values, _ = db.domain_scope_clause(
-                conn, domain, alias="", subtree=_subtree_param(request))
-            where.append(clause)
-            params.extend(values)
-        for field, value in (("status", status), ("type", type_)):
-            if value:
-                where.append(f"AND {field} = ?")
-                params.append(value)
-        total = conn.execute(
-            f"SELECT COUNT(*) FROM memories WHERE {' '.join(where)}", params).fetchone()[0]
-        # `deg` orders the cut; the degree reported below counts only edges between included
-        # nodes, so the legend matches the drawing.
-        rows = conn.execute(
-            f"SELECT uid, type, domain, also_domains, status, confidence, title, content, "
-            f"       tags, created_at, (SELECT COUNT(*) FROM relations r "
-            f"        WHERE r.from_uid = memories.uid OR r.to_uid = memories.uid) AS deg "
-            f"FROM memories WHERE {' '.join(where)} "
-            f"ORDER BY deg DESC, created_at DESC" + (" LIMIT ?" if limit else ""),
-            [*params, limit] if limit else params).fetchall()
-        uids = {r["uid"] for r in rows}
-        edges = [
-            dict(r) for r in conn.execute(
-                "SELECT id, from_uid, to_uid, relation_type, note FROM relations").fetchall()
-            if r["from_uid"] in uids and r["to_uid"] in uids
-        ]
+        total, rows, edges = queries.graph_rows(
+            conn, domain=domain, subtree=_subtree_param(request), status=status, type=type_,
+            limit=limit)
     degree: dict[str, int] = {}
     for e in edges:
         degree[e["from_uid"]] = degree.get(e["from_uid"], 0) + 1
@@ -1373,14 +1151,7 @@ def domains(request, payload) -> schema.DomainTree:
     the view says so instead of drawing it as empty.
     """
     with db.connect() as conn:
-        rows = conn.execute(
-            """SELECT domain, status, type, COUNT(*) AS n, MAX(created_at) AS latest
-               FROM memories WHERE domain <> ''
-               GROUP BY domain, status, type""").fetchall()
-        link_rows = conn.execute(
-            """SELECT dl.domain AS domain, COUNT(*) AS n, MAX(m.created_at) AS latest
-               FROM memory_domains dl JOIN memories m ON m.uid = dl.memory_uid
-               WHERE dl.domain <> '' GROUP BY dl.domain""").fetchall()
+        rows, link_rows = queries.domain_tree_counts(conn)
     agg: dict[str, dict] = {}
 
     def node(path: str) -> dict:
@@ -1465,16 +1236,7 @@ def domain_detail(request, payload) -> schema.DomainDetail:
         raise ValueError("domain is required")
     limit = _int_param(request, "limit", 6, 1, 30)
     with db.connect() as conn:
-        filed = conn.execute(
-            """SELECT * FROM memories WHERE domain = ? AND status = 'active'
-               ORDER BY created_at DESC LIMIT ?""", (domain, limit)).fetchall()
-        filed_total = conn.execute(
-            "SELECT COUNT(*) FROM memories WHERE domain = ? AND status = 'active'",
-            (domain,)).fetchone()[0]
-        crossing = conn.execute(
-            """SELECT m.* FROM memory_domains dl JOIN memories m ON m.uid = dl.memory_uid
-               WHERE dl.domain = ? AND m.status = 'active'
-               ORDER BY m.created_at DESC LIMIT ?""", (domain, limit)).fetchall()
+        filed, filed_total, crossing = queries.domain_preview(conn, domain, limit)
     return cast(schema.DomainDetail, {
         "domain": domain,
         "filed": [_summary(r, 160) for r in filed],
@@ -1601,14 +1363,7 @@ def normalize_domains(request, payload) -> schema.NormalizePlan | schema.Normali
     dry_run = bool(payload.get("dry_run", True))
     with db.connect() as conn:
         mode = db.get_domain_case(conn)
-        counts: dict[str, int] = {}
-        for sql in (
-            "SELECT domain, COUNT(*) AS n FROM memories WHERE domain <> '' GROUP BY domain",
-            "SELECT domain, COUNT(*) AS n FROM memory_domains WHERE domain <> '' GROUP BY domain",
-        ):
-            for r in conn.execute(sql):
-                counts[r["domain"]] = counts.get(r["domain"], 0) + r["n"]
-        plan = _normalize_plan(mode, counts)
+        plan = _normalize_plan(mode, queries.domain_spellings(conn))
         if dry_run:
             return cast(schema.NormalizePlan, {
                 "mode": mode, "dry_run": True, "plan": plan,
@@ -1669,51 +1424,16 @@ def set_config(request, payload) -> schema.ConfigSaved:
 
 # ------------------------------------------------------------- maintenance
 
-def _fts_check(conn: sqlite3.Connection) -> tuple[bool, str]:
-    """FTS5 integrity-check; the 2-arg form also verifies the index against
-    the external content table where supported.
-
-    `detail` is empty when the check passes: the "all good" wording is a UI
-    string and belongs in webui/i18n, not in an API response. Only the
-    failure detail crosses the wire, because that is SQLite's own message
-    and translating it would lose the thing an operator needs to read.
-    """
-    try:
-        try:
-            conn.execute("INSERT INTO memories_fts(memories_fts, rank) VALUES ('integrity-check', 1)")
-        except sqlite3.OperationalError:
-            conn.execute("INSERT INTO memories_fts(memories_fts) VALUES ('integrity-check')")
-        return True, ""
-    except sqlite3.DatabaseError as exc:
-        return False, str(exc)
-
-
 def health(request, payload) -> schema.Health:
     project = db.active_project()
     dbfile = db.default_db_path()
     with db.connect() as conn:
-        quick = [r[0] for r in conn.execute("PRAGMA quick_check").fetchall()]
+        report = maintenance.integrity_report(conn)
+        quick = report["quick_check"]
         integrity_ok = quick == ["ok"]
-        fts_ok, fts_detail = _fts_check(conn)
-        mem_count = conn.execute("SELECT COUNT(*) FROM memories").fetchone()[0]
-        fts_count = conn.execute("SELECT COUNT(*) FROM memories_fts").fetchone()[0]
-        orphan_rels = conn.execute(
-            """SELECT COUNT(*) FROM relations
-               WHERE from_uid NOT IN (SELECT uid FROM memories)
-                  OR to_uid NOT IN (SELECT uid FROM memories)""").fetchone()[0]
-        active_count = conn.execute(
-            "SELECT COUNT(*) FROM memories WHERE status = 'active'").fetchone()[0]
-        # empty tags, or tags that are nothing but the type every read
-        # already filters on -- either way the row carries no synonym
-        untagged = conn.execute(
-            "SELECT COUNT(*) FROM memories WHERE status = 'active' "
-            "AND (TRIM(tags) = '' OR TRIM(tags) = type)").fetchone()[0]
-        # no name of its own, so every list falls back to its body
-        untitled = conn.execute(
-            "SELECT COUNT(*) FROM memories WHERE status = 'active' "
-            "AND TRIM(title) = ''").fetchone()[0]
-        page_size = conn.execute("PRAGMA page_size").fetchone()[0]
-        freelist = conn.execute("PRAGMA freelist_count").fetchone()[0]
+        active_count = queries.count_active(conn)
+        untagged = queries.count_active(conn, "untagged")
+        untitled = queries.count_active(conn, "untitled")
         compact_reason = db.get_compact_reason(conn)
         render_retention = db.get_svg_retention(conn)
     # the active project's own backups; another project's are listed when it is
@@ -1723,12 +1443,13 @@ def health(request, payload) -> schema.Health:
         for p in db.backup_files(project)]
     return cast(schema.Health, {
         "project": project,
-        # same rule as _fts_check: "ok" is quick_check's way of saying
-        # nothing is wrong, and the UI has its own words for that
+        # same rule as maintenance.fts_integrity: "ok" is quick_check's way of
+        # saying nothing is wrong, and the UI has its own words for that
         "integrity": {"ok": integrity_ok,
                       "detail": "" if integrity_ok else "; ".join(quick)[:400]},
-        "fts": {"ok": fts_ok, "detail": fts_detail, "rows": fts_count, "expected": mem_count},
-        "relations": {"orphans": orphan_rels},
+        "fts": {"ok": report["fts_ok"], "detail": report["fts_detail"],
+                "rows": report["fts_rows"], "expected": report["memories"]},
+        "relations": {"orphans": report["orphan_relations"]},
         # BM25 reads content, tags and domain, so a row with no tags answers
         # only a query that quotes its own wording
         "tags": {"untagged": untagged, "active": active_count},
@@ -1743,7 +1464,7 @@ def health(request, payload) -> schema.Health:
             "path": str(dbfile),
             "size": _file_size(dbfile),
             "wal_size": _file_size(dbfile.with_name(dbfile.name + "-wal")),
-            "reclaimable": page_size * freelist,
+            "reclaimable": report["reclaimable"],
             # what freed those pages, so the disk row can say what the space
             # is instead of only how much of it there is
             "compact_reason": compact_reason,
@@ -1754,52 +1475,17 @@ def health(request, payload) -> schema.Health:
 
 def fts_rebuild(request, payload) -> schema.FtsRebuilt:
     with db.connect() as conn:
-        conn.execute("INSERT INTO memories_fts(memories_fts) VALUES ('rebuild')")
-        count = conn.execute("SELECT COUNT(*) FROM memories_fts").fetchone()[0]
+        count = maintenance.rebuild_fts(conn)
     return {"ok": True, "rows": count}
 
 
 def clean_orphans(request, payload) -> schema.OrphansCleaned:
     with db.connect() as conn:
-        cur = conn.execute(
-            """DELETE FROM relations
-               WHERE from_uid NOT IN (SELECT uid FROM memories)
-                  OR to_uid NOT IN (SELECT uid FROM memories)""")
-        rels = cur.rowcount
-        cur = conn.execute(
-            """DELETE FROM optimization_suggestions
-               WHERE status = 'pending'
-                 AND target_uid IS NOT NULL
-                 AND target_uid NOT IN (SELECT uid FROM memories)""")
-        sugs = cur.rowcount
-        cur = conn.execute(
-            """DELETE FROM diagram_node_links
-               WHERE memory_uid NOT IN (SELECT uid FROM memories)
-                  OR target_uid NOT IN (SELECT uid FROM memories)
-                  OR node_key NOT IN (
-                        SELECT node_key FROM diagram_nodes
-                        WHERE diagram_nodes.memory_uid = diagram_node_links.memory_uid)""")
-        links = cur.rowcount
-        cur = conn.execute(
-            """DELETE FROM task_item_links
-               WHERE target_uid NOT IN (SELECT uid FROM memories)""")
-        task_links = cur.rowcount
-        # a jump has four things that can rot -- both diagrams and both node
-        # keys -- and `to_node` is legitimately empty for a whole-diagram jump
-        cur = conn.execute(
-            """DELETE FROM diagram_jumps
-               WHERE from_uid NOT IN (SELECT memory_uid FROM diagrams)
-                  OR to_uid NOT IN (SELECT memory_uid FROM diagrams)
-                  OR from_node NOT IN (
-                        SELECT node_key FROM diagram_nodes
-                        WHERE diagram_nodes.memory_uid = diagram_jumps.from_uid)
-                  OR (to_node <> '' AND to_node NOT IN (
-                        SELECT node_key FROM diagram_nodes
-                        WHERE diagram_nodes.memory_uid = diagram_jumps.to_uid))""")
-        jumps = cur.rowcount
-    return {"ok": True, "relations_removed": rels,
-            "suggestions_removed": sugs, "node_links_removed": links,
-            "jumps_removed": jumps, "task_links_removed": task_links}
+        removed = maintenance.clean_orphans(conn)
+    return {"ok": True, "relations_removed": removed["relations"],
+            "suggestions_removed": removed["suggestions"],
+            "node_links_removed": removed["node_links"],
+            "jumps_removed": removed["jumps"], "task_links_removed": removed["task_links"]}
 
 
 def prune_renders(request, payload) -> schema.RendersPruned:
@@ -1821,12 +1507,7 @@ def prune_renders(request, payload) -> schema.RendersPruned:
 def vacuum(request, payload) -> schema.Vacuumed:
     dbfile = db.default_db_path()
     before = _file_size(dbfile) + _file_size(dbfile.with_name(dbfile.name + "-wal"))
-    conn = _raw_connect()
-    try:
-        conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-        conn.execute("VACUUM")
-    finally:
-        conn.close()
+    maintenance.vacuum(dbfile)
     after = _file_size(dbfile) + _file_size(dbfile.with_name(dbfile.name + "-wal"))
     with db.connect() as conn:
         db.clear_compact_reason(conn)
@@ -2050,14 +1731,8 @@ def dedup(request, payload) -> schema.DedupPairs:
 def audit(request, payload) -> schema.AuditLog:
     limit = _int_param(request, "limit", 100, 1, 400)
     with db.connect() as conn:
-        rows = conn.execute(
-            """SELECT e.id, e.memory_uid, e.edited_at, e.note,
-                      LENGTH(e.prev_content) AS prev_len, LENGTH(e.new_content) AS new_len,
-                      (e.prev_content <> e.new_content) AS content_changed,
-                      m.type, m.domain, m.status
-               FROM edits e JOIN memories m ON m.uid = e.memory_uid
-               ORDER BY e.edited_at DESC, e.id DESC LIMIT ?""", (limit,)).fetchall()
-    return cast(schema.AuditLog, {"entries": [dict(r) for r in rows]})
+        entries = queries.edit_log(conn, limit)
+    return cast(schema.AuditLog, {"entries": entries})
 
 
 def lookup(request, payload) -> schema.Lookup:
@@ -2295,8 +1970,7 @@ def _run_ledger(conn: sqlite3.Connection, pending: list) -> dict:
             uids.update(sources)
             if payload.get("domain"):
                 domains.add(str(payload["domain"]).strip())
-    active = conn.execute(
-        "SELECT COUNT(*) FROM memories WHERE status = 'active'").fetchone()[0]
+    active = queries.count_active(conn)
     return {
         "memories": len(uids), "active": active, "domains": len(domains - {""}),
         "relations": relations, "confirmed": confirmed,

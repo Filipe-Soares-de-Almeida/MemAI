@@ -23,6 +23,7 @@ from memai.store.memories import (
     purge_memory,
     set_confidence,
     set_domain_links,
+    set_meta_fields,
     set_review_after,
     set_status,
     update_memory_content,
@@ -403,10 +404,7 @@ def set_run_backup(conn: sqlite3.Connection, run_id: int, backup_path: str) -> N
 
 
 def _update_meta_field(conn: sqlite3.Connection, uid: str, field: str, value: str) -> None:
-    """Mirror admin.edit_meta for one tag/domain field: UPDATE + audit.
-
-    `field` is only ever 'tags', 'title' or 'domain' (caller-controlled), so
-    the f-string interpolation is not an injection surface.
+    """Write one metadata field the way the dashboard's meta editor does, audit included.
 
     A domain change re-runs the cross-listing policy: the memory's new path
     may already satisfy a membership the old path needed (see
@@ -416,15 +414,7 @@ def _update_meta_field(conn: sqlite3.Connection, uid: str, field: str, value: st
     if field == "domain":
         value = apply_domain_policy(conn, value)
     row = memory_row(conn, uid)
-    conn.execute(
-        f"UPDATE memories SET {field} = ?, updated_at = ? WHERE uid = ?",
-        (value, now_iso(), uid),
-    )
-    note = f"meta: {field} '{row[field]}' → '{value}'"
-    conn.execute(
-        "INSERT INTO edits (memory_uid, edited_at, prev_content, new_content, note) VALUES (?, ?, ?, ?, ?)",
-        (uid, now_iso(), row["content"], row["content"], note),
-    )
+    set_meta_fields(conn, uid, row, {field: value})
     if field == "domain" and row["also_domains"]:
         set_domain_links(conn, uid, get_domain_links(conn, uid))
 

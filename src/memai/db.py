@@ -191,6 +191,7 @@ from memai.store.memories import (  # noqa: F401
     set_domain,
     set_domain_links,
     set_generated_content,
+    set_meta_fields,
     set_pin,
     set_review_after,
     set_sections,
@@ -244,6 +245,7 @@ from memai.store.projects import (  # noqa: F401
 )
 from memai.store.relations import (  # noqa: F401
     add_relation,
+    delete_relation,
     get_relations,
 )
 from memai.store.renders import (  # noqa: F401

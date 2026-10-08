@@ -505,6 +505,34 @@ def set_title(conn: sqlite3.Connection, uid: str, value: str, note: str = "") ->
     return True
 
 
+# The columns set_meta_fields writes; the names go into the SQL, so nothing else may.
+META_COLUMNS = ("title", "domain", "tags", "session", "type", "review_after", "source_ref")
+
+
+def set_meta_fields(
+    conn: sqlite3.Connection, uid: str, row: sqlite3.Row, changed: dict[str, object],
+) -> None:
+    """Write already-checked metadata of one memory, and audit it in `edits`.
+
+    `row` is the memory before the change and `changed` the columns that
+    differ from it, each one of META_COLUMNS. A new type re-reads the body
+    into the fields that type is made of.
+    """
+    unknown = [k for k in changed if k not in META_COLUMNS]
+    if unknown:
+        raise ValueError(f"not a metadata column: {', '.join(unknown)}")
+    sets = ", ".join(f"{k} = ?" for k in changed)
+    conn.execute(
+        f"UPDATE memories SET {sets}, updated_at = ? WHERE uid = ?",
+        [*changed.values(), now_iso(), uid])
+    if "type" in changed:
+        _write_sections(conn, uid, str(changed["type"]), row["content"])
+    note = "meta: " + "; ".join(f"{k} '{row[k]}' → '{v}'" for k, v in changed.items())
+    conn.execute(
+        "INSERT INTO edits (memory_uid, edited_at, prev_content, new_content, note) VALUES (?, ?, ?, ?, ?)",
+        (uid, now_iso(), row["content"], row["content"], note))
+
+
 def purge_memory(conn: sqlite3.Connection, uid: str) -> bool:
     """Irreversibly delete a memory row plus its edit history and relations.
 

@@ -38,6 +38,11 @@ def add_relation(
     return cur.lastrowid or 0
 
 
+def delete_relation(conn: sqlite3.Connection, rel_id: int) -> bool:
+    """Remove one edge by id; False when there is none."""
+    return conn.execute("DELETE FROM relations WHERE id = ?", (rel_id,)).rowcount > 0
+
+
 def get_relations(conn: sqlite3.Connection, uid: str) -> list[sqlite3.Row]:
     return conn.execute(
         "SELECT * FROM relations WHERE from_uid = ? OR to_uid = ? ORDER BY created_at ASC",
