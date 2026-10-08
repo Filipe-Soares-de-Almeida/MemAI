@@ -54,6 +54,18 @@ from memai.store.connection import (  # noqa: F401
     get_compact_reason,
     new_uid,
 )
+from memai.store.corpus import (  # noqa: F401
+    CORPUS_ANCHORS_CAP,
+    CORPUS_CHAR_BUDGET,
+    CORPUS_FULL_LEN,
+    CORPUS_SNIPPET_LEN,
+    CORPUS_TAGS_LEN,
+    LEAK_FIELDS,
+    LEAK_SCAN_CAP,
+    NESTING_HINT_CAP,
+    _nesting_hints,
+    optimization_corpus,
+)
 from memai.store.dedup import (  # noqa: F401
     SIMILAR_ON_WRITE,
     SIMILAR_ON_WRITE_MAX,
@@ -192,20 +204,11 @@ from memai.store.memories import (  # noqa: F401
 )
 from memai.store.optimizer import (  # noqa: F401
     CONFIDENCE_VALUES,
-    CORPUS_ANCHORS_CAP,
-    CORPUS_CHAR_BUDGET,
-    CORPUS_FULL_LEN,
-    CORPUS_SNIPPET_LEN,
-    CORPUS_TAGS_LEN,
     DISTILL_PAYLOAD_KEYS,
     DISTILL_TYPES,
-    LEAK_FIELDS,
-    LEAK_SCAN_CAP,
-    NESTING_HINT_CAP,
     RUN_NOTE_MAX,
     SUGGESTION_KINDS,
     VERIFIED_REQUIRED,
-    _nesting_hints,
     _update_meta_field,
     apply_suggestion,
     delete_optimization_run,
@@ -213,7 +216,6 @@ from memai.store.optimizer import (  # noqa: F401
     get_optimization_suggestions,
     get_suggestion,
     list_optimization_runs,
-    optimization_corpus,
     optimization_run_kind_counts,
     reject_suggestion,
     revert_suggestion,
