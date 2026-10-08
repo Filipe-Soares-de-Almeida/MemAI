@@ -69,10 +69,8 @@ def _face_metrics(path: Path, family: str) -> dict:
         if glyph in hmtx.metrics:
             widths[str(code)] = int(hmtx.metrics[glyph][0])
 
-    # What an unknown codepoint measures. Not what a browser does -- it
-    # falls back to another installed font, whose advance we cannot know
-    # here -- but the font's own answer for "no glyph", which keeps the
-    # arithmetic honest and bounded instead of silently measuring zero.
+    # An unknown codepoint measures as the font's .notdef glyph: a browser's fallback font is
+    # unknowable here, and zero would hide the gap.
     notdef = int(hmtx.metrics[".notdef"][0]) if ".notdef" in hmtx.metrics else (
         round(sum(widths.values()) / len(widths)) if widths else upem // 2
     )

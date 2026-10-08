@@ -138,9 +138,8 @@ def test_refuses_a_non_loopback_host(monkeypatch, spawned, dead_port, capsys):
     monkeypatch.setenv("MEMAI_ADMIN_PORT", str(dead_port))
     autostart.ensure_admin_running()
     assert spawned == []
-    # the dashboard has no authentication, and nobody reads the stderr of
-    # a process the agent host started -- so this one refuses rather than
-    # warning the way main() does for a human who typed it
+    # no authentication and nobody reads an autostarted process's stderr, so it
+    # refuses where main() only warns a human
     assert "loopback-only" in capsys.readouterr().err
 
 

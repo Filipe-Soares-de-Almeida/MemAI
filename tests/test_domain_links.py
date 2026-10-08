@@ -455,7 +455,7 @@ def test_deleting_a_domain_drops_the_cross_listings_pointing_into_it(conn):
     assert memories.get_memory(conn, ids["queue"])["domain"] == "acme/x100/p200"
     assert memories.get_domain_links(conn, ids["queue"]) == []
     assert memories.get_memory(conn, ids["queue"])["also_domains"] == ""
-    # ...and the index the mirror feeds no longer answers for the dead subject
+    # ...and the index the mirror feeds stops answering for the dead subject
     assert search.search_memories(conn, "x900") == []
 
 

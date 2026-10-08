@@ -16,11 +16,8 @@ import pytest
 from memai import hook_install, server
 from memai.store import memories, optimizer
 
-# The non-ASCII characters a skill may spell: typographic punctuation, the
-# section sign, and the two mathematical signs its tables carry. No accented
-# letter is here, which is what makes this list the language gate -- the
-# repository is English only, and a translated paragraph fails on its first
-# accent.
+# The non-ASCII a skill may spell. No accented letter is here, so this is also the English-only
+# gate: a translated paragraph fails on its first accent.
 ALLOWED_NON_ASCII = set("—→§…·×∈✓")
 
 # The `type` a memory can carry: the one vocabulary every read accepts.
@@ -32,9 +29,8 @@ CALLS = re.compile(r"`([a-z_][a-z0-9_]*)\(")
 # `type='note'` -- the quoted form, which asserts a value. The lookbehind
 # keeps `new_type=` out of it.
 TYPED = re.compile(r"(?<!\w)type=['\"]([a-z_]+)['\"]")
-# A wikilink naming a sibling skill. The same brackets are also how a memory
-# body cites another memory, which is what memai-link is about, so only the
-# family's own prefix is held to resolving.
+# A wikilink naming a sibling skill; memory bodies use the same brackets, so only the
+# family's own prefix has to resolve.
 WIKILINK = re.compile(r"\[\[(memai-[a-z0-9-]+)\]\]")
 # A drive letter followed by a separator. The lookbehind spares a URL scheme,
 # where the letter before the colon is part of `https`.

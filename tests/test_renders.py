@@ -177,13 +177,7 @@ def test_get_diagram_rejects_an_unknown_format(mcp):
 
 
 # ── telling the caller what to do with it ───────────────────────────────
-#
-# These assert on prose, which is unusual and deliberate: for an MCP tool
-# the docstring IS the interface. A caller asked to "render the diagram"
-# reached for mermaid and silently showed a re-laid-out flow instead of the
-# one the user arranged, because the docstring called mermaid "the fastest
-# way to show a flow in a chat client" and buried the SVG path. Wording is
-# the mechanism here, so the wording gets tests.
+# These assert on prose on purpose: an MCP tool's docstring is its interface.
 
 
 def test_the_schema_leads_with_how_to_display_it(mcp):

@@ -616,5 +616,5 @@ def test_delete_endpoint_demands_the_exact_phrase(client):
                       json={"domain": "acme/x100", "confirm": "DELETE acme/x100"})
     assert res.json()["purged"] == 1
     assert client.get(f"/api/memories/{uid}").status_code == 400
-    # nothing names the levels any more, so the tree loses them both
+    # nothing names the levels, so the tree drops them both
     assert client.get("/api/domains").json()["domains"] == []

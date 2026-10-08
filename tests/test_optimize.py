@@ -63,11 +63,8 @@ def _mk_diagram(conn):
 
 # ------------------------------------------------- a leaked call: scan and kind
 
-# A body the way a leaked call leaves it: the text is right up to the closing
-# tag of the field it was written under, and the fields after it follow as
-# prose. Only a store written before the store refused one holds this, so
-# these tests plant it with restore_memory -- the one writer that reproduces a
-# row instead of judging it.
+# A body as a leaked call leaves it: the field's closing tag, then the later fields as prose.
+# The writers refuse one, so it is planted with restore_memory, which copies a row as given.
 LEAKED_BODY = "\n".join((
     "the warmup drains the queue twice on a cold start</content>",
     "<domain>acme/x100/p200</domain>",
@@ -1707,9 +1704,8 @@ def test_api_apply_all_and_discard(client):
 
 # ------------------------------------- the dashboard renders every staged kind
 
-# The kinds optCard routes away from the before/after pair, because they are
-# about a pair of memories rather than a field: link and merge print two peer
-# cards, distill prints its sources.
+# Kinds about a pair of memories rather than a field: link and merge print two peer cards,
+# distill prints its sources.
 RELATIONAL = {"link", "merge", "distill"}
 
 

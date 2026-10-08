@@ -577,9 +577,7 @@ def test_node_link_endpoints_are_validated(conn):
 
 
 # --------------------------------------------------------------------- jumps
-#
-# A jump is one row read from two sides: the flow that hands off and the
-# flow that takes over are both documented by the same statement.
+# A jump is one row read from two sides: the flow that hands off and the one that takes over.
 
 
 def _pair(conn):

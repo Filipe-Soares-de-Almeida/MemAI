@@ -73,9 +73,8 @@ def _never(timeout: float = update.TIMEOUT):
     raise AssertionError("the cached answer was there to be reused")
 
 
-# Bound at import, before the autouse fixture replaces the module's `_fetch`
-# with a stub: the two tests below are the ones that exercise the real request
-# path, against a response of their own.
+# Bound at import, before the autouse fixture stubs `_fetch`, for the two tests that exercise
+# the real request path.
 _REAL_FETCH = update._fetch
 
 
