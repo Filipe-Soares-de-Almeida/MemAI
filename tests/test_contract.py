@@ -9,7 +9,11 @@ from pathlib import Path
 import pytest
 
 from conftest import webui_constants
-from memai import admin, contract, db, diagram_svg, tasks
+from memai import contract, diagram_svg, lite, tasks
+from memai.admin.routes.memories import CONFIDENCES
+from memai.admin.shared import BULK_MAX
+from memai.store import memories, optimizer, sections
+from memai.store.diagrams import layout as diagram_layout
 
 ROOT = Path(__file__).resolve().parents[1]
 PACKAGE = ROOT / "src" / "memai"
@@ -84,13 +88,13 @@ def test_the_scan_leaves_reads_and_comparisons_alone(source):
 
 def test_python_reads_the_values_the_file_holds():
     memory, task, diagram = CONTRACT["memory"], CONTRACT["task"], CONTRACT["diagram"]
-    assert tuple(memory["TYPES"]) == db.MEMORY_TYPES
-    assert db.CONFIDENCE_VALUES == admin.CONFIDENCES == tuple(memory["CONFIDENCES"])
-    assert ("", *memory["PINS"]) == db.PIN_VALUES
-    assert memory["TITLE_MAX"] == db.TITLE_MAX and memory["DOMAIN_SEP"] == db.DOMAIN_SEP
+    assert tuple(memory["TYPES"]) == memories.MEMORY_TYPES
+    assert optimizer.CONFIDENCE_VALUES == CONFIDENCES == tuple(memory["CONFIDENCES"])
+    assert ("", *memory["PINS"]) == memories.PIN_VALUES
+    assert memory["TITLE_MAX"] == sections.TITLE_MAX and memory["DOMAIN_SEP"] == lite.DOMAIN_SEP
     assert tuple(task["STATES"]) == tasks.TASK_STATES and task["NOTE_MAX"] == tasks.NOTE_MAX
-    assert CONTRACT["admin"]["BULK_MAX"] == admin.BULK_MAX
-    assert diagram["NODE_W"] == db.NODE_DEFAULT_W and diagram["ORTH_SNAP"] == diagram_svg.ORTH_SNAP
+    assert CONTRACT["admin"]["BULK_MAX"] == BULK_MAX
+    assert diagram["NODE_W"] == diagram_layout.NODE_DEFAULT_W and diagram["ORTH_SNAP"] == diagram_svg.ORTH_SNAP
 
 
 def test_the_svg_export_keeps_its_metrics_as_floats():

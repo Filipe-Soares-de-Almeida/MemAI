@@ -80,8 +80,8 @@ has no asset; it keeps whatever `dist/` holds.
 `memai-admin` checks that build each time it starts, after it has the port.
 Every build carries `dist/build.json`: the version and a sha256 of the files
 under `src/memai/webui/` plus `package.json`, `package-lock.json`,
-`vite.config.js` and `tsconfig.json`. When the stamp is missing or its hash no
-longer matches those files, it runs `npm run build`, and `npm ci` first when
+`vite.config.js` and `tsconfig.json`. When the stamp is missing or its hash differs
+from those files, it runs `npm run build`, and `npm ci` first when
 the lockfile is newer than `node_modules`; a file touched but unchanged
 triggers nothing. Without npm on the PATH, a build stamped with another version
 is replaced by this version's release asset; otherwise, or when npm fails, it
@@ -91,6 +91,22 @@ check off.
 To iterate on the dashboard, `npm run dev` serves it with hot reload and proxies
 `/api` and `/fonts.css` to a `memai-admin` on `MEMAI_ADMIN_PORT` (8888 by
 default), which keeps the browser same-origin with the API.
+
+The code is laid out by layer. `src/memai/store/` is the SQLite store, one
+module per concern; `src/memai/admin/` is the dashboard's HTTP server, one
+routes module per resource and no SQL of its own; `src/memai/server.py` is the
+MCP server. The dashboard under `src/memai/webui/` is Vue 3 single-file
+components and TypeScript, its views under `views/`, shared components under
+`components/`, the typed API client under `api/` and the canvas engines under
+`engines/`. Before a pull request, every check CI runs:
+
+```sh
+.venv/bin/python -m pytest                   # Python, and the node cases under tools/
+.venv/bin/ruff check src tests tools
+.venv/bin/pyright --pythonpath .venv/bin/python
+npm run typecheck && npm test && npm run build
+.venv/bin/python tools/comment-lint.py --all
+```
 
 `requirements.txt` (runtime) and `requirements-dev.txt` (runtime and the
 `dev` extra) pin every package, direct and transitive, with hashes, for Windows

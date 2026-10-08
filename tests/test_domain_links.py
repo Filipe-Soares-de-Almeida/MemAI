@@ -14,20 +14,21 @@ from __future__ import annotations
 import pytest
 from starlette.testclient import TestClient
 
-from memai import admin, db, server
-from memai.store import connection
+from memai import server
+from memai.admin.app import app as admin_app
+from memai.store import connection, domains, memories, optimizer, search, subtree
 
 
 @pytest.fixture
 def conn(tmp_path):
-    with db.connect(tmp_path / "test.db") as c:
+    with connection.connect(tmp_path / "test.db") as c:
         yield c
 
 
 @pytest.fixture
 def client(tmp_path, monkeypatch):
     monkeypatch.setenv("MEMAI_HOME", str(tmp_path))
-    with TestClient(admin.app) as c:
+    with TestClient(admin_app) as c:
         yield c
 
 
@@ -38,11 +39,11 @@ def _crossing(conn):
     ancestor of either routine, and neither routine is an ancestor of it.
     """
     return {
-        "queue": db.insert_memory(conn, type="note", content="queue drain step",
+        "queue": memories.insert_memory(conn, type="note", content="queue drain step",
                                   domain="acme/x100/p200", also="omni/x900"),
-        "token": db.insert_memory(conn, type="note", content="token refresh step",
+        "token": memories.insert_memory(conn, type="note", content="token refresh step",
                                   domain="zeta/x200/p300", also="omni/x900/p910"),
-        "plain": db.insert_memory(conn, type="note", content="unrelated",
+        "plain": memories.insert_memory(conn, type="note", content="unrelated",
                                   domain="acme/x100/p400"),
     }
 
@@ -50,52 +51,52 @@ def _crossing(conn):
 # --------------------------------------------------------------- write policy
 
 def test_parse_domains_splits_on_commas_semicolons_and_newlines():
-    assert db.parse_domains("acme/x100, zeta/x200;omni\nacme/x100") == [
+    assert domains.parse_domains("acme/x100, zeta/x200;omni\nacme/x100") == [
         "acme/x100", "zeta/x200", "omni"]
-    assert db.parse_domains(["  acme // x100 ", ""]) == ["acme/x100"]
-    assert db.parse_domains("") == []
-    assert db.parse_domains(None) == []
+    assert domains.parse_domains(["  acme // x100 ", ""]) == ["acme/x100"]
+    assert domains.parse_domains("") == []
+    assert domains.parse_domains(None) == []
 
 
 def test_a_cross_listing_the_filed_path_already_covers_is_dropped(conn):
     """The prefix arm of a domain filter matches 'acme' for a memory filed at
     'acme/x100/p200' already; recording it would count the memory twice."""
-    uid = db.insert_memory(conn, type="note", content="x", domain="acme/x100/p200",
+    uid = memories.insert_memory(conn, type="note", content="x", domain="acme/x100/p200",
                            also="acme, acme/x100, acme/x100/p200, omni/x900")
-    assert db.get_domain_links(conn, uid) == ["omni/x900"]
+    assert memories.get_domain_links(conn, uid) == ["omni/x900"]
 
 
 def test_a_cross_listing_below_the_filed_path_is_kept(conn):
     """A narrower scope is a real thing to say, unlike a broader one."""
-    uid = db.insert_memory(conn, type="note", content="x", domain="acme",
+    uid = memories.insert_memory(conn, type="note", content="x", domain="acme",
                            also="acme/x100/p200")
-    assert db.get_domain_links(conn, uid) == ["acme/x100/p200"]
+    assert memories.get_domain_links(conn, uid) == ["acme/x100/p200"]
 
 
 def test_cross_listings_follow_the_store_casing_policy(conn):
-    db.set_domain_case(conn, "lower")
-    uid = db.insert_memory(conn, type="note", content="x", domain="ACME",
+    domains.set_domain_case(conn, "lower")
+    uid = memories.insert_memory(conn, type="note", content="x", domain="ACME",
                            also="OMNI/X900")
-    assert db.get_memory(conn, uid)["domain"] == "acme"
-    assert db.get_domain_links(conn, uid) == ["omni/x900"]
+    assert memories.get_memory(conn, uid)["domain"] == "acme"
+    assert memories.get_domain_links(conn, uid) == ["omni/x900"]
 
 
 def test_add_and_remove_one_membership(conn):
-    uid = db.insert_memory(conn, type="note", content="x", domain="acme/x100")
-    assert db.add_domain_link(conn, uid, "omni/x900") == ["omni/x900"]
-    assert db.add_domain_link(conn, uid, "omni/x900/p910") == [
+    uid = memories.insert_memory(conn, type="note", content="x", domain="acme/x100")
+    assert memories.add_domain_link(conn, uid, "omni/x900") == ["omni/x900"]
+    assert memories.add_domain_link(conn, uid, "omni/x900/p910") == [
         "omni/x900", "omni/x900/p910"]
     # exact-path removal: dropping the parent leaves the child membership
-    assert db.remove_domain_link(conn, uid, "omni/x900") == ["omni/x900/p910"]
+    assert memories.remove_domain_link(conn, uid, "omni/x900") == ["omni/x900/p910"]
     with pytest.raises(ValueError):
-        db.add_domain_link(conn, uid, "  ")
+        memories.add_domain_link(conn, uid, "  ")
 
 
 def test_setting_the_links_is_audited(conn):
-    uid = db.insert_memory(conn, type="note", content="x", domain="acme/x100")
-    db.add_domain_link(conn, uid, "omni/x900")
-    db.remove_domain_link(conn, uid, "omni/x900")
-    notes = [e["note"] for e in db.get_edit_history(conn, uid)]
+    uid = memories.insert_memory(conn, type="note", content="x", domain="acme/x100")
+    memories.add_domain_link(conn, uid, "omni/x900")
+    memories.remove_domain_link(conn, uid, "omni/x900")
+    notes = [e["note"] for e in memories.get_edit_history(conn, uid)]
     assert notes == ["meta: also '' → 'omni/x900'",
                      "meta: also 'omni/x900' → ''"]
 
@@ -104,74 +105,74 @@ def test_both_readers_agree_on_the_order(conn):
     """The rows come back ORDER BY domain and the mirror comes back in stored
     order, so the stored order has to BE sorted or one memory's memberships
     read two different ways depending on which reader asked."""
-    uid = db.insert_memory(conn, type="note", content="x", domain="acme",
+    uid = memories.insert_memory(conn, type="note", content="x", domain="acme",
                            also="omni/x900, omni/x100, zeta")
-    assert db.get_domain_links(conn, uid) == ["omni/x100", "omni/x900", "zeta"]
-    assert db.parse_domains(db.get_memory(conn, uid)["also_domains"]) == \
-        db.get_domain_links(conn, uid)
-    assert db.domain_links_for(conn, [uid])[uid] == db.get_domain_links(conn, uid)
+    assert memories.get_domain_links(conn, uid) == ["omni/x100", "omni/x900", "zeta"]
+    assert domains.parse_domains(memories.get_memory(conn, uid)["also_domains"]) == \
+        memories.get_domain_links(conn, uid)
+    assert memories.domain_links_for(conn, [uid])[uid] == memories.get_domain_links(conn, uid)
 
 
 def test_an_unchanged_set_writes_nothing(conn):
-    uid = db.insert_memory(conn, type="note", content="x", domain="acme/x100",
+    uid = memories.insert_memory(conn, type="note", content="x", domain="acme/x100",
                            also="omni/x900")
-    db.set_domain_links(conn, uid, "omni/x900")
-    assert db.get_edit_history(conn, uid) == []
+    memories.set_domain_links(conn, uid, "omni/x900")
+    assert memories.get_edit_history(conn, uid) == []
 
 
 # ------------------------------------------------------------------- the scope
 
 def test_a_scope_holds_what_is_cross_listed_into_it(conn):
     _crossing(conn)
-    assert {r["content"] for r in db.list_by_domain(conn, "omni/x900")} == {
+    assert {r["content"] for r in search.list_by_domain(conn, "omni/x900")} == {
         "queue drain step", "token refresh step"}
     # subtree, like any path: the flow's own parent covers the whole thing
-    assert len(db.list_by_domain(conn, "omni")) == 2
+    assert len(search.list_by_domain(conn, "omni")) == 2
     # and the narrower membership is only in the narrower scope
-    assert [r["content"] for r in db.list_by_domain(conn, "omni/x900/p910")] == [
+    assert [r["content"] for r in search.list_by_domain(conn, "omni/x900/p910")] == [
         "token refresh step"]
 
 
 def test_a_cross_listing_does_not_move_the_memory(conn):
     _crossing(conn)
-    assert {r["content"] for r in db.list_by_domain(conn, "acme")} == {
+    assert {r["content"] for r in search.list_by_domain(conn, "acme")} == {
         "queue drain step", "unrelated"}
-    assert db.list_by_domain(conn, "acme", subtree=False) == []
+    assert search.list_by_domain(conn, "acme", subtree=False) == []
 
 
 def test_subtree_false_still_narrows_to_the_exact_path(conn):
     _crossing(conn)
     assert [r["content"] for r in
-            db.list_by_domain(conn, "omni/x900", subtree=False)] == ["queue drain step"]
+            search.list_by_domain(conn, "omni/x900", subtree=False)] == ["queue drain step"]
 
 
 def test_search_and_recent_share_the_scope_arm(conn):
     _crossing(conn)
-    hits = db.search_memories(conn, "step", domain="omni/x900")
+    hits = search.search_memories(conn, "step", domain="omni/x900")
     assert {r["content"] for r in hits} == {"queue drain step", "token refresh step"}
-    assert len(db.list_recent(conn, domain="omni/x900")) == 2
+    assert len(search.list_recent(conn, domain="omni/x900")) == 2
 
 
 def test_the_cross_listing_is_indexed_as_text(conn):
     """FTS reads one field (memories.also_domains), which is why a query
     naming the subject finds a memory filed elsewhere."""
     _crossing(conn)
-    assert {r["content"] for r in db.search_memories(conn, "x900")} == {
+    assert {r["content"] for r in search.search_memories(conn, "x900")} == {
         "queue drain step", "token refresh step"}
 
 
 def test_a_path_that_exists_only_as_a_cross_listing_resolves(conn):
     _crossing(conn)
-    assert db.resolve_domain_scopes(conn, "omni/x900") == ["omni/x900"]
+    assert domains.resolve_domain_scopes(conn, "omni/x900") == ["omni/x900"]
     # and by its deep end alone, like any other path
-    assert db.resolve_domain_scopes(conn, "p910") == ["omni/x900/p910"]
+    assert domains.resolve_domain_scopes(conn, "p910") == ["omni/x900/p910"]
 
 
 # -------------------------------------------------------------- tree + census
 
 def test_the_tree_counts_filed_and_cross_listed_apart(conn):
     _crossing(conn)
-    nodes = {n["domain"]: n for n in db.list_domains(conn)}
+    nodes = {n["domain"]: n for n in domains.list_domains(conn)}
     flow = nodes["omni/x900"]
     assert (flow["count"], flow["subtree"]) == (0, 0)
     assert (flow["also"], flow["subtree_also"]) == (1, 2)
@@ -187,14 +188,14 @@ def test_the_tree_counts_filed_and_cross_listed_apart(conn):
 def test_the_tree_dates_a_purely_cross_cutting_subject(conn):
     """Or it would sort last in a recency-ordered tree it organizes."""
     _crossing(conn)
-    nodes = {n["domain"]: n for n in db.list_domains(conn)}
+    nodes = {n["domain"]: n for n in domains.list_domains(conn)}
     assert nodes["omni/x900"]["latest_at"]
     assert nodes["omni"]["subtree_latest_at"]
 
 
 def test_the_census_places_a_cross_listed_memory_by_its_membership(conn):
     _crossing(conn)
-    census = db.domain_census(conn, "omni/x900")
+    census = domains.domain_census(conn, "omni/x900")
     assert census["total"] == 2
     # both are in scope only because of a cross-listing
     assert census["also"] == 2
@@ -205,8 +206,8 @@ def test_the_census_places_a_cross_listed_memory_by_its_membership(conn):
 
 
 def test_the_census_omits_the_cross_listing_counts_when_there_are_none(conn):
-    db.insert_memory(conn, type="note", content="x", domain="acme/x100")
-    census = db.domain_census(conn, "acme")
+    memories.insert_memory(conn, type="note", content="x", domain="acme/x100")
+    census = domains.domain_census(conn, "acme")
     assert "also" not in census
     assert census["children"] == [{"domain": "acme/x100", "own": 1, "subtree": 1}]
 
@@ -224,58 +225,58 @@ def test_pulse_warms_up_a_flow_that_owns_nothing(conn, monkeypatch, tmp_path):
 
 def test_a_re_home_takes_the_memberships_with_it(conn):
     links = _crossing(conn)
-    moved = db.move_domain(conn, "omni/x900", "omni/x800")
+    moved = subtree.move_domain(conn, "omni/x900", "omni/x800")
     # nothing is FILED there, so nothing moved -- the memberships did
     assert moved["moved"] == 0
     assert moved["also_moved"] == 2
-    assert db.get_domain_links(conn, links["queue"]) == ["omni/x800"]
-    assert db.get_domain_links(conn, links["token"]) == ["omni/x800/p910"]
-    assert len(db.list_by_domain(conn, "omni/x800")) == 2
-    assert db.list_by_domain(conn, "omni/x900") == []
+    assert memories.get_domain_links(conn, links["queue"]) == ["omni/x800"]
+    assert memories.get_domain_links(conn, links["token"]) == ["omni/x800/p910"]
+    assert len(search.list_by_domain(conn, "omni/x800")) == 2
+    assert search.list_by_domain(conn, "omni/x900") == []
 
 
 def test_a_re_home_does_not_move_a_memory_that_only_belongs(conn):
     links = _crossing(conn)
-    db.move_domain(conn, "omni/x900", "omni/x800")
-    assert db.get_memory(conn, links["queue"])["domain"] == "acme/x100/p200"
+    subtree.move_domain(conn, "omni/x900", "omni/x800")
+    assert memories.get_memory(conn, links["queue"])["domain"] == "acme/x100/p200"
 
 
 def test_moving_a_memory_under_a_subject_it_belonged_to_drops_the_membership(conn):
     """The filed path now covers it, and keeping the row would double count."""
-    uid = db.insert_memory(conn, type="note", content="x", domain="zeta/x200",
+    uid = memories.insert_memory(conn, type="note", content="x", domain="zeta/x200",
                            also="omni/x900")
-    db.move_domain(conn, "zeta/x200", "omni/x900/x200")
-    assert db.get_domain_links(conn, uid) == []
-    assert len(db.list_by_domain(conn, "omni/x900")) == 1
+    subtree.move_domain(conn, "zeta/x200", "omni/x900/x200")
+    assert memories.get_domain_links(conn, uid) == []
+    assert len(search.list_by_domain(conn, "omni/x900")) == 1
 
 
 def test_re_homing_a_subject_onto_a_memorys_own_path_drops_the_membership(conn):
-    uid = db.insert_memory(conn, type="note", content="x", domain="acme/x100",
+    uid = memories.insert_memory(conn, type="note", content="x", domain="acme/x100",
                            also="omni/x900")
-    db.move_domain(conn, "omni/x900", "acme/x100")
-    assert db.get_domain_links(conn, uid) == []
+    subtree.move_domain(conn, "omni/x900", "acme/x100")
+    assert memories.get_domain_links(conn, uid) == []
 
 
 def test_a_domain_change_re_runs_the_link_policy(conn):
-    uid = db.insert_memory(conn, type="note", content="x", domain="zeta/x200",
+    uid = memories.insert_memory(conn, type="note", content="x", domain="zeta/x200",
                            also="omni/x900")
-    db._update_meta_field(conn, uid, "domain", "omni/x900/x200")
-    assert db.get_domain_links(conn, uid) == []
+    optimizer._update_meta_field(conn, uid, "domain", "omni/x900/x200")
+    assert memories.get_domain_links(conn, uid) == []
 
 
 def test_an_exact_path_move_leaves_a_descendant_membership_alone(conn):
     """What the normalize pass needs: it moves one exact stored string at a
     time, and a descendant is its own entry in that plan."""
-    uid = db.insert_memory(conn, type="note", content="x", domain="acme",
+    uid = memories.insert_memory(conn, type="note", content="x", domain="acme",
                            also="omni/x900, omni/x900/p910")
-    db.move_domain(conn, "omni/x900", "omni/x800", subtree=False)
-    assert db.get_domain_links(conn, uid) == ["omni/x800", "omni/x900/p910"]
+    subtree.move_domain(conn, "omni/x900", "omni/x800", subtree=False)
+    assert memories.get_domain_links(conn, uid) == ["omni/x800", "omni/x900/p910"]
 
 
 def test_a_move_with_nothing_at_all_at_the_source_still_raises(conn):
-    db.insert_memory(conn, type="note", content="x", domain="acme")
+    memories.insert_memory(conn, type="note", content="x", domain="acme")
     with pytest.raises(ValueError, match="no memories in domain"):
-        db.move_domain(conn, "nowhere", "acme")
+        subtree.move_domain(conn, "nowhere", "acme")
 
 
 # ------------------------------------------------------------------- surfaces
@@ -392,8 +393,8 @@ def test_a_store_written_before_the_column_migrates(tmp_path):
     """The FTS index has no ALTER, so a new indexed field means dropping it
     and rebuilding from the content table -- triggers included."""
     path = tmp_path / "old.db"
-    with db.connect(path) as conn:
-        uid = db.insert_memory(conn, type="note", content="queue drain step",
+    with connection.connect(path) as conn:
+        uid = memories.insert_memory(conn, type="note", content="queue drain step",
                               domain="acme/x100")
     # roll the store back to the pre-cross-listing shape
     import sqlite3
@@ -412,15 +413,15 @@ def test_a_store_written_before_the_column_migrates(tmp_path):
     raw.commit()
     raw.close()
 
-    with db.connect(path) as conn:
+    with connection.connect(path) as conn:
         # the index came back with the new column, and kept what it held
         assert [r["name"] for r in conn.execute("PRAGMA table_info(memories_fts)")] \
-            == list(db._FTS_COLUMNS)
-        assert [r["uid"] for r in db.search_memories(conn, "queue")] == [uid]
+            == list(connection._FTS_COLUMNS)
+        assert [r["uid"] for r in search.search_memories(conn, "queue")] == [uid]
         # and the new field works on a row that predates it
-        db.add_domain_link(conn, uid, "omni/x900")
-        assert [r["uid"] for r in db.list_by_domain(conn, "omni/x900")] == [uid]
-        assert [r["uid"] for r in db.search_memories(conn, "x900")] == [uid]
+        memories.add_domain_link(conn, uid, "omni/x900")
+        assert [r["uid"] for r in search.list_by_domain(conn, "omni/x900")] == [uid]
+        assert [r["uid"] for r in search.search_memories(conn, "x900")] == [uid]
 
 
 # ------------------------------------------------- archiving/deleting a scope
@@ -430,16 +431,16 @@ def test_archiving_a_scope_leaves_a_memory_that_only_belongs(conn):
     to a subject, not that it lives there, so archiving the subject cannot
     reach into the branch it actually lives in."""
     ids = _crossing(conn)
-    result = db.set_domain_status(conn, "omni/x900", "archived")
+    result = subtree.set_domain_status(conn, "omni/x900", "archived")
     assert result["uids"] == []
-    assert db.get_memory(conn, ids["queue"])["status"] == "active"
+    assert memories.get_memory(conn, ids["queue"])["status"] == "active"
 
 
 def test_purging_a_memory_takes_its_memberships(conn):
     """The FK on memory_domains refuses the DELETE while a membership names
     the row, so a purge has to clear the memberships first."""
     ids = _crossing(conn)
-    assert db.purge_memory(conn, ids["queue"]) is True
+    assert memories.purge_memory(conn, ids["queue"]) is True
     assert conn.execute(
         "SELECT COUNT(*) AS n FROM memory_domains WHERE memory_uid = ?",
         (ids["queue"],)).fetchone()["n"] == 0
@@ -449,20 +450,20 @@ def test_deleting_a_domain_drops_the_cross_listings_pointing_into_it(conn):
     """The path stops existing, so a membership naming it would dangle. The
     memory holding it is filed in another branch and stays."""
     ids = _crossing(conn)
-    result = db.purge_domain(conn, "omni/x900")
+    result = subtree.purge_domain(conn, "omni/x900")
     assert result["purged"] == 0 and result["unlinked"] == 2
-    assert db.get_memory(conn, ids["queue"])["domain"] == "acme/x100/p200"
-    assert db.get_domain_links(conn, ids["queue"]) == []
-    assert db.get_memory(conn, ids["queue"])["also_domains"] == ""
-    # ...and the index the mirror feeds no longer answers for the dead subject
-    assert db.search_memories(conn, "x900") == []
+    assert memories.get_memory(conn, ids["queue"])["domain"] == "acme/x100/p200"
+    assert memories.get_domain_links(conn, ids["queue"]) == []
+    assert memories.get_memory(conn, ids["queue"])["also_domains"] == ""
+    # ...and the index the mirror feeds stops answering for the dead subject
+    assert search.search_memories(conn, "x900") == []
 
 
 def test_deleting_a_domain_purges_what_is_filed_there_and_unlinks_the_rest(conn):
     ids = _crossing(conn)
-    filed = db.insert_memory(conn, type="note", content="flow overview",
+    filed = memories.insert_memory(conn, type="note", content="flow overview",
                              domain="omni/x900")
-    result = db.purge_domain(conn, "omni/x900")
+    result = subtree.purge_domain(conn, "omni/x900")
     assert result["purged"] == 1 and result["unlinked"] == 2
-    assert db.get_memory(conn, filed) is None
-    assert db.get_memory(conn, ids["token"]) is not None
+    assert memories.get_memory(conn, filed) is None
+    assert memories.get_memory(conn, ids["token"]) is not None

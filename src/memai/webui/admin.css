@@ -1,49 +1,12 @@
-/* ==========================================================================
-   MemAI · admin dashboard — Material Design dark theme
-   Spec: m2.material.io dark theme. Background #121212; surfaces are white
-   elevation overlays on it (1dp 5% → #1E1E1E, 2dp 7%, 4dp 9%, 8dp 12%,
-   16dp 15%); primary Purple 200 #BB86FC (on-primary #000); secondary
-   Teal 200 #03DAC6; error #CF6679; text = white at 87% / 60% / 50%
-   emphasis, every tier at or above 4.6:1 on #1E1E1E; dividers white 12%.
-   Roboto UI + Roboto Mono for data.
-   Memory-type palette drawn from Material color ramps and validated
-   (dataviz six checks, all-pairs, surface #1E1E1E — no warnings):
-   Blue 500 / Purple 400 / Orange 800↓ (interpolated one step toward 900
-   to enter the dark lightness band) / Teal 500 / Green 800 / Red 600.
-   ========================================================================== */
+/* MemAI admin dashboard: Material Design dark theme (m2.material.io), Roboto UI + Roboto Mono.
+   Memory-type palette from Material ramps, validated all-pairs on #1E1E1E. */
 
-/* The @font-face rules are NOT here: they are generated per request by
-   memai.admin (see fonts_css and the <link> in index.html), because a face
-   whose file has not been fetched must not be named in a url() -- the
-   browser would request it and log a 404 for something working as
-   designed. Roboto resolves as: installed copy, then webui/fonts/ if
-   populated, then the system stack in --font-ui / --font-m. */
+/* No @font-face here: memai.admin serves them per request (admin/pages.py), so a face whose
+   file is missing is never named in a url() and never logs a 404. */
 
 :root {
-  /* surfaces — #121212 + white elevation overlays.
-
-     What each step MEANS, because for a long time the ladder was built
-     correctly and then spent entirely on chrome: hover, menus, popovers. Every
-     card in every view sat at 1dp, so a broken diagram, a run waiting on a
-     decision and a backup filename were all the same tone, and rank had to be
-     read rather than seen. Depth is the rank now:
-
-       --bg        the page — and a card whose work is DONE, sunk back out
-       --surface   an ordinary content card, the default
-       --raised    a card that WANTS A DECISION from you  ·  the record drawer
-       --overlay   floating chrome: menus, popovers, toasts, modal
-       --inset     a recessed well inside any of the above
-
-     The corollary is that a container on one of these tones needs no outline.
-     There used to be 57 hairlines drawn around things the overlay already
-     separated -- two elevation systems running at once, neither winning, and
-     an outline around everything is what you reach for when you have not
-     decided what should be forward. --line and --line-soft are for DIVIDERS
-     (a row, a table cell, a section rule), for WELL EDGES (something recessed
-     below its own parent), and for a FLOATING panel, which can open over a
-     surface of its own tone -- a picker raised inside a dialog, a toast lying
-     across one -- and has no elevation step left to separate it there. That
-     edge is --line-soft, never --line: the panel carries a shadow too. */
+  /* Depth is rank: --bg the page or a done card, --surface a card, --raised one awaiting a
+     decision, --overlay floating chrome, --inset a well. Lines are for dividers, wells, floats. */
   --bg:        #121212;   /* 0dp  */
   --surface:   #1e1e1e;   /* 1dp  */
   --raised:    #232323;   /* 2dp  */
@@ -52,12 +15,7 @@
   --line:      rgba(255, 255, 255, .12);   /* divider spec */
   --line-soft: rgba(255, 255, 255, .07);
 
-  /* text — white emphasis levels. Three tiers, and all three are readable:
-     12.9:1, 6.8:1 and 5.1:1 on --surface. There used to be a fourth at 26%
-     (2.3:1) carrying the comment "ornament only, never body text", and
-     thirteen call sites used it for text regardless -- a rule a stylesheet
-     cannot enforce is a rule that gets broken, so the tier is gone and the
-     quietest thing the UI can say is --ink-3. */
+  /* text: three tiers, 12.9:1, 6.8:1 and 5.1:1 on --surface; --ink-3 is the quietest one */
   --ink:   rgba(255, 255, 255, .87);
   --ink-2: rgba(255, 255, 255, .60);
   --ink-3: rgba(255, 255, 255, .50);
@@ -69,9 +27,7 @@
   --accent-dim: rgba(187, 134, 252, .16);
   --secondary:  #03dac6;
 
-  /* the relations canvas draws its own strokes. Tokens, read back with
-     cssVar(), so the graph follows the theme like the rest of the UI --
-     these were three rgba literals inside views/graph.js. */
+  /* canvas strokes, read back with cssVar() so the relations graph follows the theme */
   --canvas-edge:  rgba(255, 255, 255, .25);
   --canvas-arrow: rgba(255, 255, 255, .38);
 
@@ -81,18 +37,11 @@
   --hover-2: rgba(255, 255, 255, .06);
   --hover-3: rgba(255, 255, 255, .08);
 
-  /* A chip has to read one step above whatever it is sitting on, and the same
-     chip turns up on --surface in a list, on --raised in the drawer and on
-     --overlay in a menu. These used to be filled with a literal --raised,
-     which can only be correct on one of the three -- in the drawer it made
-     the chip exactly the tone of its own background. A wash composites
-     against its parent, so it is right on all of them. */
+  /* A wash, not a tone: a chip sits on --surface, --raised and --overlay, and a wash reads one
+     step above each of them. */
   --chip-fill: rgba(255, 255, 255, .05);
 
-  /* memory-type palette (categorical, validated all-pairs on #1E1E1E).
-     These are the FILL colours: a dot in a legend, a node on the relations
-     canvas, a segment of a bar. They are the 500/800 steps, which is where
-     a filled shape reads on this ground and where a letterform does not. */
+  /* memory-type FILL colours (500/800 steps): dots, canvas nodes, bar segments; never text */
   --t-note:         #e86a00;
   --t-checkpoint:   #2196f3;
   --t-anti_pattern: #e53935;
@@ -102,10 +51,7 @@
   --t-task:         #c0ca33;   /* Lime 600 — the gap between the orange and the green,
                                   13+ OKLab dE from the nearest of the six, any vision */
 
-  /* ...and the 200 step of each of the same six ramps, for the type worn as
-     a WORD. The fills above are 3.0-4.4:1 as text on --surface; these are
-     6.8-9.5:1, and the chip stays legible with the colour ignored because
-     it says the type's name inside it. */
+  /* the 200 step of the same ramps, for the type worn as a word: 6.8-9.5:1 on --surface */
   --t-note-ink:         #ffb877;
   --t-checkpoint-ink:   #90caf9;
   --t-anti_pattern-ink: #ef9a9a;
@@ -114,15 +60,8 @@
   --t-diagram-ink:      #80cbc4;
   --t-task-ink:         #e6ee9c;
 
-  /* field palette, by ROLE. The six above say what a memory IS; these say
-     what one of its blocks is FOR, and the meaning holds across types: the
-     temptation of an anti-pattern and the hypothesis of a reasoning are
-     both "not proven yet", the way out and the established facts are both
-     "settled". core/shared.js maps a section key to one of these.
-
-     Two steps for the same reason the type palette has two -- the fill is
-     the dot, the ink is the letter -- and both are steps of ramps the theme
-     already uses, so a block's colour cannot drift from the scale. */
+  /* field palette, by ROLE: what a block is FOR across types (core/shared.js maps section keys).
+     Fill for the dot, ink for the letter, both steps of ramps the theme already uses. */
   --f-stop: #e53935;  --f-stop-ink: #ef9a9a;   /* the temptation, the mistake */
   --f-go:   #43a047;  --f-go-ink:   #a5d6a7;   /* the way out, what is settled */
   --f-hold: #fb8c00;  --f-hold-ink: #ffcc80;   /* in flight, not proven */
@@ -131,36 +70,13 @@
   --f-ask:  #8e24aa;  --f-ask-ink:  #ce93d8;   /* waiting on a decision */
   --f-next: #00897b;  --f-next-ink: #80cbc4;   /* left for next time */
 
-  /* status scale (fixed, reserved; always icon + label).
-
-     Two reds, by role, because one cannot do both jobs on a dark theme.
-     #CF6679 is Material's dark-theme error and it is the right colour for a
-     BORDER or a FILL, where the bar is 3:1 for non-text. As TEXT it failed
-     AA in every place it was used: 4.36:1 on --raised (.btn-danger, the
-     danger zone), 3.99:1 on its own tinted pill (contradicted
-     confidence, ten per list page) and 3.86:1 on the deletion tint
-     (.dz-type code). A red that cannot be read is the wrong red for words.
-
-     --bad-ink is Red 300, which also settles an inconsistency: --ok is
-     Green 300 and --warn is Amber 300, so the ink tier of the status scale
-     is now three steps of one ramp instead of two 300s and an error token.
-     It clears 4.5:1 on every surface this UI puts it on -- 5.58 on
-     --surface, 5.26 on --raised, 4.81 on the contradicted pill, 4.65 on the
-     deletion tint. The diff row keeps --diff-del-ink, which is tuned for
-     that one background.
-
-       --bad      borders, fills, marks on a plain surface
-       --bad-ink  anything a human reads */
+  /* status scale, always icon + label. --bad is for borders, fills and marks; --bad-ink (Red 300)
+     is for anything a human reads, and clears 4.5:1 on every surface it lands on. */
   --ok:   #81c784;   /* Green 300 */
   --warn: #ffd54f;   /* Amber 300 */
   --bad:  #cf6679;   /* Material dark error */
   --bad-ink: #e57373;   /* Red 300 */
-  /* --bad with alpha, for the outlines and washes around a destructive
-     control. It was written out as rgba(207, 102, 121, …) in eleven places at
-     six alphas -- .07 .1 .12 .3 .4 .6 -- which is eleven values the theme
-     cannot reach and six nobody chose next to each other. Four steps by role;
-     .07/.1 collapse into the tint and .3 into the line, because at those
-     distances the difference was drift rather than intent. */
+  /* --bad with alpha, four steps by role, for the outline and wash around a destructive control */
   --bad-line:    rgba(207, 102, 121, .4);    /* the outline of a danger control */
   --bad-line-hi: rgba(207, 102, 121, .6);    /* the same outline, hovered */
   --bad-wash:    rgba(207, 102, 121, .12);   /* its hover fill, or a marked pill */
@@ -168,14 +84,10 @@
   /* the same job one step down the status scale: a box the eye should treat
      as WAITING rather than as risky. Amber 300 at the tint alpha above. */
   --warn-tint:   rgba(255, 213, 79, .08);
-  /* and the same job for a box that is SETTLED. Green 300 at the tint
-     alpha, so the day banner can say "nothing open" in its own colour
-     instead of disappearing. */
+  /* the same job for a SETTLED box: Green 300 at the tint alpha */
   --ok-tint:     rgba(129, 199, 132, .08);
 
-  /* An archived backup is neither a warning nor an outcome, so it is off
-     the status scale entirely: Blue 300, for the one shelf whose files are
-     zipped and read-only. */
+  /* An archived backup is off the status scale: Blue 300, for the zipped, read-only shelf. */
   --zip:      #7fb3d5;
   --zip-wash: rgba(127, 179, 213, .13);
   --zip-line: rgba(127, 179, 213, .34);
@@ -189,13 +101,8 @@
   --font-ui: 'Roboto', 'Segoe UI', system-ui, sans-serif;
   --font-m:  'Roboto Mono', ui-monospace, Consolas, monospace;
 
-  /* type scale. There were thirteen sizes here, ten of them packed into the
-     9.5-14px band in half-pixel steps -- 9.5 vs 10 vs 10.5 vs 11 is a
-     distinction no reader perceives, so the effort bought four sizes that all
-     read as "small" and zero perceived steps. Six text steps now, each one
-     visibly not the one below it, plus two display sizes for the numbers a
-     dashboard exists to show. --fs-body matches the body rule below; a size
-     not on this list is a size that has to argue for itself. */
+  /* type scale: six text steps, each visibly apart, plus two display sizes for headline numbers.
+     A size not on this list has to argue for itself. */
   --fs-label: 11px;     /* uppercase micro-label, table head, quietest caption */
   --fs-sm:    12.5px;   /* dense data, chips, explanatory text */
   --fs-body:  13.5px;
@@ -206,44 +113,16 @@
   --fs-num:   26px;     /* a tile's value */
   --fs-hero:  42px;     /* one per view, at most */
 
-  /* Why --fs-md came DOWN to 14 and why --fs-read exists.
-     The consolidation that produced this scale rounded almost every rule UP
-     -- fifteen sizes rose, one fell -- and the loudest of those was the
-     heading: 11px uppercase tracked became 15px sentence case, five or six
-     times per view. That is not a 4px change, it is a different object on
-     the screen, and it is what made the whole UI read as if it were zoomed.
+  /* --fs-md sits close to --fs-body: weight, ink and spacing carry the heading, not size.
+     --fs-read is for prose surfaces, capped at a measure. */
 
-     14 is deliberately NOT a perceptible size step over --fs-body's 13.5,
-     and it does not need to be. Most text a heading actually sits above is
-     --fs-sm or --fs-label, so the real gap is 1.5px, and three other
-     channels are already carrying this role: weight 500 against 400, --ink
-     against --ink-2, and --sp-5 above the heading against --sp-3 below it.
-     Size was the one asked to do all the work when it went to 15.
-
-     Roboto's weights are worth checking with the right instrument, because
-     the wrong one is convincing: this face keeps its ADVANCE WIDTHS nearly
-     constant across weights, so measuring a string at 400 / 500 / 700 gives
-     109.89 / 109.81 / 109.70 and reads as "weight does nothing". Rendered
-     ink at 100px tells the truth -- 7601 / 9068 / 10359 pixels. Weight is
-     the strongest channel here; it just cannot be measured by width.
-
-     And the reading surfaces were split off rather than dragged down with
-     the chrome: a memory's own text and the no-script page are prose, they
-     are capped at a measure, and they have no reason to shrink because a
-     panel title did. */
-
-  /* radii. Nineteen values across 68 rules before this, with `--radius`
-     declared once and ignored by 33 of 43 declarations, and the pill spelled
-     three different ways (999px, 28px, 16px). Four steps, by role. */
+  /* radii: four steps, by role */
   --r-sm:   3px;    /* inline marks and square tags */
   --r-md:   6px;    /* controls: buttons, inputs, wells */
   --r-lg:   8px;    /* containers */
   --r-pill: 999px;
 
-  /* spacing on a 4px grid. Seventeen gap values and ninety distinct paddings
-     ran through consecutive odd and even pixels, chosen per component rather
-     than from a ramp -- and there was no spacing token at all. --sp-0 is the
-     one sub-grid step, for gaps between things that are meant to touch. */
+  /* spacing on a 4px grid; --sp-0 is the one sub-grid step, for things meant to touch */
   --sp-0: 2px;
   --sp-1: 4px;
   --sp-2: 8px;
@@ -253,37 +132,22 @@
   --sp-6: 32px;
   --sp-7: 48px;   /* the air an empty state or a loading block needs */
 
-  /* the app bar's floor. Its HEIGHT is not a token: the bar wraps to two
-     rows on a narrow window, and the body is a flex column so nothing has
-     to know how tall the chrome came out. */
+  /* the app bar's floor; its height is no token, since the bar wraps on a narrow window */
   --head-h: 60px;
   --shadow-pop: 0 8px 28px rgba(0, 0, 0, .55);
-  /* A panel joined to the control it drops from. Offset, and pulled in with a
-     negative spread, so the blur does not reach back across the seam and lay
-     a dark band over the control's own edge. */
+  /* A panel joined to its control: offset, with negative spread so the blur stays off the seam. */
   --shadow-drop:    0  10px 22px -6px rgba(0, 0, 0, .6);
   --shadow-drop-up: 0 -10px 22px -6px rgba(0, 0, 0, .6);
 
-  /* --surface with alpha, for the strips that float ON a canvas and have to
-     let its dot grid read through. A token rather than a literal, because
-     the same colour written out inline is one the theme cannot reach. */
+  /* --surface with alpha, for strips floating on a canvas whose dot grid reads through */
   --glass:      rgba(30, 30, 30, .92);
   --glass-soft: rgba(30, 30, 30, .82);
 
   /* smallest pointer target the UI ships (WCAG 2.5.8) */
   --tap: 24px;
 
-  /* ONE control height, and a dense one. Every control that can share a row
-     with another answers to --ctl-h: fields, pickers, buttons, segmented
-     groups. It used to be five different numbers -- a field at 38, a button
-     at 33, a segment at 30 or 32, a small button at 25 -- because each
-     borrowed its size from whatever it was elsewhere, and any row that mixed
-     two of them read as a ragged edge. The graph's floating strip had already
-     invented this variable for itself; the rest of the app is why it is up
-     here now.
-
-     A dense ROW sets --ctl-h to --ctl-h-sm on itself and every child follows,
-     rather than each child being told twice. */
+  /* ONE control height: fields, pickers, buttons and segments share --ctl-h. A dense row sets
+     --ctl-h to --ctl-h-sm on itself and every child follows. */
   --ctl-h: 36px;
   --ctl-h-sm: 30px;
 }
@@ -293,9 +157,8 @@
 
 html, body { height: 100%; }
 
-/* color-scheme so the native half of the UI -- scrollbars, date pickers,
-   the caret, Firefox's scrollbars -- renders dark without being restyled.
-   The ::-webkit-scrollbar rules below only ever reached Chromium. */
+/* color-scheme renders the native parts dark (scrollbars, date pickers, caret); the
+   ::-webkit-scrollbar rules below reach Chromium only. */
 html {
   color-scheme: dark;
   scrollbar-color: rgba(255, 255, 255, .16) transparent;
@@ -309,9 +172,7 @@ body {
   font: 400 var(--fs-body)/1.55 var(--font-ui);
   -webkit-font-smoothing: antialiased;
   overflow: hidden;
-  /* the bar, then everything else. A flex column rather than a fixed bar
-     over an absolutely-placed frame, so the bar can grow to two rows
-     without a magic number following it around. */
+  /* the bar, then everything else: a flex column, so the bar can wrap to two rows */
   display: flex; flex-direction: column;
 }
 
@@ -319,10 +180,8 @@ body {
 
 :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: var(--r-sm); }
 
-/* The rows and results that carry a role of their own sit full-bleed inside
-   a parent that clips, so an outset ring is drawn half outside and lost. It
-   goes inside instead, with a wash behind it -- a `tr` outline alone is not
-   something every browser paints the same way. */
+/* Full-bleed rows inside a clipping parent: the focus ring goes inside, with a wash, since a
+   `tr` outline paints differently across browsers. */
 .mem-row:focus-visible,
 .dgl-row:focus-visible,
 .table tbody tr:focus-visible,
@@ -333,15 +192,8 @@ body {
   background: var(--hover-2);
 }
 
-/* ── icons ───────────────────────────────────────────────────────────────
-   Shapes come from core/icons.js; this is the single place that says how
-   they are DRAWN, so a new icon inherits the set's look by existing.
-   Every icon() call carries .ico.
-
-   Size is a custom property rather than width/height on each call: a
-   context sets --ico once (see .icon-btn, .conf-pill) and every icon
-   inside it follows. currentColor means an icon tints with its own text,
-   which is how the active rail item and a danger button work. */
+/* ── icons ── shapes in core/icons.js, drawn here; every icon() carries .ico.
+   A context sets --ico once and its icons follow; currentColor tints them with the text. */
 .ico {
   width: var(--ico, 14px); height: var(--ico, 14px);
   flex: none;
@@ -351,10 +203,8 @@ body {
 
 ::-webkit-scrollbar { width: 10px; height: 10px; }
 ::-webkit-scrollbar-track { background: transparent; }
-/* The 2px inset that keeps the thumb clear of the track edge is a
-   TRANSPARENT border with the background clipped to the padding box. A
-   scroller inside a menu, a dialog or a card is not on the page's tone, and a
-   border filled --bg draws a dark ring around the thumb everywhere else. */
+/* The thumb's 2px inset is a TRANSPARENT border with the background clipped to the padding
+   box, so no ring shows on whatever surface the scroller sits on. */
 ::-webkit-scrollbar-thumb {
   background: rgba(255, 255, 255, .16);
   border-radius: var(--r-md);
@@ -382,14 +232,8 @@ kbd {
   background: var(--chip-fill);
 }
 
-/* ── the two text voices ──────────────────────────────────────────────────
-   Two voices, and the distance between them is the hierarchy:
-
-     the label    names a FIELD    · uppercase, tracked, quiet, --fs-label
-     the heading  names a SECTION  · sentence case, --fs-md, --ink
-
-   Nothing else is uppercase, and the uppercase is the stylesheet's: the
-   catalog stores these strings sentence-cased. */
+/* ── the two text voices ── the label names a FIELD (uppercase, --fs-label), the heading a
+   SECTION (sentence case, --fs-md). The catalog stores both sentence-cased. */
 .field-pair { display: grid; grid-template-columns: 1fr 1fr; gap: var(--sp-3); }
 
 .field > label,
@@ -414,9 +258,7 @@ kbd {
 
 /* ── layout ───────────────────────────────────────────────────────────────────── */
 
-/* The app bar: identity, the sections, and the controls that belong to the
-   whole app rather than to one view -- across the top, in one band, so the
-   full width is left to a list and the inspector beside it. */
+/* The app bar: identity, sections and app-wide controls in one band across the top. */
 .appbar {
   flex: none;
   min-height: var(--head-h);
@@ -441,14 +283,8 @@ kbd {
   padding: var(--sp-5) var(--sp-6) calc(var(--sp-5) + var(--toast-h, 0px));
   outline: none;
 }
-/* Centred, with 1340px as the floor: past about 1675px the view tracks 80%
-   of the WINDOW instead, which is what `max()` writes as one rule. vw and
-   not %, because the 80% is of the screen and the view's own gutters are not
-   part of it.
-
-   The diagram editor opts out of the cap (.view.wide below), and with it the
-   auto margins -- in the flex column they would shrink a full-bleed view
-   back to its content width. */
+/* Centred, at least 1340px, tracking 80vw past ~1675px. .view.wide opts out of the cap and of
+   the auto margins, which would shrink a full-bleed flex child to its content. */
 .view > * { max-width: max(1340px, 80vw); margin-left: auto; margin-right: auto; }
 .view.wide > * { max-width: none; margin-left: 0; margin-right: 0; }
 @media (min-width: 1181px) {
@@ -463,27 +299,20 @@ kbd {
   .view.wide .dg-stage { height: auto; min-height: 320px; }
 }
 
-/* A view that fills the window instead of scrolling as a page: a list beside
-   its inspector, the domain columns. They scroll INSIDE their own panes,
-   which is what keeps a toolbar and a footer where the eye left them.
-   Below --fill-floor the panes stop fitting and the view scrolls as a page
-   again -- see the squeeze at the end of this file. */
+/* A view that fills the window and scrolls inside its panes; below these sizes it scrolls as
+   a page again (see the squeeze at the end of this file). */
 @media (min-height: 620px) and (min-width: 1024px) {
   .view.fill {
     overflow: hidden; scrollbar-gutter: auto;
     padding-bottom: var(--sp-5);
     display: flex; flex-direction: column;
   }
-  /* width, not just max-width: the auto margins that centre a capped view
-     make a flex child shrink to its content, and a column layout has an
-     intrinsic width to shrink to -- see the same note on .view.wide */
+  /* width too: auto margins make a flex child shrink to its content (as on .view.wide) */
   .view.fill > * { flex: 1; min-height: 0; width: 100%; display: flex; flex-direction: column; }
 }
 
-/* The entrance, for the views that are a STACK of panels. The three that
-   fill the window -- memories, domains, the record -- opt out: they
-   re-render in place whenever something is ticked, dropped or saved, and an
-   entrance replayed on every one of those is a flash, not an arrival. */
+/* The entrance, for views that are a stack of panels; the fill views re-render in place and
+   opt out, or every save would replay it. */
 .anim > * { animation: rise .32s cubic-bezier(.2, .7, .3, 1) both; }
 .anim > *:nth-child(1) { animation-delay: .02s; }
 .anim > *:nth-child(2) { animation-delay: .05s; }
@@ -495,12 +324,8 @@ kbd {
    leave the fade -- see the media query below */
 @keyframes rise { from { opacity: 0; transform: translateY(var(--rise-y, 6px)); } }
 
-/* Reduced motion is the root's data-motion="reduce" (core/motion.js: the
-   dashboard's Animations setting over the system's), never the media query.
-   Travel is what goes: entrances keep their fade and lose their slide, panels
-   arrive in place, bars jump to their value, and the spinner breathes instead
-   of turning -- an infinite rotation cut to a hundredth of a millisecond paints
-   an arbitrary angle each frame, which says nothing about working. */
+/* Reduced motion is the root's data-motion="reduce" (core/motion.ts), not the media query:
+   travel goes, fades stay, and the spinner breathes instead of turning. */
 :root[data-motion="reduce"] { --rise-y: 0px; }
 :root[data-motion="reduce"] .bar-fill,
 :root[data-motion="reduce"] .ratio-fill,
@@ -532,9 +357,7 @@ kbd {
   transition: background .15s, color .15s;
 }
 .nav a svg {
-  /* The icon is the label's understudy, not its companion: seven glyphs
-     beside seven words in one row is twice the ink for one meaning. It comes
-     back at the width where the words go. */
+  /* the label's understudy: the icon shows only at the width where the words go */
   display: none;
   width: 17px; height: 17px; flex: none;
   fill: none; stroke: currentColor;
@@ -542,9 +365,7 @@ kbd {
   opacity: .85;
 }
 .nav a:hover { background: var(--hover-2); color: var(--ink); }
-/* keyed off aria-current rather than a class, so the state a screen reader
-   is told and the state the eye is shown cannot drift apart -- there is only
-   one attribute for the router to set */
+/* keyed off aria-current, so what a screen reader hears and the eye sees cannot drift */
 .nav a[aria-current="page"] { background: var(--accent-dim); color: var(--accent); }
 
 /* ── the bar's right-hand end ──────────────────────────────────────────────── */
@@ -612,19 +433,13 @@ kbd {
 /* declared after .btn-ghost so btn-ghost + btn-danger combos still read as dangerous */
 .btn-danger { color: var(--bad-ink); border-color: var(--bad-line); background: transparent; }
 .btn-danger:hover { background: var(--bad-wash); border-color: var(--bad-line-hi); }
-/* The dense variant, for a row that is not itself a dense row -- a table's
-   actions cell, a panel title. Inside a dense row every control is already
-   this tall and the class is redundant, not wrong. */
+/* the dense variant, for a control outside a dense row: a table's actions cell, a panel title */
 .btn-sm { padding: 0 var(--sp-3); font-size: var(--fs-sm); height: var(--ctl-h-sm); }
 
 .icon-btn {
   background: none; border: none; cursor: pointer;
   color: var(--ink-3); font-size: var(--fs-md); line-height: 1;
-  /* A square of the dense control height, even though the glyph inside is
-     13px: anything smaller falls under the 24x24 target floor (WCAG 2.5.8),
-     and these are the controls that delete a relation and close a dialog.
-     Never taller than the dense height, because the rows it sits inside are
-     list rows and it must not set their height. */
+  /* a dense-height square: at least the 24x24 target (WCAG 2.5.8), never taller than a row */
   width: var(--ctl-h-sm); height: var(--ctl-h-sm);
   padding: 0; border-radius: var(--r-md);
   transition: color .12s, background-color .12s;
@@ -634,11 +449,8 @@ kbd {
 .icon-btn:hover { color: var(--ink); background: var(--hover-3); }
 .icon-btn.danger:hover { color: var(--bad-ink); background: var(--bad-wash); }
 
-/* ── controls that do not look like buttons ───────────────────────────────
-   A chip, a uid, a row's own text, a result in a picker: each of these does
-   something when you press it, so each of them IS a <button> in the markup.
-   Declared here, ahead of the components themselves, so each still owns its
-   own look. */
+/* ── controls that do not look like buttons ── a chip, a uid, a picker result: each is a
+   <button>, reset here ahead of the components that give it a look. */
 .chip, .uid-chip, .picker-item, .type-tag {
   font: inherit;
   color: inherit;
@@ -648,10 +460,7 @@ kbd {
   margin: 0;
 }
 
-/* .pick is a BUTTON standing in for a select (see core/pick.js) -- there is
-   no <select> left in this app -- so it is in these rules rather than
-   restating them: a control that opens a list of choices has no business
-   looking like a different control because of how its popup is built. */
+/* .pick is a button standing in for a select (core/pick.js), so it shares the field rules. */
 input[type="text"], input[type="search"], input[type="number"], textarea, .pick {
   font: 400 var(--fs-body)/1.5 var(--font-ui);
   color: var(--ink);
@@ -662,9 +471,7 @@ input[type="text"], input[type="search"], input[type="number"], textarea, .pick 
   outline: none;
   transition: border-color .15s;
 }
-/* One line of text, so the row's height sets it and the vertical padding
-   would only fight that. A textarea is the exception: it is as tall as what
-   is in it. */
+/* One line of text: the row sets the height. A textarea is as tall as its content. */
 input[type="text"], input[type="search"], input[type="number"], .pick {
   height: var(--ctl-h);
   padding-top: 0; padding-bottom: 0;
@@ -702,14 +509,8 @@ input[type="checkbox"] {
   vertical-align: middle;
   transition: background .13s, border-color .13s;
 }
-/* The MARK is 16px because that is the Material checkbox; the TARGET has to
-   be 24 (WCAG 2.5.8), and there are fifty of these on one page of the
-   memories list -- the entry point to every bulk action. A centred
-   transparent ::before grows the hit area without moving anything: hit
-   testing on a pseudo-element resolves to the element that owns it, and the
-   checkmark stays on top because ::after paints after ::before. Not a
-   wrapping <label>, which would have meant touching every call site for a
-   property that belongs to the control. */
+/* A 16px mark with a 24px target (WCAG 2.5.8): a transparent ::before grows the hit area,
+   and ::after paints the check above it. */
 input[type="checkbox"]::before {
   content: "";
   position: absolute; top: 50%; left: 50%;
@@ -725,9 +526,7 @@ input[type="checkbox"]:checked::after {
 }
 textarea { resize: vertical; min-height: 110px; width: 100%; font-family: var(--font-m); font-size: var(--fs-sm); }
 
-/* A field that is wrong says so beside itself. Two of these used to fire as a
-   toast in the opposite corner of the window, about a field the caret was
-   already in -- the message and the problem were 400px apart. */
+/* A field that is wrong says so beside itself, not in a toast across the window. */
 .field-error { font-size: var(--fs-label); color: var(--bad-ink); }
 input[aria-invalid="true"], .pick[aria-invalid="true"], textarea[aria-invalid="true"] {
   border-color: var(--bad);
@@ -763,20 +562,8 @@ input[aria-invalid="true"], .pick[aria-invalid="true"], textarea[aria-invalid="t
 
 .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--c, var(--ink-3)); flex: none; }
 
-/* A type is a chip wearing BOTH steps of its ramp: the name in the pastel
-   ink, over a tint and inside an outline mixed from it, with the strong
-   fill as a dot at the head of the chip.
-
-   The dot is what makes the column work. Chips are wildly different widths
-   -- `note` against `anti_pattern` -- and a stack of them left-aligned is a
-   ragged edge whichever end you pin; the dot puts a mark at the same x on
-   every row, so the eye has a column to run down and the ragged edge stops
-   mattering.
-
-   Tint and outline are mixed from the one ink token, so a type has one
-   colour on file and the chip cannot drift from the dot beside it in a
-   legend. A browser without color-mix() gets the coloured name and the dot
-   on no fill -- still legible, still distinct. */
+/* A type chip wears both steps of its ramp: the ink name over a tint mixed from it, and the
+   fill as a dot that lines up at one x on every row. */
 .type-tag {
   display: inline-flex; align-items: center; gap: var(--sp-1);
   font: 500 var(--fs-label) var(--font-m);
@@ -786,10 +573,7 @@ input[aria-invalid="true"], .pick[aria-invalid="true"], textarea[aria-invalid="t
   border-radius: var(--r-pill);
   padding: 2px var(--sp-2);
   white-space: nowrap;
-  /* A pill is the size of what it says. Dropped into a grid cell it would
-     take the whole track instead -- `stretch` is a grid item's default --
-     and `note` came out as wide as `anti_pattern`, which is the one thing a
-     chip must never do. */
+  /* sized to its text: a grid item stretches by default */
   justify-self: start;
 }
 /* smaller than a legend's: it is riding inside 11px of text, not standing
@@ -809,11 +593,7 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
   min-height: var(--tap);          /* it is a copy button, so it is a target */
   font: 500 var(--fs-label) var(--font-m);
   letter-spacing: .02em;
-  /* An identifier is reference, not the point of the row. This had a border, a
-     raised fill and an accent hover -- more decoration than the memory's own
-     content, which is the thing a human is here to read. It keeps its fill and
-     its copy cursor, because it IS a button, and loses the outline and the
-     accent, because it is not an action anyone came here to take. */
+  /* An identifier is reference, not the point of the row: quiet ink, a fill, the copy cursor. */
   color: var(--ink-3);
   background: var(--chip-fill);
   border-radius: var(--r-sm);
@@ -837,9 +617,8 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
 .chip.clickable:hover { border-color: rgba(187, 134, 252, .4); color: var(--accent); }
 
 .conf-pill { display: inline-flex; align-items: center; gap: var(--sp-1); font-size: var(--fs-label); color: var(--ink-2); white-space: nowrap; --ico: 12px; }
-/* Mark only, for a list row: slightly larger, since it carries the state on
-   its own, and a FIXED box, so the fill one of the three wears cannot push
-   the type chip beside it out of column. */
+/* Mark only, for a list row: a FIXED box, so the filled mark cannot push the type chip beside
+   it out of column. */
 .conf-pill.compact {
   gap: 0; --ico: 14px;
   width: 22px; height: 22px; flex: none;
@@ -847,24 +626,13 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
   border-radius: 50%;
 }
 
-/* These three rules used to target `<i>`. There is no `<i>` anywhere in the JS
-   tree -- confPill() in core/shared.js and the drawer's curation row both emit
-   an `<svg class="ico">` -- so the colour never rendered once, and confirmed,
-   unverified and contradicted all computed the identical rgba(255,255,255,.60)
-   in every list row, every drawer and every card. The single field that makes
-   this a curated store rather than a filing cabinet was invisible for as long
-   as the rule existed, and the rule looked like it worked. */
+/* the confidence colours, on the svg.ico that confPill() and the drawer emit */
 .c-confirmed    .ico { color: var(--ok); }
 .c-unverified   .ico { color: var(--warn); }
 .c-contradicted .ico { color: var(--bad-ink); }
 
-/* Only one of the three gets a fill. A contradicted memory is the state you
-   must not scroll past, so it is loud enough to catch you at fifty rows;
-   `confirmed` stays quiet because a good default should never shout, and
-   `unverified` stays neutral because it is a question, not a problem.
-
-   The fill belongs to the ring: the compact mark is a round box, and a
-   labelled pill washes only its icon, as a shadow that takes no room. */
+/* Only contradicted gets a fill: it must not be scrolled past. The compact mark is round; a
+   labelled pill washes only its icon. */
 .conf-pill.c-contradicted.compact { background: var(--bad-wash); border-radius: 50%; }
 /* In a picker's face the pill is the value: the face's text size and colour,
    centred on the control, and unclipped so the ring's wash shows whole. */
@@ -874,11 +642,7 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
   border-radius: 50%; background: var(--bad-wash); box-shadow: 0 0 0 3px var(--bad-wash);
 }
 
-/* A seal, so it never shrinks and never wraps -- and never grows either:
-   as a flex child with the default `flex: 0 1 auto` it could not shrink
-   below its own text, so on a tight row it burst out of its cell instead
-   and painted over whatever sat next to it. The text that CAN give way is
-   the snippet beside it, which is already clipped with an ellipsis. */
+/* A seal: it never shrinks, wraps or grows; the snippet beside it is what gives way. */
 .status-tag {
   flex: none; white-space: nowrap;
   color: var(--ink-3);
@@ -902,9 +666,7 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
 
 /* ── view head ───────────────────────────────────────────────────────── */
 
-/* Named for assistive tech, drawn for nobody: what a heading is FOR -- a
-   document outline, and a screen reader's way of announcing what just
-   loaded -- needs no pixels. */
+/* Named for assistive tech, drawn for nobody: a heading's outline role needs no pixels. */
 .sr-only {
   position: absolute; width: 1px; height: 1px;
   margin: -1px; padding: 0; overflow: hidden;
@@ -937,23 +699,11 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
   display: flex; align-items: center; justify-content: space-between; gap: var(--sp-3);
   flex-wrap: wrap;
 }
-/* the count or hint that rides on a heading. Standalone, not scoped to
-   .panel-title, because the drawer's section headings want the same thing --
-   record.js was patching three of them inline with the two properties the
-   uppercase voice used to force. */
+/* the count or hint that rides on a heading, standalone so the drawer's headings use it too */
 .panel-aside { font-weight: 400; font-size: var(--fs-sm); color: var(--ink-3); }
 
-/* ── the explanatory line ─────────────────────────────────────────────────
-   The sentence that opens a panel, the note beside a control, the caption on
-   a row. Fifteen inline `font-size` declarations said this in five values --
-   10, 10.5, 11, 11.5 and 12 -- three of them inside the half-pixel band the
-   scale above exists to have removed, and two of them below the floor for
-   text a person has to read. Five values for one job, none of them reachable
-   from :root.
-
-   Two steps now, chosen by how quiet the line is meant to be, plus the
-   opening sentence of a panel or modal, which owns its own bottom margin
-   because that space belongs to the sentence and not to whatever follows. */
+/* ── the explanatory line ── two steps by how quiet the line is, plus a panel's opening
+   sentence, which owns its bottom margin. */
 .intro   { font-size: var(--fs-sm); color: var(--ink-2); margin-bottom: var(--sp-3); }
 .hint    { font-size: var(--fs-sm); color: var(--ink-3); }
 .hint-sm { font-size: var(--fs-label); color: var(--ink-3); }
@@ -977,11 +727,8 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
 .grid-3232 { grid-template-columns: 3fr 2fr; }
 @media (max-width: 1080px) { .grid-3232 { grid-template-columns: 1fr; } }
 
-/* ── health ───────────────────────────────────────────────────────────────
-   The landing view: the ring, the index and its axes, the symptom list, the
-   calendar, and confidence split by type. Everything here is a reading of
-   the store's condition: the numbers are set in the data font, the labels
-   are not. */
+/* ── health ── the landing view: ring, index, symptoms, calendar, confidence by type.
+   Numbers are set in the data font, labels are not. */
 
 /* the ring's column against everything else. 380px is the ring at the size
    the figure inside it stays a headline rather than a caption. */
@@ -1001,9 +748,7 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
 .hx-tasks-aside { font-size: var(--fs-sm); color: var(--ink-3); }
 .hx-tasks .btn { flex: none; }
 
-/* ── the ring ──
-   One of them, on the confidence split: three segments, drawn in proportion
-   to it. */
+/* ── the ring ── one, on the confidence split: three segments in proportion. */
 
 .hx-ring-panel { display: flex; flex-direction: column; }
 .hx-ring {
@@ -1023,10 +768,8 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
 .hx-ring-pct { font: 500 var(--fs-hero)/1 var(--font-ui); color: var(--ink); }
 /* what the percentage in the middle IS a percentage of */
 .hx-ring-cap { font-size: var(--fs-sm); color: var(--ink-2); margin-top: var(--sp-0); }
-/* the index, at the foot of the same card: the figure beside its own
-   label, and the four readings it is the mean of as bars under both.
-   `margin-top: auto` puts it at the foot whatever the legend above it
-   comes out to. */
+/* the index, at the foot of the same card: the figure, its label, and its four readings as
+   bars; `margin-top: auto` keeps it at the foot. */
 .hx-second {
   margin-top: auto; padding-top: var(--sp-4);
   border-top: 1px solid var(--line-soft);
@@ -1061,9 +804,7 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
 
 /* ── the index and its axes ── */
 
-/* --raised: this card wants a decision. It is the one number the view
-   exists to state, and the ladder is what says so -- see the note on the
-   tokens. */
+/* --raised: this card wants a decision (see the surface tokens) */
 .hx-ring-panel { background: var(--raised); }
 .hx-delta {
   font: 500 var(--fs-sm) var(--font-m); color: var(--ok);
@@ -1191,17 +932,12 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
 .legend { display: flex; flex-wrap: wrap; gap: var(--sp-2) var(--sp-4); margin-top: var(--sp-3); }
 .legend-item { display: inline-flex; align-items: center; gap: var(--sp-2); font-size: var(--fs-sm); color: var(--ink-2); }
 .legend-item b { color: var(--ink); font-weight: 500; font-family: var(--font-m); }
-/* was `.legend-item i`, dead for the same reason as the .c-* rules above --
-   overview.js worked around it with an inline style per legend entry. The
-   entry carries its own c-* class now and the mark colours itself. */
+/* each legend entry carries its own c-* class, so the mark colours itself */
 .legend-item { --ico: 12px; }
 
 .bar-track { height: 10px; background: var(--inset); border-radius: 0 var(--r-md) var(--r-md) 0; position: relative; overflow: hidden; }
-/* scaleX rather than width: animating width is a layout animation, and the
-   track is what clips to the rounded shape, so the fill needs no radius of
-   its own. A share too small to see is floored by the caller, not by a
-   min-width -- an element already stretched across the track has no width
-   left for one to raise. */
+/* scaleX, not width, so it is no layout animation; a share too small to see is floored by the
+   caller. */
 .bar-fill {
   position: absolute; inset: 0;
   background: var(--c, var(--ink-3));
@@ -1211,13 +947,8 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
 
 .spark-stat { font: 500 var(--fs-lg) var(--font-ui); margin-top: var(--sp-0); color: var(--ink); }
 
-/* The ring column folds under the rest before the axes do: at this width the
-   ring is still legible beside nothing else, and the symptom list is the
-   half of the view somebody came to read. */
-/* The two cards stack. `align-items` is deliberately NOT touched: the ring
-   centres itself (align-self), and centring the CARD's children instead
-   shrank every one of them to its content -- which took an axis bar, whose
-   whole width is the `1fr` between its label and its number, to nothing. */
+/* The two cards stack. align-items stays put: centring the card's children would shrink each
+   axis bar, whose width is its 1fr track, to nothing. */
 @media (max-width: 1180px) {
   .hx-top { grid-template-columns: 1fr; }
 }
@@ -1234,14 +965,8 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
   .hx-dow { width: 100%; }
 }
 
-/* ── domains, as columns ──────────────────────────────────────────────────
-   A path is read left to right: each column holds the levels inside the one
-   picked in the column before it, and the pane on the right is the level
-   that is picked. Depth is POSITION here rather than indentation, so the
-   ninth level down sits where the first one did.
-
-   The columns lighten as they go, one elevation step each, so the eye can
-   see how deep the path already runs without counting the columns. */
+/* ── domains, as columns ── each column holds the levels inside the one picked before it;
+   depth is position, and each column lightens one elevation step. */
 
 .dom-shell { gap: 0; }
 
@@ -1282,11 +1007,8 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
   border-radius: var(--r-lg);
   overflow: hidden;
 }
-/* The columns take only the width their levels need, and the pane takes
-   the rest -- at the roots that is one 250px column and a very wide pane,
-   which is right: there is nothing else to show. Past the width they fit
-   in, the strip shrinks and scrolls sideways rather than squeezing the
-   pane to a gutter; the pane is where the level is actually read. */
+/* The columns take the width their levels need and the pane the rest; past that the strip
+   scrolls sideways rather than squeezing the pane. */
 .dom-strip {
   flex: 0 1 auto; min-width: 0;
   display: flex; align-items: stretch;
@@ -1312,9 +1034,7 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
   padding: var(--sp-2);
   display: flex; flex-direction: column; gap: var(--sp-0);
 }
-/* the drop target that means "a sibling of these", which at the roots
-   column means the top level. It has to be able to receive a drop, so it
-   takes whatever height is left rather than collapsing to nothing. */
+/* the drop target for "a sibling of these"; it takes the leftover height to receive a drop */
 .dom-col-rest { flex: 1; min-height: var(--sp-6); border-radius: var(--r-md); }
 .dom-col-hint {
   flex: none; margin-top: var(--sp-2); padding: var(--sp-2) var(--sp-2) 0;
@@ -1361,9 +1081,7 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
   font: 400 var(--fs-label) var(--font-m); color: var(--accent);
   min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-/* Right-aligned in a track of its own, so fifty of them read as a column
-   rather than as fifty different indents. The crossing variant is a phrase
-   and grows past the track to the LEFT; its right edge is the same one. */
+/* Right-aligned in its own track, so counts read as a column; the crossing variant grows left. */
 .dom-count {
   flex: none; min-width: 26px; text-align: right;
   font: 400 var(--fs-label) var(--font-m); color: var(--ink-3);
@@ -1436,9 +1154,7 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 
-/* ── the queue ──
-   A re-home reindexes every memory in the subtree, so a drop stages the
-   move and this is what commits it. */
+/* ── the queue ── a re-home reindexes the subtree, so a drop stages the move and this commits */
 .dom-queue {
   flex: none; margin-top: var(--sp-3);
   display: flex; align-items: center; gap: var(--sp-4); flex-wrap: wrap;
@@ -1452,10 +1168,7 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
 .dom-queue-item code { font-family: var(--font-m); color: var(--ink-2); }
 .dom-queue-end { margin-left: auto; display: flex; gap: var(--sp-2); }
 
-/* ── the move dialog ──
-   The destination is two controls, so they share a row: a parent picked out
-   of the tree and the name it keeps there. `.rn-result` is the path the two
-   compose, which is the string the server is asked for. */
+/* ── the move dialog ── a parent and a name share a row; `.rn-result` is the path they make. */
 .rn-target { display: grid; grid-template-columns: 1fr 1fr; gap: var(--sp-3); }
 .rn-target .pick { width: 100%; }
 .rn-result { font-size: var(--fs-sm); color: var(--ink-3); }
@@ -1463,9 +1176,7 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
   font-family: var(--font-m); font-size: var(--fs-sm); color: var(--ink);
 }
 
-/* Below this the columns stop fitting side by side. They scroll sideways
-   rather than wrapping -- a wrapped Miller column is not a column any more
-   -- and the pane goes under them. */
+/* Below this the columns scroll sideways rather than wrap, and the pane goes under them. */
 @media (max-width: 1180px), (max-height: 619px) {
   .dom-cols { flex-direction: column; overflow: auto; }
   .dom-strip { flex: none; }
@@ -1491,16 +1202,11 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
 .table tbody tr:hover { background: var(--hover-1); }
 .table .num { text-align: right; font-variant-numeric: tabular-nums; font-family: var(--font-m); font-size: var(--fs-sm); }
 .table .actions { text-align: right; white-space: nowrap; }
-/* a row that goes somewhere when clicked. The views used to write this as an
-   inline style from JS, one row at a time. */
+/* a row that goes somewhere when clicked */
 .table tr.clickable { cursor: pointer; }
 
-/* A table has a minimum width its own columns need, and at 375px the domains
-   table wanted 508px inside a 313px column -- so it pushed 281px past its
-   container with nothing anywhere to scroll. A table scrolls sideways in its own
-   box; the page never does. A wrapper and not `display: block` on the <table>
-   itself, because that swaps the table formatting context for a block one and
-   the column widths stop agreeing with the header. */
+/* A table scrolls sideways in its own box, never the page; a wrapper, because `display: block`
+   on the <table> breaks the header's column widths. */
 .table-scroll { overflow-x: auto; }
 
 /* ── memories list ───────────────────────────────────────────────────── */
@@ -1515,10 +1221,8 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
    once here rather than in every child. */
 .toolbar-sm { --ctl-h: var(--ctl-h-sm); }
 
-/* ── optimization · the month, and the day it opens ─────────────────────
-   Curation is a daily routine, so the axis is the month: the grid says which
-   days the agent ran on and which still hold a decision, and the rail beside
-   it opens the selected day at the level of the suggestion. */
+/* ── optimization · the month, and the day it opens ── the grid says which days ran and which
+   still hold a decision; the rail opens the selected day. */
 
 .opt-cal-work {
   flex: 1; min-height: 0;
@@ -1528,15 +1232,10 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
 
 .opt-cal-bar { display: flex; align-items: center; gap: var(--sp-3); flex: none; flex-wrap: wrap; }
 .opt-cal-month { font: 500 var(--fs-xl)/1.2 var(--font-ui); margin: 0; }
-/* Intl gives the month lowercase in Portuguese, and `capitalize` raises
-   EVERY word: "setembro de 2026" came out "Setembro De 2026", and the day
-   title "Quinta-Feira, 10 De Setembro". Only the first letter is the
-   sentence's to raise. */
+/* Intl lowercases Portuguese months and `capitalize` raises every word: raise the first only. */
 .opt-cal-month::first-letter, .opt-day-when::first-letter { text-transform: uppercase; }
 .opt-cal-step { display: inline-flex; gap: var(--sp-1); }
-/* A month step is an OUTLINED control, not a bare glyph: it sits next to a
-   22px month name with nothing else around it, and .icon-btn's borderless
-   ink-3 gave the pair no edge to aim at. */
+/* A month step is an outlined control: beside a 22px month name a bare glyph has no edge. */
 .opt-step {
   width: var(--ctl-h-sm); height: var(--ctl-h-sm);
   display: inline-flex; align-items: center; justify-content: center;
@@ -1565,13 +1264,8 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
   text-align: center; padding-bottom: var(--sp-0);
 }
 
-/* A day is a control: it selects, so it is a button and it answers the
-   keyboard for free. The three states it can be in are told apart by the
-   FILL -- worked on, empty, selected -- and never by colour alone: the
-   number, the count and the bars all move with it.
-
-   An empty day still carries a fill, so the month reads as a block of
-   days. */
+/* A day is a button. Its states (worked on, empty, selected) differ by fill, never by colour
+   alone, and an empty day keeps a fill so the month reads as a block. */
 .opt-cell {
   min-height: 84px;
   display: flex; flex-direction: column; gap: var(--sp-1);
@@ -1612,10 +1306,7 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
 }
 .opt-cell.has-open .opt-cell-n { color: var(--warn); }
 
-/* One bar per RUN, not per day: a day with three runs of which one is still
-   open reads as two settled and one waiting, which a single day-level
-   colour cannot say. One row, never wrapped -- three bars is the cap and the
-   count line carries the overflow. */
+/* One bar per RUN, so a day shows settled and waiting runs apart; three bars, never wrapped. */
 .opt-ticks { display: flex; gap: 3px; height: 5px; overflow: hidden; }
 .opt-tick { width: 14px; height: 5px; border-radius: var(--r-sm); background: var(--ok); flex: none; }
 .opt-tick.is-open { background: var(--warn); }
@@ -1651,10 +1342,7 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
 }
 .opt-day-sub { margin-top: var(--sp-0); font-size: var(--fs-sm); color: var(--ink-2); }
 
-/* The one way out of the rail that is not a run: every suggestion the day
-   still holds, read one at a time across all of them. An ordinary .btn --
-   the same one the month bar and the group rows use for a control that
-   goes somewhere, carrying its chevron at the size they carry theirs. */
+/* The rail's way into every suggestion the day holds, one at a time: an ordinary .btn. */
 .opt-day-review {
   flex: none;
   display: inline-flex; align-items: center; gap: var(--sp-1);
@@ -1663,10 +1351,7 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
 
 /* ── the runs of the day ── */
 
-/* The runs staged on the day, as the cards that open them. One card per row
-   at the rail's width: the card has to say which run this is, what the pass
-   set out to do, how much of it is answered, and what sort of curation is
-   inside -- and the brief is the part that needs the line. */
+/* The day's runs as cards, one per row: which run, its brief, how much is answered, its kinds. */
 .opt-lots {
   flex: 1; min-height: 0;
   display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
@@ -1691,9 +1376,7 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
   font-variant-numeric: tabular-nums; flex: none;
 }
 .opt-lot-what { font-size: var(--fs-label); color: var(--ink-3); margin-left: auto; }
-/* The pass's own brief, which is the only line on the card written by
-   whoever staged it. Two lines: db.RUN_NOTE_MAX is 250 characters, and the
-   rest is on the page the card opens. */
+/* The pass's brief, the one line its stager wrote: two lines, the rest is on the run's page. */
 .opt-lot-note {
   font-size: var(--fs-sm); color: var(--ink); line-height: 1.45;
   display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
@@ -1705,9 +1388,7 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
   font: 500 var(--fs-lg) var(--font-m); color: var(--ink-2);
   font-variant-numeric: tabular-nums; margin-right: 2px;
 }
-/* What is inside, before the card is opened. Named and not only coloured:
-   the kind is the word the whole tab is organised by, and a row of dots
-   would be a legend the reader has to go and find. */
+/* What is inside, named and not only coloured: the kind is what the tab is organised by. */
 .opt-lot-kinds { display: flex; flex-wrap: wrap; gap: 3px; align-content: start; }
 .opt-lot-kind {
   display: inline-flex; align-items: center; gap: 3px;
@@ -1718,10 +1399,7 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
 .opt-lot-kind > span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .opt-lot-dot { width: 6px; height: 6px; border-radius: 2px; flex: none; }
 .opt-lot-more { color: var(--ink-3); font: 400 var(--fs-label) var(--font-m); padding: 1px 2px; }
-/* A run still holding a decision is the one the reader came for, so it
-   takes the waiting colour and a tinted ground; a settled one stays the
-   quiet default beside it. The word by the count says which is which
-   without the colour. */
+/* A run still holding a decision takes the waiting colour; the word by the count says it too. */
 .opt-lot.is-open { background: var(--warn-tint); border-color: rgba(255, 213, 79, .28); }
 .opt-lot.is-open .opt-lot-count b { color: var(--warn); }
 .opt-lot.is-open .opt-lot-what { color: var(--ink-2); }
@@ -1740,10 +1418,8 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
 .opt-empty-msg { margin: 0; max-width: 280px; color: var(--ink-2); line-height: 1.6; }
 .opt-day-empty .hint-sm { margin: 0; max-width: 300px; }
 
-/* ── optimization · the run and the group ───────────────────────────────
-   Three addresses under one view: one run, one kind, one day. All of them
-   are panes that fill the window, so each carries its own scroller and the
-   page itself never moves. */
+/* ── optimization · the run and the group ── one run, one kind, one day: panes that fill the
+   window, each with its own scroller. */
 
 .opt-shell { gap: 0; }
 
@@ -1752,19 +1428,14 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
 .opt-bar-title { font: 500 var(--fs-xl)/1.25 var(--font-ui); margin: 0; min-width: 0; }
 .opt-bar-end { margin-left: auto; display: flex; align-items: center; gap: var(--sp-3); }
 .opt-run-when { font-style: normal; font-weight: 400; font-size: var(--fs-md); color: var(--ink-3); }
-/* A note staged before db.RUN_NOTE_MAX can be any length. In the
-   window-filling layout the shell is a fixed height, so the note is capped
-   and scrolls inside its ceiling; below that layout the page scrolls and
-   the note runs as long as it likes. */
+/* A run's note is capped and scrolls inside the window-filling layout; below it, it runs long. */
 .opt-run-note-line {
   flex: 0 1 auto; margin-bottom: var(--sp-3);
   font-size: var(--fs-sm); color: var(--ink-2);
 }
 
-/* level 1 — the rail states the case, the table holds the decisions.
-   One column until there is room for two: the two-column arrangement and
-   the internal scrollers both belong to the window-filling layout, and are
-   switched on with it at the foot of this block. */
+/* level 1: the rail states the case, the table holds the decisions; two columns and internal
+   scrollers switch on with the window-filling layout below. */
 .opt-work { flex: 1; min-height: 0; display: grid; gap: var(--sp-4); }
 .opt-rail { display: flex; flex-direction: column; gap: var(--sp-4); min-height: 0; }
 
@@ -1815,14 +1486,8 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
 .opt-grp-note { font-family: var(--font-m); }
 .opt-grp-scroll { flex: 1; min-height: 0; }
 
-/* The name of a kind IS the way into it, with the chevron at the end of the
-   row repeating the target. Three buttons competing for the same cell left
-   the sentence that says what the group does with 144px and three lines. */
-/* The controls of a row sit in a track of their OWN width, not in one that
-   sizes to what the row happens to hold: a group with three buttons and a
-   group with one put every control at the same x, and the eye reads down
-   the column instead of hunting along each row. 264px is the widest set --
-   reject, apply, details -- at the longest catalog's labels. */
+/* A kind's name is the way into it. Row controls sit in a fixed 264px track (the widest set at
+   the longest labels), so they line up down the column. */
 .opt-grp {
   display: grid;
   grid-template-columns: 6px 128px minmax(0, 1fr) 76px minmax(0, 108px) 264px;
@@ -1897,9 +1562,7 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
 }
 .opt-row:last-child { border-bottom: 0; }
 .opt-row:hover { background: var(--hover-1); }
-/* Marked and picked are different questions -- which ones the footer acts
-   on, and which one the pane is showing -- so they are different signals:
-   a fill for the set, an outline for the one. */
+/* Marked (what the footer acts on) is a fill; picked (what the pane shows) is an outline. */
 .opt-row.marked { background: var(--accent-dim); }
 .opt-row.picked { outline: 2px solid var(--accent); outline-offset: -2px; }
 .opt-row-box { display: flex; justify-content: center; }
@@ -1933,9 +1596,7 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
 .opt-detail-head { display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; }
 .opt-detail-at { font: 400 var(--fs-label) var(--font-m); color: var(--ink-3); }
 .opt-detail-title { font-size: var(--fs-read); line-height: 1.5; color: var(--ink); }
-/* Why the agent proposes this -- a well like every other labelled well in
-   this UI, named by its label rather than by an accent bar down its edge:
-   nothing else in the file marks a block that way. */
+/* Why the agent proposes this: a labelled well like every other one here. */
 .opt-why {
   display: flex; gap: var(--sp-3); align-items: flex-start;
   background: var(--inset); border: 1px solid var(--line-soft);
@@ -1944,9 +1605,7 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
   font-size: var(--fs-sm); line-height: 1.5;
 }
 .opt-why .opt-label { flex: none; padding-top: 2px; }
-/* An agent writes this, so its length is not the reviewer's to absorb: past
-   a few lines it scrolls inside itself rather than pushing the diff -- the
-   thing being decided -- out of the pane. */
+/* Agent-written, so past a few lines it scrolls inside itself instead of pushing the diff out. */
 .opt-why-body { min-width: 0; max-height: 6.6em; overflow-y: auto; }
 .opt-detail-foot {
   margin-top: auto;
@@ -1954,75 +1613,39 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
   border-top: 1px dashed var(--line-soft); padding-top: var(--sp-3);
 }
 
-/* Inside the window-filling layout: two columns, and every long list gets a
-   scroller of its own so the page itself never moves. Below this the view is
-   an ordinary column that scrolls, and a pane with its own scrollbar inside
-   a scrolling page is two bars for one gesture. */
+/* Window-filling layout: two columns, each long list with its own scroller. Below it the view
+   is one scrolling column. */
 @media (min-height: 620px) and (min-width: 1024px) {
   .opt-run-note-line { max-height: 22vh; overflow-y: auto; }
   .opt-work { grid-template-columns: minmax(0, 352px) minmax(0, 1fr); align-items: start; }
   .opt-two { grid-template-columns: minmax(0, 380px) minmax(0, 1fr); }
-  /* 452px is what the comp gives the rail, and what a run card needs: the
-     number, the count, and the kinds staged in it. Below this breakpoint
-     the month and the day stack and the view scrolls as a page. */
+  /* 452px for the rail: a run card's number, count and kinds */
   .opt-cal-work { grid-template-columns: minmax(0, 1fr) minmax(0, 452px); }
   .opt-grp-scroll, .opt-rows { overflow-y: auto; }
   /* the rail is taller than the window on a short one, and it is the rail
      that gives, not the table of decisions beside it */
   .opt-rail { overflow-y: auto; }
 
-  /* The evidence takes the pane it was given. The 150px cap on a well is
-     right for a card in a stack of cards -- it was one -- and wrong here:
-     it left a third of a 400px pane empty with the text scrolling inside a
-     box a quarter of its size. The body grows; what is longer than the pane
-     scrolls in the well it belongs to, so Before and After stay side by
-     side and level with each other. */
+  /* The evidence takes its whole pane; what is longer scrolls in its own well, so Before and
+     After stay side by side. */
   /* The two PAIRED layouts fill the pane and keep their columns level: the
      before/after of a field, and the two ends of a relation. */
   .opt-detail > .opt-diff, .opt-detail > .opt-rel { flex: 1; min-height: 0; }
   .opt-detail > .opt-diff .snippet,
   .opt-detail > .opt-rel .snippet { max-height: none; min-height: 0; }
-  /* the peer's well is one of two things stacked in its column -- the meta
-     line is the other -- so it takes what the meta line leaves, rather than
-     ending wherever its preview happens to stop */
+  /* the peer's well takes what the meta line above it leaves */
   .opt-detail > .opt-rel .opt-peer-body { min-height: 0; }
   .opt-detail > .opt-rel .opt-peer-body .snippet { flex: 1; }
-  /* Distill STACKS its sources above the memory it writes, so the block
-     scrolls and its parts keep their natural height. Stretching them the way
-     the paired layouts stretch -- height:100% on the peer, flex:1 on its
-     well -- put every source and the new body on the same pixels, drawn over
-     each other, each in a box a few lines tall. */
+  /* Distill stacks its sources above the memory it writes, so the block scrolls and its parts
+     keep their natural height. */
   .opt-detail > .opt-distill { flex: 1; min-height: 0; overflow-y: auto; }
   .opt-detail > .opt-distill .opt-peer-body { height: auto; }
   .opt-detail > .opt-unknown { min-height: 0; }
 }
 
-/* ── memories list ───────────────────────────────────────────────────────
-   One line per memory, because the memory is the only thing on the row that
-   anyone came here to read.
-
-   It used to be four annotations stacked in a fixed 140px column beside a
-   two-line snippet clamp, and the stack -- not the memory -- set the height:
-   65px of chips (confidence 17, type 14, uid 24, status) against 19px of
-   actual memory, inside a 90px row. Eight of fifty rows fitted above the
-   fold and one page was 4849px, six screens, with the pager at the bottom of
-   all of it. The clamp was not the culprit either: 41 of 50 snippets
-   measured one line.
-
-   The annotations lie BESIDE the snippet now, so the tallest thing in the
-   row is the snippet itself and the row costs what one line of text costs.
-   Two of them left the row entirely and live in the record:
-     the uid    -- 110px of fixed width for a string nobody reads, and its
-                   --tap floor was what made the row 24px tall at minimum
-     the tags   -- there is no tag filter on this view, so they were chips
-                   you could look at and not act on
-   Confidence keeps the lead position and loses its word: three ringed marks
-   in three fixed colours, named on hover and in the drawer. The column stays
-   a FIXED width so the snippet's left edge does not jitter from row to row,
-   which is the whole point of a list. */
-/* The view is the list beside the pane that acts on it. Both scroll inside
-   themselves, so the toolbar, the select-all strip and the pager stay where
-   the eye left them however far down the rows you are. */
+/* ── memories list ── one line per memory: annotations sit beside the snippet, and confidence
+   holds a fixed-width lead column so the snippet's edge never jitters. */
+/* The list beside the pane that acts on it, both scrolling inside, so toolbar and pager stay. */
 .mem-shell { gap: 0; }
 .mem-work {
   display: grid; grid-template-columns: minmax(0, 1fr) 396px;
@@ -2038,9 +1661,7 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
   flex: 1; min-height: 0; display: flex; flex-direction: column;
 }
 .mem-list #memList { flex: 1; min-height: 0; overflow-y: auto; }
-/* The select-all strip. Its first column is the row's first column to the
-   pixel -- a header tick that does not line up under the ticks it commands
-   reads as a filter, not as a select-all. */
+/* The select-all strip: its tick column lines up with the rows' ticks to the pixel. */
 .mem-head {
   display: grid; grid-template-columns: var(--tap) 1fr auto;
   gap: var(--sp-3); align-items: center;
@@ -2065,10 +1686,8 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
 }
 .mem-row:last-child { border-bottom: none; }
 .mem-row:hover { background: var(--hover-1); }
-/* The caret the arrows and a click both move. Written by the view as a class
-   (see setCursor) so a pointer draws it too, and inset like the focus ring
-   beside it because the list clips. Ordered before .selected: a row that is
-   both keeps the ticked wash and takes the ring on top of it. */
+/* The keyboard caret: a class so a pointer draws it too, inset because the list clips. Before
+   .selected, so a row that is both keeps the wash under the ring. */
 .mem-row.is-cursor {
   outline: 2px solid var(--accent);
   outline-offset: -2px;
@@ -2077,9 +1696,7 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
 .mem-row.selected { background: var(--accent-dim); }
 .mem-check { display: flex; justify-content: center; }
 .mem-check input { cursor: pointer; }
-/* fixed width and clipped rather than wrapping: a row that grows because
-   its type has a longer name is a row that broke the column. The chips are
-   left-aligned and their own dots are the column -- see .type-tag. */
+/* fixed width and clipped, never wrapping: the chips' own dots make the column (.type-tag) */
 .mem-col-type {
   display: flex; align-items: center; gap: var(--sp-2);
   min-width: 0; overflow: hidden;
@@ -2121,12 +1738,8 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
 .tb-field .pick { width: 170px; min-width: 0; max-width: none; }
 .mem-more-row .tb-field .pick { width: 190px; }
 .tb-bare { display: flex; align-items: center; gap: var(--sp-2); height: var(--ctl-h); flex-wrap: wrap; }
-/* The row's primary control: one line of the memory, clipped. It leads the
-   row by brightness -- --ink against the --ink-3 around it -- rather than by
-   size, which at --fs-body made it dominate instead. The leading and not a
-   min-height carries the 24px target: leading centres the single line in the
-   box, a min-height would pin it to the top, and a flex box would cost the
-   ellipsis. */
+/* The row's primary control: one clipped line that leads by brightness, not size. Its line
+   height carries the 24px target and keeps the ellipsis a flex box would cost. */
 .mem-snippet {
   color: var(--ink); font-size: var(--fs-sm); line-height: 24px;
   display: block; width: 100%;
@@ -2139,9 +1752,7 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
 
 .mem-right { display: flex; align-items: center; gap: var(--sp-3); font-size: var(--fs-label); color: var(--ink-3); white-space: nowrap; }
 .mem-right .chip { max-width: 150px; }
-/* Where the row is filed, in the room a wide window has and a narrow one
-   does not. Right-aligned in a fixed column so fifty of them read as a
-   column and not as fifty different indents. */
+/* Where the row is filed, only where a wide window has room; right-aligned, as a column. */
 .mem-domain { display: none; }
 @media (min-width: 1400px) {
   .mem-domain {
@@ -2151,11 +1762,8 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
   }
 }
 
-/* ── the inspector ────────────────────────────────────────────────────────
-   One memory when one row is ticked, a batch editor when several are, and
-   an explanation of both when none is. It is --surface like the list beside
-   it, and its own footer is the only thing in it that does not scroll --
-   Apply must never be the control you have to hunt for. */
+/* ── the inspector ── one memory, a batch editor, or an explanation of both; its footer is the
+   one part that does not scroll, so Apply is never hunted for. */
 .mem-inspect {
   background: var(--surface); border-radius: var(--r-lg);
   display: flex; flex-direction: column;
@@ -2198,9 +1806,7 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
 .mi-field { display: flex; flex-direction: column; gap: var(--sp-2); }
 .mi-field .pick { width: 100%; max-width: none; }
 
-/* Each confidence is a row you press, not an option in a list: the count
-   beside it says how much of the selection it would actually change, and
-   that is the number the choice is made on. */
+/* Each confidence is a row you press, beside the count of the selection it would change. */
 .mi-confs { display: flex; flex-direction: column; gap: var(--sp-2); }
 .mi-conf {
   display: flex; align-items: center; gap: var(--sp-3);
@@ -2276,20 +1882,12 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
 
 
 
-/* ── the memory record ────────────────────────────────────────────────────
-   A view with an address of its own, not a dialog over one. The memory on
-   the left, everything ABOUT the memory on the right, and a bar across the
-   top carrying where you came from, where you are in the list, and the two
-   controls that act on the whole record.
-
-   Both columns scroll inside themselves, so neither can make the page as
-   tall as the longer of the two. */
+/* ── the memory record ── a view with its own address: the memory left, what is about it right,
+   a bar on top; both columns scroll inside themselves. */
 
 .rec-shell { gap: 0; }
 
-/* One bar, two views. The record and an optimization level both open with
-   the way out, what you are looking at, and the controls for it -- the same
-   measurements, so the same rule rather than a second copy of it. */
+/* One bar for the record and an optimization level: the way out, what you see, its controls. */
 .rec-bar, .opt-bar {
   flex: none;
   display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2);
@@ -2298,10 +1896,8 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
   border-bottom: 1px solid var(--line-soft);
   min-width: 0;
 }
-/* The way out is a CONTROL and the path beside it is a FACT: the button is
-   a .btn like the rest of the bar, the path stays plain text in the data
-   font, a step quieter. The label can be a memory's title (see backTarget),
-   so it is capped and clipped rather than allowed to push the path off. */
+/* The way out is a control, the path beside it a fact in the data font; the label can be a
+   title, so it is capped and clipped. */
 .rec-back { flex: none; max-width: 260px; }
 .rec-back-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .rec-crumb {
@@ -2338,17 +1934,8 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
   padding-right: var(--sp-1);
 }
 
-/* The name, edited where it is read. The dashed rule is the whole
-   affordance: a field that looks like a field would make the loudest thing
-   on the page a form control.
-
-   A box that GROWS, not a one-line field: over half the titles in a store
-   of a few hundred memories are wider than this column, and an input puts
-   what does not fit off screen without so much as an ellipsis. views/
-   record.js sets the height from the content.
-
-   More air above than below, so it reads as the head of the column rather
-   than a sibling of the stage under it. */
+/* The name, edited where it is read, in a box that grows with a long title; the dashed rule is
+   the whole affordance. */
 .rec-title { margin: 0; margin-top: var(--sp-1); }
 .rec-title textarea {
   display: block; width: 100%;
@@ -2364,14 +1951,8 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
 .rec-title textarea:hover { border-bottom-color: rgba(187, 134, 252, .6); }
 .rec-title textarea:focus { outline: none; border-bottom-color: var(--accent); }
 
-/* Blocks are wildly uneven: measured over a few hundred memories, half of
-   them fill less than 62% of a panel this tall and a third run past it, and
-   the largest single block is 19.600 characters. Two of them sharing a
-   capped row meant the short one was mostly empty and the long one was a
-   porthole, and a type with ONE block left half the column blank.
-
-   So one block is on screen at a time, filling the stage, and the index
-   beside it says what the others are. */
+/* One block on screen at a time, filling the stage, with the index beside it naming the rest:
+   block lengths vary too much to share a row. */
 .rec-stage {
   flex: 1; min-height: 0;
   display: grid; grid-template-columns: 244px minmax(0, 1fr);
@@ -2408,11 +1989,8 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
   display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
 }
 
-/* The selected block and the headings of its body are ONE card: the row is
-   the head, the headings are the body, tinted a step of the block's own
-   colour between the page and the head -- the same relation .rf-head has
-   with .rf-body. 8% measures 1,15 against the page, which is the --bg to
-   --surface step; at 12% the index starts competing with the panel. */
+/* The selected block and its body's headings are one card, tinted 8% of the block's colour:
+   the --bg to --surface step, as .rf-head is to .rf-body. */
 .rec-group {
   display: flex; flex-direction: column;
   background: color-mix(in srgb, var(--h-ink) 8%, var(--bg));
@@ -2422,9 +2000,7 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
 .rec-group > .rec-pick,
 .rec-group > .rec-mark { border-radius: 0; }
 .rec-group > .rec-mark:last-child { padding-bottom: var(--sp-2); }
-/* One heading of the body. The bullet is the indent -- it sits in the same
-   track as the block's dot, so a heading's text falls under the block's own
-   text, and the hierarchy is carried by the mark rather than by a margin. */
+/* One heading of the body; its bullet shares the block dot's track, so the mark is the indent. */
 .rec-mark {
   display: grid; grid-template-columns: 7px minmax(0, 1fr); gap: var(--sp-2);
   align-items: start; text-align: left;
@@ -2462,11 +2038,8 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
   outline: 1px solid rgba(187, 134, 252, .5); outline-offset: -1px;
   background: var(--surface);
 }
-/* The header is the field's NAME, and a name has to be findable at a
-   glance: it sits one elevation step above the body it heads, which is
-   what draws the line between one field and the next without an outline
-   round either. It was a 12%-white hairline on the page ground, and on a
-   column of four fields you could not see where one ended. */
+/* A field's name sits one elevation step above its body, which parts the fields without an
+   outline. */
 .rf-head {
   flex: none;
   display: flex; align-items: center; gap: var(--sp-2);
@@ -2475,9 +2048,8 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
   border-bottom: 1px solid var(--line);
 }
 .rf.is-open .rf-head { background: rgba(187, 134, 252, .14); }
-/* The block's own colour, from the pair core/shared.js sets on the card and
-   on its row in the index -- so the mark in front of a name is the same in
-   both places. It falls back to the accent for a card with no block. */
+/* The block's colour, from the pair core/shared.js sets on the card and its index row; the
+   accent when there is no block. */
 .rf-dot {
   width: 7px; height: 7px; border-radius: 50%; flex: none;
   background: var(--h, var(--accent));
@@ -2486,9 +2058,8 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
   font: 500 var(--fs-label) var(--font-ui);
   letter-spacing: .1em; text-transform: uppercase; color: var(--ink);
 }
-/* On the stage the panel is the document and the index is its table of
-   contents, so the name here is a title and not a micro-label -- the
-   uppercase 11px stays in the index and in the `Edit all` stack. */
+/* On the stage the panel is the document, so the name is a title; the micro-label stays in the
+   index and the `Edit all` stack. */
 .rec-stage .rf-head { padding: var(--sp-3) var(--sp-4); }
 .rec-stage .rf-label {
   font-size: var(--fs-md); letter-spacing: 0; text-transform: none;
@@ -2520,10 +2091,7 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
 
 .rf-split { display: grid; grid-template-columns: 1fr 1fr; }
 .rf-split.rf-solo { grid-template-columns: 1fr; }
-/* Editing on the stage keeps the card at the height it already had, and each
-   side of the pair scrolls inside it: the textarea is the scroller, and it is
-   on screen whole. Letting the card grow instead leaves the preview with no
-   ceiling of its own. */
+/* Editing on the stage keeps the card's height, and each side of the pair scrolls inside it. */
 .rec-stage .rf-split { flex: 1; min-height: 0; }
 .rec-stage .rf-pane { min-height: 0; }
 .rec-stage .rf-pane textarea { flex: 1; min-height: 0; resize: none; }
@@ -2690,9 +2258,7 @@ button.rs-mono:hover { color: var(--accent); }
 @media (max-width: 1180px), (max-height: 619px) {
   .rec-work { grid-template-columns: 1fr; }
   .rec-main, .rs-body { overflow: visible; }
-  /* one column, and nothing with a height of its own: the page is the thing
-     that scrolls here, and a box scrolling inside a scrolling page traps
-     the wheel */
+  /* one column, no box height: the page scrolls, and a scroller in a scroller traps the wheel */
   .rec-stage { grid-template-columns: 1fr; flex: none; }
   .rec-index { overflow: visible; }
   .rec-stage .rf-body,
@@ -3025,33 +2591,20 @@ textarea.tk-box {
   margin: 0;
   max-height: 420px; overflow-y: auto;
 }
-/* A memory is prose an agent wrote in sentences, and it was rendered in
-   monospace inside a bordered recessed well -- which says "payload", not "a
-   note someone left you". Every atom AROUND it had a container of its own
-   (uid, domain, tag, type, session), so the decoration went to the metadata
-   and the substance got none. It stays a <pre>, because an author's line
-   breaks carry meaning, and it drops the costume. The well is right for
-   exactly one type -- `diagram`, whose content genuinely is machine output. */
+/* A memory is prose: still a <pre>, since an author's line breaks carry meaning, but set as text
+   rather than as a payload. */
 .content-prose {
   font: 400 var(--fs-read)/1.65 var(--font-ui);
   color: var(--ink);
-  /* The WELL STAYS. It was removed here along with the monospace, and that was
-     one change too many: this box scrolls (max-height + overflow-y above), and a
-     scrolling region with no edge has no visible beginning or end -- the text
-     just dissolved into the panel behind it. What was wrong was the costume,
-     not the container. Only the typography changes; --inset keeps the reading
-     pane recessed below the surface it sits on, which is what tells you it is
-     a pane you can scroll and not the page itself.
-     Measure is capped rather than left to the column's width, which would run
-     the line to ~100 characters. */
+  /* The --inset well stays, since this box scrolls and needs an edge; the measure is capped at
+     68ch. */
   max-width: 68ch;
 }
 
 /* ── a body drawn as what it is ───────────────────────────────────────── */
 
-/* The container borrows its well from .content-pre, so it arrives with
-   `white-space: pre-wrap`. Blocks now carry their own spacing and only the
-   ones where an author's line breaks MEAN something keep it. */
+/* The container inherits pre-wrap from .content-pre; only the blocks whose line breaks mean
+   something keep it. */
 .rt { white-space: normal; }
 .rt > :first-child { margin-top: 0; }
 .rt > :last-child { margin-bottom: 0; }
@@ -3078,28 +2631,15 @@ textarea.tk-box {
   word-break: break-word;
 }
 
-/* A run of pipes with no separator under it is not a grid, so it keeps the
-   spacing its author lined up by hand. Same for anything else this does not
-   recognise as a block. */
+/* Pipes with no separator row are not a grid: they keep the author's hand spacing. */
 .rt-raw {
   font: 400 var(--fs-sm)/1.6 var(--font-m);
   white-space: pre; overflow-x: auto;
   margin: 0 0 var(--sp-3);
 }
 
-/* A fenced block: a bar that names the language and copies it, over code that
-   does NOT wrap -- what lines up in code is meant to line up, so it scrolls
-   sideways instead. The bar is a row of its own rather than something drawn
-   over the <pre>: laid on top it covered the first line, and a block wide
-   enough to scroll slid its own text underneath the label. */
-/* The block steps FORWARD out of the reading pane rather than sinking into
-   it: --bg inside the --inset well is five points of luminance, which is no
-   edge at all. --raised is one step up and carries the boundary on its own --
-   no outline, per the rule these tones exist for. An outline on top of an
-   elevation step says the same thing twice, and a block that says it twice
-   stops reading as part of the memory it belongs to.
-
-   The only rule here is the divider under the header, which is a divider. */
+/* A fenced block: a header row naming the language over code that scrolls instead of wrapping,
+   raised one step out of the reading well, with no outline. */
 .rt-code-block {
   background: var(--raised);
   border-radius: var(--r-md);
@@ -3139,9 +2679,7 @@ textarea.tk-box {
   font: inherit; color: var(--ink);
 }
 
-/* The token palette is this dashboard's, not a theme shipped with the
-   engine: a code block should read as part of the page. Five roles, which is
-   as many as the eye separates at this size. */
+/* The dashboard's own token palette, five roles, so a code block reads as part of the page. */
 .rt-code .hljs-comment, .rt-code .hljs-quote { color: var(--ink-3); font-style: italic; }
 .rt-code .hljs-string, .rt-code .hljs-addition, .rt-code .hljs-regexp,
 .rt-code .hljs-doctag { color: var(--ok); }
@@ -3194,9 +2732,7 @@ textarea.tk-box {
 /* The marks a relation row wears, wherever it is drawn: which way it
    points, what kind of tie it is, and that the other end is gone. */
 .rel-dir { color: var(--ink-3); flex: none; width: 18px; display: inline-flex; justify-content: center; --ico: 14px; }
-/* Holds the relation's NAME, so it is set in the UI font: a translated name
-   is a word, and it shares a 368px column with the peer's own name. The
-   stored identifier is one hover away (shared.relTypeTitle). */
+/* Holds the relation's translated name, so the UI font; the stored id is on hover. */
 .rel-type-chip {
   font: 500 var(--fs-label) var(--font-ui);
   letter-spacing: .02em;
@@ -3208,15 +2744,9 @@ textarea.tk-box {
 /* the other end of this relation is gone from the store */
 .rel-gone { color: var(--bad-ink); }
 
-/* ── result rows for the memory picker ─────────────────────────────────
-   Shared by the picker dialog (.lp, below). They were the rows of a popover
-   anchored to a lookup field, in a column narrow enough that the list of
-   TITLES ran at roughly half the width of a 760px drawer -- which is most
-   of why choosing the right memory was guesswork. */
+/* ── result rows for the memory picker ── shared by the picker dialog (.lp, below) */
 
-/* Filters sit above the list they filter, in their own strip: they cost a
-   row of chrome and they are the difference between finding one memory in
-   a store of hundreds and scrolling for it. */
+/* Filters sit in their own strip above the list they filter. */
 .picker-filters {
   --ctl-h: var(--ctl-h-sm);
   display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2);
@@ -3231,11 +2761,8 @@ textarea.tk-box {
 /* the archived toggle is an .inline-label; only its wrapping differs */
 .picker-filters .inline-label { flex: none; }
 
-/* mark | snippet
-   mark | domain · type · match · uid · archived
-   The snippet leads and takes the width. Everything that separates two
-   near-identical memories sits under it in one quiet line -- present, and
-   not competing with the sentence you are actually reading. */
+/* mark | snippet, then one quiet line under it (domain · type · match · uid · archived): the
+   snippet leads and takes the width. */
 .picker-item {
   display: grid;
   grid-template-columns: auto 1fr;
@@ -3273,11 +2800,8 @@ textarea.tk-box {
 }
 .picker-note-bad { color: var(--bad-ink); }
 
-/* ── link picker (core/link-picker.js) ─────────────────────────────────
-   Find on the left, the whole memory on the right, what you chose along
-   the bottom. The two panes are the point: judging a candidate needs its
-   full content, and a 280-character snippet in a dropdown was the only
-   thing this decision used to have to go on. */
+/* ── link picker (core/link-picker.js) ── find on the left, the whole memory on the right, the
+   choice along the bottom: judging a candidate needs its full content. */
 
 .lp {
   flex: 1; min-height: 0;        /* both panes scroll; the grid must not grow */
@@ -3295,11 +2819,7 @@ textarea.tk-box {
 }
 .lp-foot-note { font-size: var(--fs-label); color: var(--ink-3); }
 
-/* mark | snippet | meta -- the same row as .picker-item, plus the mark that
-   says whether it is chosen. aria-pressed carries the state; this draws it.
-   The bar as well as the tint, because the tint alone is what .picker-item
-   already uses for HOVER -- a chosen row and the row under the pointer
-   would have looked the same. */
+/* A chosen row: aria-pressed, drawn as a bar plus the tint, since the tint alone is hover. */
 .lp-item[aria-pressed="true"] {
   background: var(--accent-dim);
   box-shadow: inset 2px 0 0 var(--accent);
@@ -3361,14 +2881,8 @@ textarea.tk-box {
   .lp-prev { max-height: 40vh; }
 }
 
-/* The relation type, the free-text escape that keeps the vocabulary open,
-   and the note -- the three controls on the link picker's form row.
-   `.lp-note` and not `.rel-note`: this width rule was written for the note
-   INPUT and the class it used is also worn by the note SPAN on a relation
-   row, where `flex: 1; min-width: 140px` overrode that span's own
-   `flex: none; max-width: 28%` and took 140px of a row it was supposed to
-   ride along the end of. That is what pushed the archived tag out of the
-   peer cell and let it draw over the note beside it. */
+/* The link picker's form row: relation type, its free-text escape, and the note. `.lp-note`
+   keeps the width on the input, off the note span of a relation row. */
 .rel-type-sel { flex: none; min-width: 150px; max-width: 190px; }
 .rel-type-custom { flex: 1; min-width: 140px; }
 .lp-note { flex: 1; min-width: 140px; }
@@ -3382,11 +2896,8 @@ textarea.tk-box {
 .diff-add { background: var(--diff-add-bg); color: var(--diff-add-ink); display: block; }
 .diff-ctx { color: var(--ink-3); display: block; }
 
-/* The same two colours, inline: the edit history compares whole lines, the
-   before/after panes of a suggestion compare words inside one. <mark> is
-   the element for it and arrives yellow-on-black from the browser, so both
-   ends of it are set here. The padding is horizontal only -- a vertical one
-   would push the line the mark sits in away from its neighbours. */
+/* The same two colours inline, on <mark>, whose browser colours are both overridden here;
+   horizontal padding only, so the line keeps its spacing. */
 .df-del, .df-ins {
   border-radius: var(--r-sm); padding: 0 2px;
   text-decoration: none;
@@ -3400,23 +2911,14 @@ textarea.tk-box {
    takes the room and the button never shrinks to fit around it */
 .dz-row > input { flex: 1; min-width: 170px; }
 .dz-row > .btn { flex: none; }
-/* Why the button is grey. It reserves its line whether or not it has
-   something to say, so arming the control does not move it -- hence the
-   min-height matching its own line box.
-
-   Quiet while the phrase is merely unfinished, which is the state you are
-   in for every keystroke but the last: red there would spend the alarm
-   colour on nothing, and there would be none left for the line that says
-   the button now works. */
+/* Why the button is grey, on a reserved line so arming it moves nothing; quiet while the phrase
+   is unfinished, so red is left for the line that says it works. */
 .dz-state {
   font: 400 var(--fs-label)/1.4 var(--font-ui);
   color: var(--ink-3); min-height: 1.4em;
 }
 .dz-state.armed { color: var(--bad-ink); font-weight: 500; }
-/* the phrase to type, and the one place it appears -- see the note in
-   record.js on why it is not also the field's placeholder. --chip-fill and
-   not --bad-tint: the box around it is that tint now, and a tint on a tint
-   of itself is a chip you cannot see. */
+/* the phrase to type, its one appearance; --chip-fill, since the box around it is the bad tint */
 .dz-type code {
   font-family: var(--font-m); color: var(--bad-ink);
   background: var(--chip-fill);
@@ -3451,28 +2953,16 @@ textarea.tk-box {
   height: calc(100vh - 246px); min-height: 420px;
   border: 1px solid var(--line-soft);
   border-radius: var(--r-lg);
-  /* Not the dotted well the diagram canvas uses: this one holds a whole
-     store at once, so the ground stays the darkest tone the theme has and the
-     depth comes from two washes in the primary and secondary hues, at an
-     alpha where they read as distance and not as decoration. */
+  /* the darkest ground, with two washes in the primary and secondary hues for depth: this
+     canvas holds a whole store */
   background:
     radial-gradient(115% 85% at 50% 42%, rgba(187, 134, 252, .06), transparent 60%),
     radial-gradient(95% 75% at 82% 90%, rgba(3, 218, 198, .045), transparent 58%),
     var(--bg);
   overflow: hidden;
 }
-/* touch-action: none so a drag on the canvas is a drag ON the canvas and not
-   the browser scrolling the page out from under it -- the engines listen on
-   pointer events, which covers mouse, pen and finger with one path */
-/* width/height 100% for the same reason .dg-stage canvas has them. A canvas's
-   width/height ATTRIBUTES act as a CSS width, and an absolutely-positioned
-   REPLACED element with width:auto resolves from its intrinsic size rather
-   than stretching between left and right -- so the backing store the engine
-   sets (`cv.width = w * dpr`, graph-2d.js) would also set the displayed
-   width, and at a device pixel ratio of 2 the element lays out at twice its
-   frame with .graph-wrap's overflow:hidden clipping the difference. The
-   engine reads the WRAP for its coordinate space, so the CSS size is pinned
-   to the wrap. */
+/* touch-action: none keeps a drag on the canvas. Sized 100% to the wrap, or a canvas's width
+   attribute would set its displayed size at every device pixel ratio. */
 .graph-wrap canvas {
   position: absolute; inset: 0;
   width: 100%; height: 100%;
@@ -3481,9 +2971,7 @@ textarea.tk-box {
 }
 .graph-wrap canvas.grabbing { cursor: grabbing; }
 .graph-wrap canvas.linkmode { cursor: crosshair; }
-/* The arrangement, while it is still arranging. On a large store this is a
-   real wait and the layout visibly condenses through it, so it reports how
-   much is left rather than spinning. */
+/* The arrangement while it settles: on a large store a real wait, so it reports what is left. */
 .graph-settle {
   position: absolute; left: 50%; top: 50%;
   transform: translate(-50%, -50%);
@@ -3499,9 +2987,7 @@ textarea.tk-box {
   width: 172px; height: 3px; border-radius: 2px;
   background: var(--line); overflow: hidden;
 }
-/* Scaled, not resized: a bar that animates its own width relayouts the strip
-   around it eleven times a second while the arrangement it is reporting on is
-   the thing that needs the frames. */
+/* Scaled, not resized, so the bar does not relayout the strip while the arrangement runs. */
 .gs-fill {
   display: block; height: 100%; width: 100%;
   background: var(--accent);
@@ -3522,20 +3008,13 @@ textarea.tk-box {
   font-size: var(--fs-read); line-height: 1.6; color: var(--ink-2);
 }
 
-/* The row ABOVE the drawing is the list toolbar every other view files under,
-   at the dense height; what is left here are the widths this one needs.
-
-   Both pickers take the same width -- a row of controls that each sizes to its
-   own longest label is a ragged edge -- and the width is set by the longest
-   TRANSLATED placeholder plus the chevron's reserved 32px, not by the
-   shortest. */
+/* The list toolbar above the drawing. Both pickers share one width, set by the longest
+   translated placeholder plus the chevron's 32px. */
 .graph-bar input, .graph-bar .pick { font-size: var(--fs-sm); }
 .graph-bar .pick { flex: none; width: 180px; }
 
-/* The arrangement, and the only control left standing on the canvas: it says
-   what the drawing IS rather than which memories are in it. Wide enough for
-   the longest name in either catalogue, and lifted off the field by its own
-   shadow, since what is behind it is a drawing and not a surface. */
+/* The arrangement picker, the one control on the canvas: wide enough for either catalogue's
+   longest name, lifted by its own shadow. */
 .graph-mode {
   --ctl-h: var(--ctl-h-sm);
   position: absolute; top: 12px; left: 12px; z-index: 3;
@@ -3544,16 +3023,9 @@ textarea.tk-box {
   width: 196px; font-size: var(--fs-sm);
   box-shadow: var(--shadow-pop);
 }
-/* Capped rather than allowed to eat the row: the leftover has to stay free so
-   the match count can sit at the far end without shoving anything when it
-   appears. The compound selector is what it takes to reach past
-   `.list-toolbar input[type="search"]`, which sets the rest of its flex. */
+/* Capped so the match count keeps its slot; compound to beat `.list-toolbar input[type="search"]`. */
 .graph-bar .graph-find-field { max-width: 340px; }
-/* A reserved slot at the far end of the toolbar, held whether it has text in
-   it or not. Sizing it to its content and pushing it right was not enough:
-   the leftover it needed existed in English and not in pt-BR, where the
-   longer labels left none, so the first keystroke shrank the search field and
-   slid the row. A fixed box cannot do that in any language. */
+/* A fixed slot for the match count, so a keystroke never resizes the row in any language. */
 .graph-find-count {
   margin-left: auto; flex: none;
   width: 96px; text-align: right;
@@ -3572,18 +3044,14 @@ textarea.tk-box {
   font-size: var(--fs-label); color: var(--ink-2);
 }
 .graph-legend .legend-item { font-size: var(--fs-label); }
-/* What the arrangement on screen means. It is a sentence rather than a label,
-   so it wraps inside a measure instead of stretching the legend across the
-   drawing. */
+/* What the arrangement means: a sentence, so it wraps in a measure. */
 .graph-legend .legend-note {
   margin-top: var(--sp-1); padding-top: var(--sp-1);
   border-top: 1px solid var(--line-soft);
   color: var(--ink-3); font-size: var(--fs-label);
   max-width: 34ch; line-height: 1.5;
 }
-/* The card floats over the drawing, so its height is canvas the reader does
-   not get to look at. It answers four things -- what this memory is, what it
-   is called, where it is filed, and where you can go from it -- and stops. */
+/* The card floats over the drawing, so it answers what, what name, where filed, where next. */
 .graph-card {
   position: absolute; left: 12px; bottom: 12px; z-index: 4;
   width: min(324px, calc(100% - 24px));
@@ -3611,9 +3079,7 @@ textarea.tk-box {
   overflow: hidden;
 }
 .gc-tags { display: flex; gap: var(--sp-2); align-items: center; flex-wrap: wrap; }
-/* The memory's own name, which is the first thing the card has to answer.
-   A titled memory shows its title; one written before the column shows the
-   opening line of its body, and then the snippet below would repeat it. */
+/* The memory's name: its title, or the opening line of an untitled body. */
 .gc-name {
   margin: var(--sp-2) 0 0;
   font: 500 var(--fs-md)/1.4 var(--font-ui);
@@ -3659,43 +3125,16 @@ textarea.tk-box {
 
 /* ── domains ─────────────────────────────────────────────────────────── */
 
-/* A domain is a path, so a list of them is a tree: one row per level,
-   indented by --d (its depth), and only the leaf name written out -- the
-   ancestors are the rows above it. The full path stays in the row's title and
-   in every link it emits, because that is what the API matches on.
-
-   ONE level is --dom-slot plus the gap after it, and the indent has to be
-   that same distance or the rail and the names it points at disagree.
-   Everything below is derived from that pair.
-
-   Two variables place a column, and the host sets them:
-
-     --dom-rail-x   where column 0 starts, which is whatever a depth-1 row
-                    puts at its own left edge.
-     --dom-line     how far into a column the vertical runs, so it lands on
-                    the thing that column is anchored to.
-
-   Nothing in the picker expands, so it reserves no column for a control -- a
-   root would otherwise sit indented from the edge of its own list. Its anchor
-   is the parent's NAME, and the line runs just inside the first character the
-   way `tree` prints it. The rail itself is drawn by core/shared.js
-   (domainRailHTML). */
+/* A domain list is a tree: one row per level, indented by --d, leaf name only (the full path in
+   its title and links). The host sets --dom-rail-x and --dom-line; core/shared.js draws the rail. */
 .pick-row.dom-row {
   position: relative;
   --dom-slot: 18px;
   --dom-step: calc(var(--dom-slot) + var(--sp-2));
 }
 
-/* The guide rails, drawn OVER that indent: one column per ancestor level,
-   carrying the lines that say which level a row hangs off. core/shared.js
-   decides which columns carry a line; this draws them.
-
-   Positioned against the whole row BOX -- padding included, and the extra
-   pixel at the bottom crosses the row's border -- because a vertical has to
-   meet the one in the next row. Stretching a flex child inside the row cannot
-   do that: the content is only as tall as itself, which leaves the padding of
-   both rows as a gap, and the tree then reads as a column of disconnected
-   ticks. */
+/* The guide rails over the indent, one column per ancestor, positioned against the row box so
+   a vertical meets the next row's across the padding. */
 .dom-rail {
   position: absolute; left: var(--dom-rail-x); top: 0; bottom: -1px;
   display: flex; pointer-events: none;
@@ -3723,15 +3162,8 @@ textarea.tk-box {
 /* a level that exists only because something deeper is filed under it:
    real enough to group by, but nobody wrote a memory to it */
 .dom-leaf.implicit { color: var(--ink-3); font-style: italic; }
-/* ── the picker ────────────────────────────────────────────────────────
-   The panel behind .pick, for every choice in the app that used to be a
-   native <select> popup -- the one surface this stylesheet could not reach,
-   which is why a type used to lose its colour and a confidence its ring the
-   moment you opened the list they live in. See core/pick.js.
-
-   Modelled on .ctx-menu, and above the modal scrim rather than below it: a
-   list raised from inside a dialog has to be over the dialog, and both the
-   link picker and the memory record are dialogs. */
+/* ── the picker ── the panel behind .pick (core/pick.js), modelled on .ctx-menu and above the
+   modal scrim, since lists open from inside dialogs. */
 .pick-pop {
   position: fixed; z-index: 101;
   display: flex; flex-direction: column;
@@ -3743,24 +3175,8 @@ textarea.tk-box {
   animation: rise .13s both;
 }
 
-/* ── the panel, joined to its control ─────────────────────────────────
-   A picker's panel hangs OFF its button: it starts on the button's own edge
-   with nothing between them, and while it is open the button wears the
-   panel's surface, so the two read as one piece of material and not as a card
-   that happens to be near a control.
-
-   The corner the two share is square -- that one corner, and no other. The
-   panel is as wide as its rows need and a compact control is narrower than
-   that, so the far end of the same edge overhangs the button with nothing
-   above it to continue from. Which corner it is follows the edge they line up
-   on: drop-right for a control that hangs its panel off its RIGHT edge.
-
-   core/pick.js decides all of it, and marks nothing while a clamped panel is
-   not touching the button at all -- a squared corner against nothing reads as
-   a panel with a piece cut out of it.
-
-   Transparent, not zero: a border whose WIDTH changes changes the height the
-   placement already measured, and the panel then lands a pixel off the seam. */
+/* ── the panel, joined to its control ── it hangs off the button, which wears its surface while
+   open; core/pick.js squares the one shared corner. Borders go transparent, never zero width. */
 .pick-pop.drop-below {
   border-top-color: transparent;
   border-radius: 0 var(--r-md) var(--r-md) var(--r-md);
@@ -3791,11 +3207,7 @@ textarea.tk-box {
 .pick.project-sel.drop-below, .pick.project-sel.drop-above { background-color: transparent; }
 
 .pick-head { flex: none; padding: var(--sp-2); border-bottom: 1px solid var(--line-soft); }
-/* The filter is a field ON the panel, not a well cut through it: the head's
-   own rule is the boundary, so the box needs no outline of its own, and
-   --inset here would be the page showing through a floating menu. A filled
-   field, the way the theme draws one -- a wash and an underline that takes
-   the accent while the caret is in it, which is from the moment it opens. */
+/* The filter is a filled field on the panel: a wash, and an underline that takes the accent. */
 input.pick-q {
   width: 100%; font-size: var(--fs-sm);
   background: var(--hover-1);
@@ -3811,10 +3223,7 @@ input.pick-q:focus { box-shadow: inset 0 -2px 0 var(--accent); }
   font-size: var(--fs-sm); color: var(--ink);
 }
 .pick-row:hover { background: var(--hover-1); }
-/* The keyboard caret and what is currently chosen are different facts and
-   both are on screen at once: the caret is where Enter would land, the choice
-   is what the control already holds. So one is a wash and the other is the
-   accent, never the same mark. */
+/* The keyboard caret is a wash and the current choice the accent: two facts, two marks. */
 .pick-row.active { background: var(--hover-3); }
 .pick-row[aria-selected="true"] { color: var(--accent); }
 .pick-row[aria-selected="true"] .dom-leaf,
@@ -3833,9 +3242,8 @@ input.pick-q:focus { box-shadow: inset 0 -2px 0 var(--accent); }
   text-align: left;
 }
 .pick-value .type-tag, .pick-value .conf-pill { pointer-events: none; }
-/* The quiet variant, for a picker whose control wears no box at all (see
-   core/projects.js): one step of elevation instead of eight, the data font of
-   the rows it lists, and the accent on one row -- the project that is active. */
+/* The quiet variant, for a picker with a boxless control (core/projects.js): one elevation
+   step, the rows' data font, the accent on the active project. */
 .pick-pop.pick-quiet {
   background: var(--raised);
 }
@@ -3853,9 +3261,7 @@ input.pick-q:focus { box-shadow: inset 0 -2px 0 var(--accent); }
 .pick-quiet .pick-row[aria-selected="true"],
 .pick-quiet .pick-row[aria-selected="true"] .pick-label { color: var(--ink); }
 .pick-quiet .pick-row[aria-selected="true"] { box-shadow: inset 2px 0 0 var(--accent); }
-/* the action row, set apart by the rule and by the UI font among the
-   monospaced names -- the accent it wears in a dialog would be a second
-   coloured row in a panel that has one */
+/* the action row, set apart by a rule and by the UI font among monospaced names */
 .pick-quiet .pick-row.pick-new {
   margin-top: var(--sp-1); padding-top: var(--sp-2);
   border-top: 1px solid var(--line-soft);
@@ -3864,10 +3270,8 @@ input.pick-q:focus { box-shadow: inset 0 -2px 0 var(--accent); }
   font-family: var(--font-ui); color: var(--ink-3);
 }
 
-/* The domain variant. The indent is the row's own padding, not a spacer
-   inside it: with no control holding a column open, a zero-width spacer would
-   still leave the flex gap after it and push every level -- a root included
-   -- off the left edge of its own list. */
+/* The domain variant: the indent is the row's padding, since a zero-width spacer would still
+   leave a flex gap before a root. */
 .pick-row.dom-row {
   gap: 0;
   padding-left: calc(var(--sp-3) + var(--d, 0) * var(--dom-step));
@@ -3877,15 +3281,8 @@ input.pick-q:focus { box-shadow: inset 0 -2px 0 var(--accent); }
 
 /* ── maintenance ─────────────────────────────────────────────────────── */
 
-/* Maintenance is six workspaces behind one tab strip, not six panels
-   competing for one screen. Each tab owns the whole area under the strip
-   and scrolls inside it; the strip and the store's own state stay put.
-
-   The panels are all built at mount and hidden with [hidden] rather than
-   thrown away, because two of them hold work you would lose: a dedup scan
-   is an O(n^2) sweep, and a log you have scrolled back through is a place
-   you were reading. Flipping to another tab and back must not re-run
-   either. */
+/* Maintenance is six workspaces behind one tab strip, each scrolling inside. Panels stay
+   mounted and [hidden], so a dedup scan or a scrolled log survives a tab switch. */
 .mnt-head {
   flex: none;
   display: flex; align-items: center; gap: var(--sp-2) var(--sp-4);
@@ -3989,9 +3386,8 @@ input.pick-q:focus { box-shadow: inset 0 -2px 0 var(--accent); }
 .mnt-disk-split { font-size: var(--fs-sm); color: var(--ink-3); margin-top: var(--sp-0); }
 .mnt-disk .btn { width: 100%; margin-top: var(--sp-3); justify-content: center; }
 
-/* A stacked bar of one segment says nothing, so every use of this has at
-   least two: the live file against what its backups cost, the pages in
-   use against the pages a compaction would return. */
+/* A stacked bar always has two segments or more: a file against its backups, pages against
+   what compaction returns. */
 .mnt-bar {
   display: flex; height: 6px; margin-top: var(--sp-2);
   border-radius: var(--r-sm); overflow: hidden; background: var(--inset);
@@ -4035,9 +3431,8 @@ input.pick-q:focus { box-shadow: inset 0 -2px 0 var(--accent); }
   gap: var(--sp-3); align-items: center;
   border-radius: var(--r-md); padding: var(--sp-2);
 }
-/* The tick and the row's own two controls are columns of their own on the
-   shelf that can be acted on. A zip's files are read-only, so that shelf
-   keeps the four it always had. */
+/* The tick and the row's two controls are columns of their own on an actionable shelf; a zip's
+   shelf is read-only. */
 .mnt-shelf-body.pickable .mnt-file {
   grid-template-columns: 18px 16px minmax(0, 1fr) 96px 74px 62px;
 }
@@ -4093,9 +3488,7 @@ input.pick-q:focus { box-shadow: inset 0 -2px 0 var(--accent); }
 .mnt-file-when { font-size: var(--fs-sm); color: var(--ink-2); }
 .mnt-file-size { font: 400 var(--fs-sm) var(--font-m); color: var(--ink-2); text-align: right; }
 
-/* What the ticks add up to, and the one thing that can be done with them.
-   It sits under the scroller rather than in the head, because it is about
-   the rows and it has to stay put while they move. */
+/* What the ticks add up to and what can be done with them, pinned under the scroller. */
 .mnt-sel {
   flex: none;
   display: flex; align-items: center; gap: var(--sp-3);
@@ -4199,9 +3592,7 @@ input.pick-q:focus { box-shadow: inset 0 -2px 0 var(--accent); }
 .mnt-ev .dot { align-self: start; margin-top: .42em; }
 .mnt-ev-main { min-width: 0; }
 .mnt-ev-uid { font: 400 var(--fs-label) var(--font-m); color: var(--ink-3); }
-/* An event's own note is the title, and a note has no length limit -- one
-   of 400 characters would otherwise own a third of the log. Two lines,
-   then the full text in the row's tooltip. */
+/* An event's note is its title: two lines, the full text in the row's tooltip. */
 .mnt-ev-title {
   font-size: var(--fs-body); color: var(--ink); line-height: 1.45;
   display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
@@ -4224,14 +3615,10 @@ input.pick-q:focus { box-shadow: inset 0 -2px 0 var(--accent); }
      truncating, plus the folder and the count. */
   .mnt-two { grid-template-columns: minmax(0, 240px) minmax(0, 1fr); }
   .mnt-rail2 { overflow-y: auto; }
-  /* a panel is a heading that stays and a body that moves. The toolbar of a
-     scan sits between them and stays too: it is what you set before you
-     press Run, and it cannot scroll away from its own results. */
+  /* a panel is a heading that stays and a body that moves; a scan's toolbar stays too */
   .mnt-panel .panel { min-height: 0; display: flex; flex-direction: column; }
-  /* A tab whose content is one list takes the tab's whole height, so an
-     empty one is a box saying it is empty rather than a strip of heading
-     over a screen of nothing. The exception opts out: a pair of settings
-     grown to full height is a rule with more air under it than words. */
+  /* A one-list tab takes the tab's whole height, so empty reads as empty; a pair of settings
+     opts out. */
   .mnt-panel > .panel { flex: 1; }
   .mnt-panel > .panel.mnt-short { flex: none; }
   .mnt-panel .panel > .panel-body { flex: 1; min-height: 0; overflow-y: auto; }
@@ -4250,9 +3637,7 @@ input.pick-q:focus { box-shadow: inset 0 -2px 0 var(--accent); }
   }
 }
 
-/* Below the fill floor the tabs stack as a page: the rail goes above its
-   shelf, and every box grows to its content instead of scrolling inside a
-   frame too short to scroll in. */
+/* Below the fill floor the tabs stack as a page and every box grows to its content. */
 @media (max-width: 1023px), (max-height: 619px) {
   .mnt-two { grid-template-columns: minmax(0, 1fr); }
   /* the rail is a band across the top here, not a column with a foot */
@@ -4262,9 +3647,8 @@ input.pick-q:focus { box-shadow: inset 0 -2px 0 var(--accent); }
 
 
 
-/* A body the section parser could not read. The whole row opens the record,
-   which is where its fields are set by hand, so it is a button and the uid
-   is plain text -- a copy chip inside would be a button inside a button. */
+/* A body the section parser could not read: the whole row opens the record, so it is a button
+   and the uid is plain text. */
 .sc-row {
   display: grid; gap: var(--sp-1);
   width: 100%; text-align: left;
@@ -4283,9 +3667,7 @@ input.pick-q:focus { box-shadow: inset 0 -2px 0 var(--accent); }
 
 /* ── a body read into its fields ──────────────────────────────────────── */
 
-/* The label carries the separation, so the panes stack with no rule between
-   them: four boxed fields read as four things to compare rather than as one
-   memory, which is what the body actually is. */
+/* The label carries the separation, so the panes stack with no rule: one memory, not four. */
 .sec-label {
   font: 500 var(--fs-label) var(--font-m);
   letter-spacing: .06em; text-transform: uppercase;
@@ -4299,10 +3681,8 @@ input.pick-q:focus { box-shadow: inset 0 -2px 0 var(--accent); }
    until then it is a fact about the draft and not a problem with it. */
 .sec-count { float: right; text-transform: none; letter-spacing: 0; color: var(--ink-3); }
 .sec-count.over { color: var(--bad-ink); }
-/* The body did not read back into the fields its type is supposed to
-   have. A thin edge all the way round rather than a thick one down the
-   left: the warning is about the whole box, and a coloured tab on one
-   side of a card is decoration wearing a severity. */
+/* A body that did not read back into its type's fields: a thin edge round the whole box, since
+   the warning is about all of it. */
 .sec-problem {
   font-size: var(--fs-sm); color: var(--warn); line-height: 1.5;
   background: var(--inset); border: 1px solid rgba(255, 213, 79, .35);
@@ -4329,16 +3709,12 @@ input.pick-q:focus { box-shadow: inset 0 -2px 0 var(--accent); }
   display: flex; flex-direction: column; gap: var(--sp-2);
 }
 .pair-card .snippet { color: var(--ink-2); line-height: 1.5; max-height: 130px; overflow: hidden; }
-/* a pair you have already ruled on. maintenance.js used to write
-   `style.opacity = .4` here, which dims the text along with the box; sinking
-   the surface instead keeps every word readable and still says "handled". */
+/* a pair already ruled on: the surface sinks and the text stays readable */
 .pair-card.decided { background: var(--bg); }
 
 /* ── optimization ────────────────────────────────────────────────────── */
 
-/* What KIND of suggestion this is -- which is not a memory type. It used to
-   be rendered as `type-tag t-note`, so a `compact` or a `retag` was painted
-   with the orange that means "note" everywhere else in the UI. */
+/* What KIND of suggestion this is, which is not a memory type, so no type colour. */
 .opt-kind {
   display: inline-flex; align-items: center;
   font: 500 var(--fs-sm) var(--font-ui);
@@ -4364,9 +3740,7 @@ input.pick-q:focus { box-shadow: inset 0 -2px 0 var(--accent); }
 .opt-peer-name { display: block; color: var(--ink); font-weight: 500; }
 .opt-peer-body-text { display: block; margin-top: var(--sp-2); color: var(--ink-2); }
 
-/* memory-under-review preview: which memory this is about. It is no longer
-   shown for the kinds whose Before pane is that same content, so it only has
-   to identify a memory now, not reproduce it -- hence the shorter well. */
+/* memory-under-review preview: it identifies the memory, so the well is shorter */
 .opt-preview { margin-bottom: var(--sp-1); }
 .opt-preview .snippet {
   background: var(--inset); border: 1px solid var(--line-soft); border-radius: var(--r-md);
@@ -4380,17 +3754,13 @@ input.pick-q:focus { box-shadow: inset 0 -2px 0 var(--accent); }
   grid-template-areas: "bl . al" "bs arrow as";
   column-gap: var(--sp-3); row-gap: var(--sp-1);
 }
-/* Scoped to the prose pair: .opt-diff-b and .opt-diff-a also name the two
-   halves of the one-line pair below, which is an ordinary two-column grid
-   with no areas to place into. */
+/* Scoped to the prose pair: .opt-diff-b and .opt-diff-a also name the one-line pair's halves. */
 .opt-diff > .opt-diff-bl { grid-area: bl; }
 .opt-diff > .opt-diff-al { grid-area: al; }
 .opt-diff > .opt-diff-b  { grid-area: bs; }
 .opt-diff > .opt-diff-a  { grid-area: as; }
-/* ── the three panes that are not prose ──
-   A flag, a set and a single line each change in their own way, so each
-   gets the shape that shows the change and nothing wider. All three sit at
-   their natural height: only the prose pair earns the pane. */
+/* ── the three panes that are not prose ── a flag, a set and a line, each at its natural
+   height; only the prose pair earns the pane. */
 
 /* A flag moving between named states: both marks on one line, the way the
    rest of the UI draws them, with the arrow between. */
@@ -4453,24 +3823,16 @@ input.pick-q:focus { box-shadow: inset 0 -2px 0 var(--accent); }
   --ico: 14px;
 }
 .opt-label { color: var(--ink-3); }
-/* --inset, not --surface: this is a well showing text the suggestion is about,
-   and on a --raised card a --surface well was only visible because of its
-   border. Every other snippet well in this file is --inset; so is this one. */
+/* --inset, like every snippet well in this file: the text the suggestion is about. */
 .opt-diff .snippet, .opt-peer-body .snippet {
   background: var(--inset); border: 1px solid var(--line-soft); border-radius: var(--r-md);
   padding: var(--sp-2) var(--sp-2); color: var(--ink-2); line-height: 1.5; max-height: 150px; overflow: auto;
   height: 100%;
 }
-/* The proposal's side of the pair, named by its edge: the two wells hold
-   nearly the same text, and which one is the store as it stands has to be
-   readable without going back up to the label. */
+/* The proposal's side of the pair is named by its green edge, so it reads without the label. */
 .opt-diff .opt-diff-a { border-color: rgba(129, 199, 132, .25); }
-/* A well holding a BODY is prose someone reads to decide, so it carries the
-   reading ink; the plain wells beside it hold a tag set or a path and stay a
-   step quieter. Padding grows with it -- rendered blocks need the room that
-   one wrapped line did not. Deliberately NOT .content-prose: that caps the
-   measure at 68ch, and this box is the one that scrolls (see the note on
-   .rf-body). */
+/* A well holding a body carries the reading ink and more padding; not .content-prose, whose
+   68ch measure would fight this scrolling box. */
 .opt-diff .snippet.rt, .opt-distill .snippet.rt {
   color: var(--ink); padding: var(--sp-3);
 }
@@ -4502,15 +3864,10 @@ input.pick-q:focus { box-shadow: inset 0 -2px 0 var(--accent); }
   min-width: 0;
 }
 .opt-verified .ico { flex: none; }
-/* The attestation the agent wrote can be a paragraph, and it is the FOOT of
-   the pane: it takes the slack the buttons leave and clips, with the whole
-   of it on the title. The ellipsis lives here rather than on .opt-verified
-   because that one is a flex container -- text-overflow has nothing to act
-   on when the text is an anonymous flex item. */
+/* The agent's attestation, at the pane's foot, clips with the whole text in the title; here and
+   not on .opt-verified, a flex container that text-overflow cannot reach into. */
 .opt-verified-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-/* basis 0, not auto: with `auto` the basis is the length of the sentence, so
-   a long attestation demanded a whole row and wrapped the decision buttons
-   onto a second one. It takes what the buttons leave and clips. */
+/* basis 0, so a long attestation takes what the buttons leave instead of wrapping them */
 .opt-detail-foot .opt-verified { flex: 1 1 0; }
 .opt-verified.muted { color: var(--ink-3); }
 
@@ -4522,9 +3879,7 @@ input.pick-q:focus { box-shadow: inset 0 -2px 0 var(--accent); }
   display: flex; align-items: center; justify-content: center;
   animation: fade .18s both;
 }
-/* A second level over the first: two scrims at .6 stack to near-black and
-   the form underneath -- which is the context for the one on top -- stops
-   being readable. This one only has to separate the two dialogs. */
+/* A second level over the first: a lighter scrim, so the form underneath stays readable. */
 .modal-scrim.stacked { background: rgba(0, 0, 0, .32); }
 @keyframes fade { from { opacity: 0; } }
 .modal {
@@ -4537,23 +3892,14 @@ input.pick-q:focus { box-shadow: inset 0 -2px 0 var(--accent); }
   animation: rise .2s both;
 }
 .modal:focus-visible { outline: none; }
-/* A form with columns rather than one column of fields: the record and the
-   link picker both put two panes side by side, and 540px is a stack. Wide
-   enough that the pair of panes is the point -- a memory's content is a
-   wall of prose and the panels beside it are rows of chips and snippets,
-   and at 1120px both were still clipping things they had room for in a
-   window this dialog was only using two thirds of. */
+/* A form with two panes side by side (the record, the link picker): wide enough for both. */
 .modal-wide { width: min(1340px, 95vw); }
-/* Head and foot pinned, body scrolling -- for a dialog tall enough that
-   the buttons would otherwise be somewhere down the page. The plain modal
-   scrolls as one piece, which is right for four fields. */
+/* Head and foot pinned, body scrolling, for a dialog taller than the window. */
 .modal-tall {
   height: min(88vh, 940px);
   display: flex; flex-direction: column; overflow: hidden;
 }
-/* flex, not the grid a plain modal body is: a tall dialog has one region
-   that takes the leftover height (a pane pair, a scrolling record) and the
-   rest pinned around it, which rows of auto height cannot express */
+/* flex, not grid: one region takes the leftover height and the rest is pinned around it */
 .modal-tall > .modal-body {
   flex: 1; min-height: 0; overflow-y: auto;
   display: flex; flex-direction: column; gap: var(--sp-3);
@@ -4574,25 +3920,15 @@ input.pick-q:focus { box-shadow: inset 0 -2px 0 var(--accent); }
 .toasts {
   position: fixed; z-index: 90;
   right: var(--sp-5);
-  /* Right-anchored deliberately, and NOT centred on the content: a centred
-     stack would land on the middle of the dialog the toast is usually ABOUT.
-     Down here it clears a centred record's own bottom corner, and the record
-     reserves this much padding for it (see --toast-h on .record-grid). */
+  /* right-anchored, not centred, so a toast does not land on the dialog it is about */
   bottom: var(--sp-5);
-  /* max-width, never width: a fixed width made "uid copied" as wide as the
-     longest error the API can return. align-items so each toast hugs the right
-     edge at its own size -- the stack is right-anchored, so they line up on the
-     side the eye is already on. */
+  /* max-width, never width; align-items hugs each toast to the right edge at its own size */
   display: flex; flex-direction: column; align-items: flex-end; gap: var(--sp-2);
   max-width: min(440px, calc(100vw - var(--sp-6)));
 }
-/* flex, not grid: the mark, the action and the repeat count are each optional,
-   and a fixed set of grid columns leaves an empty track wherever one is absent,
-   sliding the close button out of the corner. */
+/* flex, not grid: mark, action and count are optional, and an empty track would move close */
 .toast {
-  /* the first line's box -- the size body sets times the line-height body
-     sets. What the mark centres against, and all of the layout the two
-     buttons beside it claim. */
+  /* the first line's box (body size times line height): the mark and buttons align to it */
   --toast-line: calc(var(--fs-body) * 1.55);
   display: flex; align-items: flex-start; gap: var(--sp-3);
   background: var(--overlay);
@@ -4605,10 +3941,7 @@ input.pick-q:focus { box-shadow: inset 0 -2px 0 var(--accent); }
   box-shadow: var(--shadow-pop);
   animation: toast-in .22s cubic-bezier(.25, .9, .3, 1.1) both;
 }
-/* The mark centres against the FIRST LINE of the message, not against the whole
-   block: its box is one line-height tall and the icon centres inside it. A bare
-   `padding-top` guess left it sitting high, and it drifted further the moment
-   the type scale moved -- this follows the line box instead of a magic number. */
+/* The mark centres on the message's FIRST LINE: its box is one line-height tall. */
 .toast-mark {
   display: inline-flex; align-items: center;
   height: var(--toast-line);
@@ -4626,19 +3959,14 @@ input.pick-q:focus { box-shadow: inset 0 -2px 0 var(--accent); }
   overflow-wrap: anywhere;
 }
 .toast [data-act] { flex: none; }
-/* Both buttons keep the 30px target every other control has (WCAG 2.5.8) and
-   claim only the first line's height in the layout: at their own height they
-   set the box of a one-line toast, and the message it is about then sits
-   above that box's centre line rather than on it. */
+/* Both buttons keep the 30px target but claim only the first line's height in the layout, so a
+   one-line message stays centred. */
 .toast [data-act], .toast [data-close] {
   margin-block: calc((var(--toast-line) - var(--ctl-h-sm)) / 2);
 }
 
-/* Three redundant signals, not one of them trim: the mark's SHAPE (a closed,
-   an open or a crossed ring), its colour, and -- for a failure only -- the
-   whole container plus a heavier message. Nothing depends on hue alone, and the
-   3px strip that used to be the only difference between "uid copied" and a
-   rejected write is gone. */
+/* Three redundant signals, never hue alone: the mark's shape, its colour, and for a failure the
+   whole container with a heavier message. */
 .toast.ok   .toast-mark { color: var(--ok); }
 .toast.warn .toast-mark { color: var(--warn); }
 .toast.bad  .toast-mark { color: var(--bad-ink); }
@@ -4661,28 +3989,19 @@ input.pick-q:focus { box-shadow: inset 0 -2px 0 var(--accent); }
   padding: var(--sp-2) var(--sp-3);
   font-size: var(--fs-sm); color: var(--ink);
   box-shadow: var(--shadow-pop);
-  /* Wrap, and never grow past the window. This used to be nowrap with no
-     bound, so any long content -- a step's note, a full memory snippet --
-     became one endless line running off the screen. */
+  /* wrap, and never grow past the window */
   max-width: min(420px, calc(100vw - 32px));
   white-space: normal;
   overflow-wrap: anywhere;
   line-height: 1.5;
-  /* Bound the other axis too, now that the diagram tip carries a whole note
-     rather than 220 characters of one. The tip is pointer-events:none -- it
-     has to be, it follows the pointer -- so it cannot be scrolled, and a box
-     taller than the window would just run off the bottom with nothing to say
-     so. A note long enough to hit this belongs in the inspector anyway; a
-     screenful is what a tip can honestly carry. */
+  /* and never past the window's height: a pointer-events:none tip cannot scroll */
   max-height: calc(100vh - 20px);
   overflow: hidden;
 }
 .tip b { color: var(--accent); font-family: var(--font-m); }
 
-/* A menu of actions: at the pointer for a right-click, or under the control
-   that opened it (see openDropMenu). Above the tip, because the pointer is
-   over the canvas and a hovered step's note would otherwise sit on top of the
-   menu. */
+/* A menu of actions, at the pointer or under its control (openDropMenu); above the tip, which
+   would otherwise sit on it over the canvas. */
 .ctx-menu {
   position: fixed; z-index: 96;
   min-width: 190px; max-width: min(300px, calc(100vw - 24px));
@@ -4719,11 +4038,8 @@ input.pick-q:focus { box-shadow: inset 0 -2px 0 var(--accent); }
   font: 400 var(--fs-body) var(--font-ui);
 }
 
-/* Deliberately NOT `.empty`. Six places rendered a fatal load failure with
-   that class -- the same grey centred sentence as "nothing matched your
-   filters" -- so a dropped connection on Maintenance read as a clean database.
-   Left-aligned because it is a statement and not a shrug, marked so it is not
-   mistaken for content, and carrying a Retry, which this app had nowhere. */
+/* Not `.empty`, so a failed load never reads as an empty store: left-aligned, marked, with a
+   Retry. */
 .failed {
   display: flex; align-items: flex-start; gap: var(--sp-3);
   padding: var(--sp-4);
@@ -4779,9 +4095,7 @@ input.pick-q:focus { box-shadow: inset 0 -2px 0 var(--accent); }
   align-items: start;
 }
 .dg-main {
-  /* the toolbar is a row of its own above the canvas, so no card can ever
-     be dragged, panned or arranged under it -- reserving space in the fit
-     only kept auto-arrange off the buttons, not a hand drag */
+  /* the toolbar is its own row above the canvas, so no card can be dragged under it */
   display: grid; grid-template-rows: auto 1fr; gap: var(--sp-3);
   min-width: 0;
 }
@@ -4796,11 +4110,7 @@ input.pick-q:focus { box-shadow: inset 0 -2px 0 var(--accent); }
     var(--bg);
   overflow: hidden;
 }
-/* width/height 100% on purpose: a canvas's width/height ATTRIBUTES act as
-   a CSS width, so without this the displayed size is whatever the last
-   resize() wrote and any drift shows up as a clipped strip. Pinning the
-   CSS size to the stage leaves the attributes doing only their real job,
-   sizing the backing store. */
+/* Sized 100% to the stage, so the width/height attributes only size the backing store. */
 .dg-stage canvas {
   position: absolute; inset: 0;
   width: 100%; height: 100%;
@@ -4810,10 +4120,7 @@ input.pick-q:focus { box-shadow: inset 0 -2px 0 var(--accent); }
 .dg-stage canvas.dragging { cursor: grabbing; }
 .dg-stage canvas.linkmode { cursor: crosshair; }
 
-/* The record dialog draws the same flow at a reading size: it sits in a
-   scrolling column beside the metadata, so it takes a fixed slice of the
-   dialog instead of the viewport the editor gets. Panning and zooming
-   still work -- what it does not do is edit. */
+/* The record dialog's read-only flow, a fixed slice of the column; pan and zoom still work. */
 .dg-stage-record { height: 340px; min-height: 0; }
 @media (max-width: 720px) { .dg-stage-record { height: 240px; } }
 
@@ -4821,11 +4128,8 @@ input.pick-q:focus { box-shadow: inset 0 -2px 0 var(--accent); }
   display: flex; flex-wrap: wrap; gap: var(--sp-2); align-items: center;
   min-width: 0;
 }
-/* Bottom-left corner of the stage. Both the hint strip and the legend want
-   to live here, so they stack instead of fighting: the legend is always
-   there, the hint appears above it when it has something to say, and
-   insets() measures the pair so fit() never parks a card behind them.
-   Transparent to the pointer, or it would eat drags near the corner. */
+/* Bottom-left corner: the legend, and the hint above it when it has one; insets() measures both
+   so fit() never parks a card behind them. Pointer-transparent, so drags still pan. */
 .dg-overlay {
   position: absolute; left: 12px; bottom: 12px; z-index: 3;
   max-width: calc(100% - 24px);
@@ -4854,19 +4158,8 @@ input.pick-q:focus { box-shadow: inset 0 -2px 0 var(--accent); }
 }
 .dg-legend-item { display: inline-flex; align-items: center; gap: var(--sp-1); white-space: nowrap; }
 
-/* Top-left corner of the stage, opposite the legend and built the same
-   way: the same glass over the dot grid, transparent to the pointer except
-   on the chips themselves, so a drag near the corner still pans.
-
-   It holds the ways off this flow for the selected step, and the way back
-   into whichever flow sent you here. Empty and hidden for a step that
-   continues nowhere -- which is most of them, and the reason this can sit
-   on the drawing at all. */
-/* A ROW that wraps, not a column: the chips carry a flow's short name now
-   (see chipLabel), so five or six fit across instead of one per row. Past
-   JUMP_CHIPS_SHOWN they fold behind the +N button -- the corner is the only
-   thing over the canvas that grows with how connected a flow is, and it
-   feeds insets(), so left alone it shrinks the diagram it sits on. */
+/* Top-left corner: the ways off this flow for the step, and back; a wrapping row of short chips
+   that folds past JUMP_CHIPS_SHOWN, since it feeds insets(). */
 .dg-jumpnav {
   position: absolute; left: 12px; top: 12px; z-index: 3;
   max-width: calc(100% - 24px);
@@ -4876,9 +4169,7 @@ input.pick-q:focus { box-shadow: inset 0 -2px 0 var(--accent); }
 .dg-jumpnav > * { pointer-events: auto; }
 .dg-jumpnav .dg-navchip.over { display: none; }
 .dg-jumpnav.open .dg-navchip.over { display: inline-flex; }
-/* family and size only -- the `font` shorthand would carry a line-height in
-   with it and win over .dg-navchip's, leaving the button two pixels shorter
-   than the chips it shares a row with */
+/* family and size only: the `font` shorthand would override .dg-navchip's line-height */
 .dg-navmore {
   font-family: inherit; cursor: pointer;
   font-variant-numeric: tabular-nums;
@@ -4922,10 +4213,7 @@ input.pick-q:focus { box-shadow: inset 0 -2px 0 var(--accent); }
   min-width: 0;
 }
 .dg-panel {
-  /* a grid with one gap, rather than margins per child: the panel stacks a
-     heading, hints, fields and a button row, and every one of those used to
-     carry its own spacing (or none, which is how a label ended up sitting
-     on the input above it) */
+  /* a grid with one gap rather than margins per child */
   display: grid; gap: var(--sp-3); align-content: start;
   background: var(--surface);
   border-radius: var(--r-lg);
@@ -4935,11 +4223,7 @@ input.pick-q:focus { box-shadow: inset 0 -2px 0 var(--accent); }
   min-width: 0;
 }
 .dg-panel > * { min-width: 0; }
-/* This was the sheet's only weight-600 and its only monospace heading, which
-   made the diagram inspector read as a different product from the rest of the
-   app for no reason anyone could name. It is a panel title like every other
-   panel title now; the inspector's density is a padding question, not a
-   typographic one. */
+/* A panel title like every other one; the inspector's density is a padding question. */
 .dg-panel > h3 {
   margin: 0;
   display: flex; align-items: center; gap: var(--sp-2);
@@ -4955,11 +4239,8 @@ input.pick-q:focus { box-shadow: inset 0 -2px 0 var(--accent); }
   border: 1px solid var(--line-soft);
   border-radius: var(--r-sm); padding: var(--sp-0) var(--sp-2);
 }
-/* minmax(0, 1fr) and not the default `auto` track, on all three of these
-   row lists: an auto track is at least as wide as its widest item's
-   min-content, and a row of nowrap parts (a step key, a diagram title, a
-   condition) has a large one -- so the track grew past the 327px inspector
-   column and scrolled it sideways instead of the rows shrinking. */
+/* minmax(0, 1fr), not auto: an auto track grows to a nowrap item's min-content and scrolls the
+   inspector sideways. */
 .dg-edges { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--sp-1); }
 .dg-edge {
   display: flex; align-items: center; gap: var(--sp-2);
@@ -4988,11 +4269,8 @@ input.pick-q:focus { box-shadow: inset 0 -2px 0 var(--accent); }
 .dg-link .snippet.clickable { cursor: pointer; }
 .dg-link .snippet.clickable:hover { color: var(--ink); }
 
-/* ── jumps: where a step continues in another flow ──────────────────────
-   Built to read as an ADDRESS rather than as a note. The row is an <a> so
-   the destination is in the status bar before it is clicked, ctrl-click
-   opens it in another tab, and the accent colour says the same thing every
-   other link in this app says with it. */
+/* ── jumps: where a step continues in another flow ── an address, not a note: the row is an
+   <a>, so it shows in the status bar and opens in a tab. */
 .dg-jumps { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--sp-2); }
 .dg-jump {
   display: flex; align-items: center; gap: var(--sp-2);
@@ -5008,10 +4286,7 @@ input.pick-q:focus { box-shadow: inset 0 -2px 0 var(--accent); }
   text-decoration: none;
 }
 .dg-jump-to:hover .dg-jump-title { text-decoration: underline; }
-/* Every nowrap item on this row needs min-width:0 to be allowed below its
-   min-content width, or the row refuses to shrink and the whole inspector
-   column scrolls sideways -- which is what a diagram title, a step key, a
-   step label and a condition on one 327px row did. */
+/* Every nowrap item here needs min-width: 0, or the row cannot shrink in the 327px column. */
 .dg-jump-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .dg-jump-to > .dg-key { flex: none; }
 .dg-jump-whole { font-size: var(--fs-label); color: var(--ink-3); flex: none; }
@@ -5029,10 +4304,8 @@ input.pick-q:focus { box-shadow: inset 0 -2px 0 var(--accent); }
   .dg-stage { height: 58vh; }
 }
 
-/* ── diagram list ────────────────────────────────────────────────────────
-   A list of flows and the inspector beside it, laid out like the memory
-   list: both panes scroll inside themselves, so the toolbar above and the
-   pane's own footer stay where the eye left them. */
+/* ── diagram list ── flows and the inspector beside them, both scrolling inside, like the
+   memory list. */
 
 .dgl-work {
   display: grid; grid-template-columns: minmax(0, 1fr) 420px;
@@ -5042,18 +4315,14 @@ input.pick-q:focus { box-shadow: inset 0 -2px 0 var(--accent); }
 .dgl-pane { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
 .dgl-pane .list-toolbar { flex: none; }
 
-/* The whole list scrolls, heads included, rather than the rows alone: a
-   scrollbar inside the rows makes them 15px narrower than the strip above,
-   and the last column of that strip then sits 15px right of the column it
-   names. The heads stick instead, so they are still there at row forty. */
+/* The whole list scrolls, heads included, so the heads stay level with their columns; the
+   heads stick. */
 .dgl-list {
   border-radius: var(--r-lg); background: var(--surface);
   overflow: hidden auto;
   flex: 1; min-height: 0;
 }
-/* The column heads. The first column is the row's first column to the
-   pixel, so the state marks read as a column under a heading rather than
-   as a stripe beside one. */
+/* The column heads: the first lines up with the rows' first column to the pixel. */
 .dgl-head {
   position: sticky; top: 0; z-index: 1;
   display: grid; grid-template-columns: var(--tap) minmax(0, 1fr) auto;
@@ -5079,14 +4348,8 @@ input.pick-q:focus { box-shadow: inset 0 -2px 0 var(--accent); }
 }
 .dgl-row:last-child { border-bottom: none; }
 .dgl-row:hover { background: var(--hover-1); }
-/* The caret and the pick are one thing here: the pane shows the row the
-   keyboard is on. So it is marked the way every roving list in this app marks
-   its caret -- the accent ring, inset because the list clips, over the same
-   wash a focused row takes (see .mem-row.is-cursor and .opt-row.picked).
-
-   NOT --accent-dim. That wash says a row is CHOSEN out of a set everywhere
-   else it appears -- a ticked memory, a staged suggestion, the level a column
-   is showing, the tab you are on -- and a caret is not a choice. */
+/* The caret is the pick here, marked like every roving caret: the inset accent ring over the
+   focus wash. Not --accent-dim, which means chosen out of a set. */
 .dgl-row[aria-selected="true"] {
   outline: 2px solid var(--accent);
   outline-offset: -2px;
@@ -5123,10 +4386,7 @@ input.pick-q:focus { box-shadow: inset 0 -2px 0 var(--accent); }
 .dgl-back { color: var(--ink-3); text-decoration: none; }
 .dgl-back:hover { color: var(--accent); }
 
-/* ── the flow inspector ──────────────────────────────────────────────────
-   A row holds a row's worth of characters; a routine's summary is a
-   paragraph, and its four counts are numbers to compare rather than words
-   to read. Both live here, for the one flow the caret is on. */
+/* ── the flow inspector ── the summary and the four counts of the flow under the caret */
 .dgl-ins {
   background: var(--surface); border-radius: var(--r-lg);
   display: flex; flex-direction: column;
@@ -5170,28 +4430,16 @@ input.pick-q:focus { box-shadow: inset 0 -2px 0 var(--accent); }
   .dgl-work { grid-template-columns: 1fr; }
 }
 
-/* ── releases ────────────────────────────────────────────────────────────
-   A document rather than a dashboard: entries at reading measure in one
-   column, with the version, its date and its standing in a gutter beside
-   them. The gutter is sticky, so a release long enough to fill the window
-   keeps saying which version is being read.
-
-   The only tone above --surface here is the update block: --raised is this
-   stylesheet's "this card wants a decision from you", and an update is the
-   one thing on the page that asks for something. Everything else sits on
-   the page itself, separated by rules, because a changelog is read top to
-   bottom and boxing each release would cut the thread. */
+/* ── releases ── a document: entries at reading measure with a sticky gutter for version, date
+   and standing; only the update block, which asks for something, is --raised. */
 
 .rl { max-width: 920px; }
 
 .rl-head { margin-bottom: var(--sp-6); }
 .rl-title { font: 500 var(--fs-xl)/1.25 var(--font-ui); margin: 0 0 var(--sp-4); }
 
-/* The two numbers ARE the answer, so they are drawn at the size of an
-   answer and not written into a sentence. Installed on the left in plain
-   white, what it is behind on the right in the accent, the step between them
-   pointing from one to the other; up to date, there is one number and no
-   step, because there is nowhere to point. */
+/* The two numbers are the answer, drawn at that size: installed, then the accent target after
+   a step; up to date, one number. */
 .rl-versions {
   display: grid; grid-template-columns: auto auto auto;
   justify-content: start; align-items: center;
@@ -5245,10 +4493,7 @@ input.pick-q:focus { box-shadow: inset 0 -2px 0 var(--accent); }
    control after it, at the end of the card's last line. */
 .rl-update-foot { display: flex; justify-content: flex-end; }
 
-/* One order, one list: what to close, what to run, what to open again. The
-   numbers are drawn rather than left to a marker the list-style: none
-   removes, and a step is as tall as a control so a line of prose and a
-   command well sit on the same rhythm. */
+/* One ordered list: close, run, open again. Numbers are drawn, and a step is a control tall. */
 .rl-steps {
   list-style: none; counter-reset: step;
   margin: 0; padding: 0;
@@ -5284,9 +4529,7 @@ input.pick-q:focus { box-shadow: inset 0 -2px 0 var(--accent); }
 
 /* one release */
 
-/* The rule between where this installation stands (the versions, the controls
-   and the update block) and the history below it. It is the full divider and
-   the rules between releases are the soft one, so it reads as the larger break. */
+/* The full divider between this installation's state and the history; releases part softly. */
 .rl-stream { border-top: 1px solid var(--line); padding-top: var(--sp-6); }
 
 .rl-item {
@@ -5306,9 +4549,7 @@ input.pick-q:focus { box-shadow: inset 0 -2px 0 var(--accent); }
 .rl-item.is-here .rl-ver { color: var(--accent); }
 .rl-date { font: 400 var(--fs-label)/1.4 var(--font-m); color: var(--ink-3); }
 
-/* Two states, told apart by weight rather than by two colours: the version
-   running is the emphatic one, and a version published since is stated
-   plainly -- the update block above it is where that news belongs. */
+/* The running version is emphatic, a newer one plain: weight, not a second colour. */
 .rl-tag {
   margin-top: var(--sp-1);
   border-radius: var(--r-pill);
@@ -5363,15 +4604,8 @@ input.pick-q:focus { box-shadow: inset 0 -2px 0 var(--accent); }
 .rl-link:hover { color: var(--accent-hi); }
 .rl-empty { max-width: 60ch; margin: 0 auto; display: grid; gap: var(--sp-2); }
 
-/* ── the version mark in the app bar ──────────────────────────────────────
-   At the head of the controls, with a divider after it: a version is a fact
-   about the program and the three things beside it are things to operate, and
-   without the rule the number read as one more of them -- the project switch
-   is set in the same data font.
-
-   An update shows as the icon, not as a count: the bar has one thing to say
-   here, which is that there is one. Which release, and how many, are on the
-   page it opens. */
+/* ── the version mark in the app bar ── a fact before the controls, divided from them; an
+   update shows as the icon, with the detail on the page it opens. */
 
 #verHost {
   display: flex; align-items: center; flex: none;
@@ -5404,10 +4638,7 @@ input.pick-q:focus { box-shadow: inset 0 -2px 0 var(--accent); }
 .ver-chip.is-behind svg { color: var(--accent); }
 .ver-chip.is-behind:hover { color: var(--ink); }
 
-/* The gutter stops being a gutter: version, date and standing sit in a row
-   above the entries they belong to. A command stops scrolling on its own
-   axis and wraps instead -- at this width a line to scroll sideways is a
-   line you cannot read, and the copy button is what runs it anyway. */
+/* The gutter becomes a row above its entries, and a command wraps instead of scrolling. */
 @media (max-width: 860px) {
   .rl-item { grid-template-columns: minmax(0, 1fr); gap: var(--sp-3); }
   .rl-mark {
@@ -5419,9 +4650,7 @@ input.pick-q:focus { box-shadow: inset 0 -2px 0 var(--accent); }
   .rl-step.is-cmd code { white-space: pre-wrap; overflow-wrap: anywhere; overflow-x: visible; }
 }
 
-/* The bar is two rows here and the controls fit their row with nothing to
-   spare. The number gives way to the icon, which is the half that is news;
-   with no news there is nothing here worth the width. */
+/* Two bar rows here: the version number gives way to the update icon, or to nothing. */
 @media (max-width: 720px) {
   #verHost { padding-right: var(--sp-2); }
   /* 16 + 4 + 4: the tap-target floor exactly (WCAG 2.5.8), and the row it
@@ -5435,12 +4664,8 @@ input.pick-q:focus { box-shadow: inset 0 -2px 0 var(--accent); }
 
 /* ── responsive squeeze ──────────────────────────────────────────────── */
 
-/* Seven labels, a wordmark, a project and two controls stop fitting one row
-   before the window is narrow: the labels go first and the icons that were
-   waiting behind them take over. font-size: 0 on the link, because a nav
-   label is a bare text node -- and the wordmark is NOT, so it is hidden by
-   display instead (its own --fs-md overrode the 0 it was meant to inherit,
-   and 72px of wrapped text broke the band open). */
+/* The nav labels go first and the icons take over: font-size 0 on the link's bare text node;
+   the wordmark is hidden by display, since its own size would override the 0. */
 @media (max-width: 1180px) {
   .appbar { gap: var(--sp-5); padding: 0 var(--sp-4); }
   .brand-name { display: none; }
@@ -5454,19 +4679,11 @@ input.pick-q:focus { box-shadow: inset 0 -2px 0 var(--accent); }
   }
 }
 
-/* One window narrow enough that the header cannot hold a row: the search
-   field takes a line of its own under the actions, and the two things whose
-   value is one tap away elsewhere step aside -- the active count is the
-   first tile on Overview, and the shortcut hint is for a keyboard this
-   window probably does not have. */
-/* Below this the bar is two rows: identity and the controls on the first,
-   the sections on the second, scrolling sideways if even the icons do not
-   fit. One row here meant the project switch sitting on top of the nav. */
+/* Below this the bar is two rows: identity and controls, then the sections, scrolling
+   sideways if even the icons do not fit. */
 @media (max-width: 720px) {
   .appbar { flex-wrap: wrap; padding: var(--sp-2) var(--sp-3); gap: var(--sp-2); }
-  /* The seal goes. Two controls, a button and seven sections do not leave
-     it a row to share, and a row holding nothing but a 22px mark is worse
-     than no mark -- the nav's first section is the same destination. */
+  /* the seal goes: the nav's first section is the same destination */
   .brand { display: none; }
   .nav {
     order: 3; flex-basis: 100%;
@@ -5490,11 +4707,7 @@ input.pick-q:focus { box-shadow: inset 0 -2px 0 var(--accent); }
   .view {
     padding: var(--sp-4) var(--sp-3) calc(var(--sp-4) + var(--toast-h, 0px));
   }
-  /* The memory takes the width; its annotations go under it. The four-column
-     grid had no narrow override, so at 375px the fixed metadata column plus
-     the auto date column plus three gaps consumed the whole 276px and the
-     snippet was allotted `0px` -- it wrapped one character per line, rows ran
-     121-175px, and two of them fitted on a phone. */
+  /* the memory takes the width and its annotations go under it */
   .mem-row {
     grid-template-columns: var(--tap) 1fr;
     gap: var(--sp-1) var(--sp-3);
@@ -5518,10 +4731,7 @@ input.pick-q:focus { box-shadow: inset 0 -2px 0 var(--accent); }
     padding-left: var(--sp-4); padding-right: var(--sp-4);
   }
   .graph-wrap { height: calc(100vh - 294px); }
-  /* Five controls wrapped to four rows here and covered 28% of the canvas --
-     on the one view whose whole job is the shape of the whole store. The strip
-     scrolls sideways instead: one row at any width, and the artifact keeps its
-     pixels. */
+  /* the strip scrolls sideways in one row rather than wrapping over the canvas */
   .graph-bar { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; }
   .graph-bar::-webkit-scrollbar { display: none; }
   .graph-bar > * { flex: none; }
@@ -5529,9 +4739,7 @@ input.pick-q:focus { box-shadow: inset 0 -2px 0 var(--accent); }
   /* The legend floats over the drawing, and on a phone the drawing is the
      scarce thing: the counts stay, the sentence about the arrangement goes. */
   .graph-legend .legend-note { display: none; }
-  /* The backup takes the width; when and size go under it. Four columns at
-     375px left the label 129px, so both the reason and the filename ended
-     in an ellipsis and neither said which file it was. */
+  /* the backup takes the width; when and size go under it */
   .mnt-file {
     grid-template-columns: 16px minmax(0, 1fr);
     gap: var(--sp-0) var(--sp-3);

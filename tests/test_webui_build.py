@@ -254,21 +254,21 @@ class _Stop(Exception):
 
 
 def _run_admin_main(monkeypatch, tmp_path, bound):
-    from memai import admin
+    from memai.admin import cli
 
     events: list[str] = []
     monkeypatch.setenv("MEMAI_HOME", str(tmp_path))
     monkeypatch.setattr("sys.argv", ["memai-admin", "--autostarted"])
-    monkeypatch.setattr(admin.cli, "_bind", lambda host, port: events.append("bind") or bound)
+    monkeypatch.setattr(cli, "_bind", lambda host, port: events.append("bind") or bound)
     monkeypatch.setattr(webui_build, "ensure_built", lambda: events.append("build"))
 
     def registry(host, port):
         events.append("registry")
         raise _Stop
 
-    monkeypatch.setattr(admin.cli, "_write_registry", registry)
+    monkeypatch.setattr(cli, "_write_registry", registry)
     with pytest.raises((_Stop, SystemExit)):
-        admin.main()
+        cli.main()
     return events
 
 

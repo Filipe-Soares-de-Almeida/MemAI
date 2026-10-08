@@ -10,12 +10,13 @@ from __future__ import annotations
 
 import pytest
 
-from memai import db, server
+from memai import server
+from memai.store import connection, dedup, memories
 
 
 @pytest.fixture
 def conn(tmp_path):
-    with db.connect(tmp_path / "test.db") as c:
+    with connection.connect(tmp_path / "test.db") as c:
         yield c
 
 
@@ -71,10 +72,10 @@ def test_consecutive_checkpoints_are_a_timeline_not_a_copy(store):
 
 def test_the_probe_stays_inside_the_scope(conn):
     """The probe is a scan, so it must not widen with the store."""
-    near = db.insert_memory(conn, type="note", content=_FACT, domain="acme/x100")
-    db.insert_memory(conn, type="note", content=_FACT, domain="zeta/x200")
-    uid = db.insert_memory(conn, type="note", content=_FACT + " sharp", domain="acme/x100")
-    hits = db.similar_memories(conn, uid)
+    near = memories.insert_memory(conn, type="note", content=_FACT, domain="acme/x100")
+    memories.insert_memory(conn, type="note", content=_FACT, domain="zeta/x200")
+    uid = memories.insert_memory(conn, type="note", content=_FACT + " sharp", domain="acme/x100")
+    hits = dedup.similar_memories(conn, uid)
     assert [h["uid"] for h in hits] == [near]
     assert hits[0]["method"] == "lexical"
 
@@ -102,6 +103,6 @@ def test_writing_a_diagram_never_probes(store):
 
 def test_it_stops_at_the_cap(conn):
     for _ in range(6):
-        db.insert_memory(conn, type="note", content="car maintenance schedule")
-    uid = db.insert_memory(conn, type="note", content="car maintenance schedule")
-    assert len(db.similar_memories(conn, uid)) == db.SIMILAR_ON_WRITE_MAX
+        memories.insert_memory(conn, type="note", content="car maintenance schedule")
+    uid = memories.insert_memory(conn, type="note", content="car maintenance schedule")
+    assert len(dedup.similar_memories(conn, uid)) == dedup.SIMILAR_ON_WRITE_MAX

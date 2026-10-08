@@ -13,17 +13,15 @@ from pathlib import Path
 
 import pytest
 
-from memai import db, hook_install, server
+from memai import hook_install, server
+from memai.store import memories, optimizer
 
-# The non-ASCII characters a skill may spell: typographic punctuation, the
-# section sign, and the two mathematical signs its tables carry. No accented
-# letter is here, which is what makes this list the language gate -- the
-# repository is English only, and a translated paragraph fails on its first
-# accent.
+# The non-ASCII a skill may spell. No accented letter is here, so this is also the English-only
+# gate: a translated paragraph fails on its first accent.
 ALLOWED_NON_ASCII = set("—→§…·×∈✓")
 
 # The `type` a memory can carry: the one vocabulary every read accepts.
-MEMORY_TYPES = set(db.MEMORY_TYPES)
+MEMORY_TYPES = set(memories.MEMORY_TYPES)
 
 # A backticked call: the one unambiguous way a skill names a tool. A bare
 # backticked word is a field, a group or a value just as often.
@@ -31,9 +29,8 @@ CALLS = re.compile(r"`([a-z_][a-z0-9_]*)\(")
 # `type='note'` -- the quoted form, which asserts a value. The lookbehind
 # keeps `new_type=` out of it.
 TYPED = re.compile(r"(?<!\w)type=['\"]([a-z_]+)['\"]")
-# A wikilink naming a sibling skill. The same brackets are also how a memory
-# body cites another memory, which is what memai-link is about, so only the
-# family's own prefix is held to resolving.
+# A wikilink naming a sibling skill; memory bodies use the same brackets, so only the
+# family's own prefix has to resolve.
 WIKILINK = re.compile(r"\[\[(memai-[a-z0-9-]+)\]\]")
 # A drive letter followed by a separator. The lookbehind spares a URL scheme,
 # where the letter before the colon is part of `https`.
@@ -135,8 +132,8 @@ def test_the_curation_skill_lists_the_kinds_that_demand_a_verified():
     # naming a kind would otherwise count as part of the list.
     claim = re.search(r"destructive kinds:\*\*(.+?)\n- ", text, re.S)
     assert claim, "memai-maintenance no longer states which kinds demand a verified"
-    said = {kind for kind in db.SUGGESTION_KINDS if f"`{kind}`" in claim.group(1)}
-    assert said == set(db.VERIFIED_REQUIRED), said ^ set(db.VERIFIED_REQUIRED)
+    said = {kind for kind in optimizer.SUGGESTION_KINDS if f"`{kind}`" in claim.group(1)}
+    assert said == set(optimizer.VERIFIED_REQUIRED), said ^ set(optimizer.VERIFIED_REQUIRED)
 
 
 def test_the_distill_skill_lists_the_payload_keys_distill_applies():
@@ -148,7 +145,7 @@ def test_the_distill_skill_lists_the_payload_keys_distill_applies():
     claim = re.search(r"payload accepts(.+?)and nothing else", text, re.S)
     assert claim, "memai-distill no longer enumerates the accepted payload keys"
     said = set(re.findall(r"`([a-z_]+)`", claim.group(1)))
-    assert said == set(db.DISTILL_PAYLOAD_KEYS), said ^ set(db.DISTILL_PAYLOAD_KEYS)
+    assert said == set(optimizer.DISTILL_PAYLOAD_KEYS), said ^ set(optimizer.DISTILL_PAYLOAD_KEYS)
 
 
 def test_the_curation_skill_documents_every_suggestion_kind():
@@ -157,5 +154,5 @@ def test_the_curation_skill_documents_every_suggestion_kind():
     stayed invisible after it shipped.
     """
     text = _text(hook_install.skills_source() / "memai-maintenance")
-    missing = [kind for kind in db.SUGGESTION_KINDS if f"`{kind}`" not in text]
+    missing = [kind for kind in optimizer.SUGGESTION_KINDS if f"`{kind}`" not in text]
     assert not missing, missing

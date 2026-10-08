@@ -16,7 +16,8 @@ from pathlib import Path
 
 import pytest
 
-from memai import db, warden
+from memai import lite, warden
+from memai.store import connection, settings
 
 
 @pytest.fixture
@@ -39,7 +40,7 @@ def test_marking_an_ask_satisfies_the_interval(store):
 def test_the_ask_returns_once_the_interval_has_passed(store):
     """The interval is a floor on the cost, so it reopens after it elapses."""
     warden.mark("session-1")
-    later = datetime.now(UTC) + timedelta(minutes=db.WARDEN_MINUTES_DEFAULT + 1)
+    later = datetime.now(UTC) + timedelta(minutes=lite.WARDEN_MINUTES_DEFAULT + 1)
     assert warden.due("session-1", now=later) is True
 
 
@@ -214,9 +215,9 @@ def test_an_ask_keeps_the_start_on_file(store):
 # ------------------------------------------------------- the store-wide switch
 
 def test_the_warden_is_on_until_somebody_turns_it_off(store):
-    with db.connect() as conn:
-        assert db.get_warden_enabled(conn) is True
-        assert db.get_warden_minutes(conn) == db.WARDEN_MINUTES_DEFAULT
+    with connection.connect() as conn:
+        assert settings.get_warden_enabled(conn) is True
+        assert settings.get_warden_minutes(conn) == lite.WARDEN_MINUTES_DEFAULT
 
 
 @pytest.mark.parametrize("given, expected", [
@@ -225,35 +226,35 @@ def test_the_warden_is_on_until_somebody_turns_it_off(store):
     ("on", True), ("1", True), ("true", True),
 ])
 def test_the_switch_takes_a_bool_or_what_a_form_sends(store, given, expected):
-    with db.connect() as conn:
-        assert db.set_warden_enabled(conn, given) is expected
-        assert db.get_warden_enabled(conn) is expected
+    with connection.connect() as conn:
+        assert settings.set_warden_enabled(conn, given) is expected
+        assert settings.get_warden_enabled(conn) is expected
 
 
 def test_the_interval_survives_the_switch(store):
     """Turning it off and on again does not lose the chosen interval."""
-    with db.connect() as conn:
-        db.set_warden_minutes(conn, 45)
-        db.set_warden_enabled(conn, False)
-        db.set_warden_enabled(conn, True)
-        assert db.get_warden_minutes(conn) == 45
+    with connection.connect() as conn:
+        settings.set_warden_minutes(conn, 45)
+        settings.set_warden_enabled(conn, False)
+        settings.set_warden_enabled(conn, True)
+        assert settings.get_warden_minutes(conn) == 45
 
 
 @pytest.mark.parametrize("bad", [0, -5, 481, "", "soon", None, 3.7])
 def test_an_interval_outside_the_range_is_refused(store, bad):
-    with db.connect() as conn, pytest.raises(ValueError):
-        db.set_warden_minutes(conn, bad)
+    with connection.connect() as conn, pytest.raises(ValueError):
+        settings.set_warden_minutes(conn, bad)
 
 
 def test_a_stored_interval_out_of_range_reads_as_the_default(store):
     """Hand-edited meta does not put the hook on a nonsense schedule."""
-    with db.connect() as conn:
+    with connection.connect() as conn:
         conn.execute("INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)",
-                     (db.WARDEN_MINUTES_KEY, "99999"))
-        assert db.get_warden_minutes(conn) == db.WARDEN_MINUTES_DEFAULT
+                     (settings.WARDEN_MINUTES_KEY, "99999"))
+        assert settings.get_warden_minutes(conn) == lite.WARDEN_MINUTES_DEFAULT
         conn.execute("INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)",
-                     (db.WARDEN_MINUTES_KEY, "not a number"))
-        assert db.get_warden_minutes(conn) == db.WARDEN_MINUTES_DEFAULT
+                     (settings.WARDEN_MINUTES_KEY, "not a number"))
+        assert settings.get_warden_minutes(conn) == lite.WARDEN_MINUTES_DEFAULT
 
 
 # ------------------------------------------------------- the task ask's stamp
@@ -303,38 +304,38 @@ def test_an_unreadable_task_stamp_counts_as_never_asked(store):
 # --------------------------------------------------- the task ask's own settings
 
 def test_the_task_ask_is_on_every_thirty_minutes_by_default(store):
-    with db.connect() as conn:
-        assert db.get_task_ask_enabled(conn) is True
-        assert db.get_task_ask_minutes(conn) == db.TASK_ASK_MINUTES_DEFAULT == 30
+    with connection.connect() as conn:
+        assert settings.get_task_ask_enabled(conn) is True
+        assert settings.get_task_ask_minutes(conn) == lite.TASK_ASK_MINUTES_DEFAULT == 30
 
 
 @pytest.mark.parametrize("given, expected", [
     (False, False), (True, True), ("off", False), ("0", False), ("on", True),
 ])
 def test_the_task_switch_takes_a_bool_or_what_a_form_sends(store, given, expected):
-    with db.connect() as conn:
-        assert db.set_task_ask_enabled(conn, given) is expected
-        assert db.get_task_ask_enabled(conn) is expected
+    with connection.connect() as conn:
+        assert settings.set_task_ask_enabled(conn, given) is expected
+        assert settings.get_task_ask_enabled(conn) is expected
 
 
 @pytest.mark.parametrize("bad", [0, -5, 481, "", "soon", None, 3.7])
 def test_a_task_interval_outside_the_range_is_refused(store, bad):
-    with db.connect() as conn, pytest.raises(ValueError):
-        db.set_task_ask_minutes(conn, bad)
+    with connection.connect() as conn, pytest.raises(ValueError):
+        settings.set_task_ask_minutes(conn, bad)
 
 
 def test_the_task_interval_round_trips_apart_from_the_warden_s(store):
-    with db.connect() as conn:
-        assert db.set_task_ask_minutes(conn, 45) == 45
-        assert db.get_task_ask_minutes(conn) == 45
-        assert db.get_warden_minutes(conn) == db.WARDEN_MINUTES_DEFAULT
+    with connection.connect() as conn:
+        assert settings.set_task_ask_minutes(conn, 45) == 45
+        assert settings.get_task_ask_minutes(conn) == 45
+        assert settings.get_warden_minutes(conn) == lite.WARDEN_MINUTES_DEFAULT
 
 
 def test_a_stored_task_interval_out_of_range_reads_as_the_default(store):
-    with db.connect() as conn:
+    with connection.connect() as conn:
         conn.execute("INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)",
-                     (db.TASK_ASK_MINUTES_KEY, "99999"))
-        assert db.get_task_ask_minutes(conn) == db.TASK_ASK_MINUTES_DEFAULT
+                     (settings.TASK_ASK_MINUTES_KEY, "99999"))
+        assert settings.get_task_ask_minutes(conn) == lite.TASK_ASK_MINUTES_DEFAULT
 
 
 # ------------------------------------------------ the domains a session names

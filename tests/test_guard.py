@@ -23,7 +23,10 @@ import re
 import pytest
 from starlette.testclient import TestClient
 
-from memai import admin, db, guard, hook, hook_install, server, tasks, warden
+from memai import guard, hook, hook_install, server, tasks, warden
+from memai import lite as lite_mod
+from memai.admin.app import app as admin_app
+from memai.store import connection, memories, paths
 
 # What a leaked call looks like once it is one parameter's text: the closing
 # tag of the field it was written under, and the fields after it as prose.
@@ -38,7 +41,7 @@ PREFIXED = "</" + "antml:parameter>"
 
 @pytest.fixture
 def conn(tmp_path):
-    with db.connect(tmp_path / "test.db") as c:
+    with connection.connect(tmp_path / "test.db") as c:
         yield c
 
 
@@ -51,7 +54,7 @@ def store(tmp_path, monkeypatch):
 @pytest.fixture
 def client(tmp_path, monkeypatch):
     monkeypatch.setenv("MEMAI_HOME", str(tmp_path))
-    with TestClient(admin.app) as c:
+    with TestClient(admin_app) as c:
         yield c
 
 
@@ -288,12 +291,12 @@ def test_the_store_refuses_a_body_holding_the_rest_of_the_call(conn):
     """The backstop: a call that reaches the store with no hook in front of
     it -- an unregistered host, the dashboard, staged text."""
     with pytest.raises(ValueError, match="tool call's own source"):
-        db.insert_memory(conn, type="note", title="a cache warmup", content=LEAKED)
+        memories.insert_memory(conn, type="note", title="a cache warmup", content=LEAKED)
 
 
 def test_the_store_refuses_a_title_holding_it(conn):
     with pytest.raises(ValueError, match="tool call's own source"):
-        db.insert_memory(conn, type="note", title=f"a warmup{PREFIXED}", content="a fact")
+        memories.insert_memory(conn, type="note", title=f"a warmup{PREFIXED}", content="a fact")
 
 
 def test_the_store_refuses_leaked_tags_and_a_leaked_source_ref(conn):
@@ -301,37 +304,37 @@ def test_the_store_refuses_leaked_tags_and_a_leaked_source_ref(conn):
     common a landing place as the body."""
     tail = "</tags>\n<source_ref>src/acme/x100/warmup.py</source_ref>"
     with pytest.raises(ValueError, match="tool call's own source"):
-        db.insert_memory(conn, type="note", title="a cache warmup",
+        memories.insert_memory(conn, type="note", title="a cache warmup",
                          content="a fact", tags=f"cache warmup{tail}")
     with pytest.raises(ValueError, match="tool call's own source"):
-        db.insert_memory(conn, type="note", title="a cache warmup",
+        memories.insert_memory(conn, type="note", title="a cache warmup",
                          content="a fact", source_ref=f"src/acme{tail}")
 
 
 def test_a_tag_edit_that_leaks_leaves_the_tags_it_had(conn):
-    uid = db.insert_memory(conn, type="note", title="a cache warmup",
+    uid = memories.insert_memory(conn, type="note", title="a cache warmup",
                            content="a fact", tags="cache warmup")
     with pytest.raises(ValueError, match="tool call's own source"):
-        db.set_tags(conn, uid, "cache warmup</tags>")
+        memories.set_tags(conn, uid, "cache warmup</tags>")
     with pytest.raises(ValueError, match="tool call's own source"):
-        db.set_source_ref(conn, uid, "src/acme/x100/warmup.py</source_ref>")
-    row = db.get_memory(conn, uid)
+        memories.set_source_ref(conn, uid, "src/acme/x100/warmup.py</source_ref>")
+    row = memories.get_memory(conn, uid)
     assert (row["tags"], row["source_ref"]) == ("cache warmup", "")
 
 
 def test_an_edit_that_leaks_leaves_the_body_it_had(conn):
-    uid = db.insert_memory(conn, type="note", title="a cache warmup",
+    uid = memories.insert_memory(conn, type="note", title="a cache warmup",
                            content="the warmup drains the queue once")
     with pytest.raises(ValueError, match="tool call's own source"):
-        db.update_memory_content(conn, uid, LEAKED)
-    assert db.get_memory(conn, uid)["content"] == "the warmup drains the queue once"
+        memories.update_memory_content(conn, uid, LEAKED)
+    assert memories.get_memory(conn, uid)["content"] == "the warmup drains the queue once"
 
 
 def test_a_rename_that_leaks_leaves_the_name_it_had(conn):
-    uid = db.insert_memory(conn, type="note", title="a cache warmup", content="a fact")
+    uid = memories.insert_memory(conn, type="note", title="a cache warmup", content="a fact")
     with pytest.raises(ValueError, match="tool call's own source"):
-        db.set_title(conn, uid, f"a cache warmup{PREFIXED}")
-    assert db.get_memory(conn, uid)["title"] == "a cache warmup"
+        memories.set_title(conn, uid, f"a cache warmup{PREFIXED}")
+    assert memories.get_memory(conn, uid)["title"] == "a cache warmup"
 
 
 def test_the_tool_says_so_instead_of_writing(store):
@@ -352,9 +355,9 @@ def test_the_dashboard_refuses_it(client):
 def test_a_restore_reproduces_a_row_that_already_carries_it(conn):
     """A restore reproduces a row whose body carries a leak: a round trip
     reproduces rows, it does not re-judge them."""
-    db.restore_memory(conn, {"uid": "a1b2c3d4e5f60718", "type": "note",
+    memories.restore_memory(conn, {"uid": "a1b2c3d4e5f60718", "type": "note",
                              "title": "a cache warmup", "content": LEAKED})
-    assert db.get_memory(conn, "a1b2c3d4e5f60718")["content"] == LEAKED
+    assert memories.get_memory(conn, "a1b2c3d4e5f60718")["content"] == LEAKED
 
 
 # ------------------------------------------------- what it will not judge
@@ -431,7 +434,7 @@ def test_the_missing_fields_are_named_in_signature_order():
 # ------------------------------------------- the domains a session names
 
 def _seed_task(domain: str) -> str:
-    with db.connect() as conn:
+    with connection.connect() as conn:
         return tasks.create_task(conn, title="Repair the pier", goal="The pier holds",
                                  items=["replace the planks"], domain=domain)
 
@@ -504,7 +507,7 @@ def test_an_unsafe_session_id_records_nothing(store, monkeypatch, capsys):
 def test_a_call_naming_a_domain_does_not_open_the_store(store, monkeypatch, capsys):
     def refuse(*args, **kwargs):
         raise AssertionError("the store was opened")
-    monkeypatch.setattr(db, "connect", refuse)
+    monkeypatch.setattr(connection, "connect", refuse)
     assert _guarded(_call("pulse", domain="acme/harbor"), monkeypatch, capsys)[0] == 0
     assert _named() == ["acme/harbor"]
 
@@ -526,7 +529,7 @@ def test_the_uid_lookup_runs_no_migration(store, monkeypatch, capsys):
 
     def refuse(*args, **kwargs):
         raise AssertionError("db.connect was used")
-    monkeypatch.setattr(db, "connect", refuse)
+    monkeypatch.setattr(connection, "connect", refuse)
     assert _guarded(_call("get_memory", uid=uid), monkeypatch, capsys) == (0, "", "")
     assert _named() == ["acme/docks"]
 
@@ -535,7 +538,7 @@ def test_the_uid_lookup_does_not_wait_for_a_writer(store, monkeypatch, capsys):
     import sqlite3
     import time
     uid = _seed_task("acme/docks")
-    writer = sqlite3.connect(str(db.default_db_path()), timeout=1)
+    writer = sqlite3.connect(str(paths.default_db_path()), timeout=1)
     writer.execute("BEGIN IMMEDIATE")
     try:
         started = time.monotonic()
@@ -553,7 +556,7 @@ def test_a_store_that_does_not_exist_records_nothing_and_is_not_created(
                               monkeypatch, capsys)
     assert (code, out, err) == (0, "", "")
     assert _named() == []
-    assert not db.default_db_path().exists()
+    assert not paths.default_db_path().exists()
     code, _, err = _guarded(_call("task_item", uid="deadbeefdeadbeef"), monkeypatch, capsys)
     assert code == 2 and "BLOCKED" in err
 
@@ -570,7 +573,7 @@ def test_a_store_path_with_a_space_still_opens_for_the_lookup(
 
 # ------------------------------------------------- the guard starts without the store
 
-_HEAVY = ("memai.db", "memai.brief", "memai.update", "memai.pending")
+_HEAVY = ("memai.store", "memai.brief", "memai.update", "memai.pending")
 
 _RUNNER = (
     "import json, sys\n"
@@ -628,7 +631,7 @@ def test_the_light_home_resolves_the_way_the_store_does(tmp_path, monkeypatch):
 
     from memai import lite
     monkeypatch.setenv("MEMAI_HOME", str(tmp_path / "set"))
-    assert lite.home() == db.home() == tmp_path / "set"
+    assert lite.home() == lite_mod.home() == tmp_path / "set"
     monkeypatch.delenv("MEMAI_HOME")
     monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path / "user"))
-    assert lite.home() == db.home() == tmp_path / "user" / ".memai"
+    assert lite.home() == lite_mod.home() == tmp_path / "user" / ".memai"

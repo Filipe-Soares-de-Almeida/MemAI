@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from memai import db
+from memai.store import memories
 
 CSS = Path(__file__).resolve().parents[1] / "src" / "memai" / "webui" / "admin.css"
 
@@ -25,7 +25,7 @@ def _css() -> str:
 # ------------------------------------------------------------- type colours
 
 def test_every_type_has_its_colour_tokens_and_class(css):
-    for tp in db.MEMORY_TYPES:
+    for tp in memories.MEMORY_TYPES:
         assert re.search(rf"--t-{tp}:\s*#[0-9a-f]{{6}}", css), f"--t-{tp} is not declared"
         assert re.search(rf"--t-{tp}-ink:\s*#[0-9a-f]{{6}}", css), f"--t-{tp}-ink is not declared"
         assert re.search(rf"\.t-{tp}\s*\{{", css), f".t-{tp} is not declared"

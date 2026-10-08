@@ -19,19 +19,20 @@ from pathlib import Path
 import pytest
 from starlette.testclient import TestClient
 
-from memai import admin, db
+from memai.admin.app import app as admin_app
+from memai.store import backups, paths
 
 
 @pytest.fixture()
 def client(tmp_path, monkeypatch):
     monkeypatch.setenv("MEMAI_HOME", str(tmp_path))
-    with TestClient(admin.app) as c:
+    with TestClient(admin_app) as c:
         yield c
 
 
 def _shelve(name: str, body: bytes = b"a backup") -> Path:
     """Put a file on the active project's shelf without taking a real copy."""
-    path = db.backups_dir(db.active_project()) / name
+    path = backups.backups_dir(paths.active_project()) / name
     path.write_bytes(body)
     return path
 
@@ -42,9 +43,9 @@ def test_archiving_moves_the_files_into_one_zip(client):
     a = _shelve("General-20260901-120000.db", b"first")
     b = _shelve("General-20260902-120000.db", b"second")
 
-    dest = db.archive_backups("General", [a.name, b.name])
+    dest = backups.archive_backups("General", [a.name, b.name])
 
-    assert dest.name == db.archive_name("General")
+    assert dest.name == backups.archive_name("General")
     assert not a.exists() and not b.exists(), "the shelf keeps no copy"
     with zipfile.ZipFile(dest) as zf:
         assert sorted(zf.namelist()) == sorted([a.name, b.name])
@@ -55,36 +56,36 @@ def test_a_second_run_in_the_same_month_joins_the_same_archive(client):
     first = _shelve("General-20260901-120000.db")
     second = _shelve("General-20260902-120000.db")
 
-    one = db.archive_backups("General", [first.name])
-    two = db.archive_backups("General", [second.name])
+    one = backups.archive_backups("General", [first.name])
+    two = backups.archive_backups("General", [second.name])
 
     assert one == two
-    assert len(db.archive_files("General")) == 1
-    assert len(db.archive_members(one)) == 2
+    assert len(backups.archive_files("General")) == 1
+    assert len(backups.archive_members(one)) == 2
 
 
 def test_a_different_month_gets_its_own_archive(client):
     _shelve("General-20260901-120000.db")
     _shelve("General-20260801-120000.db")
 
-    db.archive_backups("General", ["General-20260901-120000.db"], when=date(2026, 9, 4))
-    db.archive_backups("General", ["General-20260801-120000.db"], when=date(2026, 8, 4))
+    backups.archive_backups("General", ["General-20260901-120000.db"], when=date(2026, 9, 4))
+    backups.archive_backups("General", ["General-20260801-120000.db"], when=date(2026, 8, 4))
 
-    assert sorted(p.name for p in db.archive_files("General")) == [
+    assert sorted(p.name for p in backups.archive_files("General")) == [
         "General-2026-08.zip", "General-2026-09.zip"]
 
 
 def test_unarchiving_puts_every_file_back_and_drops_the_zip(client):
     a = _shelve("General-20260901-120000.db", b"first")
     b = _shelve("General-20260902-120000.db", b"second")
-    dest = db.archive_backups("General", [a.name, b.name])
+    dest = backups.archive_backups("General", [a.name, b.name])
 
-    restored = db.unarchive("General", dest.name)
+    restored = backups.unarchive("General", dest.name)
 
     assert sorted(restored) == sorted([a.name, b.name])
     assert a.read_bytes() == b"first" and b.read_bytes() == b"second"
     assert not dest.exists()
-    assert db.archive_files("General") == []
+    assert backups.archive_files("General") == []
 
 
 def test_a_restored_backup_keeps_the_day_it_was_taken(client):
@@ -93,9 +94,9 @@ def test_a_restored_backup_keeps_the_day_it_was_taken(client):
     a = _shelve("General-20260901-120000.db")
     taken = datetime(2026, 9, 1, 12, 0, 0).timestamp()
     os.utime(a, (taken, taken))
-    dest = db.archive_backups("General", [a.name])
+    dest = backups.archive_backups("General", [a.name])
 
-    db.unarchive("General", dest.name)
+    backups.unarchive("General", dest.name)
 
     # a zip rounds its timestamps to two seconds
     assert abs(a.stat().st_mtime - taken) <= 2
@@ -104,17 +105,17 @@ def test_a_restored_backup_keeps_the_day_it_was_taken(client):
 def test_an_archive_is_not_a_backup(client):
     """backup_files globs one level, so the shelf never lists what was zipped."""
     a = _shelve("General-20260901-120000.db")
-    db.archive_backups("General", [a.name])
+    backups.archive_backups("General", [a.name])
 
-    assert db.backup_files("General") == []
+    assert backups.backup_files("General") == []
 
 
 def test_deleting_an_archive_reports_what_went_with_it(client):
     a = _shelve("General-20260901-120000.db")
     b = _shelve("General-20260902-120000.db")
-    dest = db.archive_backups("General", [a.name, b.name])
+    dest = backups.archive_backups("General", [a.name, b.name])
 
-    assert db.delete_archive("General", dest.name) == 2
+    assert backups.delete_archive("General", dest.name) == 2
     assert not dest.exists()
 
 
@@ -133,7 +134,7 @@ def test_grouping_by_month_follows_when_each_backup_was_taken(client):
     _taken(a, datetime(2026, 9, 15, 12))
     _taken(b, datetime(2026, 10, 3, 12))
 
-    made = db.archive_grouped("General", [a.name, b.name], "month")
+    made = backups.archive_grouped("General", [a.name, b.name], "month")
 
     assert sorted(p.name for p in made) == ["General-2026-09.zip", "General-2026-10.zip"]
     assert made[next(p for p in made if p.name.endswith("09.zip"))] == [a.name]
@@ -148,7 +149,7 @@ def test_grouping_by_week_splits_on_the_iso_week(client):
     _taken(nxt, datetime(2026, 10, 5, 9))
     week = lambda d: "General-{}-W{:02d}.zip".format(*d.isocalendar()[:2])
 
-    made = db.archive_grouped("General", [mon.name, sun.name, nxt.name], "week")
+    made = backups.archive_grouped("General", [mon.name, sun.name, nxt.name], "week")
 
     assert {p.name: v for p, v in made.items()} == {
         week(date(2026, 9, 28)): [mon.name, sun.name],
@@ -159,7 +160,7 @@ def test_a_week_belongs_to_the_iso_year_it_falls_in(client):
     a = _shelve("General-20251229-120000.db")
     _taken(a, datetime(2025, 12, 29, 12))
 
-    (dest,) = db.archive_grouped("General", [a.name], "week")
+    (dest,) = backups.archive_grouped("General", [a.name], "week")
 
     assert dest.name == "General-2026-W01.zip"
 
@@ -169,57 +170,57 @@ def test_a_group_that_already_has_a_zip_is_appended_to(client):
     b = _shelve("General-20260902-120000.db")
     _taken(a, datetime(2026, 9, 1, 12))
     _taken(b, datetime(2026, 9, 2, 12))
-    db.archive_grouped("General", [a.name], "month")
+    backups.archive_grouped("General", [a.name], "month")
 
-    db.archive_grouped("General", [b.name], "month")
+    backups.archive_grouped("General", [b.name], "month")
 
-    (only,) = db.archive_files("General")
-    assert len(db.archive_members(only)) == 2
+    (only,) = backups.archive_files("General")
+    assert len(backups.archive_members(only)) == 2
 
 
 def test_an_unknown_grouping_is_refused(client):
     a = _shelve("General-20260901-120000.db")
     with pytest.raises(ValueError, match="group"):
-        db.archive_grouped("General", [a.name], "decade")
+        backups.archive_grouped("General", [a.name], "decade")
     assert a.exists()
 
 
 def test_a_zip_can_be_named_by_the_one_archiving(client):
     a = _shelve("General-20260901-120000.db", b"first")
 
-    dest = db.archive_backups("General", [a.name], label="before the move")
+    dest = backups.archive_backups("General", [a.name], label="before the move")
 
     assert dest.name == "General-before the move.zip"
-    assert db.archive_members(dest)[0]["name"] == a.name
+    assert backups.archive_members(dest)[0]["name"] == a.name
     assert not a.exists()
 
 
 def test_naming_a_zip_that_exists_is_refused_and_leaves_the_shelf_alone(client):
     a = _shelve("General-20260901-120000.db")
     b = _shelve("General-20260902-120000.db")
-    db.archive_backups("General", [a.name], label="keep")
+    backups.archive_backups("General", [a.name], label="keep")
 
     with pytest.raises(ValueError, match="already exists"):
-        db.archive_backups("General", [b.name], label="keep")
+        backups.archive_backups("General", [b.name], label="keep")
     assert b.exists()
 
 
 def test_a_backup_can_be_added_to_an_existing_zip(client):
     a = _shelve("General-20260901-120000.db")
     b = _shelve("General-20260902-120000.db")
-    first = db.archive_backups("General", [a.name], label="keep")
+    first = backups.archive_backups("General", [a.name], label="keep")
 
-    dest = db.archive_backups("General", [b.name], into=first.name)
+    dest = backups.archive_backups("General", [b.name], into=first.name)
 
     assert dest == first
-    assert sorted(m["name"] for m in db.archive_members(dest)) == sorted([a.name, b.name])
+    assert sorted(m["name"] for m in backups.archive_members(dest)) == sorted([a.name, b.name])
     assert not b.exists()
 
 
 def test_adding_to_a_zip_that_is_not_there_is_refused(client):
     a = _shelve("General-20260901-120000.db")
     with pytest.raises(ValueError, match="not an archive"):
-        db.archive_backups("General", [a.name], into="General-nope.zip")
+        backups.archive_backups("General", [a.name], into="General-nope.zip")
     assert a.exists()
 
 
@@ -227,36 +228,36 @@ def test_adding_to_a_zip_that_is_not_there_is_refused(client):
 def test_adding_to_a_zip_outside_the_archive_folder_is_refused(client, into):
     a = _shelve("General-20260901-120000.db")
     with pytest.raises(ValueError):
-        db.archive_backups("General", [a.name], into=into)
+        backups.archive_backups("General", [a.name], into=into)
     assert a.exists()
 
 
 def test_a_zip_can_be_renamed_and_keeps_its_files(client):
     a = _shelve("General-20260901-120000.db", b"first")
-    old = db.archive_backups("General", [a.name], label="draft")
+    old = backups.archive_backups("General", [a.name], label="draft")
 
-    new = db.rename_archive("General", old.name, "final name")
+    new = backups.rename_archive("General", old.name, "final name")
 
     assert new.name == "General-final name.zip"
     assert not old.exists()
-    assert [m["name"] for m in db.archive_members(new)] == [a.name]
+    assert [m["name"] for m in backups.archive_members(new)] == [a.name]
 
 
 def test_renaming_onto_another_zip_is_refused(client):
     a = _shelve("General-20260901-120000.db")
     b = _shelve("General-20260902-120000.db")
-    one = db.archive_backups("General", [a.name], label="one")
-    db.archive_backups("General", [b.name], label="two")
+    one = backups.archive_backups("General", [a.name], label="one")
+    backups.archive_backups("General", [b.name], label="two")
 
     with pytest.raises(ValueError, match="already exists"):
-        db.rename_archive("General", one.name, "two")
+        backups.rename_archive("General", one.name, "two")
     assert one.exists()
 
 
 def test_renaming_a_zip_to_its_own_name_changes_nothing(client):
     a = _shelve("General-20260901-120000.db")
-    zipped = db.archive_backups("General", [a.name], label="same")
-    assert db.rename_archive("General", zipped.name, "same") == zipped
+    zipped = backups.archive_backups("General", [a.name], label="same")
+    assert backups.rename_archive("General", zipped.name, "same") == zipped
     assert zipped.exists()
 
 
@@ -267,21 +268,21 @@ def test_renaming_a_zip_to_its_own_name_changes_nothing(client):
 def test_a_zip_name_that_is_not_a_plain_name_is_refused(client, label):
     a = _shelve("General-20260901-120000.db")
     with pytest.raises(ValueError, match="name"):
-        db.archive_backups("General", [a.name], label=label)
+        backups.archive_backups("General", [a.name], label=label)
     assert a.exists()
 
 
 def test_accented_names_are_plain_names(client):
     a = _shelve("General-20260901-120000.db")
-    dest = db.archive_backups("General", [a.name], label="antes da migração")
+    dest = backups.archive_backups("General", [a.name], label="antes da migração")
     assert dest.name == "General-antes da migração.zip"
 
 
 def test_renaming_something_that_is_not_an_archive_is_refused(client):
     with pytest.raises(ValueError):
-        db.rename_archive("General", "../../memai.db", "x")
+        backups.rename_archive("General", "../../memai.db", "x")
     with pytest.raises(ValueError, match="not an archive"):
-        db.rename_archive("General", "General-missing.zip", "x")
+        backups.rename_archive("General", "General-missing.zip", "x")
 
 
 # -------------------------------------------------------------------- refusals
@@ -293,44 +294,44 @@ def test_renaming_something_that_is_not_an_archive_is_refused(client):
 ])
 def test_a_name_that_climbs_out_of_the_shelf_is_refused(client, name):
     with pytest.raises(ValueError):
-        db.archive_backups("General", [name])
+        backups.archive_backups("General", [name])
 
 
 def test_a_name_that_is_not_on_the_shelf_is_refused(client):
     with pytest.raises(ValueError, match="not a backup"):
-        db.archive_backups("General", ["General-does-not-exist.db"])
+        backups.archive_backups("General", ["General-does-not-exist.db"])
 
 
 def test_archiving_nothing_is_refused(client):
     with pytest.raises(ValueError, match="no backups"):
-        db.archive_backups("General", [])
+        backups.archive_backups("General", [])
 
 
 def test_a_file_that_is_not_a_db_is_refused(client):
-    (db.backups_dir("General") / "notes.txt").write_text("x", encoding="utf-8")
+    (backups.backups_dir("General") / "notes.txt").write_text("x", encoding="utf-8")
     with pytest.raises(ValueError, match="not a backup"):
-        db.archive_backups("General", ["notes.txt"])
+        backups.archive_backups("General", ["notes.txt"])
 
 
 def test_archiving_the_same_name_twice_is_refused(client):
     """The archive would hold two members with one name, and unzip one."""
     a = _shelve("General-20260901-120000.db")
-    db.archive_backups("General", [a.name])
+    backups.archive_backups("General", [a.name])
     _shelve(a.name)
 
     with pytest.raises(ValueError, match="already archived"):
-        db.archive_backups("General", [a.name])
+        backups.archive_backups("General", [a.name])
 
 
 def test_unarchiving_onto_a_name_the_shelf_already_holds_is_refused(client):
     """Nothing is written: the check runs over every member first."""
     a = _shelve("General-20260901-120000.db", b"archived")
     b = _shelve("General-20260902-120000.db")
-    dest = db.archive_backups("General", [a.name, b.name])
+    dest = backups.archive_backups("General", [a.name, b.name])
     _shelve(a.name, b"a newer file with the same name")
 
     with pytest.raises(ValueError, match="already on the shelf"):
-        db.unarchive("General", dest.name)
+        backups.unarchive("General", dest.name)
     assert dest.exists(), "the archive is intact"
     assert not b.exists(), "and nothing was extracted"
 
@@ -338,19 +339,19 @@ def test_unarchiving_onto_a_name_the_shelf_already_holds_is_refused(client):
 def test_an_archive_holding_a_path_is_not_extracted(client):
     """A zip written elsewhere can name `../x`; extracting it would write
     outside the shelf."""
-    archive = db.archives_dir("General") / "General-2026-09.zip"
+    archive = backups.archives_dir("General") / "General-2026-09.zip"
     with zipfile.ZipFile(archive, "w") as zf:
         zf.writestr("../escaped.db", b"x")
 
     with pytest.raises(ValueError, match="a path, not a name"):
-        db.unarchive("General", archive.name)
-    assert not (db.backups_dir("General").parent / "escaped.db").exists()
+        backups.unarchive("General", archive.name)
+    assert not (backups.backups_dir("General").parent / "escaped.db").exists()
 
 
 @pytest.mark.parametrize("name", ["../../memai.db", "General-2026-09.db", "nope.zip"])
 def test_only_a_zip_in_the_archive_folder_can_be_unarchived(client, name):
     with pytest.raises(ValueError):
-        db.unarchive("General", name)
+        backups.unarchive("General", name)
 
 
 # -------------------------------------------------------------------- the API
@@ -449,7 +450,7 @@ def test_a_dry_run_reports_the_plan_and_moves_nothing(client):
         {"name": "General-2026-W41.zip", "added": 1, "exists": False},
         {"name": "General-2026-W40.zip", "added": 1, "exists": True}]
     assert b.exists() and c.exists()
-    assert [x.name for x in db.archive_files("General")] == ["General-2026-W40.zip"]
+    assert [x.name for x in backups.archive_files("General")] == ["General-2026-W40.zip"]
 
 
 def test_a_dry_run_still_refuses_what_a_real_run_would(client):
@@ -521,10 +522,10 @@ def test_the_rename_endpoint_refuses_a_bad_name(client):
 def test_a_name_and_a_pin_are_written_beside_the_shelf(client):
     a = _shelve("General-20260901-120000.db")
 
-    db.set_shelf_meta("General", a.name, label="before the move")
-    db.set_shelf_meta("General", a.name, pinned=True)
+    backups.set_shelf_meta("General", a.name, label="before the move")
+    backups.set_shelf_meta("General", a.name, pinned=True)
 
-    assert db.shelf_meta("General") == {
+    assert backups.shelf_meta("General") == {
         a.name: {"label": "before the move", "pinned": True}}
     assert a.exists(), "the backup itself is untouched"
 
@@ -533,33 +534,33 @@ def test_clearing_the_last_field_takes_the_entry_and_the_file_with_it(client):
     """The sidecar holds what was WRITTEN about the shelf, not a row per
     backup ever taken."""
     a = _shelve("General-20260901-120000.db")
-    db.set_shelf_meta("General", a.name, label="temporary")
+    backups.set_shelf_meta("General", a.name, label="temporary")
 
-    db.set_shelf_meta("General", a.name, label="")
+    backups.set_shelf_meta("General", a.name, label="")
 
-    assert db.shelf_meta("General") == {}
-    assert not (db.backups_dir("General") / db.SHELF_META_FILE).exists()
+    assert backups.shelf_meta("General") == {}
+    assert not (backups.backups_dir("General") / backups.SHELF_META_FILE).exists()
 
 
 def test_a_name_follows_its_backup_into_an_archive_and_back(client):
     """The sidecar is keyed by filename, so archiving does not lose it."""
     a = _shelve("General-20260901-120000.db")
-    db.set_shelf_meta("General", a.name, label="the one worth keeping")
-    dest = db.archive_backups("General", [a.name])
+    backups.set_shelf_meta("General", a.name, label="the one worth keeping")
+    dest = backups.archive_backups("General", [a.name])
 
-    assert db.shelf_meta("General")[a.name]["label"] == "the one worth keeping"
-    db.unarchive("General", dest.name)
-    assert db.shelf_meta("General")[a.name]["label"] == "the one worth keeping"
+    assert backups.shelf_meta("General")[a.name]["label"] == "the one worth keeping"
+    backups.unarchive("General", dest.name)
+    assert backups.shelf_meta("General")[a.name]["label"] == "the one worth keeping"
 
 
 def test_writing_about_a_name_outside_the_shelf_is_refused(client):
     with pytest.raises(ValueError):
-        db.set_shelf_meta("General", "../memai.db", label="x")
+        backups.set_shelf_meta("General", "../memai.db", label="x")
 
 
 def test_an_unreadable_sidecar_reads_as_an_unwritten_shelf(client):
-    (db.backups_dir("General") / db.SHELF_META_FILE).write_text("{oops", encoding="utf-8")
-    assert db.shelf_meta("General") == {}
+    (backups.backups_dir("General") / backups.SHELF_META_FILE).write_text("{oops", encoding="utf-8")
+    assert backups.shelf_meta("General") == {}
 
 
 def test_the_shelf_endpoint_carries_the_name_and_the_pin(client):
@@ -584,19 +585,19 @@ def test_a_backup_with_nothing_written_about_it_carries_neither(client):
 def test_deleting_takes_the_files_and_what_was_written_about_them(client):
     a = _shelve("General-20260901-120000.db")
     b = _shelve("General-20260902-120000.db")
-    db.set_shelf_meta("General", a.name, label="gone with it")
+    backups.set_shelf_meta("General", a.name, label="gone with it")
 
-    assert db.delete_backups("General", [a.name, b.name]) == 2
+    assert backups.delete_backups("General", [a.name, b.name]) == 2
 
     assert not a.exists() and not b.exists()
-    assert db.shelf_meta("General") == {}
+    assert backups.shelf_meta("General") == {}
 
 
 def test_one_bad_name_deletes_nothing(client):
     a = _shelve("General-20260901-120000.db")
 
     with pytest.raises(ValueError):
-        db.delete_backups("General", [a.name, "../memai.db"])
+        backups.delete_backups("General", [a.name, "../memai.db"])
 
     assert a.exists()
 
@@ -641,9 +642,9 @@ def test_restoring_keeps_the_state_it_replaced(client):
     kept = client.post("/api/maintenance/backup-restore", json={"name": name}).json()["kept"]
 
     assert "pre-restore" in kept
-    assert (db.backups_dir("General") / kept).is_file()
+    assert (backups.backups_dir("General") / kept).is_file()
 
 
 def test_restoring_something_that_is_not_on_the_shelf_is_refused(client):
     with pytest.raises(ValueError):
-        db.restore_backup("General", "../memai.db")
+        backups.restore_backup("General", "../memai.db")

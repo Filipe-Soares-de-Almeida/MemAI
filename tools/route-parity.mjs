@@ -12,11 +12,8 @@ const ENGINE = join(ROOT, 'src', 'memai', 'webui', 'engines', 'diagram-engine.ts
 
 /* ── the smallest DOM the editor will start against ──────────────────── */
 
-/* Nothing here is asked to behave like a browser: the routing code never
- * touches the canvas, and the drawing code never runs because the stubbed
- * requestAnimationFrame does not call back. measureText is present only
- * because wrap() would reach for it -- text metrics are checked on the
- * Python side against real browser numbers, not here. */
+/* Routing never touches the canvas and the stubbed requestAnimationFrame never draws;
+   measureText exists only because wrap() reaches for it. */
 const stubCanvas = () => {
   const ctx = {
     measureText: t => ({ width: String(t).length * 6 }),

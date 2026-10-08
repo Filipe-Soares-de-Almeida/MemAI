@@ -7,9 +7,9 @@ from typing import cast
 from starlette.routing import Route
 
 from memai import admin_schemas as schema
-from memai import db
 from memai.admin.api import api
 from memai.admin.shared import _backup
+from memai.store import connection, memories, sections
 
 
 def sectionize(request, payload) -> schema.Sectionized:
@@ -21,17 +21,17 @@ def sectionize(request, payload) -> schema.Sectionized:
     either way, so one memory can be put back without the file.
     """
     dest = _backup("sectionize")
-    with db.connect() as c:
-        result = db.migrate_sections(c)
+    with connection.connect() as c:
+        result = memories.migrate_sections(c)
     return cast(schema.Sectionized, {"ok": True, "backup": str(dest), **result})
 
 
 def section_queue(request, payload) -> schema.SectionQueue:
     """The bodies that do not conform, and whether the store has been read."""
-    with db.connect() as conn:
-        return cast(schema.SectionQueue, {"ok": True, "migrated": db.sections_read(conn),
-                                          "unread": db.unread_sections(conn),
-                                          "queue": db.section_queue(conn)})
+    with connection.connect() as conn:
+        return cast(schema.SectionQueue, {"ok": True, "migrated": sections.sections_read(conn),
+                                          "unread": sections.unread_sections(conn),
+                                          "queue": sections.section_queue(conn)})
 
 
 def edit_sections(request, payload) -> schema.Ok:
@@ -44,10 +44,10 @@ def edit_sections(request, payload) -> schema.Ok:
     values = payload.get("sections")
     if not isinstance(values, dict):
         raise ValueError("sections must be an object of key -> text")
-    with db.connect() as conn:
-        if db.get_memory(conn, uid) is None:
+    with connection.connect() as conn:
+        if memories.get_memory(conn, uid) is None:
             raise ValueError(f"unknown memory: {uid}")
-        db.set_sections(conn, uid, {k: str(v) for k, v in values.items()},
+        memories.set_sections(conn, uid, {k: str(v) for k, v in values.items()},
                         note=payload.get("note", ""))
     return {"ok": True}
 

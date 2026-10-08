@@ -16,7 +16,8 @@ import re
 import pytest
 
 from conftest import shaped
-from memai import db, guard, hook, hook_install, warden
+from memai import guard, hook, hook_install, warden
+from memai.store import connection, memories
 
 SESSION = "session-1"
 
@@ -28,10 +29,10 @@ def store(tmp_path, monkeypatch):
 
 
 def _seed() -> None:
-    with db.connect() as conn:
-        db.insert_memory(conn, type="note", domain="acme/x100",
+    with connection.connect() as conn:
+        memories.insert_memory(conn, type="note", domain="acme/x100",
                          content="the harbor crane lifts at dawn")
-        db.insert_memory(conn, type="checkpoint", domain="acme/x100",
+        memories.insert_memory(conn, type="checkpoint", domain="acme/x100",
                          content=shaped("checkpoint", "rig the crane"))
 
 

@@ -1,11 +1,10 @@
 """The few pieces of the store's layout that the hook's guard path needs.
 
-`memai.db` is the store itself and costs a visible fraction of a second to
+`memai.store` is the store itself and costs a visible fraction of a second to
 import; the guard runs in front of every memai tool call and has to start
 without it. What sits here is what both can share: where the home directory
 is, the clock's format, how a domain path is cut and normalised, and the
-intervals a session's state is judged against. `memai.db` re-exports all of
-it, so callers keep one spelling.
+intervals a session's state is judged against.
 
 Nothing here imports another memai module but the stdlib-only `memai.contract`.
 """

@@ -6,7 +6,9 @@ pending for the price of a title each and open what it will touch.
 
 import sqlite3
 
-from . import db, tasks
+from . import lite, tasks
+from .store import connection, memories, search
+from .store import domains as store_domains
 
 CATEGORIES = ("task", "anti_pattern", "handoff", "note", "diagram")
 # what a pin can be counted under: the categories, then the types outside them
@@ -27,16 +29,16 @@ def _scope(conn: sqlite3.Connection, domain: str) -> tuple[str, list]:
     A domain that normalizes to nothing ("/") names no path, so it is the
     whole project too.
     """
-    if not db.normalize_domain(domain):
+    if not lite.normalize_domain(domain):
         return "", []
-    clause, params, _ = db.domain_scope_clause(conn, domain, alias="m")
+    clause, params, _ = store_domains.domain_scope_clause(conn, domain, alias="m")
     return clause, params
 
 
 def _pin_scope(conn: sqlite3.Connection, domain: str) -> tuple[str, list]:
     """The pins in scope for `domain`: every global one, and each domain pin
     whose domain or also path is the asked domain or above it."""
-    scopes = db.resolve_domain_scopes(conn, domain) if db.normalize_domain(domain) else []
+    scopes = store_domains.resolve_domain_scopes(conn, domain) if lite.normalize_domain(domain) else []
     if not scopes:
         return "AND m.pin = 'global'", []
     arms, params = [], []
@@ -51,10 +53,10 @@ def _pin_scope(conn: sqlite3.Connection, domain: str) -> tuple[str, list]:
 def _from_where(conn: sqlite3.Connection, domain: str, type_: str,
                 pinned: bool = False) -> tuple[str, list]:
     scope, params = _pin_scope(conn, domain) if pinned else _scope(conn, domain)
-    if type_ == db.TASK_TYPE:
+    if type_ == memories.TASK_TYPE:
         return (f"FROM memories m JOIN tasks t ON t.memory_uid = m.uid "
                 f"WHERE m.type = ? AND m.status = 'active' AND t.state = 'open' {scope}", [type_, *params])
-    sound = db._sound_clause(type_ in _SOUND)
+    sound = search._sound_clause(type_ in _SOUND)
     return (f"FROM memories m WHERE m.type = ? AND m.status = 'active'{sound} {scope}",
             [type_, *params])
 
@@ -85,9 +87,9 @@ def open_task_uids(conn: sqlite3.Connection, domains: list[str]) -> list[str]:
     """
     found: dict[str, None] = {}
     for domain in domains:
-        if not db.normalize_domain(str(domain)):
+        if not lite.normalize_domain(str(domain)):
             continue
-        where, params = _from_where(conn, str(domain).strip(), db.TASK_TYPE)
+        where, params = _from_where(conn, str(domain).strip(), memories.TASK_TYPE)
         for row in conn.execute(f"SELECT m.uid {where}", params):
             found[row["uid"]] = None
     return list(found)
@@ -118,8 +120,8 @@ def task_state(conn: sqlite3.Connection, uid: str) -> str | None:
 
 def _header(conn: sqlite3.Connection, row: sqlite3.Row) -> dict:
     item = {"uid": row["uid"], "title": row["title"], "domain": row["domain"],
-            "est_tokens": db.est_tokens(len(row["content"]))}
-    if row["type"] == db.TASK_TYPE:
+            "est_tokens": connection.est_tokens(len(row["content"]))}
+    if row["type"] == memories.TASK_TYPE:
         item["progress"] = task_progress(conn, row["uid"])
         item["doing"] = _doing(conn, row["uid"])
     return item
@@ -137,7 +139,7 @@ def headers(conn: sqlite3.Connection, domain: str, type_: str,
     offset = max(0, int(offset))
     where, params = _from_where(conn, domain, type_, pinned)
     total = _count(conn, domain, type_, pinned)
-    if type_ == db.TASK_TYPE:
+    if type_ == memories.TASK_TYPE:
         order = ("ORDER BY COALESCE((SELECT MAX(i.updated_at) FROM task_items i "
                  "WHERE i.memory_uid = m.uid), m.created_at) DESC, m.rowid_pk DESC")
     else:

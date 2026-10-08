@@ -17,7 +17,9 @@ import pytest
 from starlette.testclient import TestClient
 
 import memai
-from memai import admin, db, hook, server, update
+from memai import hook, server, update
+from memai.admin.app import app as admin_app
+from memai.store import connection, memories
 
 NEWER = "v9.9.9"
 PAGE = "https://example.com/memai/releases/v9.9.9"
@@ -71,9 +73,8 @@ def _never(timeout: float = update.TIMEOUT):
     raise AssertionError("the cached answer was there to be reused")
 
 
-# Bound at import, before the autouse fixture replaces the module's `_fetch`
-# with a stub: the two tests below are the ones that exercise the real request
-# path, against a response of their own.
+# Bound at import, before the autouse fixture stubs `_fetch`, for the two tests that exercise
+# the real request path.
 _REAL_FETCH = update._fetch
 
 
@@ -439,8 +440,8 @@ def _session_start(payload: dict, capsysbinary) -> dict | None:
 
 
 def test_the_session_start_hook_appends_the_note(store, monkeypatch, capsysbinary):
-    with db.connect() as conn:
-        db.insert_memory(conn, type="note", domain="acme/x100",
+    with connection.connect() as conn:
+        memories.insert_memory(conn, type="note", domain="acme/x100",
                          content="cache warmup runs before the first request")
     monkeypatch.setattr(update, "_fetch", _answers())
     result = _session_start({"session_id": "s1"}, capsysbinary)
@@ -452,8 +453,8 @@ def test_the_session_start_hook_appends_the_note(store, monkeypatch, capsysbinar
 
 def test_the_session_start_hook_says_nothing_about_a_version_that_is_current(
         store, monkeypatch, capsysbinary):
-    with db.connect() as conn:
-        db.insert_memory(conn, type="note", domain="acme/x100",
+    with connection.connect() as conn:
+        memories.insert_memory(conn, type="note", domain="acme/x100",
                          content="cache warmup runs before the first request")
     monkeypatch.setattr(update, "_fetch", _answers(f"v{memai.__version__}"))
     result = _session_start({"session_id": "s1"}, capsysbinary)
@@ -488,7 +489,7 @@ def test_the_stop_hook_asks_on_the_chosen_window(store, monkeypatch):
 
 @pytest.fixture
 def client(store):
-    with TestClient(admin.app) as c:
+    with TestClient(admin_app) as c:
         yield c
 
 

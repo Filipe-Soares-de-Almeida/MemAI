@@ -8,7 +8,7 @@ from pathlib import Path
 from starlette.routing import Match, Route
 
 import memai
-from memai import admin
+from memai.admin.app import app as admin_app
 
 PACKAGE = Path(memai.__file__).parent
 SQL = re.compile(r"\b(SELECT\b[\s\S]*\bFROM|INSERT\s+INTO|UPDATE\s+\w+\s+SET|DELETE\s+FROM|PRAGMA)\b")
@@ -44,11 +44,11 @@ def test_the_check_sees_a_query_and_a_call():
 
 def test_no_route_is_answered_by_an_earlier_one():
     """Routes are matched in order, so a pattern above a literal path can take its requests."""
-    for route in admin.app.routes:
+    for route in admin_app.routes:
         if not isinstance(route, Route):
             continue
         path = re.sub(r"\{\w+\}", "abc", re.sub(r"\{\w+:int\}", "7", route.path))
         for method in route.methods or ():
             scope = {"type": "http", "path": path, "method": method, "root_path": ""}
-            first = next(r for r in admin.app.routes if r.matches(scope)[0] == Match.FULL)
+            first = next(r for r in admin_app.routes if r.matches(scope)[0] == Match.FULL)
             assert first is route, f"{method} {route.path} is answered by {first.path}"

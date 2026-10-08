@@ -6,6 +6,7 @@ comments are reported once an edit touches them. Standard library only.
     python tools/comment-lint.py                    # changes vs origin/dev
     python tools/comment-lint.py --base HEAD a.py   # uncommitted lines in a.py
     python tools/comment-lint.py --all a.py         # every line of a.py
+    python tools/comment-lint.py --all              # every line of every tracked file
     python tools/comment-lint.py --hook             # a Claude Code PostToolUse hook
 
 Exit 1 with one `file:line: message` per finding; in --hook mode the findings
@@ -372,7 +373,8 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.all:
-        targets: dict[str, set[int] | None] = {f: None for f in args.files}
+        files = args.files or _git("ls-files").splitlines()
+        targets: dict[str, set[int] | None] = {f: None for f in files}
     else:
         targets = dict(added_lines(args.base, args.files or None))
     report = run(targets)

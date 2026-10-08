@@ -12,7 +12,8 @@ import sys
 
 import pytest
 
-from memai import budget, db, hook, sections, server, tasks
+from memai import budget, hook, sections, server, tasks
+from memai.store import connection, memories, relations, search
 
 FILLER = "Lorem ipsum dolor sit amet, acao util e rapida. "
 MEMORIES = 600
@@ -26,7 +27,7 @@ def _text(n: int, salt: str = "") -> str:
 
 
 def _memory(conn, n: int, domain: str) -> str:
-    return db.insert_memory(conn, type="note", content=_text(1800, f"m{n} "),
+    return memories.insert_memory(conn, type="note", content=_text(1800, f"m{n} "),
                             title=_text(120, f"m{n} "), domain=domain,
                             tags=", ".join(f"tag{n}-{k}" for k in range(25)))
 
@@ -37,15 +38,15 @@ def worst(tmp_path_factory):
     mp = pytest.MonkeyPatch()
     mp.setenv("MEMAI_HOME", str(home))
     ids: dict = {}
-    with db.connect() as conn:
+    with connection.connect() as conn:
         domains = [f"acme/m{d:03d}/p{d % 7}" for d in range(DOMAINS)]
         uids = [_memory(conn, n, domains[n % DOMAINS]) for n in range(MEMORIES)]
         ids["note"], ids["spare"] = uids[0], uids[-1]
         for n in range(1, 120):
-            db.add_relation(conn, uids[0], uids[n], "relates_to")
+            relations.add_relation(conn, uids[0], uids[n], "relates_to")
         for n in range(60):
-            db.update_memory_content(conn, uids[1], _text(20_000, f"e{n} "), note=f"edit {n}")
-        db.update_memory_content(conn, uids[2], _text(120_000, "long "), note="long body")
+            memories.update_memory_content(conn, uids[1], _text(20_000, f"e{n} "), note=f"edit {n}")
+        memories.update_memory_content(conn, uids[2], _text(120_000, "long "), note="long body")
         ids["edited"], ids["long"] = uids[1], uids[2]
         task = tasks.create_task(conn, title=_text(120), goal=_text(tasks.GOAL_MAX),
                                  items=[_text(tasks.ITEM_MAX, f"{n} ") for n in range(tasks.ITEMS_MAX)],
@@ -60,7 +61,7 @@ def worst(tmp_path_factory):
             tasks.link_item(conn, task, key, uids[3:203])
         ids["task"] = task
         for n in range(40):
-            db.insert_memory(conn, type="note", content=_text(1500, f"dup{n % 3} "),
+            memories.insert_memory(conn, type="note", content=_text(1500, f"dup{n % 3} "),
                              title=_text(120, f"d{n} "), domain="acme/dups")
         for n in range(40):
             tasks.create_task(conn, title=_text(120, f"t{n} "), goal=_text(500), items=["a", "b"],
@@ -230,8 +231,8 @@ def test_search_pages_cover_every_hit_once(worst):
     for page in _walk(lambda o: server.search(QUERY, limit=400, offset=o)):
         assert budget.result_chars(page) <= budget.PAGE_MAX_CHARS + 2000
         seen += [r["uid"] for r in page["results"]]
-    with db.connect() as conn:
-        ranked = [r["uid"] for r in db.search_ranked(conn, QUERY, limit=400, collapse=True)]
+    with connection.connect() as conn:
+        ranked = [r["uid"] for r in search.search_ranked(conn, QUERY, limit=400, collapse=True)]
     assert seen == ranked and len(set(seen)) == len(seen)
 
 

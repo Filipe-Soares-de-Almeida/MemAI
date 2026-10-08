@@ -12,7 +12,8 @@ from pathlib import Path
 import pytest
 
 from conftest import shaped
-from memai import brief, db, pending, portable, server
+from memai import brief, pending, portable, server
+from memai.store import connection, memories, paths
 
 
 @pytest.fixture
@@ -22,83 +23,83 @@ def store(tmp_path, monkeypatch):
 
 
 def _note(conn, title="Parser fact", domain="acme/x100", also="") -> str:
-    return db.insert_memory(conn, type="note", title=title, content="Lex once.",
+    return memories.insert_memory(conn, type="note", title=title, content="Lex once.",
                             domain=domain, also=also)
 
 
 def test_a_new_memory_is_not_pinned(store):
-    with db.connect() as conn:
+    with connection.connect() as conn:
         uid = _note(conn)
-        assert db.get_memory(conn, uid)["pin"] == ""
+        assert memories.get_memory(conn, uid)["pin"] == ""
 
 
 @pytest.mark.parametrize("pin", ["global", "domain", ""])
 def test_set_pin_stores_each_value(store, pin):
-    with db.connect() as conn:
+    with connection.connect() as conn:
         uid = _note(conn)
-        before = db.get_memory(conn, uid)["updated_at"]
-        assert db.set_pin(conn, uid, pin) is True
-        row = db.get_memory(conn, uid)
+        before = memories.get_memory(conn, uid)["updated_at"]
+        assert memories.set_pin(conn, uid, pin) is True
+        row = memories.get_memory(conn, uid)
         assert row["pin"] == pin
         assert row["updated_at"] >= before
 
 
 def test_set_pin_refuses_an_unknown_value(store):
-    with db.connect() as conn:
+    with connection.connect() as conn:
         uid = _note(conn)
         with pytest.raises(ValueError, match="pin must be one of"):
-            db.set_pin(conn, uid, "always")
+            memories.set_pin(conn, uid, "always")
 
 
 def test_set_pin_refuses_a_domain_pin_without_a_domain(store):
-    with db.connect() as conn:
+    with connection.connect() as conn:
         uid = _note(conn, domain="")
         with pytest.raises(ValueError, match="without a domain"):
-            db.set_pin(conn, uid, "domain")
-        assert db.set_pin(conn, uid, "global") is True
+            memories.set_pin(conn, uid, "domain")
+        assert memories.set_pin(conn, uid, "global") is True
 
 
 def test_set_pin_on_an_unknown_uid_is_false(store):
-    with db.connect() as conn:
-        assert db.set_pin(conn, "0" * 16, "global") is False
+    with connection.connect() as conn:
+        assert memories.set_pin(conn, "0" * 16, "global") is False
 
 
 def test_an_existing_store_gains_the_column(store):
-    with db.connect() as conn:
+    with connection.connect() as conn:
         _note(conn)
-    raw = sqlite3.connect(db.default_db_path())
+    raw = sqlite3.connect(paths.default_db_path())
     raw.execute("ALTER TABLE memories DROP COLUMN pin")
     raw.commit()
     raw.close()
-    with db.connect() as conn:
+    with connection.connect() as conn:
         assert {r["pin"] for r in conn.execute("SELECT pin FROM memories")} == {""}
 
 
 def test_export_and_import_carry_the_pin(store, tmp_path, monkeypatch):
-    with db.connect() as conn:
+    with connection.connect() as conn:
         uid = _note(conn)
-        db.set_pin(conn, uid, "domain")
+        memories.set_pin(conn, uid, "domain")
         records = list(portable.export_records(conn))
     assert next(r for r in records if r.get("uid") == uid)["pin"] == "domain"
     monkeypatch.setenv("MEMAI_HOME", str(tmp_path / "other-store"))
-    with db.connect() as conn:
+    with connection.connect() as conn:
         assert portable.import_records(conn, records)["errors"] == []
-        assert db.get_memory(conn, uid)["pin"] == "domain"
+        assert memories.get_memory(conn, uid)["pin"] == "domain"
 
 
 def test_import_rejects_an_unknown_pin(store):
     record = {"record": "memory", "uid": "1" * 16, "type": "note",
               "title": "Parser fact", "content": "Lex once.", "pin": "always"}
-    with db.connect() as conn:
+    with connection.connect() as conn:
         result = portable.import_records(conn, [record])
         assert result["added"] == 0 and len(result["errors"]) == 1
-        assert db.get_memory(conn, "1" * 16) is None
+        assert memories.get_memory(conn, "1" * 16) is None
 
 
 def test_markdown_export_names_a_pin(store):
-    with db.connect() as conn:
+    with connection.connect() as conn:
         uid = _note(conn)
-        db.set_pin(conn, uid, "global")
+        memories.set_pin(conn, uid, "global")
         text = portable.to_markdown(portable.export_records(conn))
     assert "pin: global" in text
 
@@ -109,9 +110,9 @@ def _pinned(conn, pin, domain="acme/x100", also="", type_="note", title="Pinned 
     if type_ == "note":
         uid = _note(conn, title=title, domain=domain, also=also)
     else:
-        uid = db.insert_memory(conn, type=type_, title=title,
+        uid = memories.insert_memory(conn, type=type_, title=title,
                                content=shaped(type_, "a pinned body"), domain=domain)
-    db.set_pin(conn, uid, pin)
+    memories.set_pin(conn, uid, pin)
     return uid
 
 
@@ -120,7 +121,7 @@ def _types(found):
 
 
 def test_whole_project_counts_only_global_pins(store):
-    with db.connect() as conn:
+    with connection.connect() as conn:
         _pinned(conn, "global")
         _pinned(conn, "domain")
         assert pending.pinned_counts(conn) == [{"type": "note", "count": 1}]
@@ -131,7 +132,7 @@ def test_whole_project_counts_only_global_pins(store):
     ("acme", False), ("acme/x1000", False), ("other", False),
 ])
 def test_a_domain_pin_covers_its_subtree_only(store, asked, seen):
-    with db.connect() as conn:
+    with connection.connect() as conn:
         _note(conn, title="Something under p200", domain="acme/x100/p200")
         _pinned(conn, "domain")
         assert pending.pinned_counts(conn, asked) == (
@@ -139,51 +140,51 @@ def test_a_domain_pin_covers_its_subtree_only(store, asked, seen):
 
 
 def test_a_global_pin_is_in_every_scope(store):
-    with db.connect() as conn:
+    with connection.connect() as conn:
         _pinned(conn, "global", domain="other")
         for asked in ("", "acme", "acme/x100/p200", "other"):
             assert _types(pending.pinned_counts(conn, asked)) == {"note": 1}
 
 
 def test_a_domain_pin_covers_its_also_paths(store):
-    with db.connect() as conn:
+    with connection.connect() as conn:
         _pinned(conn, "domain", also="other/y200")
         assert _types(pending.pinned_counts(conn, "other/y200/z")) == {"note": 1}
         assert pending.pinned_counts(conn, "other") == []
 
 
 def test_a_pin_that_is_not_pending_is_not_counted_and_survives(store):
-    with db.connect() as conn:
+    with connection.connect() as conn:
         archived = _pinned(conn, "global", title="Archived pin")
-        db.set_status(conn, archived, "archived")
+        memories.set_status(conn, archived, "archived")
         wrong = _pinned(conn, "global", title="Wrong pin")
-        db.set_confidence(conn, wrong, "contradicted")
+        memories.set_confidence(conn, wrong, "contradicted")
         assert pending.pinned_counts(conn) == []
-        db.set_status(conn, archived, "active")
+        memories.set_status(conn, archived, "active")
         assert _types(pending.pinned_counts(conn)) == {"note": 1}
-        assert db.get_memory(conn, wrong)["pin"] == "global"
+        assert memories.get_memory(conn, wrong)["pin"] == "global"
 
 
 def test_a_closed_task_pin_is_not_counted(store):
     uid = server.task(title="Ship the parser", goal="Parse every config file",
                       items="read the spec", domain="acme/x100")["uid"]
-    with db.connect() as conn:
-        db.set_pin(conn, uid, "global")
+    with connection.connect() as conn:
+        memories.set_pin(conn, uid, "global")
         assert _types(pending.pinned_counts(conn)) == {"task": 1}
     server.task_item(uid, "i1", state="done")
-    with db.connect() as conn:
+    with connection.connect() as conn:
         assert pending.pinned_counts(conn) == []
 
 
 def test_pinned_memories_still_count_in_their_category(store):
-    with db.connect() as conn:
+    with connection.connect() as conn:
         _pinned(conn, "global")
         _note(conn, title="Plain fact")
         assert pending.counts(conn, "acme/x100") == [{"type": "note", "count": 2}]
 
 
 def test_checkpoint_and_reasoning_pins_are_counted(store):
-    with db.connect() as conn:
+    with connection.connect() as conn:
         _pinned(conn, "global", type_="checkpoint", title="Pinned bearing")
         _pinned(conn, "global", type_="reasoning", title="Pinned decision")
         assert pending.pinned_counts(conn) == [
@@ -191,7 +192,7 @@ def test_checkpoint_and_reasoning_pins_are_counted(store):
 
 
 def test_pinned_headers_list_only_pins_of_the_type(store):
-    with db.connect() as conn:
+    with connection.connect() as conn:
         uid = _pinned(conn, "domain")
         _note(conn, title="Plain fact")
         page = pending.headers(conn, "acme/x100", "note", pinned=True)
@@ -202,14 +203,14 @@ def test_pinned_headers_list_only_pins_of_the_type(store):
 # ---------------------------------------------------------------- the tools
 
 def _seed_pins():
-    with db.connect() as conn:
+    with connection.connect() as conn:
         _pinned(conn, "global", title="Global pin")
         _pinned(conn, "domain", title="Domain pin")
         _note(conn, title="Plain fact")
 
 
 def test_pending_tool_adds_pinned_counts_only_when_pinned(store):
-    with db.connect() as conn:
+    with connection.connect() as conn:
         _note(conn)
     assert server.must_read() == {"categories": [{"type": "note", "count": 1}]}
     _seed_pins()
@@ -243,7 +244,7 @@ def test_pulse_reports_pins_and_reads_them_first(store):
 
 
 def test_pulse_without_pins_reads_as_before(store):
-    with db.connect() as conn:
+    with connection.connect() as conn:
         _note(conn)
     result = server.pulse("acme/x100")
     assert result["pinned"] == []
@@ -258,7 +259,7 @@ def test_instructions_name_the_pins():
 
 def test_pin_line_counts_global_pins_at_session_start(store):
     _seed_pins()
-    with db.connect() as conn:
+    with connection.connect() as conn:
         assert brief.pin_line(conn, "") == (
             "Pinned, read every one before acting: 1 note -- "
             "must_read(type=..., pinned=true), then get_memory(uid) each.")
@@ -268,14 +269,14 @@ def test_pin_line_counts_global_pins_at_session_start(store):
 
 
 def test_pin_line_is_empty_without_pins(store):
-    with db.connect() as conn:
+    with connection.connect() as conn:
         _note(conn)
         assert brief.pin_line(conn, "") == ""
 
 
 def test_the_brief_keeps_the_pin_line_under_a_tight_budget(store):
     _seed_pins()
-    with db.connect() as conn:
+    with connection.connect() as conn:
         for n in range(30):
             _note(conn, title=f"Filler fact {n}", domain=f"acme/filler{n}")
         text = brief.session_brief(conn, budget=200)
@@ -284,7 +285,7 @@ def test_the_brief_keeps_the_pin_line_under_a_tight_budget(store):
 
 # ---------------------------------------------------------------- dashboard
 
-WEBUI = Path(db.__file__).parent / "webui"
+WEBUI = Path(server.__file__).parent / "webui"
 
 
 @pytest.mark.parametrize("locale", ["en.json", "pt-BR.json"])
@@ -306,13 +307,13 @@ def test_pin_strings_exist_in_every_locale(locale):
     ("Acme/X100", "acme/x100/deeper"),
 ])
 def test_a_domain_pin_ignores_the_casing_of_the_asked_path(store, pinned_at, asked):
-    with db.connect() as conn:
+    with connection.connect() as conn:
         _pinned(conn, "domain", domain=pinned_at)
         assert _types(pending.pinned_counts(conn, asked)) == {"note": 1}
 
 
 def test_an_unpinned_memory_payload_carries_no_pin_field(store):
-    with db.connect() as conn:
+    with connection.connect() as conn:
         plain = _note(conn, title="Plain fact")
         pinned = _pinned(conn, "global")
     assert "pin" not in server.get_memory(plain)

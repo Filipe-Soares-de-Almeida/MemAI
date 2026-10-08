@@ -1,19 +1,17 @@
 /* Vocabulary every view shares: memory types, the confidence scale, fragments built from them,
    and the domains cache. Labels resolve t() at import; a language switch reloads the page. */
 
-import { $, esc, cssVar } from './dom.ts';
+import { esc, cssVar } from './dom.ts';
 import { icon } from './icons.js';
 import { fixedItems, pickerFor, wirePicker } from './pick.js';
 import { t } from '../i18n.ts';
-import { copyUid } from './copy.ts';
 import { TYPE_ORDER } from './vocab.js';
 import { MEMORY } from '../contract.ts';
-import { byDomainPath } from './domains.ts';
 import * as client from '../api/client.ts';
 
 export { TYPE_ORDER, REL_SUGGEST, DG_REL_SUGGEST } from './vocab.js';
 
-export const TYPES = Object.fromEntries(
+const TYPES = Object.fromEntries(
   TYPE_ORDER.map(tp => [tp, { color: cssVar(`--t-${tp}`) || '#9e9e9e' }]));
 
 /* the raw enum stays lower_snake for CSS classes & payloads; the label is
@@ -31,7 +29,7 @@ const PIN_ICON = { global: 'pin', domain: 'pin-domain' };
 export const PIN = Object.fromEntries(MEMORY.PINS.map(p =>
   [p, { icon: PIN_ICON[p], label: t(`mem.pin.${p}`) }]));
 
-export const pinMark = pin => PIN[pin]
+const pinMark = pin => PIN[pin]
   ? `<span class="pin-mark pin-${pin}" role="img" title="${esc(PIN[pin].label)}"
        aria-label="${esc(PIN[pin].label)}">${icon(PIN[pin].icon)}</span>`
   : '';
@@ -121,7 +119,7 @@ export function wireRelTypeField(root, { selId, customId, options, onPick }) {
 
 /* What a suggestion kind does, as one of the six field roles (--f-*, admin.css); kinds that act
    alike share a hue. Never the --t-* type ramp, where orange means "note". */
-export const KIND_ROLE = {
+const KIND_ROLE = {
   link: 'aim', crosslist: 'aim',
   reword: 'hold', compact: 'hold', distill: 'hold', unleak: 'hold',
   set_confidence: 'ask', redomain: 'ask',
@@ -134,11 +132,6 @@ export const kindColor = kind => `var(--f-${KIND_ROLE[kind] || 'aim'})`;
 
 export const typeColor = tp => (TYPES[tp] || {}).color || '#9e9e9e';
 export const typeClass = tp => TYPES[tp] ? `t-${tp}` : '';
-
-/* The chip's dot is the type's fill and its name the ink, one class setting both (.type-tag);
-   `.dot` alone is for a mark beside something else. */
-export const typeTag = tp =>
-  `<span class="type-tag ${typeClass(tp)}"><span class="dot"></span>${esc(tp)}</span>`;
 
 /* `compact` keeps only the mark for dense rows; the title is then the only place the label
    survives. */
@@ -163,10 +156,6 @@ export const sectionLabel = (type, section) => {
   const named = t(key);
   return named === key ? section.label : named;
 };
-
-export const sectionLabelHTML = (type, section) =>
-  `<span class="sec-label-text" title="${esc(section.label)}">`
-  + `${esc(sectionLabel(type, section))}</span>`;
 
 /* What a field does, by section key: one flat map, since SECTION_SPEC keys do not collide across
    types. A type with no sections falls back to its own colour. */
@@ -205,13 +194,6 @@ export const confItems = ({ any = '' } = {}) => [
   ...Object.keys(CONF).map(c => ({ value: c, label: CONF[c].label, html: confPill(c) })),
 ];
 
-/* A toolbar filter under its label (see .tb-labeled), and a control with no
-   label kept level with the labelled ones. */
-export const tbField = (label, control, cls = '') =>
-  `<div class="tb-field${cls ? ` ${cls}` : ''}"><span class="mg-label" aria-hidden="true">${
-    esc(label)}</span>${control}</div>`;
-export const tbBare = control => `<div class="tb-bare">${control}</div>`;
-
 export const pinItems = ({ any = '' } = {}) => [
   { value: '', label: any, html: `<span class="pick-any">${esc(any)}</span>` },
   { value: 'any', label: t('mem.pin.any'),
@@ -235,29 +217,12 @@ export const failedHTML = err => `<div class="failed" role="alert">
   <button type="button" class="btn btn-sm" data-retry>${t('common.retry')}</button>
 </div>`;
 
-/* Wraps a loader so a failure renders into `hostSel` with a Retry that re-runs this wrapper, which
-   is also what Refresh should call. Resolves undefined on failure; it is already on screen. */
-export function retryable(hostSel, loader) {
-  const run = () => loader().catch(err => {
-    const host = document.querySelector(hostSel);
-    if (!host) return;            /* the view was swapped while this was in flight */
-    host.innerHTML = failedHTML(err);
-    host.querySelector('[data-retry]').addEventListener('click', run);
-  });
-  return run;
-}
-
 export const statusTag = s =>
   s === 'archived' ? `<span class="status-tag archived">${t('status.archived')}</span>` : '';
 
-export function wireCopyChips(root) {
-  root.querySelectorAll('[data-copy]').forEach(el =>
-    el.addEventListener('click', e => { e.stopPropagation(); copyUid(el.dataset.copy); }));
-}
-
 /* ─── domain paths (core/domains.ts), and the markup drawn from them */
 
-export { DOMAIN_SEP, domainSegments, domainLeaf, domainDepth, inDomainPath, byDomainPath,
+export { DOMAIN_SEP, domainSegments, domainLeaf, inDomainPath, byDomainPath,
          domainGuides } from './domains.ts';
 
 /* One row's guide rails as markup. Hosts declare --dom-step and lay rows out as spacer, an 18px
@@ -268,11 +233,6 @@ export const domainRailHTML = ({ depth, through, last }, { leaf = false } = {}) 
         through.map(on => `<i class="${on ? 'dg-line' : 'dg-gap'}"></i>`).join('')
       }<i class="dg-elbow${last ? ' dg-end' : ''}"></i></span>`
     : '';
-
-/* Suggestions for a free-text domain field: whole paths, in tree order. */
-export const domainDatalist = domains =>
-  domains.slice().sort(byDomainPath)
-    .map(d => `<option value="${esc(d.domain)}">`).join('');
 
 /* ─── domains cache (datalists, selects) ─────────────────────────────── */
 

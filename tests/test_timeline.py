@@ -11,7 +11,8 @@ from __future__ import annotations
 
 import pytest
 
-from memai import db, server
+from memai import server
+from memai.store import connection, memories
 
 
 @pytest.fixture
@@ -27,9 +28,9 @@ def _at(day: int) -> str:
 def _seed(rows: list[dict]) -> list[str]:
     """Insert rows in the given order, one per day from 2026-03-01."""
     uids = []
-    with db.connect() as conn:
+    with connection.connect() as conn:
         for i, row in enumerate(rows, start=1):
-            uids.append(db.insert_memory(
+            uids.append(memories.insert_memory(
                 conn, type=row.get("type", "note"), content=row["content"],
                 domain=row.get("domain", ""), also=row.get("also", ""),
                 created_at=_at(i)))
@@ -131,8 +132,8 @@ def test_an_edge_of_the_store_runs_out_rather_than_wrapping(store):
 def test_records_written_in_the_same_instant_land_on_one_side_each(store):
     """created_at is not unique; insertion order separates a tie, so no row
     can be both older and newer than the anchor."""
-    with db.connect() as conn:
-        uids = [db.insert_memory(conn, type="note", content=f"queue drain step {i}",
+    with connection.connect() as conn:
+        uids = [memories.insert_memory(conn, type="note", content=f"queue drain step {i}",
                                  created_at=_at(1))
                 for i in range(3)]
     result = server.timeline(uid=uids[1])
@@ -215,8 +216,8 @@ def test_a_query_anchor_is_scoped_too(store):
 
 def test_an_archived_neighbour_is_left_out(store):
     uids = _seed(DAYS)
-    with db.connect() as conn:
-        db.set_status(conn, uids[2], "archived")
+    with connection.connect() as conn:
+        memories.set_status(conn, uids[2], "archived")
     result = server.timeline(uid=uids[3], before=2)
     assert [r["uid"] for r in result["before"]] == [uids[0], uids[1]]
 
@@ -224,8 +225,8 @@ def test_an_archived_neighbour_is_left_out(store):
 def test_an_archived_record_can_still_be_the_anchor(store):
     """A uid names one record; the filters are the neighbourhood's."""
     uids = _seed(DAYS)
-    with db.connect() as conn:
-        db.set_status(conn, uids[3], "archived")
+    with connection.connect() as conn:
+        memories.set_status(conn, uids[3], "archived")
     result = server.timeline(uid=uids[3], before=1, after=1)
     assert result["anchor"]["uid"] == uids[3]
     assert [r["uid"] for r in result["before"]] == [uids[2]]
@@ -240,16 +241,16 @@ def test_each_record_is_snippet_truncated_and_priced(store):
     result = server.timeline(uid=uids[1])
     neighbour = result["before"][0]
     assert len(neighbour["content"]) < len(long_body)
-    assert neighbour["est_tokens"] == db.est_tokens(len(long_body))
-    assert result["anchor"]["est_tokens"] == db.est_tokens(
+    assert neighbour["est_tokens"] == connection.est_tokens(len(long_body))
+    assert result["anchor"]["est_tokens"] == connection.est_tokens(
         len("the queue drain retries twice"))
 
 
 def test_a_timeline_counts_what_it_handed_over(store):
     uids = _seed(DAYS)
     server.timeline(uid=uids[3], before=1, after=1)
-    with db.connect() as conn:
-        assert set(db.usage_for(conn, uids)) == {uids[2], uids[3], uids[4]}
+    with connection.connect() as conn:
+        assert set(memories.usage_for(conn, uids)) == {uids[2], uids[3], uids[4]}
 
 
 def test_the_indexing_mirror_never_leaves(store):

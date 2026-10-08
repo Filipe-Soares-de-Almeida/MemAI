@@ -29,7 +29,12 @@ import sys
 from collections import Counter
 from pathlib import Path
 
-from memai import db, tasks
+from memai import lite, tasks
+from memai.store import backups, connection, domains, paths, projects, sections
+from memai.store import memories as store_memories
+from memai.store import relations as store_relations
+from memai.store.diagrams import persist as diagram_persist
+from memai.store.diagrams import render as diagram_render
 
 FORMATS = ("jsonl", "md")
 FORMAT_VERSION = 1
@@ -55,7 +60,7 @@ def _memory_record(conn, row, usage: dict) -> dict:
         value = row[col]
         if value:
             out[col] = value
-    links = db.parse_domains(row["also_domains"])
+    links = domains.parse_domains(row["also_domains"])
     if links:
         out["also"] = links
     seen = usage.get(row["uid"])
@@ -80,7 +85,7 @@ def export_records(conn, *, domain: str = "", uids=None, include_archived: bool 
     """
     where, params = ["1=1"], []
     if domain:
-        clause, values, _ = db.domain_scope_clause(conn, domain, alias="", subtree=True)
+        clause, values, _ = domains.domain_scope_clause(conn, domain, alias="", subtree=True)
         where.append(clause)
         params.extend(values)
     if uids is not None:
@@ -93,11 +98,11 @@ def export_records(conn, *, domain: str = "", uids=None, include_archived: bool 
         f"SELECT * FROM memories WHERE {' '.join(where)} ORDER BY created_at, uid",
         params).fetchall()
     uids = [r["uid"] for r in rows]
-    usage = db.usage_for(conn, uids)
+    usage = store_memories.usage_for(conn, uids)
     inside = set(uids)
 
-    yield {"record": "meta", "format": FORMAT_VERSION, "exported_at": db.now_iso(),
-           "domain_case": db.get_domain_case(conn), "count": len(rows),
+    yield {"record": "meta", "format": FORMAT_VERSION, "exported_at": lite.now_iso(),
+           "domain_case": domains.get_domain_case(conn), "count": len(rows),
            **({"domain": domain} if domain else {})}
     for row in rows:
         yield _memory_record(conn, row, usage)
@@ -112,9 +117,9 @@ def export_records(conn, *, domain: str = "", uids=None, include_archived: bool 
                        "prev_content": r["prev_content"], "new_content": r["new_content"],
                        **({"note": r["note"]} if r["note"] else {})}
     for row in rows:
-        if row["type"] != db.DIAGRAM_TYPE:
+        if row["type"] != store_memories.DIAGRAM_TYPE:
             continue
-        graph = db.get_diagram(conn, row["uid"])
+        graph = diagram_persist.get_diagram(conn, row["uid"])
         if graph is None:
             continue
         yield {
@@ -134,7 +139,7 @@ def export_records(conn, *, domain: str = "", uids=None, include_archived: bool 
                       for j in graph["jumps"]],
         }
     for row in rows:
-        if row["type"] == db.TASK_TYPE:
+        if row["type"] == store_memories.TASK_TYPE:
             record = _task_record(conn, row["uid"])
             if record is not None:
                 yield record
@@ -227,7 +232,7 @@ def to_markdown(records) -> str:
                 # the same projection get_diagram(format='mermaid') returns,
                 # from the graph in hand rather than from the store
                 out += ["```mermaid",
-                        db._render_mermaid(graph["title"], graph["nodes"], graph["edges"]),
+                        diagram_render._render_mermaid(graph["title"], graph["nodes"], graph["edges"]),
                         "```", ""]
     if relations:
         out += ["## Relations", ""]
@@ -258,10 +263,10 @@ def import_records(conn, records) -> dict:
         kind = rec.get("record")
         try:
             if kind == "memory":
-                if db.get_memory(conn, rec["uid"]) is not None:
+                if store_memories.get_memory(conn, rec["uid"]) is not None:
                     skipped += 1
                     continue
-                db.restore_memory(conn, rec)
+                store_memories.restore_memory(conn, rec)
                 fresh.add(str(rec["uid"]))
                 added += 1
             elif kind == "edit":
@@ -280,17 +285,17 @@ def import_records(conn, records) -> dict:
         if str(rec.get("uid")) not in fresh:
             continue
         try:
-            db.restore_edit(conn, rec)
+            store_memories.restore_edit(conn, rec)
             history += 1
         except Exception as exc:
             errors.append({"uid": rec.get("uid"), "error": str(exc)})
     for rec in diagrams:
         try:
-            if db.get_memory(conn, rec["uid"]) is None:
+            if store_memories.get_memory(conn, rec["uid"]) is None:
                 continue  # its memory was skipped as already present
-            if db.get_diagram_row(conn, rec["uid"]) is None:
-                db.restore_diagram(conn, rec)
-            db.restore_diagram_refs(conn, rec)
+            if diagram_persist.get_diagram_row(conn, rec["uid"]) is None:
+                store_memories.restore_diagram(conn, rec)
+            store_memories.restore_diagram_refs(conn, rec)
         except Exception as exc:
             errors.append({"uid": rec.get("uid"), "error": str(exc)})
     for rec in task_records:
@@ -312,7 +317,7 @@ def import_records(conn, records) -> dict:
     linked = 0
     for rec in relations:
         try:
-            db.add_relation(conn, rec["from_uid"], rec["to_uid"],
+            store_relations.add_relation(conn, rec["from_uid"], rec["to_uid"],
                             rec["relation_type"], rec.get("note", ""))
             linked += 1
         except ValueError:
@@ -374,7 +379,7 @@ def boundary(conn, uids) -> dict:
         mentions = []
         for row in conn.execute("SELECT uid, content FROM memories WHERE content LIKE '%[[%'"):
             here = row["uid"] in slice_set
-            for target in sorted({m.group(1) for m in db._BODY_LINK.finditer(row["content"] or "")}):
+            for target in sorted({m.group(1) for m in sections._BODY_LINK.finditer(row["content"] or "")}):
                 if target != row["uid"] and (target in slice_set) != here:
                     mentions.append({"uid": row["uid"], "target_uid": target})
         # a name nothing in the store resolves is already dangling, and no move
@@ -417,29 +422,29 @@ def move(source: str, target: str, *, uids=(), domain: str = "", dry_run: bool =
     reports `creates`.
     """
     for name in (source, target):
-        error = db.project_name_error(name)
+        error = paths.project_name_error(name)
         if error:
             raise ValueError(error)
-    source = db.project_name(source)
-    target = db.find_project(target) or target
+    source = paths.project_name(source)
+    target = paths.find_project(target) or target
     if source.casefold() == target.casefold():
         raise ValueError("source and target are the same project")
     if not uids and not domain:
         raise ValueError("name what to move: uids, a domain, or both")
-    creates = not db.project_exists(target)
+    creates = not paths.project_exists(target)
     if creates and not create:
         raise ValueError(f"no project named '{target}'")
 
     wanted = [str(u).strip() for u in uids if str(u).strip()]
-    with db.connect(project=source) as src:
+    with connection.connect(project=source) as src:
         records = list(export_records(src, domain=domain, uids=wanted or None,
                                       include_archived=True, include_edits=True))
         slice_uids = [r["uid"] for r in records if r["record"] == "memory"]
         outside = boundary(src, slice_uids)
     conflicts: list[str] = []
     if not creates:
-        with db.connect(project=target) as dst:
-            conflicts = [u for u in slice_uids if db.get_memory(dst, u) is not None]
+        with connection.connect(project=target) as dst:
+            conflicts = [u for u in slice_uids if store_memories.get_memory(dst, u) is not None]
     kinds = Counter(r["record"] for r in records)
     report = {
         "source": source, "target": target, "creates": creates,
@@ -456,16 +461,16 @@ def move(source: str, target: str, *, uids=(), domain: str = "", dry_run: bool =
     if not movable:
         return {"dry_run": False, "moved": 0, "backup": "", "errors": [], **report}
     if creates:
-        db.create_project(target)
-    backup = _spare_name(db.backups_dir(source), db.backup_name(source, "move"))
-    db.backup_to(backup, project=source)
-    with db.connect(project=target) as dst:
+        projects.create_project(target)
+    backup = _spare_name(backups.backups_dir(source), backups.backup_name(source, "move"))
+    backups.backup_to(backup, project=source)
+    with connection.connect(project=target) as dst:
         result = import_records(dst, records)
-    with db.connect(project=target) as dst:
-        landed = [u for u in movable if db.get_memory(dst, u) is not None]
-    with db.connect(project=source) as src:
+    with connection.connect(project=target) as dst:
+        landed = [u for u in movable if store_memories.get_memory(dst, u) is not None]
+    with connection.connect(project=source) as src:
         for uid in landed:
-            db.purge_memory(src, uid)
+            store_memories.purge_memory(src, uid)
     return {"dry_run": False, "moved": len(landed), "backup": str(backup),
             "errors": result["errors"], **report}
 
@@ -473,9 +478,9 @@ def move(source: str, target: str, *, uids=(), domain: str = "", dry_run: bool =
 def _adopt_refusal(conn, row, keys: list[str]) -> str:
     if row is None or not keys:
         return "not linked to this task"
-    if db.get_relations(conn, row["uid"]):
+    if store_relations.get_relations(conn, row["uid"]):
         return "has relations"
-    if db.diagrams_referencing(conn, row["uid"]):
+    if diagram_persist.diagrams_referencing(conn, row["uid"]):
         return "referenced by a diagram"
     if len(row["content"]) > tasks.NOTE_MAX:
         return f"body over {tasks.NOTE_MAX} characters"
@@ -490,15 +495,15 @@ def adopt(task_uid: str, uids: list[str], *, dry_run: bool = True) -> dict:
     lost. One linked to every item becomes a task-level note. The real run
     backs the store up first and drops the task's edit history.
     """
-    project = db.active_project()
+    project = paths.active_project()
     plan, refused = [], []
-    with db.connect() as conn:
+    with connection.connect() as conn:
         if not tasks.is_task(conn, task_uid):
             raise ValueError(f"no task {task_uid}")
         all_keys = [r["item_key"] for r in conn.execute(
             "SELECT item_key FROM task_items WHERE memory_uid = ? ORDER BY seq", (task_uid,))]
         for uid in dict.fromkeys(uids):
-            row = db.get_memory(conn, uid)
+            row = store_memories.get_memory(conn, uid)
             keys = [r["item_key"] for r in conn.execute(
                 "SELECT l.item_key FROM task_item_links l JOIN task_items t "
                 "ON t.memory_uid = l.memory_uid AND t.item_key = l.item_key "
@@ -509,18 +514,18 @@ def adopt(task_uid: str, uids: list[str], *, dry_run: bool = True) -> dict:
             whole = set(keys) == set(all_keys)
             plan.append({"uid": uid, "title": row["title"], "body": row["content"],
                          "items": [] if whole else keys, "level": "task" if whole else "item"})
-        edits = db.edit_count(conn, task_uid)
+        edits = store_memories.edit_count(conn, task_uid)
     report = {"task": task_uid, "refused": refused, "edits_dropped": edits,
               "plan": [{k: p[k] for k in ("uid", "title", "items", "level")} for p in plan]}
     if dry_run or not plan:
         return {"dry_run": dry_run, "backup": "", **report}
-    backup = _spare_name(db.backups_dir(project), db.backup_name(project, "adopt"))
-    db.backup_to(backup, project=project)
-    with db.connect() as conn:
+    backup = _spare_name(backups.backups_dir(project), backups.backup_name(project, "adopt"))
+    backups.backup_to(backup, project=project)
+    with connection.connect() as conn:
         for p in plan:
             tasks.add_note(conn, task_uid, title=p["title"] or p["body"][:120], body=p["body"],
                            items=p["items"])
-            db.purge_memory(conn, p["uid"])
+            store_memories.purge_memory(conn, p["uid"])
         conn.execute("DELETE FROM edits WHERE memory_uid = ?", (task_uid,))
     return {"dry_run": False, "backup": str(backup), **report}
 
@@ -571,7 +576,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command == "export":
-        with db.connect() as conn:
+        with connection.connect() as conn:
             records = list(export_records(conn, domain=args.domain,
                                           include_archived=args.include_archived,
                                           include_edits=args.include_edits))
@@ -584,7 +589,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command == "move":
-        result = move(args.source or db.active_project(), args.target,
+        result = move(args.source or paths.active_project(), args.target,
                       uids=[u for u in args.uids.split(",") if u.strip()],
                       domain=args.domain, dry_run=args.dry_run, create=args.create)
         print(json.dumps(result, ensure_ascii=False))
@@ -593,13 +598,13 @@ def main(argv: list[str] | None = None) -> int:
     text = sys.stdin.read() if args.path == "-" else Path(args.path).read_text(encoding="utf-8")
     records = list(read_jsonl(text))
     if args.dry_run:
-        with db.connect() as conn:
+        with connection.connect() as conn:
             fresh = sum(1 for r in records if r.get("record") == "memory"
-                        and db.get_memory(conn, r["uid"]) is None)
+                        and store_memories.get_memory(conn, r["uid"]) is None)
         print(json.dumps({"dry_run": True, "would_add": fresh,
                           "records": len(records)}, ensure_ascii=False))
         return 0
-    with db.connect() as conn:
+    with connection.connect() as conn:
         result = import_records(conn, records)
     print(json.dumps(result, ensure_ascii=False))
     return 1 if result["errors"] else 0
