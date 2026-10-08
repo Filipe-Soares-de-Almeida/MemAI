@@ -7,10 +7,11 @@ from typing import cast
 from starlette.routing import Route
 
 from memai import admin_schemas as schema
-from memai import db
+from memai import lite
 from memai.admin.api import api
 from memai.admin.shared import BULK_MAX, STATUSES, _int_param, _summary
-from memai.store import queries
+from memai.store import connection, queries, subtree
+from memai.store import domains as store_domains
 
 
 def domains(request, payload) -> schema.DomainTree:
@@ -30,22 +31,22 @@ def domains(request, payload) -> schema.DomainTree:
     its own and an `also` above zero is a purely cross-cutting subject, and
     the view says so instead of drawing it as empty.
     """
-    with db.connect() as conn:
+    with connection.connect() as conn:
         rows, link_rows = queries.domain_tree_counts(conn)
     agg: dict[str, dict] = {}
 
     def node(path: str) -> dict:
         return agg.setdefault(path, {
             "domain": path, "active": 0, "archived": 0, "types": {},
-            "latest_at": "", "parent": db.domain_parent(path),
-            "depth": db.domain_depth(path), "children": 0,
+            "latest_at": "", "parent": store_domains.domain_parent(path),
+            "depth": store_domains.domain_depth(path), "children": 0,
             "subtree_active": 0, "subtree_archived": 0,
             "also": 0, "subtree_also": 0,
             "subtree_latest_at": "", "implicit": True,
         })
 
     for r in rows:
-        d = node(db.normalize_domain(r["domain"]))
+        d = node(lite.normalize_domain(r["domain"]))
         d["implicit"] = False
         if r["status"] == "active":
             d["active"] += r["n"]
@@ -53,21 +54,21 @@ def domains(request, payload) -> schema.DomainTree:
             d["archived"] += r["n"]
         d["types"][r["type"]] = d["types"].get(r["type"], 0) + r["n"]
         d["latest_at"] = max(d["latest_at"], r["latest"])
-        for ancestor in db.domain_ancestors(d["domain"]):
+        for ancestor in store_domains.domain_ancestors(d["domain"]):
             node(ancestor)
 
     # being cross-listed at a path names it as surely as being filed there,
     # so it clears `implicit` and counts as activity for the ordering
     for r in link_rows:
-        d = node(db.normalize_domain(r["domain"]))
+        d = node(lite.normalize_domain(r["domain"]))
         d["implicit"] = False
         d["also"] += r["n"]
         d["latest_at"] = max(d["latest_at"], r["latest"])
-        for ancestor in db.domain_ancestors(d["domain"]):
+        for ancestor in store_domains.domain_ancestors(d["domain"]):
             node(ancestor)
 
     for d in list(agg.values()):
-        for scope in db.domain_ancestors(d["domain"], include_self=True):
+        for scope in store_domains.domain_ancestors(d["domain"], include_self=True):
             holder = agg[scope]
             holder["subtree_active"] += d["active"]
             holder["subtree_archived"] += d["archived"]
@@ -83,7 +84,7 @@ def domains(request, payload) -> schema.DomainTree:
         if d["implicit"]:
             continue
         by_sibling.setdefault(
-            (d["parent"], db.split_domain(path)[-1].lower()), []).append(path)
+            (d["parent"], lite.split_domain(path)[-1].lower()), []).append(path)
     for names in by_sibling.values():
         if len(names) > 1:
             for n in names:
@@ -111,11 +112,11 @@ def domain_detail(request, payload) -> schema.DomainDetail:
     Both are capped: this is a preview under a set of columns, and the
     memory list is where a whole scope is read.
     """
-    domain = db.normalize_domain(request.query_params.get("domain", ""))
+    domain = lite.normalize_domain(request.query_params.get("domain", ""))
     if not domain:
         raise ValueError("domain is required")
     limit = _int_param(request, "limit", 6, 1, 30)
-    with db.connect() as conn:
+    with connection.connect() as conn:
         filed, filed_total, crossing = queries.domain_preview(conn, domain, limit)
     return cast(schema.DomainDetail, {
         "domain": domain,
@@ -143,8 +144,8 @@ def rename_domain(request, payload) -> schema.DomainRenamed:
         raise ValueError("'from' is required")
     if not dst:
         raise ValueError("'to' is required")
-    with db.connect() as conn:
-        moved = db.move_domain(conn, src, dst)
+    with connection.connect() as conn:
+        moved = subtree.move_domain(conn, src, dst)
     return {"ok": True, "affected": moved["moved"],
             "also_affected": moved["also_moved"],
             "domains": moved["domains"], "merged": moved["merged"]}
@@ -169,8 +170,8 @@ def domain_status(request, payload) -> schema.DomainStatusSaved:
     reason = (payload.get("reason") or "").strip()
     verb = "archived" if status == "archived" else "restored"
     note = f"{verb} with domain '{domain}'" + (f": {reason}" if reason else "")
-    with db.connect() as conn:
-        moved = db.set_domain_status(conn, domain, status, note=note)
+    with connection.connect() as conn:
+        moved = subtree.set_domain_status(conn, domain, status, note=note)
     uids = moved["uids"]
     return {"ok": True, "affected": len(uids), "domains": moved["domains"],
             "uids": uids if len(uids) <= BULK_MAX else []}
@@ -191,8 +192,8 @@ def delete_domain(request, payload) -> schema.DomainDeleted:
     expected = f"DELETE {domain}"
     if payload.get("confirm", "") != expected:
         raise ValueError(f"confirm phrase must exactly equal '{expected}'")
-    with db.connect() as conn:
-        gone = db.purge_domain(conn, domain)
+    with connection.connect() as conn:
+        gone = subtree.purge_domain(conn, domain)
     return cast(schema.DomainDeleted, {"ok": True, **gone})
 
 
@@ -211,7 +212,7 @@ def _normalize_plan(mode: str, counts: dict[str, int]) -> list[dict]:
     existing = set(counts)
     targets: dict[str, list[str]] = {}
     for d in counts:
-        targets.setdefault(db.normalize_domain(db.case_domain(mode, d)), []).append(d)
+        targets.setdefault(lite.normalize_domain(store_domains.case_domain(mode, d)), []).append(d)
     plan: list[dict] = []
     for target, srcs in targets.items():
         changing = [s for s in srcs if s != target]
@@ -241,15 +242,15 @@ def normalize_domains(request, payload) -> schema.NormalizePlan | schema.Normali
     would leave the one spelling no prefix query can match.
     """
     dry_run = bool(payload.get("dry_run", True))
-    with db.connect() as conn:
-        mode = db.get_domain_case(conn)
+    with connection.connect() as conn:
+        mode = store_domains.get_domain_case(conn)
         plan = _normalize_plan(mode, queries.domain_spellings(conn))
         if dry_run:
             return cast(schema.NormalizePlan, {
                 "mode": mode, "dry_run": True, "plan": plan,
                 "renames": sum(1 for e in plan if e["action"] == "rename"),
                 "merges": sum(1 for e in plan if e["action"] == "merge")})
-        moved = [db.move_domain(conn, e["from"], e["to"], subtree=False) for e in plan]
+        moved = [subtree.move_domain(conn, e["from"], e["to"], subtree=False) for e in plan]
     return {"ok": True, "mode": mode, "moved": len(plan),
             "affected": sum(m["moved"] for m in moved),
             "also_affected": sum(m["also_moved"] for m in moved)}

@@ -13,12 +13,15 @@ import sqlite3
 import pytest
 from starlette.testclient import TestClient
 
-from memai import admin, db, guard, server
+from memai import guard, server
+from memai.admin.app import app as admin_app
+from memai.store import connection, memories, optimizer, search, sections
+from memai.store.diagrams import persist as diagram_persist
 
 
 @pytest.fixture
 def conn(tmp_path):
-    with db.connect(tmp_path / "test.db") as c:
+    with connection.connect(tmp_path / "test.db") as c:
         yield c
 
 
@@ -30,7 +33,7 @@ def store(tmp_path, monkeypatch):
 
 @pytest.fixture
 def client(store):
-    with TestClient(admin.app) as c:
+    with TestClient(admin_app) as c:
         yield c
 
 
@@ -57,50 +60,50 @@ def test_the_title_a_writer_gave_is_what_comes_back(store):
 
 
 def test_surrounding_space_is_not_part_of_the_name(conn):
-    uid = db.insert_memory(conn, type="note", title="  padded  ", content="a fact")
-    assert db.get_memory(conn, uid)["title"] == "padded"
+    uid = memories.insert_memory(conn, type="note", title="  padded  ", content="a fact")
+    assert memories.get_memory(conn, uid)["title"] == "padded"
 
 
 # ---------------------------------------------------------- what it is worth
 
 def test_a_word_only_in_the_title_finds_the_memory(conn):
-    uid = db.insert_memory(conn, type="note", title="Nightly export window",
+    uid = memories.insert_memory(conn, type="note", title="Nightly export window",
                            content="it runs while the queue is idle")
-    assert [r["uid"] for r in db.search_memories(conn, "export")] == [uid]
+    assert [r["uid"] for r in search.search_memories(conn, "export")] == [uid]
 
 
 def test_a_title_match_outranks_the_same_word_in_a_body(conn):
-    mentioned = db.insert_memory(
+    mentioned = memories.insert_memory(
         conn, type="note", title="How the loader reads a part",
         content="a part is rejected when the checksum of the export disagrees")
-    named = db.insert_memory(
+    named = memories.insert_memory(
         conn, type="note", title="The export window",
         content="both ends are inclusive")
-    assert [r["uid"] for r in db.search_memories(conn, "export")][0] == named
-    assert mentioned in [r["uid"] for r in db.search_memories(conn, "export")]
+    assert [r["uid"] for r in search.search_memories(conn, "export")][0] == named
+    assert mentioned in [r["uid"] for r in search.search_memories(conn, "export")]
 
 
 # --------------------------------------------------------- diagrams and both
 
 def test_a_diagrams_title_is_its_memorys_title(conn):
-    uid, errors = db.insert_diagram(
+    uid, errors = diagram_persist.insert_diagram(
         conn, title="Nightly export routine",
         nodes=[{"key": "a", "label": "Start", "shape": "start"},
                {"key": "b", "label": "Done", "shape": "end"}],
         edges=[{"from": "a", "to": "b"}])
     assert errors == []
-    assert db.get_memory(conn, uid)["title"] == "Nightly export routine"
+    assert memories.get_memory(conn, uid)["title"] == "Nightly export routine"
 
 
 def test_renaming_a_diagram_renames_the_memory(conn):
-    uid, _ = db.insert_diagram(
+    uid, _ = diagram_persist.insert_diagram(
         conn, title="Nightly export routine",
         nodes=[{"key": "a", "label": "Start", "shape": "start"},
                {"key": "b", "label": "Done", "shape": "end"}],
         edges=[{"from": "a", "to": "b"}])
-    ok, errors = db.set_diagram_meta(conn, uid, title="Hourly export routine")
+    ok, errors = diagram_persist.set_diagram_meta(conn, uid, title="Hourly export routine")
     assert (ok, errors) == (True, [])
-    assert db.get_memory(conn, uid)["title"] == "Hourly export routine"
+    assert memories.get_memory(conn, uid)["title"] == "Hourly export routine"
 
 
 # ----------------------------------------------------------- the dashboard
@@ -161,35 +164,35 @@ def _store_without_the_column(path) -> None:
 def test_a_store_written_before_the_column_gains_it(tmp_path):
     path = tmp_path / "old.db"
     _store_without_the_column(path)
-    with db.connect(path) as conn:
-        row = db.get_memory(conn, "0123456789abcdef")
+    with connection.connect(path) as conn:
+        row = memories.get_memory(conn, "0123456789abcdef")
         assert row["title"] == ""
         # the index was rebuilt around the new column, so the old row is
         # still findable and a new one is findable by its title alone
-        assert [r["uid"] for r in db.search_memories(conn, "drain")] == ["0123456789abcdef"]
-        fresh = db.insert_memory(conn, type="note", title="Export window bounds",
+        assert [r["uid"] for r in search.search_memories(conn, "drain")] == ["0123456789abcdef"]
+        fresh = memories.insert_memory(conn, type="note", title="Export window bounds",
                                  content="both ends are inclusive")
-        assert [r["uid"] for r in db.search_memories(conn, "export")] == [fresh]
+        assert [r["uid"] for r in search.search_memories(conn, "export")] == [fresh]
 
 
 def test_an_edit_keeps_the_index_in_step_with_the_title(conn):
-    uid = db.insert_memory(conn, type="note", title="The export window",
+    uid = memories.insert_memory(conn, type="note", title="The export window",
                            content="both ends are inclusive")
     conn.execute("UPDATE memories SET title = ? WHERE uid = ?", ("The drain step", uid))
-    assert db.search_memories(conn, "export") == []
-    assert [r["uid"] for r in db.search_memories(conn, "drain")] == [uid]
+    assert search.search_memories(conn, "export") == []
+    assert [r["uid"] for r in search.search_memories(conn, "drain")] == [uid]
 
 
 # --------------------------------------------------------------- renaming it
 
 def test_a_rename_is_audited_and_reindexed(conn):
-    uid = db.insert_memory(conn, type="note", title="The export window",
+    uid = memories.insert_memory(conn, type="note", title="The export window",
                            content="both ends are inclusive")
-    assert db.set_title(conn, uid, "Export window bounds", note="clearer name")
-    row = db.get_memory(conn, uid)
+    assert memories.set_title(conn, uid, "Export window bounds", note="clearer name")
+    row = memories.get_memory(conn, uid)
     assert row["title"] == "Export window bounds"
-    assert [r["uid"] for r in db.search_memories(conn, "bounds")] == [uid]
-    entry = db.get_edit_history(conn, uid)[0]
+    assert [r["uid"] for r in search.search_memories(conn, "bounds")] == [uid]
+    entry = memories.get_edit_history(conn, uid)[0]
     assert "title 'The export window' -> 'Export window bounds'" in entry["note"]
     assert "clearer name" in entry["note"]
     # a rename is not a rewrite: the body is what it was
@@ -197,14 +200,14 @@ def test_a_rename_is_audited_and_reindexed(conn):
 
 
 def test_a_rename_to_nothing_leaves_the_name_alone(conn):
-    uid = db.insert_memory(conn, type="note", title="The export window",
+    uid = memories.insert_memory(conn, type="note", title="The export window",
                            content="both ends are inclusive")
-    assert db.set_title(conn, uid, "   ") is False
-    assert db.get_memory(conn, uid)["title"] == "The export window"
+    assert memories.set_title(conn, uid, "   ") is False
+    assert memories.get_memory(conn, uid)["title"] == "The export window"
 
 
 def test_renaming_something_that_is_not_there(conn):
-    assert db.set_title(conn, "0000000000000000", "a name") is False
+    assert memories.set_title(conn, "0000000000000000", "a name") is False
 
 
 def test_the_tool_renames_a_memory(store):
@@ -233,37 +236,37 @@ def test_the_tool_refuses_to_rename_a_diagram(store):
 
 # ------------------------------------------------------- how long it may be
 
-AT_LIMIT = "N" + "a" * (db.TITLE_MAX - 1)
-OVER_LIMIT = "N" + "a" * db.TITLE_MAX
+AT_LIMIT = "N" + "a" * (sections.TITLE_MAX - 1)
+OVER_LIMIT = "N" + "a" * sections.TITLE_MAX
 
 
 def test_a_title_at_the_limit_is_stored(conn):
-    uid = db.insert_memory(conn, type="note", title=AT_LIMIT, content="a fact")
-    assert db.get_memory(conn, uid)["title"] == AT_LIMIT
+    uid = memories.insert_memory(conn, type="note", title=AT_LIMIT, content="a fact")
+    assert memories.get_memory(conn, uid)["title"] == AT_LIMIT
 
 
 def test_a_writer_is_refused_a_longer_one(conn):
-    with pytest.raises(ValueError, match=str(db.TITLE_MAX)):
-        db.insert_memory(conn, type="note", title=OVER_LIMIT, content="a fact")
+    with pytest.raises(ValueError, match=str(sections.TITLE_MAX)):
+        memories.insert_memory(conn, type="note", title=OVER_LIMIT, content="a fact")
 
 
 def test_the_length_is_measured_after_stripping(conn):
     """Padding does not spend the budget: the stored name is what counts."""
-    uid = db.insert_memory(conn, type="note", title=f"   {AT_LIMIT}   ", content="a fact")
-    assert db.get_memory(conn, uid)["title"] == AT_LIMIT
+    uid = memories.insert_memory(conn, type="note", title=f"   {AT_LIMIT}   ", content="a fact")
+    assert memories.get_memory(conn, uid)["title"] == AT_LIMIT
 
 
 def test_renaming_over_the_limit_leaves_the_old_name(conn):
-    uid = db.insert_memory(conn, type="note", title="The export window", content="a fact")
-    with pytest.raises(ValueError, match=str(db.TITLE_MAX)):
-        db.set_title(conn, uid, OVER_LIMIT)
-    assert db.get_memory(conn, uid)["title"] == "The export window"
+    uid = memories.insert_memory(conn, type="note", title="The export window", content="a fact")
+    with pytest.raises(ValueError, match=str(sections.TITLE_MAX)):
+        memories.set_title(conn, uid, OVER_LIMIT)
+    assert memories.get_memory(conn, uid)["title"] == "The export window"
 
 
 def test_the_tool_refuses_a_rename_over_the_limit(store):
     uid = server.note(title="The export window", content="both ends are inclusive")["uid"]
     res = server.edit_memory(uid, title=OVER_LIMIT)
-    assert res["ok"] is False and str(db.TITLE_MAX) in res["errors"][0]
+    assert res["ok"] is False and str(sections.TITLE_MAX) in res["errors"][0]
     assert server.get_memory(uid)["title"] == "The export window"
 
 
@@ -272,7 +275,7 @@ def test_a_diagram_cannot_be_named_over_the_limit(store):
                          nodes=[{"key": "a", "label": "Start", "shape": "start"},
                                 {"key": "b", "label": "Done", "shape": "end"}],
                          edges=[{"from": "a", "to": "b"}])
-    assert res["ok"] is False and str(db.TITLE_MAX) in res["errors"][0]
+    assert res["ok"] is False and str(sections.TITLE_MAX) in res["errors"][0]
 
 
 def test_the_dashboard_refuses_a_title_over_the_limit(client):
@@ -284,10 +287,10 @@ def test_the_dashboard_refuses_a_title_over_the_limit(client):
 
 
 def test_staging_a_retitle_over_the_limit_is_reported_not_staged(conn):
-    uid = db.insert_memory(conn, type="note", title="The export window", content="a fact")
-    res = db.stage_optimization(conn, "a run", [
+    uid = memories.insert_memory(conn, type="note", title="The export window", content="a fact")
+    res = optimizer.stage_optimization(conn, "a run", [
         {"kind": "retitle", "target_uid": uid, "payload": {"title": OVER_LIMIT}},
         {"kind": "retitle", "target_uid": uid, "payload": {"title": "Export window bounds"}},
     ])
     assert res["staged"] == 1
-    assert str(db.TITLE_MAX) in res["errors"][0]["error"]
+    assert str(sections.TITLE_MAX) in res["errors"][0]["error"]

@@ -4,13 +4,14 @@ from __future__ import annotations
 
 import pytest
 
-from memai import budget, db, tasks
+from memai import budget, tasks
+from memai.store import connection, memories
 
 
 @pytest.fixture
 def conn(tmp_path, monkeypatch):
     monkeypatch.setenv("MEMAI_HOME", str(tmp_path))
-    with db.connect() as c:
+    with connection.connect() as c:
         yield c
 
 
@@ -22,7 +23,7 @@ def uid(conn):
     tasks.add_note(conn, u, title="Lexer rules", body="ASCII only.", items=["i2"])
     tasks.add_comment(conn, u, "on the task")
     tasks.add_comment(conn, u, "on the lexer", item="i2")
-    other = db.insert_memory(conn, type="note", content="Lexers are fun.", title="Lexers",
+    other = memories.insert_memory(conn, type="note", content="Lexers are fun.", title="Lexers",
                              domain="acme/parser")
     tasks.link_item(conn, u, "i2", [other])
     return u
@@ -72,7 +73,7 @@ def test_offset_past_the_end_is_an_empty_last_page(conn, uid):
 
 
 def test_not_a_task_is_a_value_error(conn):
-    other = db.insert_memory(conn, type="note", content="x", title="x", domain="acme")
+    other = memories.insert_memory(conn, type="note", content="x", title="x", domain="acme")
     with pytest.raises(ValueError):
         tasks.head(conn, other)
     with pytest.raises(ValueError):

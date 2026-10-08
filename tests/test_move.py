@@ -14,19 +14,22 @@ from pathlib import Path
 import pytest
 from starlette.testclient import TestClient
 
-from memai import admin, db, portable, server
+from memai import portable, server
+from memai.admin.app import app as admin_app
+from memai.store import backups, connection, memories, paths, projects, relations, search
+from memai.store.diagrams import persist as diagram_persist
 
 
 @pytest.fixture
 def home(tmp_path, monkeypatch):
     monkeypatch.setenv("MEMAI_HOME", str(tmp_path))
-    db.create_project("acme")
+    projects.create_project("acme")
     return tmp_path
 
 
 @pytest.fixture
 def client(home):
-    with TestClient(admin.app) as c:
+    with TestClient(admin_app) as c:
         yield c
 
 
@@ -39,36 +42,36 @@ def _seed(conn) -> dict:
     """A slice under acme/x100 holding everything a move has to carry, and one
     memory outside it that the slice is related to."""
     ids = {
-        "note": db.insert_memory(conn, type="note", domain="acme/x100", tags="queue, drain",
+        "note": memories.insert_memory(conn, type="note", domain="acme/x100", tags="queue, drain",
                                  title="Queue drain waits for the retry",
                                  content="the drain waits for the batch retry to settle",
                                  also="omni/x900"),
-        "old": db.insert_memory(conn, type="note", domain="acme/x100/p200",
+        "old": memories.insert_memory(conn, type="note", domain="acme/x100/p200",
                                 content="the drain used to run at once"),
-        "outside": db.insert_memory(conn, type="note", domain="zeta/x100",
+        "outside": memories.insert_memory(conn, type="note", domain="zeta/x100",
                                     content="token refresh happens on the hour"),
     }
-    db.update_memory_content(conn, ids["note"],
+    memories.update_memory_content(conn, ids["note"],
                              "the drain waits for the retry to settle; measured", note="tightened")
-    db.set_status(conn, ids["old"], "archived", superseded_by=ids["note"], note="superseded")
-    db.add_relation(conn, ids["note"], ids["old"], "supersedes", "same fact, corrected")
-    db.add_relation(conn, ids["note"], ids["outside"], "relates_to", "crosses the slice")
-    ids["flow"], _ = db.insert_diagram(conn, title="Queue drain", domain="acme/x100",
+    memories.set_status(conn, ids["old"], "archived", superseded_by=ids["note"], note="superseded")
+    relations.add_relation(conn, ids["note"], ids["old"], "supersedes", "same fact, corrected")
+    relations.add_relation(conn, ids["note"], ids["outside"], "relates_to", "crosses the slice")
+    ids["flow"], _ = diagram_persist.insert_diagram(conn, title="Queue drain", domain="acme/x100",
                                        nodes=NODES, edges=EDGES, summary="how it drains")
-    db.add_node_link(conn, ids["flow"], "start", ids["note"], "explains")
-    db.record_recall(conn, [ids["note"]])
+    diagram_persist.add_node_link(conn, ids["flow"], "start", ids["note"], "explains")
+    memories.record_recall(conn, [ids["note"]])
     return ids
 
 
 def _count(store: str, sql: str = "SELECT COUNT(*) FROM memories") -> int:
-    with db.connect(project=store) as conn:
+    with connection.connect(project=store) as conn:
         return conn.execute(sql).fetchone()[0]
 
 
 # ── the report ──────────────────────────────────────────────────────────
 
 def test_a_dry_run_reports_the_slice_and_moves_nothing(home):
-    with db.connect(project="General") as conn:
+    with connection.connect(project="General") as conn:
         ids = _seed(conn)
         edits = conn.execute(
             "SELECT COUNT(*) FROM edits WHERE memory_uid IN (?, ?, ?)",
@@ -80,19 +83,19 @@ def test_a_dry_run_reports_the_slice_and_moves_nothing(home):
     assert plan["outside"]["relations"]["count"] == 1
     assert plan["outside"]["relations"]["items"][0]["to_uid"] == ids["outside"]
     assert _count("General") == 4 and _count("acme") == 0
-    assert not list(db.backups_dir().glob("*.db"))
+    assert not list(backups.backups_dir().glob("*.db"))
 
 
 def test_the_boundary_report_names_every_kind_of_crossing(home):
-    with db.connect(project="General") as conn:
+    with connection.connect(project="General") as conn:
         ids = _seed(conn)
-        other, _ = db.insert_diagram(conn, title="Token refresh", domain="zeta/x100",
+        other, _ = diagram_persist.insert_diagram(conn, title="Token refresh", domain="zeta/x100",
                                      nodes=NODES, edges=EDGES)
-        db.add_diagram_jump(conn, ids["flow"], "done", other)
-        db.update_memory_content(conn, ids["note"], f"see [[{ids['outside']}]] for the refresh")
-        db.update_memory_content(conn, ids["outside"], f"see [[{ids['note']}]] for the drain")
+        diagram_persist.add_diagram_jump(conn, ids["flow"], "done", other)
+        memories.update_memory_content(conn, ids["note"], f"see [[{ids['outside']}]] for the refresh")
+        memories.update_memory_content(conn, ids["outside"], f"see [[{ids['note']}]] for the drain")
         # a name nothing resolves is dangling already, and stays out of the report
-        db.update_memory_content(conn, ids["old"], "see [[0123456789abcdef]] for nothing")
+        memories.update_memory_content(conn, ids["old"], "see [[0123456789abcdef]] for nothing")
         report = portable.boundary(conn, [ids["note"], ids["flow"]])
     assert report["relations"]["count"] == 2            # note->old and note->outside
     assert report["diagram_links"]["count"] == 0        # flow->note stays inside
@@ -104,7 +107,7 @@ def test_the_boundary_report_names_every_kind_of_crossing(home):
 
 
 def test_moving_by_uid_leaves_out_what_the_store_does_not_hold(home):
-    with db.connect(project="General") as conn:
+    with connection.connect(project="General") as conn:
         ids = _seed(conn)
     plan = portable.move("General", "acme", uids=[ids["outside"], "0123456789abcdef"])
     assert plan["memories"] == 1 and plan["unknown"] == ["0123456789abcdef"]
@@ -122,7 +125,7 @@ def test_source_and_target_have_to_differ_and_the_target_has_to_exist(home):
 # ── the move ────────────────────────────────────────────────────────────
 
 def test_a_move_carries_everything_and_then_removes_the_originals(home):
-    with db.connect(project="General") as conn:
+    with connection.connect(project="General") as conn:
         ids = _seed(conn)
         edits = conn.execute(
             "SELECT COUNT(*) FROM edits WHERE memory_uid IN (?, ?, ?)",
@@ -132,20 +135,20 @@ def test_a_move_carries_everything_and_then_removes_the_originals(home):
     assert Path(result["backup"]).name.startswith("General-move-")
     assert Path(result["backup"]).exists()
 
-    with db.connect(project="acme") as dst:
-        note = db.get_memory(dst, ids["note"])
+    with connection.connect(project="acme") as dst:
+        note = memories.get_memory(dst, ids["note"])
         assert note["content"].endswith("measured") and note["domain"] == "acme/x100"
-        assert db.get_domain_links(dst, ids["note"]) == ["omni/x900"]
-        old = db.get_memory(dst, ids["old"])
+        assert memories.get_domain_links(dst, ids["note"]) == ["omni/x900"]
+        old = memories.get_memory(dst, ids["old"])
         assert old["status"] == "archived" and old["superseded_by"] == ids["note"]
-        assert [r["to_uid"] for r in db.get_relations(dst, ids["note"])] == [ids["old"]]
+        assert [r["to_uid"] for r in relations.get_relations(dst, ids["note"])] == [ids["old"]]
         assert dst.execute("SELECT COUNT(*) FROM edits").fetchone()[0] == edits
-        assert [n["key"] for n in db.get_diagram(dst, ids["flow"])["nodes"]] == ["start", "done"]
-        assert [link["target_uid"] for link in db.get_node_links(dst, ids["flow"])] == [ids["note"]]
-        assert db.usage_for(dst, [ids["note"]])[ids["note"]]["recalls"] == 1
-        assert ids["note"] in {r["uid"] for r in db.search_memories(dst, "drain retry settle")}
+        assert [n["key"] for n in diagram_persist.get_diagram(dst, ids["flow"])["nodes"]] == ["start", "done"]
+        assert [link["target_uid"] for link in diagram_persist.get_node_links(dst, ids["flow"])] == [ids["note"]]
+        assert memories.usage_for(dst, [ids["note"]])[ids["note"]]["recalls"] == 1
+        assert ids["note"] in {r["uid"] for r in search.search_memories(dst, "drain retry settle")}
 
-    with db.connect(project="General") as src:
+    with connection.connect(project="General") as src:
         assert [r["uid"] for r in src.execute("SELECT uid FROM memories")] == [ids["outside"]]
         assert src.execute("SELECT COUNT(*) FROM relations").fetchone()[0] == 0
         assert src.execute("SELECT COUNT(*) FROM edits").fetchone()[0] == 0
@@ -153,50 +156,50 @@ def test_a_move_carries_everything_and_then_removes_the_originals(home):
 
 
 def test_the_backup_holds_the_source_as_it_stood_before(home):
-    with db.connect(project="General") as conn:
+    with connection.connect(project="General") as conn:
         ids = _seed(conn)
     result = portable.move("General", "acme", uids=[ids["note"]], dry_run=False)
-    with db.connect(Path(result["backup"])) as copy:
-        assert db.get_memory(copy, ids["note"]) is not None
-    with db.connect(project="General") as src:
-        assert db.get_memory(src, ids["note"]) is None
+    with connection.connect(Path(result["backup"])) as copy:
+        assert memories.get_memory(copy, ids["note"]) is not None
+    with connection.connect(project="General") as src:
+        assert memories.get_memory(src, ids["note"]) is None
 
 
 def test_a_uid_the_target_already_holds_stays_in_both_places(home):
-    with db.connect(project="General") as conn:
+    with connection.connect(project="General") as conn:
         ids = _seed(conn)
-    with db.connect(project="acme") as dst:
-        db.restore_memory(dst, {"uid": ids["note"], "type": "note",
+    with connection.connect(project="acme") as dst:
+        memories.restore_memory(dst, {"uid": ids["note"], "type": "note",
                                 "content": "the copy acme already has"})
     result = portable.move("General", "acme", uids=[ids["note"], ids["old"]], dry_run=False)
     assert result["conflicts"] == [ids["note"]] and result["moved"] == 1
-    with db.connect(project="acme") as dst:
-        assert db.get_memory(dst, ids["note"])["content"] == "the copy acme already has"
-    with db.connect(project="General") as src:
-        assert db.get_memory(src, ids["note"]) is not None
-        assert db.get_memory(src, ids["old"]) is None
+    with connection.connect(project="acme") as dst:
+        assert memories.get_memory(dst, ids["note"])["content"] == "the copy acme already has"
+    with connection.connect(project="General") as src:
+        assert memories.get_memory(src, ids["note"]) is not None
+        assert memories.get_memory(src, ids["old"]) is None
 
 
 def test_create_makes_the_target_on_the_real_run_only(home):
-    with db.connect(project="General") as conn:
+    with connection.connect(project="General") as conn:
         _seed(conn)
     plan = portable.move("General", "zeta", domain="acme/x100", create=True)
-    assert plan["creates"] is True and not db.project_exists("zeta")
+    assert plan["creates"] is True and not paths.project_exists("zeta")
     result = portable.move("General", "zeta", domain="acme/x100", create=True, dry_run=False)
-    assert result["moved"] == 3 and db.project_exists("zeta")
+    assert result["moved"] == 3 and paths.project_exists("zeta")
     assert _count("zeta") == 3
 
 
 def test_nothing_to_move_takes_no_backup(home):
     result = portable.move("General", "acme", domain="nowhere", dry_run=False)
     assert result["moved"] == 0 and result["backup"] == ""
-    assert not list(db.backups_dir().glob("*.db"))
+    assert not list(backups.backups_dir().glob("*.db"))
 
 
 def test_two_moves_in_one_second_get_two_backups(home, monkeypatch):
-    with db.connect(project="General") as conn:
+    with connection.connect(project="General") as conn:
         ids = _seed(conn)
-    monkeypatch.setattr(db, "backup_name", lambda store, kind="": f"{store}-{kind}-stamp.db")
+    monkeypatch.setattr(backups, "backup_name", lambda store, kind="": f"{store}-{kind}-stamp.db")
     first = portable.move("General", "acme", uids=[ids["note"]], dry_run=False)
     second = portable.move("General", "acme", uids=[ids["outside"]], dry_run=False)
     assert Path(first["backup"]).name == "General-move-stamp.db"
@@ -206,7 +209,7 @@ def test_two_moves_in_one_second_get_two_backups(home, monkeypatch):
 # ── the edit history in the format ──────────────────────────────────────
 
 def test_the_edit_history_travels_only_when_asked_for(home):
-    with db.connect(project="General") as conn:
+    with connection.connect(project="General") as conn:
         ids = _seed(conn)
         plain = [r["record"] for r in portable.export_records(conn, uids=[ids["note"]])]
         full = [r["record"] for r in portable.export_records(
@@ -217,12 +220,12 @@ def test_the_edit_history_travels_only_when_asked_for(home):
 
 def test_an_imported_history_belongs_to_the_row_the_import_added(home):
     """A memory already in the target keeps the history it has."""
-    with db.connect(project="General") as conn:
+    with connection.connect(project="General") as conn:
         ids = _seed(conn)
         records = list(portable.export_records(
             conn, uids=[ids["note"], ids["old"]], include_archived=True, include_edits=True))
-    with db.connect(project="acme") as dst:
-        db.restore_memory(dst, {"uid": ids["note"], "type": "note", "content": "already here"})
+    with connection.connect(project="acme") as dst:
+        memories.restore_memory(dst, {"uid": ids["note"], "type": "note", "content": "already here"})
         result = portable.import_records(dst, records)
         assert result["added"] == 1 and result["skipped"] == 1
         per_uid = dict(dst.execute(
@@ -234,7 +237,7 @@ def test_an_imported_history_belongs_to_the_row_the_import_added(home):
 # ── the dashboard, the MCP tool and the CLI ────────────────────────────
 
 def test_the_dashboard_moves_a_selection_after_a_dry_run(client, home):
-    with db.connect() as conn:
+    with connection.connect() as conn:
         ids = _seed(conn)
     plan = client.post("/api/projects/move", json={"target": "acme", "uids": [ids["note"]]}).json()
     assert plan["dry_run"] is True and plan["memories"] == 1
@@ -248,7 +251,7 @@ def test_the_dashboard_moves_a_selection_after_a_dry_run(client, home):
 
 
 def test_the_mcp_tool_moves_out_of_the_active_project(home):
-    with db.connect() as conn:
+    with connection.connect() as conn:
         ids = _seed(conn)
     plan = server.move_to_project("acme", uids=f"{ids['note']}, {ids['old']}")
     assert plan["dry_run"] is True and plan["source"] == "General" and plan["memories"] == 2
@@ -260,7 +263,7 @@ def test_the_mcp_tool_moves_out_of_the_active_project(home):
 
 
 def test_the_cli_moves_too(home, capsys):
-    with db.connect() as conn:
+    with connection.connect() as conn:
         _seed(conn)
     assert portable.main(["move", "--to", "acme", "--domain", "acme/x100", "--dry-run"]) == 0
     plan = json.loads(capsys.readouterr().out)
@@ -275,8 +278,8 @@ def test_the_cli_moves_too(home, capsys):
 def test_moving_a_task_reports_and_drops_a_link_left_behind(home):
     from memai import tasks
 
-    with db.connect(project="General") as conn:
-        kept = db.insert_memory(conn, type="note", content="the lexer reads one token",
+    with connection.connect(project="General") as conn:
+        kept = memories.insert_memory(conn, type="note", content="the lexer reads one token",
                                 domain="zeta/x100")
         uid = tasks.create_task(conn, title="Ship the parser", goal="Parse every config file",
                                 items=["read the spec", "write the lexer"], domain="acme/x100")
@@ -290,11 +293,11 @@ def test_moving_a_task_reports_and_drops_a_link_left_behind(home):
     result = portable.move("General", "acme", uids=[uid], dry_run=False)
     assert result["moved"] == 1 and result["errors"] == []
     assert result["tasks"] == 1
-    with db.connect(project="acme") as dst:
+    with connection.connect(project="acme") as dst:
         task = tasks.get_task(dst, uid)
         assert [i["key"] for i in task["items"]] == ["i1", "i2"]
         assert [c["body"] for c in task["comments"]] == ["lexer drafted"]
         assert task["items"][1]["links"] == []
-    with db.connect(project="General") as src:
-        assert db.get_memory(src, uid) is None
-        assert db.get_memory(src, kept) is not None
+    with connection.connect(project="General") as src:
+        assert memories.get_memory(src, uid) is None
+        assert memories.get_memory(src, kept) is not None

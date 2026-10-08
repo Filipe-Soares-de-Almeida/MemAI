@@ -17,19 +17,25 @@ import pytest
 from starlette.testclient import TestClient
 
 from conftest import shaped, webui_constants
-from memai import admin, db, sections, tasks
+from memai import lite, sections, tasks
+from memai.admin import shared
+from memai.admin.app import app as admin_app
+from memai.store import connection, dedup, memories, optimizer, relations, search
+from memai.store import corpus as store_corpus
+from memai.store import sections as store_sections
+from memai.store.diagrams import persist as diagram_persist
 
 
 @pytest.fixture
 def conn(tmp_path):
-    with db.connect(tmp_path / "test.db") as c:
+    with connection.connect(tmp_path / "test.db") as c:
         yield c
 
 
 @pytest.fixture()
 def client(tmp_path, monkeypatch):
     monkeypatch.setenv("MEMAI_HOME", str(tmp_path))
-    with TestClient(admin.app) as c:
+    with TestClient(admin_app) as c:
         yield c
 
 
@@ -38,11 +44,11 @@ def client(tmp_path, monkeypatch):
 def _mk(conn, content="a fact", **kw):
     """A memory of any type, with `content` shaped to what that type holds."""
     type_ = kw.pop("type", "note")
-    return db.insert_memory(conn, type=type_, content=shaped(type_, content), **kw)
+    return memories.insert_memory(conn, type=type_, content=shaped(type_, content), **kw)
 
 
 def _mk_diagram(conn):
-    uid, errors = db.insert_diagram(
+    uid, errors = diagram_persist.insert_diagram(
         conn, title="Cache warmup routine",
         nodes=[
             {"key": "start", "shape": "start", "label": "Receive the warmup trigger"},
@@ -71,7 +77,7 @@ LEAKED_BODY = "\n".join((
 
 
 def _plant(conn, uid="a1b2c3d4e5f60718", *, type="note", content=LEAKED_BODY, **kw):
-    db.restore_memory(conn, {"uid": uid, "type": type, "content": content,
+    memories.restore_memory(conn, {"uid": uid, "type": type, "content": content,
                              "title": "a cache warmup", **kw})
     return uid
 
@@ -80,7 +86,7 @@ def test_the_scan_reports_a_leaked_row_and_counts_every_one(conn):
     _plant(conn)
     _plant(conn, "b2c3d4e5f6071829")
     _mk(conn, content="a body nobody leaked into")
-    res = db.optimization_corpus(conn)
+    res = store_corpus.optimization_corpus(conn)
 
     assert res["stats"]["leaked_calls"] == 2
     finding = next(f for f in res["leaked_calls"] if f["uid"] == "a1b2c3d4e5f60718")
@@ -96,7 +102,7 @@ def test_a_finding_declares_only_the_columns_that_are_still_empty(conn):
     redomain beside the unleak -- but only where nothing is filed yet."""
     _plant(conn, "a1b2c3d4e5f60718")
     _plant(conn, "b2c3d4e5f6071829", domain="acme/x100", tags="cache warmup")
-    findings = {f["uid"]: f for f in db.optimization_corpus(conn)["leaked_calls"]}
+    findings = {f["uid"]: f for f in store_corpus.optimization_corpus(conn)["leaked_calls"]}
 
     assert findings["a1b2c3d4e5f60718"]["declares"] == {
         "domain": "acme/x100/p200", "tags": "cache warmup, queue drain"}
@@ -108,7 +114,7 @@ def test_a_mark_inside_prose_is_reported_as_not_clean(conn):
     Cutting it would take a hole out of the sentence, so the finding says the
     repair does not clear the field."""
     _plant(conn, content="a call quotes </content> mid-sentence and means to")
-    finding = db.optimization_corpus(conn)["leaked_calls"][0]
+    finding = store_corpus.optimization_corpus(conn)["leaked_calls"][0]
     assert finding["fields"]["content"]["clean"] is False
 
 
@@ -116,26 +122,26 @@ def test_staging_an_unleak_computes_the_repair_from_the_row(conn):
     """The caller sends the field and nothing else: a payload carrying the
     body would be the same retyping this kind exists to avoid."""
     uid = _plant(conn)
-    res = db.stage_optimization(conn, "clean the leaks", [
+    res = optimizer.stage_optimization(conn, "clean the leaks", [
         {"kind": "unleak", "target_uid": uid, "payload": {"field": "content"}}])
 
     assert (res["staged"], res["errors"]) == (1, [])
-    payload = json.loads(db.get_optimization_suggestions(conn, res["run_id"])[0]["payload"])
+    payload = json.loads(optimizer.get_optimization_suggestions(conn, res["run_id"])[0]["payload"])
     assert payload["field"] == "content"
     assert payload["new_text"] == "the warmup drains the queue twice on a cold start"
 
 
 def test_an_unleak_defaults_to_the_body(conn):
     uid = _plant(conn)
-    res = db.stage_optimization(conn, "clean the leaks", [
+    res = optimizer.stage_optimization(conn, "clean the leaks", [
         {"kind": "unleak", "target_uid": uid}])
-    payload = json.loads(db.get_optimization_suggestions(conn, res["run_id"])[0]["payload"])
+    payload = json.loads(optimizer.get_optimization_suggestions(conn, res["run_id"])[0]["payload"])
     assert payload["field"] == "content"
 
 
 def test_an_unleak_on_a_field_with_nothing_leaked_is_refused(conn):
     uid = _mk(conn, content="a body nobody leaked into")
-    res = db.stage_optimization(conn, "clean the leaks", [
+    res = optimizer.stage_optimization(conn, "clean the leaks", [
         {"kind": "unleak", "target_uid": uid, "payload": {"field": "content"}}])
     assert res["staged"] == 0
     assert "nothing leaked" in res["errors"][0]["error"]
@@ -145,7 +151,7 @@ def test_an_unleak_that_would_not_clear_the_field_is_refused(conn):
     """A mark in the middle of a sentence is a rewrite somebody makes on
     purpose, so this kind hands it to reword instead of half-cleaning it."""
     uid = _plant(conn, content="a call quotes </content> mid-sentence")
-    res = db.stage_optimization(conn, "clean the leaks", [
+    res = optimizer.stage_optimization(conn, "clean the leaks", [
         {"kind": "unleak", "target_uid": uid, "payload": {"field": "content"}}])
     assert res["staged"] == 0
     assert "reword" in res["errors"][0]["error"]
@@ -153,7 +159,7 @@ def test_an_unleak_that_would_not_clear_the_field_is_refused(conn):
 
 def test_an_unleak_of_an_unknown_field_is_refused(conn):
     uid = _plant(conn)
-    res = db.stage_optimization(conn, "clean the leaks", [
+    res = optimizer.stage_optimization(conn, "clean the leaks", [
         {"kind": "unleak", "target_uid": uid, "payload": {"field": "title"}}])
     assert res["staged"] == 0
     assert "payload.field" in res["errors"][0]["error"]
@@ -170,13 +176,13 @@ def test_an_unleak_leaves_a_sectioned_body_reading_as_its_type(conn):
         "OPEN QUESTIONS: none",
     ))
     uid = _plant(conn, type="checkpoint", content=body)
-    res = db.stage_optimization(conn, "clean the leaks", [
+    res = optimizer.stage_optimization(conn, "clean the leaks", [
         {"kind": "unleak", "target_uid": uid, "payload": {"field": "content"}}])
     assert (res["staged"], res["errors"]) == (1, [])
 
-    sug = db.get_optimization_suggestions(conn, res["run_id"])[0]
-    db.apply_suggestion(conn, sug["id"])
-    row = db.get_memory(conn, uid)
+    sug = optimizer.get_optimization_suggestions(conn, res["run_id"])[0]
+    optimizer.apply_suggestion(conn, sug["id"])
+    row = memories.get_memory(conn, uid)
     assert row["content"].startswith("INTENT: warm the cache before the queue drains")
     assert "OPEN QUESTIONS: none" in row["content"]
     assert sections.read("checkpoint", row["content"]).conforms
@@ -186,37 +192,37 @@ def test_applying_an_unleak_clears_the_field_and_undo_puts_it_back(conn):
     """Applying an unleak clears the field; the undo puts back the body, which
     the store would refuse from a writer."""
     uid = _plant(conn)
-    res = db.stage_optimization(conn, "clean the leaks", [
+    res = optimizer.stage_optimization(conn, "clean the leaks", [
         {"kind": "unleak", "target_uid": uid, "payload": {"field": "content"}}])
-    sug_id = db.get_optimization_suggestions(conn, res["run_id"])[0]["id"]
+    sug_id = optimizer.get_optimization_suggestions(conn, res["run_id"])[0]["id"]
 
-    db.apply_suggestion(conn, sug_id)
-    assert db.get_memory(conn, uid)["content"] == (
+    optimizer.apply_suggestion(conn, sug_id)
+    assert memories.get_memory(conn, uid)["content"] == (
         "the warmup drains the queue twice on a cold start")
 
-    db.revert_suggestion(conn, sug_id)
-    assert db.get_memory(conn, uid)["content"] == LEAKED_BODY
+    optimizer.revert_suggestion(conn, sug_id)
+    assert memories.get_memory(conn, uid)["content"] == LEAKED_BODY
 
 
 def test_an_unleak_of_the_tags_touches_only_the_tags(conn):
     uid = _plant(conn, content="a clean body", tags="cache warmup</tags>")
-    res = db.stage_optimization(conn, "clean the leaks", [
+    res = optimizer.stage_optimization(conn, "clean the leaks", [
         {"kind": "unleak", "target_uid": uid, "payload": {"field": "tags"}}])
-    sug_id = db.get_optimization_suggestions(conn, res["run_id"])[0]["id"]
-    db.apply_suggestion(conn, sug_id)
+    sug_id = optimizer.get_optimization_suggestions(conn, res["run_id"])[0]["id"]
+    optimizer.apply_suggestion(conn, sug_id)
 
-    row = db.get_memory(conn, uid)
+    row = memories.get_memory(conn, uid)
     assert (row["tags"], row["content"]) == ("cache warmup", "a clean body")
 
-    db.revert_suggestion(conn, sug_id)
-    assert db.get_memory(conn, uid)["tags"] == "cache warmup</tags>"
+    optimizer.revert_suggestion(conn, sug_id)
+    assert memories.get_memory(conn, uid)["tags"] == "cache warmup</tags>"
 
 
 def test_an_unleak_of_a_diagram_body_is_refused(conn):
     """Same refusal the other content kinds get: the body is the graph's
     projection, so a repair applied over it lasts until the next edit."""
     uid = _mk_diagram(conn)
-    res = db.stage_optimization(conn, "clean the leaks", [
+    res = optimizer.stage_optimization(conn, "clean the leaks", [
         {"kind": "unleak", "target_uid": uid, "payload": {"field": "content"}}])
     assert res["staged"] == 0
     assert "is a diagram" in res["errors"][0]["error"]
@@ -225,9 +231,9 @@ def test_an_unleak_of_a_diagram_body_is_refused(conn):
 def test_the_panel_reads_the_leaked_field_as_a_pair(client):
     """The dashboard draws Before and After for the field the payload names,
     so the API sends that field's text -- not the memory's content."""
-    with db.connect() as conn:
+    with connection.connect() as conn:
         uid = _plant(conn, content="a clean body", tags="cache warmup</tags>")
-        run = db.stage_optimization(conn, "clean the leaks", [
+        run = optimizer.stage_optimization(conn, "clean the leaks", [
             {"kind": "unleak", "target_uid": uid, "payload": {"field": "tags"}}])
 
     res = client.get(
@@ -239,7 +245,7 @@ def test_the_panel_reads_the_leaked_field_as_a_pair(client):
 
 def test_stage_validates_and_reports_errors(conn):
     uid = _mk(conn, content="keep me")
-    res = db.stage_optimization(conn, "run", [
+    res = optimizer.stage_optimization(conn, "run", [
         {"kind": "reword", "target_uid": uid, "payload": {"new_content": "better"}},
         {"kind": "bogus", "target_uid": uid, "payload": {}},
         {"kind": "reword", "target_uid": "deadbeef", "payload": {"new_content": "x"}},
@@ -247,7 +253,7 @@ def test_stage_validates_and_reports_errors(conn):
     ])
     assert res["staged"] == 1
     assert {e["index"] for e in res["errors"]} == {1, 2, 3}
-    sugs = db.get_optimization_suggestions(conn, res["run_id"])
+    sugs = optimizer.get_optimization_suggestions(conn, res["run_id"])
     assert len(sugs) == 1 and sugs[0]["kind"] == "reword"
 
 
@@ -256,17 +262,17 @@ def test_a_note_over_the_cap_stages_nothing(conn):
     suggestion is written."""
     uid = _mk(conn, content="keep me")
     sug = [{"kind": "reword", "target_uid": uid, "payload": {"new_content": "better"}}]
-    with pytest.raises(ValueError, match=f"the limit is {db.RUN_NOTE_MAX}"):
-        db.stage_optimization(conn, "x" * (db.RUN_NOTE_MAX + 1), sug)
-    assert db.list_optimization_runs(conn) == []
-    res = db.stage_optimization(conn, "x" * db.RUN_NOTE_MAX, sug)
+    with pytest.raises(ValueError, match=f"the limit is {optimizer.RUN_NOTE_MAX}"):
+        optimizer.stage_optimization(conn, "x" * (optimizer.RUN_NOTE_MAX + 1), sug)
+    assert optimizer.list_optimization_runs(conn) == []
+    res = optimizer.stage_optimization(conn, "x" * optimizer.RUN_NOTE_MAX, sug)
     assert res["staged"] == 1
 
 
 def test_stage_no_valid_suggestions_creates_no_run(conn):
-    res = db.stage_optimization(conn, "", [{"kind": "bogus", "payload": {}}])
+    res = optimizer.stage_optimization(conn, "", [{"kind": "bogus", "payload": {}}])
     assert res["run_id"] is None and res["staged"] == 0
-    assert db.list_optimization_runs(conn) == []
+    assert optimizer.list_optimization_runs(conn) == []
 
 
 @pytest.mark.parametrize("kind", ["compact", "reword"])
@@ -274,32 +280,32 @@ def test_stage_refuses_rewriting_a_diagram(conn, kind):
     """A diagram's content is the projection of its graph, so the panel never
     gets to offer a rewrite the next structural edit would regenerate over."""
     uid = _mk_diagram(conn)
-    res = db.stage_optimization(conn, "r", [
+    res = optimizer.stage_optimization(conn, "r", [
         {"kind": kind, "target_uid": uid, "payload": {"new_content": "hand written"}},
     ])
     assert res["staged"] == 0 and res["run_id"] is None
     assert "generated from the graph" in res["errors"][0]["error"]
-    assert db.get_memory(conn, uid)["content"].startswith("DIAGRAM:")
+    assert memories.get_memory(conn, uid)["content"].startswith("DIAGRAM:")
 
 
 def test_apply_refuses_a_diagram_rewrite_staged_before_the_guard(conn):
     """Runs staged before staging refused this still hold one, so apply checks too."""
     diag, note = _mk_diagram(conn), _mk(conn, content="untouched")
-    before = db.get_memory(conn, diag)["content"]
-    run = db.stage_optimization(conn, "r", [
+    before = memories.get_memory(conn, diag)["content"]
+    run = optimizer.stage_optimization(conn, "r", [
         {"kind": "reword", "target_uid": note, "payload": {"new_content": "better"}},
     ])
     conn.execute(
         """INSERT INTO optimization_suggestions
            (run_id, kind, target_uid, payload, rationale, verified, status, created_at)
            VALUES (?, 'reword', ?, ?, '', '', 'pending', ?)""",
-        (run["run_id"], diag, json.dumps({"new_content": "hand written"}), db.now_iso()),
+        (run["run_id"], diag, json.dumps({"new_content": "hand written"}), lite.now_iso()),
     )
-    sug = db.get_optimization_suggestions(conn, run["run_id"])[-1]
+    sug = optimizer.get_optimization_suggestions(conn, run["run_id"])[-1]
     with pytest.raises(ValueError, match="generated from the graph"):
-        db.apply_suggestion(conn, sug["id"])
-    assert db.get_memory(conn, diag)["content"] == before
-    assert db.get_suggestion(conn, sug["id"])["status"] == "pending"
+        optimizer.apply_suggestion(conn, sug["id"])
+    assert memories.get_memory(conn, diag)["content"] == before
+    assert optimizer.get_suggestion(conn, sug["id"])["status"] == "pending"
 
 
 def _mk_task(conn):
@@ -310,18 +316,18 @@ def _mk_task(conn):
 @pytest.mark.parametrize("kind", ["compact", "reword"])
 def test_stage_refuses_rewriting_a_task(conn, kind):
     uid = _mk_task(conn)
-    before = db.get_memory(conn, uid)["content"]
-    res = db.stage_optimization(conn, "r", [
+    before = memories.get_memory(conn, uid)["content"]
+    res = optimizer.stage_optimization(conn, "r", [
         {"kind": kind, "target_uid": uid, "payload": {"new_content": "hand written"}},
     ])
     assert res["staged"] == 0 and res["run_id"] is None
     assert "is a task" in res["errors"][0]["error"]
-    assert db.get_memory(conn, uid)["content"] == before
+    assert memories.get_memory(conn, uid)["content"] == before
 
 
 def test_an_unleak_of_a_task_body_is_refused(conn):
     uid = _mk_task(conn)
-    res = db.stage_optimization(conn, "clean the leaks", [
+    res = optimizer.stage_optimization(conn, "clean the leaks", [
         {"kind": "unleak", "target_uid": uid, "payload": {"field": "content"}}])
     assert res["staged"] == 0
     assert "is a task" in res["errors"][0]["error"]
@@ -334,21 +340,21 @@ def test_an_unleak_of_a_task_body_is_refused(conn):
 ])
 def test_apply_refuses_a_task_rewrite_staged_before_the_guard(conn, kind, payload):
     task, note = _mk_task(conn), _mk(conn, content="untouched")
-    before = db.get_memory(conn, task)["content"]
-    run = db.stage_optimization(conn, "r", [
+    before = memories.get_memory(conn, task)["content"]
+    run = optimizer.stage_optimization(conn, "r", [
         {"kind": "reword", "target_uid": note, "payload": {"new_content": "better"}},
     ])
     conn.execute(
         """INSERT INTO optimization_suggestions
            (run_id, kind, target_uid, payload, rationale, verified, status, created_at)
            VALUES (?, ?, ?, ?, '', '', 'pending', ?)""",
-        (run["run_id"], kind, task, json.dumps(payload), db.now_iso()),
+        (run["run_id"], kind, task, json.dumps(payload), lite.now_iso()),
     )
-    sug = db.get_optimization_suggestions(conn, run["run_id"])[-1]
+    sug = optimizer.get_optimization_suggestions(conn, run["run_id"])[-1]
     with pytest.raises(ValueError, match="is a task"):
-        db.apply_suggestion(conn, sug["id"])
-    assert db.get_memory(conn, task)["content"] == before
-    assert db.get_suggestion(conn, sug["id"])["status"] == "pending"
+        optimizer.apply_suggestion(conn, sug["id"])
+    assert memories.get_memory(conn, task)["content"] == before
+    assert optimizer.get_suggestion(conn, sug["id"])["status"] == "pending"
 
 
 @pytest.mark.parametrize("kind,payload,check", [
@@ -363,19 +369,19 @@ def test_apply_refuses_a_task_rewrite_staged_before_the_guard(conn, kind, payloa
 ])
 def test_apply_and_revert_roundtrip(conn, kind, payload, check):
     uid = _mk(conn, content="original", domain="d0", tags="old", type="note")
-    before = dict(db.get_memory(conn, uid))
-    run = db.stage_optimization(conn, "r", [
+    before = dict(memories.get_memory(conn, uid))
+    run = optimizer.stage_optimization(conn, "r", [
         {"kind": kind, "target_uid": uid, "payload": payload, "rationale": "why", "verified": "checked newer memories"},
     ])
-    sug = db.get_optimization_suggestions(conn, run["run_id"])[0]
+    sug = optimizer.get_optimization_suggestions(conn, run["run_id"])[0]
 
-    db.apply_suggestion(conn, sug["id"])
-    assert check(db.get_memory(conn, uid))
-    applied = db.get_suggestion(conn, sug["id"])
+    optimizer.apply_suggestion(conn, sug["id"])
+    assert check(memories.get_memory(conn, uid))
+    applied = optimizer.get_suggestion(conn, sug["id"])
     assert applied["status"] == "applied" and applied["prev_state"]
 
-    db.revert_suggestion(conn, sug["id"])
-    after = db.get_memory(conn, uid)
+    optimizer.revert_suggestion(conn, sug["id"])
+    after = memories.get_memory(conn, uid)
     assert after["content"] == before["content"]
     assert after["tags"] == before["tags"]
     # a row that had no name goes back to having none: undo restores the
@@ -384,56 +390,56 @@ def test_apply_and_revert_roundtrip(conn, kind, payload, check):
     assert after["domain"] == before["domain"]
     assert after["confidence"] == before["confidence"]
     assert after["status"] == before["status"]
-    assert db.get_suggestion(conn, sug["id"])["status"] == "pending"
+    assert optimizer.get_suggestion(conn, sug["id"])["status"] == "pending"
 
 
 def test_crosslist_replaces_the_whole_set_and_reverts(conn):
     uid = _mk(conn, content="queue drain step", domain="acme/x100/p200",
               also="omni/x900")
-    run = db.stage_optimization(conn, "r", [
+    run = optimizer.stage_optimization(conn, "r", [
         {"kind": "crosslist", "target_uid": uid,
          "payload": {"also": ["omni/x900", "omni/x800"]}, "rationale": "why"},
     ])
-    sug = db.get_optimization_suggestions(conn, run["run_id"])[0]
+    sug = optimizer.get_optimization_suggestions(conn, run["run_id"])[0]
 
-    db.apply_suggestion(conn, sug["id"])
-    assert db.get_domain_links(conn, uid) == ["omni/x800", "omni/x900"]
+    optimizer.apply_suggestion(conn, sug["id"])
+    assert memories.get_domain_links(conn, uid) == ["omni/x800", "omni/x900"]
     # the scope reads it, which is the point of staging this at all
-    assert [r["uid"] for r in db.list_by_domain(conn, "omni/x800")] == [uid]
+    assert [r["uid"] for r in search.list_by_domain(conn, "omni/x800")] == [uid]
 
-    db.revert_suggestion(conn, sug["id"])
-    assert db.get_domain_links(conn, uid) == ["omni/x900"]
-    assert db.list_by_domain(conn, "omni/x800") == []
+    optimizer.revert_suggestion(conn, sug["id"])
+    assert memories.get_domain_links(conn, uid) == ["omni/x900"]
+    assert search.list_by_domain(conn, "omni/x800") == []
 
 
 def test_crosslist_can_drop_every_membership(conn):
     uid = _mk(conn, content="x", domain="acme", also="omni/x900")
-    run = db.stage_optimization(conn, "r", [
+    run = optimizer.stage_optimization(conn, "r", [
         {"kind": "crosslist", "target_uid": uid, "payload": {"also": []}},
     ])
-    sug = db.get_optimization_suggestions(conn, run["run_id"])[0]
-    db.apply_suggestion(conn, sug["id"])
-    assert db.get_domain_links(conn, uid) == []
-    db.revert_suggestion(conn, sug["id"])
-    assert db.get_domain_links(conn, uid) == ["omni/x900"]
+    sug = optimizer.get_optimization_suggestions(conn, run["run_id"])[0]
+    optimizer.apply_suggestion(conn, sug["id"])
+    assert memories.get_domain_links(conn, uid) == []
+    optimizer.revert_suggestion(conn, sug["id"])
+    assert memories.get_domain_links(conn, uid) == ["omni/x900"]
 
 
 def test_crosslist_stages_the_paths_that_will_actually_hold(conn):
     """The panel shows this payload as the proposal, so the policy that drops
     a redundant path has to run at staging, not only on apply."""
     uid = _mk(conn, content="x", domain="acme/x100/p200")
-    run = db.stage_optimization(conn, "r", [
+    run = optimizer.stage_optimization(conn, "r", [
         {"kind": "crosslist", "target_uid": uid,
          "payload": {"also": ["acme", " omni // x900 ", "omni/x900"]}},
     ])
-    sug = db.get_optimization_suggestions(conn, run["run_id"])[0]
+    sug = optimizer.get_optimization_suggestions(conn, run["run_id"])[0]
     assert json.loads(sug["payload"])["also"] == ["omni/x900"]
 
 
 def test_crosslist_of_only_redundant_paths_is_rejected(conn):
     """It would stage as a clear, which is not the suggestion it looks like."""
     uid = _mk(conn, content="x", domain="acme/x100/p200")
-    res = db.stage_optimization(conn, "r", [
+    res = optimizer.stage_optimization(conn, "r", [
         {"kind": "crosslist", "target_uid": uid, "payload": {"also": ["acme", "acme/x100"]}},
     ])
     assert res["staged"] == 0
@@ -442,7 +448,7 @@ def test_crosslist_of_only_redundant_paths_is_rejected(conn):
 
 def test_crosslist_requires_the_payload_field(conn):
     uid = _mk(conn, content="x", domain="acme")
-    res = db.stage_optimization(conn, "r", [
+    res = optimizer.stage_optimization(conn, "r", [
         {"kind": "crosslist", "target_uid": uid, "payload": {}},
     ])
     assert res["staged"] == 0 and "payload.also required" in res["errors"][0]["error"]
@@ -450,32 +456,32 @@ def test_crosslist_requires_the_payload_field(conn):
 
 def test_apply_link_and_revert(conn):
     a, b = _mk(conn, content="one"), _mk(conn, content="two")
-    run = db.stage_optimization(conn, "r", [
+    run = optimizer.stage_optimization(conn, "r", [
         {"kind": "link", "payload": {"from_uid": a, "to_uid": b, "relation_type": "relates_to"}},
     ])
-    sug = db.get_optimization_suggestions(conn, run["run_id"])[0]
-    db.apply_suggestion(conn, sug["id"])
-    assert len(db.get_relations(conn, a)) == 1
-    db.revert_suggestion(conn, sug["id"])
-    assert db.get_relations(conn, a) == []
+    sug = optimizer.get_optimization_suggestions(conn, run["run_id"])[0]
+    optimizer.apply_suggestion(conn, sug["id"])
+    assert len(relations.get_relations(conn, a)) == 1
+    optimizer.revert_suggestion(conn, sug["id"])
+    assert relations.get_relations(conn, a) == []
 
 
 def test_apply_merge_archives_drop_and_links(conn):
     keep, drop = _mk(conn, content="canonical"), _mk(conn, content="dupe")
-    run = db.stage_optimization(conn, "r", [
+    run = optimizer.stage_optimization(conn, "r", [
         {"kind": "merge", "payload": {"keep_uid": keep, "drop_uid": drop},
          "verified": "read both against the live routine"},
     ])
-    sug = db.get_optimization_suggestions(conn, run["run_id"])[0]
-    db.apply_suggestion(conn, sug["id"])
-    drow = db.get_memory(conn, drop)
+    sug = optimizer.get_optimization_suggestions(conn, run["run_id"])[0]
+    optimizer.apply_suggestion(conn, sug["id"])
+    drow = memories.get_memory(conn, drop)
     assert drow["status"] == "archived" and drow["superseded_by"] == keep
-    assert len(db.get_relations(conn, keep)) == 1
+    assert len(relations.get_relations(conn, keep)) == 1
 
-    db.revert_suggestion(conn, sug["id"])
-    drow = db.get_memory(conn, drop)
+    optimizer.revert_suggestion(conn, sug["id"])
+    drow = memories.get_memory(conn, drop)
     assert drow["status"] == "active" and drow["superseded_by"] is None
-    assert db.get_relations(conn, keep) == []
+    assert relations.get_relations(conn, keep) == []
 
 
 def test_a_rejection_can_be_taken_back(conn):
@@ -486,85 +492,85 @@ def test_a_rejection_can_be_taken_back(conn):
     day rail is a dead end no undo reaches.
     """
     uid = _mk(conn, content="original")
-    staged = db.stage_optimization(conn, "reject then think again", [
+    staged = optimizer.stage_optimization(conn, "reject then think again", [
         {"kind": "retag", "target_uid": uid, "payload": {"tags": "x"}, "rationale": "r"},
     ])
-    sug = db.get_optimization_suggestions(conn, staged["run_id"])[0]
+    sug = optimizer.get_optimization_suggestions(conn, staged["run_id"])[0]
 
-    db.reject_suggestion(conn, sug["id"])
-    assert db.get_suggestion(conn, sug["id"])["status"] == "rejected"
+    optimizer.reject_suggestion(conn, sug["id"])
+    assert optimizer.get_suggestion(conn, sug["id"])["status"] == "rejected"
 
-    db.revert_suggestion(conn, sug["id"])
-    back = db.get_suggestion(conn, sug["id"])
+    optimizer.revert_suggestion(conn, sug["id"])
+    back = optimizer.get_suggestion(conn, sug["id"])
     assert back["status"] == "pending"
     assert back["decided_at"] is None
     # and it can then be applied for real
-    db.apply_suggestion(conn, sug["id"])
-    assert db.get_memory(conn, uid)["tags"] == "x"
+    optimizer.apply_suggestion(conn, sug["id"])
+    assert memories.get_memory(conn, uid)["tags"] == "x"
 
 
 def test_reverting_a_pending_suggestion_is_refused(conn):
     """It is already on the table; saying so beats performing a no-op."""
     uid = _mk(conn)
-    staged = db.stage_optimization(conn, "nothing decided", [
+    staged = optimizer.stage_optimization(conn, "nothing decided", [
         {"kind": "retag", "target_uid": uid, "payload": {"tags": "x"}, "rationale": "r"},
     ])
-    sug = db.get_optimization_suggestions(conn, staged["run_id"])[0]
+    sug = optimizer.get_optimization_suggestions(conn, staged["run_id"])[0]
     with pytest.raises(ValueError, match="already pending"):
-        db.revert_suggestion(conn, sug["id"])
+        optimizer.revert_suggestion(conn, sug["id"])
 
 
 def test_reverting_a_rejection_writes_nothing_to_the_memory(conn):
     uid = _mk(conn, content="untouched")
-    before = dict(db.get_memory(conn, uid))
-    staged = db.stage_optimization(conn, "reject and revert", [
+    before = dict(memories.get_memory(conn, uid))
+    staged = optimizer.stage_optimization(conn, "reject and revert", [
         {"kind": "reword", "target_uid": uid, "payload": {"new_content": "rewritten"},
          "rationale": "r"},
     ])
-    sug = db.get_optimization_suggestions(conn, staged["run_id"])[0]
-    db.reject_suggestion(conn, sug["id"])
-    db.revert_suggestion(conn, sug["id"])
-    after = dict(db.get_memory(conn, uid))
+    sug = optimizer.get_optimization_suggestions(conn, staged["run_id"])[0]
+    optimizer.reject_suggestion(conn, sug["id"])
+    optimizer.revert_suggestion(conn, sug["id"])
+    after = dict(memories.get_memory(conn, uid))
     assert after["content"] == before["content"] == shaped("note", "untouched")
     assert after["updated_at"] == before["updated_at"]
 
 
 def test_reject_leaves_memory_untouched(conn):
     uid = _mk(conn, content="untouched")
-    run = db.stage_optimization(conn, "r", [
+    run = optimizer.stage_optimization(conn, "r", [
         {"kind": "reword", "target_uid": uid, "payload": {"new_content": "changed"}},
     ])
-    sug = db.get_optimization_suggestions(conn, run["run_id"])[0]
-    db.reject_suggestion(conn, sug["id"])
-    assert db.get_memory(conn, uid)["content"] == "untouched"
-    assert db.get_suggestion(conn, sug["id"])["status"] == "rejected"
+    sug = optimizer.get_optimization_suggestions(conn, run["run_id"])[0]
+    optimizer.reject_suggestion(conn, sug["id"])
+    assert memories.get_memory(conn, uid)["content"] == "untouched"
+    assert optimizer.get_suggestion(conn, sug["id"])["status"] == "rejected"
 
 
 def test_run_summary_counts(conn):
     uid = _mk(conn)
-    run = db.stage_optimization(conn, "counts", [
+    run = optimizer.stage_optimization(conn, "counts", [
         {"kind": "set_confidence", "target_uid": uid, "payload": {"confidence": "confirmed"}},
         {"kind": "archive", "target_uid": uid, "payload": {}, "verified": "ticket closed upstream"},
     ])
-    sugs = db.get_optimization_suggestions(conn, run["run_id"])
-    db.apply_suggestion(conn, sugs[0]["id"])
-    db.reject_suggestion(conn, sugs[1]["id"])
-    r = db.list_optimization_runs(conn)[0]
+    sugs = optimizer.get_optimization_suggestions(conn, run["run_id"])
+    optimizer.apply_suggestion(conn, sugs[0]["id"])
+    optimizer.reject_suggestion(conn, sugs[1]["id"])
+    r = optimizer.list_optimization_runs(conn)[0]
     assert (r["total"], r["applied"], r["rejected"], r["pending"]) == (2, 1, 1, 0)
 
 
 def test_purge_removes_suggestions(conn):
     uid = _mk(conn)
-    run = db.stage_optimization(conn, "r", [
+    run = optimizer.stage_optimization(conn, "r", [
         {"kind": "reword", "target_uid": uid, "payload": {"new_content": "x"}},
     ])
-    db.purge_memory(conn, uid)
-    assert db.get_optimization_suggestions(conn, run["run_id"]) == []
+    memories.purge_memory(conn, uid)
+    assert optimizer.get_optimization_suggestions(conn, run["run_id"]) == []
 
 
 def test_destructive_kinds_require_verified(conn):
     uid = _mk(conn)
-    res = db.stage_optimization(conn, "guards", [
+    res = optimizer.stage_optimization(conn, "guards", [
         {"kind": "archive", "target_uid": uid, "payload": {}},
         {"kind": "set_confidence", "target_uid": uid, "payload": {"confidence": "contradicted"}},
         # non-destructive: verified stays optional
@@ -589,19 +595,19 @@ def test_every_kind_in_verified_required_is_actually_refused(conn):
                          "new_content": "the durable fact",
                          "title": "What the drain retries"}),
     }
-    assert set(payloads) == set(db.VERIFIED_REQUIRED), (
+    assert set(payloads) == set(optimizer.VERIFIED_REQUIRED), (
         "a kind entered VERIFIED_REQUIRED without a case here")
     for kind, (extra, payload) in payloads.items():
-        res = db.stage_optimization(conn, f"{kind} guard",
+        res = optimizer.stage_optimization(conn, f"{kind} guard",
                                     [{"kind": kind, "payload": payload, **extra}])
         assert res["staged"] == 0, kind
-        assert res["errors"][0]["error"] == db.VERIFIED_REQUIRED[kind], kind
+        assert res["errors"][0]["error"] == optimizer.VERIFIED_REQUIRED[kind], kind
 
 
 def test_merge_requires_verified(conn):
     """merge archives payload.drop_uid, so it takes the same verified as archive."""
     keep, drop = _mk(conn, content="canonical"), _mk(conn, content="dupe")
-    res = db.stage_optimization(conn, "merge guard", [
+    res = optimizer.stage_optimization(conn, "merge guard", [
         {"kind": "merge", "payload": {"keep_uid": keep, "drop_uid": drop}},
         {"kind": "merge", "payload": {"keep_uid": keep, "drop_uid": drop},
          "verified": "read both against the live routine"},
@@ -609,12 +615,12 @@ def test_merge_requires_verified(conn):
     assert res["staged"] == 1
     assert {e["index"] for e in res["errors"]} == {0}
     assert "verified required" in res["errors"][0]["error"]
-    assert db.get_memory(conn, drop)["status"] == "active"
+    assert memories.get_memory(conn, drop)["status"] == "active"
 
 
 def test_link_merge_reject_mismatched_target_uid(conn):
     a, b = _mk(conn, content="one"), _mk(conn, content="two")
-    res = db.stage_optimization(conn, "targets", [
+    res = optimizer.stage_optimization(conn, "targets", [
         {"kind": "link", "target_uid": b,  # mismatch: derived is from_uid
          "payload": {"from_uid": a, "to_uid": b, "relation_type": "relates_to"}},
         {"kind": "merge", "target_uid": a,  # mismatch: derived is drop_uid
@@ -624,7 +630,7 @@ def test_link_merge_reject_mismatched_target_uid(conn):
     ])
     assert res["staged"] == 1
     assert {e["index"] for e in res["errors"]} == {0, 1}
-    sug = db.get_optimization_suggestions(conn, res["run_id"])[0]
+    sug = optimizer.get_optimization_suggestions(conn, res["run_id"])[0]
     assert sug["target_uid"] == a
 
 
@@ -632,7 +638,7 @@ def test_distill_validation(conn):
     a, b = _mk(conn, content="one"), _mk(conn, content="two")
     ok = {"source_uids": [a, b], "new_type": "note", "new_content": "the durable fact",
           "title": "What the drain retries"}
-    res = db.stage_optimization(conn, "distill guards", [
+    res = optimizer.stage_optimization(conn, "distill guards", [
         {"kind": "distill", "payload": ok},                                     # no verified
         {"kind": "distill", "target_uid": a, "payload": ok, "verified": "v"},   # target_uid forbidden
         {"kind": "distill", "payload": {**ok, "source_uids": []}, "verified": "v"},
@@ -641,7 +647,7 @@ def test_distill_validation(conn):
         {"kind": "distill", "payload": {**ok, "new_type": "checkpoint"}, "verified": "v"},
         {"kind": "distill", "payload": {**ok, "new_content": "  "}, "verified": "v"},
         {"kind": "distill", "payload": {**ok, "title": "  "}, "verified": "v"},
-        {"kind": "distill", "payload": {**ok, "title": "N" + "a" * db.TITLE_MAX},
+        {"kind": "distill", "payload": {**ok, "title": "N" + "a" * store_sections.TITLE_MAX},
          "verified": "v"},
         {"kind": "distill", "payload": ok, "verified": "checked repo"},         # valid
     ])
@@ -654,7 +660,7 @@ def test_distill_rejects_a_payload_key_it_does_not_apply(conn):
     a = _mk(conn, content="one")
     ok = {"source_uids": [a], "new_type": "note", "new_content": "the durable fact",
           "title": "What the drain retries"}
-    res = db.stage_optimization(conn, "distill keys", [
+    res = optimizer.stage_optimization(conn, "distill keys", [
         {"kind": "distill", "payload": {**ok, "review_after": "90d"}, "verified": "checked repo"},
         {"kind": "distill", "payload": {**ok, "source_ref": "src/memai/db.py", "session": "s"},
          "verified": "checked repo"},
@@ -670,7 +676,7 @@ def test_distill_rejects_a_payload_key_it_does_not_apply(conn):
 def test_distill_refuses_a_diagram_as_a_source(conn):
     """A diagram stays out of source_uids: distill archives every source it names."""
     diag, note = _mk_diagram(conn), _mk(conn, content="the warmup fills every hot key")
-    res = db.stage_optimization(conn, "distill sources", [
+    res = optimizer.stage_optimization(conn, "distill sources", [
         {"kind": "distill", "payload": {
             "source_uids": [note, diag], "new_type": "note",
             "new_content": "warmup loads the hot keys before traffic",
@@ -679,13 +685,13 @@ def test_distill_refuses_a_diagram_as_a_source(conn):
     ])
     assert res["staged"] == 0 and res["run_id"] is None
     assert "is a diagram" in res["errors"][0]["error"]
-    assert db.get_memory(conn, diag)["status"] == "active"
+    assert memories.get_memory(conn, diag)["status"] == "active"
 
 
 def test_distill_apply_and_revert(conn):
     a = _mk(conn, content="checkpoint one", type="checkpoint", domain="proj-1042")
     b = _mk(conn, content="checkpoint two", type="checkpoint", domain="proj-1042")
-    run = db.stage_optimization(conn, "distill", [
+    run = optimizer.stage_optimization(conn, "distill", [
         {"kind": "distill", "payload": {
             "source_uids": [a, b], "new_type": "note",
             "new_content": "root cause: retry loop lacked backoff",
@@ -693,34 +699,34 @@ def test_distill_apply_and_revert(conn):
             "tags": "retry, timeout", "domain": "proj-1042",
         }, "verified": "checked repo, fix merged"},
     ])
-    sug = db.get_optimization_suggestions(conn, run["run_id"])[0]
+    sug = optimizer.get_optimization_suggestions(conn, run["run_id"])[0]
     assert sug["target_uid"] is None
 
-    db.apply_suggestion(conn, sug["id"])
-    prev = json.loads(db.get_suggestion(conn, sug["id"])["prev_state"])
+    optimizer.apply_suggestion(conn, sug["id"])
+    prev = json.loads(optimizer.get_suggestion(conn, sug["id"])["prev_state"])
     new_uid = prev["new_uid"]
-    new = db.get_memory(conn, new_uid)
+    new = memories.get_memory(conn, new_uid)
     assert new["type"] == "note" and new["content"].startswith("root cause")
     assert new["tags"] == "retry, timeout" and new["domain"] == "proj-1042"
     for src in (a, b):
-        row = db.get_memory(conn, src)
+        row = memories.get_memory(conn, src)
         assert row["status"] == "archived" and row["superseded_by"] == new_uid
-    rels = db.get_relations(conn, new_uid)
+    rels = relations.get_relations(conn, new_uid)
     assert len(rels) == 2 and all(r["relation_type"] == "supersedes" for r in rels)
 
-    db.revert_suggestion(conn, sug["id"])
-    assert db.get_memory(conn, new_uid) is None          # created memory purged
+    optimizer.revert_suggestion(conn, sug["id"])
+    assert memories.get_memory(conn, new_uid) is None          # created memory purged
     for src in (a, b):
-        row = db.get_memory(conn, src)
+        row = memories.get_memory(conn, src)
         assert row["status"] == "active" and row["superseded_by"] is None
-        assert db.get_relations(conn, src) == []
-    assert db.get_suggestion(conn, sug["id"])["status"] == "pending"
+        assert relations.get_relations(conn, src) == []
+    assert optimizer.get_suggestion(conn, sug["id"])["status"] == "pending"
 
     # re-apply after revert mints a fresh memory
-    db.apply_suggestion(conn, sug["id"])
-    prev2 = json.loads(db.get_suggestion(conn, sug["id"])["prev_state"])
+    optimizer.apply_suggestion(conn, sug["id"])
+    prev2 = json.loads(optimizer.get_suggestion(conn, sug["id"])["prev_state"])
     assert prev2["new_uid"] != new_uid
-    assert db.get_memory(conn, prev2["new_uid"]) is not None
+    assert memories.get_memory(conn, prev2["new_uid"]) is not None
 
 
 # ------------------------------------------------------------------ corpus / scan
@@ -728,12 +734,12 @@ def test_distill_apply_and_revert(conn):
 def test_corpus_snippets_by_default_full_on_demand(conn):
     long_body = "x" * 1000
     uid = _mk(conn, content=long_body)
-    corpus = db.optimization_corpus(conn)
+    corpus = store_corpus.optimization_corpus(conn)
     m = next(m for m in corpus["memories"] if m["uid"] == uid)
     assert m["content_len"] == 1000
-    assert len(m["content"]) == db.CORPUS_SNIPPET_LEN and m["content"].endswith("…")
+    assert len(m["content"]) == store_corpus.CORPUS_SNIPPET_LEN and m["content"].endswith("…")
 
-    full = db.optimization_corpus(conn, full=True)
+    full = store_corpus.optimization_corpus(conn, full=True)
     m = next(m for m in full["memories"] if m["uid"] == uid)
     assert m["content"] == long_body
 
@@ -741,14 +747,14 @@ def test_corpus_snippets_by_default_full_on_demand(conn):
 def test_corpus_truncated_flag_and_stats_ignore_limit(conn):
     for i in range(5):
         _mk(conn, content=f"fact {i}", domain="d1" if i < 3 else "")
-    corpus = db.optimization_corpus(conn, limit=2)
+    corpus = store_corpus.optimization_corpus(conn, limit=2)
     assert corpus["count"] == 2 and corpus["truncated"] is True
     assert corpus["stats"]["total"] == 5          # whole corpus, not the window
     assert corpus["stats"]["by_type"] == {"note": 5}
     assert corpus["stats"]["by_domain"]["d1"] == 3
     assert corpus["stats"]["empty_domain"] == 2
 
-    all_of_it = db.optimization_corpus(conn)
+    all_of_it = store_corpus.optimization_corpus(conn)
     assert all_of_it["truncated"] is False
 
 
@@ -760,7 +766,7 @@ def test_corpus_counts_what_a_retag_would_reach(conn):
     _mk(conn, content="a temptation and its cure", type="anti_pattern",
         tags="anti_pattern")
 
-    assert db.optimization_corpus(conn)["stats"]["untagged"] == 2
+    assert store_corpus.optimization_corpus(conn)["stats"]["untagged"] == 2
 
 
 def test_corpus_counts_what_a_retitle_would_reach(conn):
@@ -770,12 +776,12 @@ def test_corpus_counts_what_a_retitle_would_reach(conn):
     _mk(conn, content="the loader skips a blank part")
     _mk(conn, content="a temptation and its cure", type="anti_pattern")
 
-    assert db.optimization_corpus(conn)["stats"]["untitled"] == 2
+    assert store_corpus.optimization_corpus(conn)["stats"]["untitled"] == 2
 
 
 def test_a_retitle_needs_a_name(conn):
     uid = _mk(conn, content="the drain retries twice")
-    run = db.stage_optimization(conn, "r", [
+    run = optimizer.stage_optimization(conn, "r", [
         {"kind": "retitle", "target_uid": uid, "payload": {"title": "   "},
          "rationale": "why", "verified": "read the body"},
     ])
@@ -787,13 +793,13 @@ def test_a_diagram_is_not_retitled_through_a_suggestion(conn):
     """Its title generates part of its body, so an applied rename would last
     until the next structural change."""
     diag = _mk_diagram(conn)
-    run = db.stage_optimization(conn, "r", [
+    run = optimizer.stage_optimization(conn, "r", [
         {"kind": "retitle", "target_uid": diag, "payload": {"title": "Another name"},
          "rationale": "why", "verified": "read the graph"},
     ])
     assert run["staged"] == 0
     assert "generates its body" in run["errors"][0]["error"]
-    assert db.get_memory(conn, diag)["title"] == "Cache warmup routine"
+    assert memories.get_memory(conn, diag)["title"] == "Cache warmup routine"
 
 
 def test_corpus_extracts_anchors(conn):
@@ -801,7 +807,7 @@ def test_corpus_extracts_anchors(conn):
         "fix lives in src/core/parser.py, field F100_TOTAL of table X100; "
         "spec at https://example.com/spec and flag USE_NEW_PARSER"
     ))
-    corpus = db.optimization_corpus(conn)
+    corpus = store_corpus.optimization_corpus(conn)
     m = next(m for m in corpus["memories"] if m["uid"] == uid)
     assert "https://example.com/spec" in m["anchors"]
     assert "src/core/parser.py" in m["anchors"]
@@ -810,14 +816,14 @@ def test_corpus_extracts_anchors(conn):
     assert "USE_NEW_PARSER" in m["anchors"]
 
     plain = _mk(conn, content="just prose, nothing checkable")
-    corpus = db.optimization_corpus(conn)
+    corpus = store_corpus.optimization_corpus(conn)
     m = next(m for m in corpus["memories"] if m["uid"] == plain)
     assert "anchors" not in m
 
 
 def test_corpus_omits_empty_fields_and_trims_timestamps(conn):
     uid = _mk(conn, content="bare fact")          # no domain/session/tags
-    corpus = db.optimization_corpus(conn)
+    corpus = store_corpus.optimization_corpus(conn)
     m = next(m for m in corpus["memories"] if m["uid"] == uid)
     for absent in ("domain", "also", "session", "tags", "superseded_by", "status",
                    "updated_at", "confidence"):     # confidence: unverified is the default
@@ -830,7 +836,7 @@ def test_corpus_lists_the_cross_listings(conn):
     that already holds."""
     uid = _mk(conn, content="queue drain step", domain="acme/x100/p200",
               also="omni/x900")
-    corpus = db.optimization_corpus(conn)
+    corpus = store_corpus.optimization_corpus(conn)
     m = next(m for m in corpus["memories"] if m["uid"] == uid)
     assert m["also"] == ["omni/x900"]
     assert "also_domains" not in m                # the indexing mirror stays put
@@ -839,22 +845,22 @@ def test_corpus_lists_the_cross_listings(conn):
 def test_corpus_truncates_long_tags(conn):
     long_tags = ", ".join(f"tag{i}" for i in range(40))
     uid = _mk(conn, content="tagged", tags=long_tags)
-    corpus = db.optimization_corpus(conn)
+    corpus = store_corpus.optimization_corpus(conn)
     m = next(m for m in corpus["memories"] if m["uid"] == uid)
     assert m["tags_len"] == len(long_tags)
-    assert len(m["tags"]) == db.CORPUS_TAGS_LEN and m["tags"].endswith("…")
+    assert len(m["tags"]) == store_corpus.CORPUS_TAGS_LEN and m["tags"].endswith("…")
 
 
 def test_corpus_char_budget_caps_a_page(conn, monkeypatch):
     monkeypatch.setattr("memai.store.corpus.CORPUS_CHAR_BUDGET", 1200)
     for i in range(20):
         _mk(conn, content=f"memory number {i} with some padding text")
-    page1 = db.optimization_corpus(conn)
+    page1 = store_corpus.optimization_corpus(conn)
     assert 0 < page1["count"] < 20 and page1["truncated"] is True
     # paging by offset walks the whole corpus without overlap
     seen, offset = set(), 0
     while True:
-        page = db.optimization_corpus(conn, offset=offset)
+        page = store_corpus.optimization_corpus(conn, offset=offset)
         uids = {m["uid"] for m in page["memories"]}
         assert not seen & uids
         seen |= uids
@@ -867,8 +873,8 @@ def test_corpus_char_budget_caps_a_page(conn, monkeypatch):
 def test_corpus_pages_with_offset(conn):
     for i in range(5):
         _mk(conn, content=f"fact {i}")
-    first = db.optimization_corpus(conn, limit=3)
-    rest = db.optimization_corpus(conn, limit=3, offset=3)
+    first = store_corpus.optimization_corpus(conn, limit=3)
+    rest = store_corpus.optimization_corpus(conn, limit=3, offset=3)
     assert first["truncated"] is True and rest["truncated"] is False
     assert first["count"] == 3 and rest["count"] == 2
     assert rest["offset"] == 3
@@ -876,30 +882,30 @@ def test_corpus_pages_with_offset(conn):
 
 
 def test_corpus_since_filters_incrementally(conn):
-    old = db.insert_memory(conn, type="note", content="old fact",
+    old = memories.insert_memory(conn, type="note", content="old fact",
                            created_at="2026-01-05T10:00:00+00:00")
-    new = db.insert_memory(conn, type="note", content="new fact",
+    new = memories.insert_memory(conn, type="note", content="new fact",
                            created_at="2026-03-20T10:00:00+00:00")
-    corpus = db.optimization_corpus(conn, since="2026-02-01")
+    corpus = store_corpus.optimization_corpus(conn, since="2026-02-01")
     uids = {m["uid"] for m in corpus["memories"]}
     assert uids == {new}
     assert corpus["stats"]["total"] == 1        # stats describe the delta
 
     # an EDIT pulls an old memory back into the incremental window
-    db.update_memory_content(conn, old, "old fact, revised", note="touch")
-    corpus = db.optimization_corpus(conn, since="2026-02-01")
+    memories.update_memory_content(conn, old, "old fact, revised", note="touch")
+    corpus = store_corpus.optimization_corpus(conn, since="2026-02-01")
     assert {m["uid"] for m in corpus["memories"]} == {old, new}
 
 
 def test_dedup_since_pairs_new_against_old_lexical(conn):
     # identical contents guarantee a hit
-    old_a = db.insert_memory(conn, type="note", content="the retry loop lacks backoff",
+    old_a = memories.insert_memory(conn, type="note", content="the retry loop lacks backoff",
                              created_at="2026-01-05T10:00:00+00:00")
-    db.insert_memory(conn, type="note", content="the retry loop lacks backoff",
+    memories.insert_memory(conn, type="note", content="the retry loop lacks backoff",
                      created_at="2026-01-06T10:00:00+00:00")
-    new = db.insert_memory(conn, type="note", content="the retry loop lacks backoff",
+    new = memories.insert_memory(conn, type="note", content="the retry loop lacks backoff",
                            created_at="2026-03-20T10:00:00+00:00")
-    pairs = db.dedup_candidates(conn, threshold=0.9, since="2026-02-01")
+    pairs = dedup.dedup_candidates(conn, threshold=0.9, since="2026-02-01")
     assert pairs, "new x old collision must surface"
     # every pair touches the delta -- the old x old duplicate (a x b) is
     # a full-pass concern, not this run's
@@ -909,15 +915,15 @@ def test_dedup_since_pairs_new_against_old_lexical(conn):
 
 
 def test_corpus_domain_hints_cross_window_with_since(conn):
-    db.insert_memory(conn, type="note", content="a", domain="PROJ-1042",
+    memories.insert_memory(conn, type="note", content="a", domain="PROJ-1042",
                      created_at="2026-01-05T10:00:00+00:00")     # old spelling
-    db.insert_memory(conn, type="note", content="b", domain="proj_1042-fix",
+    memories.insert_memory(conn, type="note", content="b", domain="proj_1042-fix",
                      created_at="2026-03-20T10:00:00+00:00")     # new variant
-    db.insert_memory(conn, type="note", content="c", domain="OTHER-100",
+    memories.insert_memory(conn, type="note", content="c", domain="OTHER-100",
                      created_at="2026-01-05T10:00:00+00:00")     # old-only cluster seed
-    db.insert_memory(conn, type="note", content="d", domain="other_100",
+    memories.insert_memory(conn, type="note", content="d", domain="other_100",
                      created_at="2026-01-06T10:00:00+00:00")
-    corpus = db.optimization_corpus(conn, since="2026-02-01")
+    corpus = store_corpus.optimization_corpus(conn, since="2026-02-01")
     hints = corpus["domain_hints"]
     assert len(hints) == 1                        # old-only cluster stays out of the delta run
     assert {v["domain"] for v in hints[0]["variants"]} == {"PROJ-1042", "proj_1042-fix"}
@@ -928,7 +934,7 @@ def test_corpus_domain_hints_cluster_variants(conn):
     _mk(conn, content="b", domain="proj-1042")
     _mk(conn, content="c", domain="proj_1042-fix")
     _mk(conn, content="d", domain="unrelated")
-    corpus = db.optimization_corpus(conn)
+    corpus = store_corpus.optimization_corpus(conn)
     hints = corpus["domain_hints"]
     assert len(hints) == 1
     h = hints[0]
@@ -942,7 +948,7 @@ def test_dedup_ranks_checkpoints_below(conn):
     n2 = _mk(conn, content="alpha beta gamma delta epsilon")
     _mk(conn, content="zeta eta theta iota kappa", type="checkpoint", domain="d1")
     _mk(conn, content="zeta eta theta iota kappa", type="checkpoint", domain="d2")
-    pairs = db.dedup_candidates(conn, threshold=0.9)
+    pairs = dedup.dedup_candidates(conn, threshold=0.9)
     assert all(m == "lexical" for _a, _b, _s, m in pairs)
     assert len(pairs) == 2
     # equal scores (identical contents), but the note pair outranks the
@@ -955,9 +961,9 @@ def test_optimize_runs_and_status_tools(tmp_path, monkeypatch):
     from memai import server
 
     monkeypatch.setenv("MEMAI_HOME", str(tmp_path))
-    with db.connect() as c:
-        uid = db.insert_memory(c, type="note", content="a fact")
-        staged = db.stage_optimization(c, "visibility", [
+    with connection.connect() as c:
+        uid = memories.insert_memory(c, type="note", content="a fact")
+        staged = optimizer.stage_optimization(c, "visibility", [
             {"kind": "reword", "target_uid": uid, "payload": {"new_content": "better"}},
         ])
 
@@ -978,8 +984,8 @@ def test_optimize_runs_and_status_tools(tmp_path, monkeypatch):
 
 def _stage_via_db(uid, kind, payload):
     """Stage directly through the db layer against the client's store."""
-    with db.connect() as conn:
-        return db.stage_optimization(conn, "api run", [
+    with connection.connect() as conn:
+        return optimizer.stage_optimization(conn, "api run", [
             {"kind": kind, "target_uid": uid, "payload": payload, "rationale": "r", "verified": "v"},
         ])
 
@@ -1038,8 +1044,8 @@ def test_api_apply_takes_backup_and_mutates(client, tmp_path):
 def test_api_distill_card_sources_and_new_uid(client):
     a = _new_memory(client, domain="d")
     b = _new_memory(client, domain="d")
-    with db.connect() as conn:
-        staged = db.stage_optimization(conn, "api distill", [
+    with connection.connect() as conn:
+        staged = optimizer.stage_optimization(conn, "api distill", [
             {"kind": "distill", "payload": {
                 "source_uids": [a, b], "new_type": "note", "new_content": "distilled",
                 "title": "What the sources taught",
@@ -1060,8 +1066,8 @@ def test_api_distill_card_sources_and_new_uid(client):
 
 def test_api_runs_include_kind_breakdown(client):
     uid = _new_memory(client)
-    with db.connect() as conn:
-        staged = db.stage_optimization(conn, "kinds run", [
+    with connection.connect() as conn:
+        staged = optimizer.stage_optimization(conn, "kinds run", [
             {"kind": "retag", "target_uid": uid, "payload": {"tags": "x"}, "rationale": "r", "verified": "v"},
             {"kind": "retag", "target_uid": uid, "payload": {"tags": "y"}, "rationale": "r", "verified": "v"},
             {"kind": "set_confidence", "target_uid": uid, "payload": {"confidence": "confirmed"}, "rationale": "r", "verified": "v"},
@@ -1084,8 +1090,8 @@ def test_api_kind_breakdown_counts_what_was_turned_down(client):
     applied and claims work nobody accepted.
     """
     uid = _new_memory(client)
-    with db.connect() as conn:
-        staged = db.stage_optimization(conn, "three retags", [
+    with connection.connect() as conn:
+        staged = optimizer.stage_optimization(conn, "three retags", [
             {"kind": "retag", "target_uid": uid, "payload": {"tags": "a"}, "rationale": "r", "verified": "v"},
             {"kind": "retag", "target_uid": uid, "payload": {"tags": "b"}, "rationale": "r", "verified": "v"},
             {"kind": "retag", "target_uid": uid, "payload": {"tags": "c"}, "rationale": "r", "verified": "v"},
@@ -1104,8 +1110,8 @@ def test_api_kind_breakdown_counts_what_was_turned_down(client):
 
 def test_api_apply_all_filters_by_kind(client):
     uid = _new_memory(client)
-    with db.connect() as conn:
-        staged = db.stage_optimization(conn, "kind filter", [
+    with connection.connect() as conn:
+        staged = optimizer.stage_optimization(conn, "kind filter", [
             {"kind": "retag", "target_uid": uid, "payload": {"tags": "x"}, "rationale": "r", "verified": "v"},
             {"kind": "set_confidence", "target_uid": uid, "payload": {"confidence": "confirmed"}, "rationale": "r", "verified": "v"},
         ])
@@ -1121,8 +1127,8 @@ def test_api_apply_all_filters_by_kind(client):
 def test_api_suggestions_filter_by_kind(client):
     """A group is its own page, so it fetches its own kind and no other."""
     uid = _new_memory(client)
-    with db.connect() as conn:
-        staged = db.stage_optimization(conn, "one kind", [
+    with connection.connect() as conn:
+        staged = optimizer.stage_optimization(conn, "one kind", [
             {"kind": "retag", "target_uid": uid, "payload": {"tags": "x"}, "rationale": "r", "verified": "v"},
             {"kind": "retitle", "target_uid": uid, "payload": {"title": "Cache warmup"}, "rationale": "r", "verified": "v"},
         ])
@@ -1180,8 +1186,8 @@ def test_api_suggestions_rejects_an_unknown_run_in_the_list(client):
 def test_api_summary_counts_verified_and_the_ledger(client):
     """The run head reports what is written on the rows, not a projected score."""
     keep, drop = _new_memory(client, domain="acme/x100"), _new_memory(client, domain="zeta/x200")
-    with db.connect() as conn:
-        staged = db.stage_optimization(conn, "head", [
+    with connection.connect() as conn:
+        staged = optimizer.stage_optimization(conn, "head", [
             # checked, and it rewrites a body: 'api fact' (8) -> 'short' (5)
             {"kind": "reword", "target_uid": keep, "payload": {"new_content": "short"},
              "rationale": "r", "verified": "v"},
@@ -1217,12 +1223,12 @@ def test_api_summary_counts_verified_and_the_ledger(client):
 def test_api_summary_leaves_the_field_empty_when_the_batch_disagrees(client):
     """One destination can be named in the sentence; four cannot."""
     a, b = _new_memory(client), _new_memory(client)
-    with db.connect() as conn:
-        one = db.stage_optimization(conn, "same", [
+    with connection.connect() as conn:
+        one = optimizer.stage_optimization(conn, "same", [
             {"kind": "redomain", "target_uid": a, "payload": {"domain": "acme/x100"}, "rationale": "r"},
             {"kind": "redomain", "target_uid": b, "payload": {"domain": "acme/x100"}, "rationale": "r"},
         ])
-        many = db.stage_optimization(conn, "split", [
+        many = optimizer.stage_optimization(conn, "split", [
             {"kind": "redomain", "target_uid": a, "payload": {"domain": "acme/x100"}, "rationale": "r"},
             {"kind": "redomain", "target_uid": b, "payload": {"domain": "zeta/x200"}, "rationale": "r"},
         ])
@@ -1235,8 +1241,8 @@ def test_api_summary_leaves_the_field_empty_when_the_batch_disagrees(client):
 def test_api_summary_ledger_ignores_what_is_already_decided(client):
     """The ledger is what is STILL on the table -- an applied row is history."""
     uid = _new_memory(client)
-    with db.connect() as conn:
-        staged = db.stage_optimization(conn, "half done", [
+    with connection.connect() as conn:
+        staged = optimizer.stage_optimization(conn, "half done", [
             {"kind": "set_confidence", "target_uid": uid,
              "payload": {"confidence": "confirmed"}, "rationale": "r", "verified": "v"},
         ])
@@ -1257,8 +1263,8 @@ def test_api_summary_rejects_an_unknown_run(client):
 def test_api_apply_all_takes_an_explicit_selection(client):
     """The level-2 footer acts on what is ticked, not on the whole kind."""
     uid = _new_memory(client)
-    with db.connect() as conn:
-        staged = db.stage_optimization(conn, "pick some", [
+    with connection.connect() as conn:
+        staged = optimizer.stage_optimization(conn, "pick some", [
             {"kind": "retag", "target_uid": uid, "payload": {"tags": "a"}, "rationale": "r", "verified": "v"},
             {"kind": "retag", "target_uid": uid, "payload": {"tags": "b"}, "rationale": "r", "verified": "v"},
             {"kind": "retag", "target_uid": uid, "payload": {"tags": "c"}, "rationale": "r", "verified": "v"},
@@ -1444,8 +1450,8 @@ def test_a_bulk_decision_rejects_a_malformed_scope(client, body):
 
 def test_api_reject_all_by_selection_and_by_kind(client):
     uid = _new_memory(client)
-    with db.connect() as conn:
-        staged = db.stage_optimization(conn, "reject some", [
+    with connection.connect() as conn:
+        staged = optimizer.stage_optimization(conn, "reject some", [
             {"kind": "retag", "target_uid": uid, "payload": {"tags": "a"}, "rationale": "r"},
             {"kind": "retag", "target_uid": uid, "payload": {"tags": "b"}, "rationale": "r"},
             {"kind": "retitle", "target_uid": uid, "payload": {"title": "Queue drain"}, "rationale": "r"},
@@ -1541,8 +1547,8 @@ def test_a_peer_card_carries_the_name_the_memory_goes_by(client):
     keep = _new_memory(client, content="the body of the one that stays")
     drop = _new_memory(client, content="the body of the one that goes")
     # merge names its pair in the payload and carries no target_uid
-    with db.connect() as conn:
-        staged = db.stage_optimization(conn, "peer names", [
+    with connection.connect() as conn:
+        staged = optimizer.stage_optimization(conn, "peer names", [
             {"kind": "merge", "payload": {"keep_uid": keep, "drop_uid": drop},
              "rationale": "r", "verified": "v"},
         ])
@@ -1575,7 +1581,7 @@ def test_a_preview_shows_prose_not_the_markup_around_it(body, shown):
     Flattened BEFORE the cut, so a 160-character snippet cannot sever a
     `**` and leave the stray half on the screen.
     """
-    assert admin.shared._plain(body) == shown
+    assert shared._plain(body) == shown
 
 
 def test_a_peer_snippet_is_flattened_before_it_is_cut(client):
@@ -1596,8 +1602,8 @@ def test_a_peer_with_no_title_still_carries_the_field(client):
     `untitled` defect Health counts is exactly this row -- so a preview
     cannot assume a name is there.
     """
-    with db.connect() as conn:
-        uid = db.insert_memory(conn, type="note", title="",
+    with connection.connect() as conn:
+        uid = memories.insert_memory(conn, type="note", title="",
                                content="a memory nobody named")
     staged = _stage_via_db(uid, "retag", {"tags": "x"})
     s = client.get(
@@ -1626,8 +1632,8 @@ def test_a_suggestion_resolves_the_wikilinks_its_prose_carries(client):
     peer = _new_memory(client, domain="acme/x100")
     other = _new_memory(client)
     uid = _new_memory(client, content=f"the body cites [[{peer}]] already")
-    with db.connect() as conn:
-        staged = db.stage_optimization(conn, "links", [
+    with connection.connect() as conn:
+        staged = optimizer.stage_optimization(conn, "links", [
             {"kind": "reword", "target_uid": uid,
              "payload": {"new_content": f"shorter, still citing [[{other}]]"},
              "rationale": f"the reasoning behind it is in [[{peer}]]"},
@@ -1723,7 +1729,7 @@ def test_every_staged_kind_reaches_a_renderer():
     optCard falls back to printing the raw payload, so the run lands, the
     Apply button works, and the reviewer decides against a JSON dump.
     """
-    assert set(db.SUGGESTION_KINDS) == _diff_kinds() | RELATIONAL
+    assert set(optimizer.SUGGESTION_KINDS) == _diff_kinds() | RELATIONAL
 
 
 def test_every_diff_kind_is_claimed_by_exactly_one_pane():
@@ -1759,7 +1765,7 @@ def test_every_kind_has_a_sentence_in_every_catalog():
     missing what the other has.
     """
     for loc, strings in _catalogs().items():
-        for kind in db.SUGGESTION_KINDS:
+        for kind in optimizer.SUGGESTION_KINDS:
             assert f"op.what.{kind}" in strings, f"{loc} has no sentence for {kind}"
         assert "op.what.other" in strings
 
@@ -1773,7 +1779,7 @@ def test_every_kind_has_a_name_in_every_catalog():
     remove.
     """
     for loc, strings in _catalogs().items():
-        for kind in db.SUGGESTION_KINDS:
+        for kind in optimizer.SUGGESTION_KINDS:
             assert f"kind.{kind}" in strings, f"{loc} has no name for {kind}"
         assert "kind.raw" in strings, f"{loc} cannot show the stored spelling"
 
@@ -1805,14 +1811,14 @@ def test_the_distilled_memory_is_born_with_its_name(conn):
     listed by the opening line of its body for good.
     """
     a = _mk(conn, content="checkpoint one", type="checkpoint", domain="proj-1042")
-    run = db.stage_optimization(conn, "distill", [
+    run = optimizer.stage_optimization(conn, "distill", [
         {"kind": "distill", "verified": "checked repo", "payload": {
             "source_uids": [a], "new_type": "note",
             "new_content": "the retry loop lacked backoff",
             "title": "Why the retry loop stalled",
         }},
     ])
-    sug = db.get_optimization_suggestions(conn, run["run_id"])[0]
-    db.apply_suggestion(conn, sug["id"])
-    new_uid = json.loads(db.get_suggestion(conn, sug["id"])["prev_state"])["new_uid"]
-    assert db.get_memory(conn, new_uid)["title"] == "Why the retry loop stalled"
+    sug = optimizer.get_optimization_suggestions(conn, run["run_id"])[0]
+    optimizer.apply_suggestion(conn, sug["id"])
+    new_uid = json.loads(optimizer.get_suggestion(conn, sug["id"])["prev_state"])["new_uid"]
+    assert memories.get_memory(conn, new_uid)["title"] == "Why the retry loop stalled"

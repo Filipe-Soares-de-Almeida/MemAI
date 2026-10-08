@@ -125,7 +125,7 @@ def test_vendored_and_generated_paths_are_skipped():
     assert not lint.checked(ROOT / "src" / "memai" / "webui" / "public" / "x.js")
     assert not lint.checked(ROOT / "src" / "memai" / "webui" / "dist" / "x.js")
     assert not lint.checked(ROOT / "CHANGELOG.md")
-    assert lint.checked(ROOT / "src" / "memai" / "db.py")
+    assert lint.checked(ROOT / "src" / "memai" / "store" / "connection.py")
 
 
 def test_the_hook_reports_on_stderr_with_exit_2(tmp_path):

@@ -8,7 +8,8 @@ from pathlib import Path
 from starlette.responses import FileResponse, JSONResponse, Response
 from starlette.routing import Route
 
-from memai import __version__, db, update
+from memai import __version__, update
+from memai.store import paths
 
 # The dashboard as served: the Vite build output, not its sources. `npm run
 # build` writes it; an install that skipped that step has no directory here.
@@ -40,8 +41,8 @@ async def ping(request):
         "app": "memai",
         "version": __version__,
         "pid": os.getpid(),
-        "project": db.active_project(),
-        "db": str(db.default_db_path()),
+        "project": paths.active_project(),
+        "db": str(paths.default_db_path()),
         # install-guard.py compares it with its own checkout before refusing
         "root": str(update.checkout_root() or ""),
     })

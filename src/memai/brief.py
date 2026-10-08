@@ -15,7 +15,8 @@ that was empty.
 
 from __future__ import annotations
 
-from memai import db, pending
+from memai import pending
+from memai.store import domains, memories, search
 
 # What a warm-up may cost: paid once per session, small next to a context window.
 DEFAULT_BUDGET = 2400
@@ -74,8 +75,8 @@ CALL_TO_ACTION = (
 
 def call_to_action(conn) -> str:
     """The instruction, with the casing line the store's policy calls for."""
-    mode = db.get_domain_case(conn)
-    return CALL_TO_ACTION.format(casing=CASING.get(mode, CASING[db.DOMAIN_CASE_DEFAULT]))
+    mode = domains.get_domain_case(conn)
+    return CALL_TO_ACTION.format(casing=CASING.get(mode, CASING[domains.DOMAIN_CASE_DEFAULT]))
 
 
 def _snip(text: str, limit: int = SNIPPET) -> str:
@@ -93,7 +94,7 @@ def pending_line(conn, domain: str) -> str:
     found = pending.counts(conn, domain)
     if not found:
         return ""
-    ask = WORK_TASKS_FIRST if found[0]["type"] == db.TASK_TYPE else WORK_EACH
+    ask = WORK_TASKS_FIRST if found[0]["type"] == memories.TASK_TYPE else WORK_EACH
     return f"Pending in {domain or 'this project'}: {_said(found)}. {ask}"
 
 
@@ -115,20 +116,20 @@ def session_brief(conn, *, domain: str = "", budget: int = DEFAULT_BUDGET,
 
     `project` is the name of the project `conn` is on, for the opening line.
     """
-    census = db.domain_census(conn, domain)
+    census = domains.domain_census(conn, domain)
     if not census["total"]:
         return ""
 
     scope = domain or (f"project '{project}'" if project else "the whole store")
     parts = [f"MemAI long-term memory: {census['total']} memories in {scope}."]
 
-    tree = [d for d in db.list_domains(conn) if not domain or db.in_domain(d["domain"], domain)]
+    tree = [d for d in domains.list_domains(conn) if not domain or domains.in_domain(d["domain"], domain)]
     if tree:
         named = ", ".join(f"{d['domain']} ({d['subtree']})" for d in tree[:DOMAINS])
         more = f", +{len(tree) - DOMAINS} more" if len(tree) > DOMAINS else ""
         parts.append(f"Active domains, most recent first: {named}{more}.")
 
-    checkpoint = db.latest_by_type(conn, "checkpoint", domain=domain, exclude_contradicted=True)
+    checkpoint = search.latest_by_type(conn, "checkpoint", domain=domain, exclude_contradicted=True)
     if checkpoint is not None:
         where = f" [{checkpoint['domain']}]" if checkpoint["domain"] else ""
         parts.append(f"Latest checkpoint{where} {checkpoint['created_at'][:16]} "

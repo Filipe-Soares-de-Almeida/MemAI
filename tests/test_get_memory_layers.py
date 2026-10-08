@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import pytest
 
-from memai import budget, db, guard, server
+from memai import budget, guard, server
+from memai.store import connection, memories
 
 
 @pytest.fixture
@@ -20,8 +21,8 @@ def _task(**over) -> str:
 
 
 def _note(content: str = "v0") -> str:
-    with db.connect() as conn:
-        return db.insert_memory(conn, type="note", content=content, title="Parser fact",
+    with connection.connect() as conn:
+        return memories.insert_memory(conn, type="note", content=content, title="Parser fact",
                                 domain="acme/parser")
 
 
@@ -40,9 +41,9 @@ def test_get_memory_on_a_task_is_a_head_without_items(store):
 
 def test_edit_history_is_a_count_and_a_separate_page(store):
     uid = _note()
-    with db.connect() as conn:
+    with connection.connect() as conn:
         for n in range(1, 4):
-            db.update_memory_content(conn, uid, f"v{n}", note=f"edit {n}")
+            memories.update_memory_content(conn, uid, f"v{n}", note=f"edit {n}")
     record = server.get_memory(uid)
     assert record["edit_count"] == 3 and "edit_history" not in record
     assert record["next"]["edits"] == f"get_memory(uid='{uid}', edits_offset=0)"
@@ -53,8 +54,8 @@ def test_edit_history_is_a_count_and_a_separate_page(store):
 
 def test_a_long_edit_body_is_cut_and_says_so(store):
     uid = _note()
-    with db.connect() as conn:
-        db.update_memory_content(conn, uid, "y" * 50_000, note="big")
+    with connection.connect() as conn:
+        memories.update_memory_content(conn, uid, "y" * 50_000, note="big")
     edit = server.get_memory(uid, edits_offset=0)["records"][0]
     assert edit["new_chars"] == 50_000 and len(edit["new_content"]) < 50_000
     assert edit["truncated"] is True

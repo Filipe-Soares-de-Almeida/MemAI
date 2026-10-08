@@ -46,7 +46,7 @@ import sysconfig
 from pathlib import Path
 from typing import Any
 
-from memai import db
+from memai import lite
 
 DEFAULT_PORT = 8888
 LOOPBACK = "127.0.0.1"
@@ -73,8 +73,8 @@ def _log(message: str) -> None:
 
 
 def home() -> Path:
-    """MEMAI_HOME, created if needed -- db.home() does the mkdir."""
-    return db.home()
+    """MEMAI_HOME, created if needed -- lite.home() does the mkdir."""
+    return lite.home()
 
 
 def registry_path() -> Path:

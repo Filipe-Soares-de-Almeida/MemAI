@@ -7,10 +7,9 @@ from typing import cast
 from starlette.routing import Route
 
 from memai import admin_schemas as schema
-from memai import db
 from memai.admin.api import api
 from memai.admin.shared import _int_param, _paths, _scope_echo, _snip, _subtree_param
-from memai.store import queries
+from memai.store import connection, queries
 
 # The graph gets the whole scope (layout in a worker, one instanced GPU pass). `limit` cuts most-
 # connected first; the ceiling only keeps a hand-typed number from straining SQLite.
@@ -23,7 +22,7 @@ def graph(request, payload) -> schema.Graph:
     domain = qp.get("domain", "")
     type_ = qp.get("type", "")
     limit = _int_param(request, "limit", 0, 0, GRAPH_LIMIT_MAX)
-    with db.connect() as conn:
+    with connection.connect() as conn:
         scope = _scope_echo(conn, domain)
         total, rows, edges = queries.graph_rows(
             conn, domain=domain, subtree=_subtree_param(request), status=status, type=type_,

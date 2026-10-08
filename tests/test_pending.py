@@ -8,7 +8,8 @@ from __future__ import annotations
 
 import pytest
 
-from memai import db, pending, server, tasks
+from memai import pending, server, tasks
+from memai.store import connection, memories
 
 VOCABULARY = "note, checkpoint, anti_pattern, reasoning, handoff, diagram, task"
 UNKNOWN = f"unknown type 'pitfall'; valid types: {VOCABULARY}"
@@ -21,14 +22,14 @@ def store(tmp_path, monkeypatch):
 
 
 def test_type_error_lists_the_vocabulary():
-    assert db.type_error("pitfall") == UNKNOWN
+    assert memories.type_error("pitfall") == UNKNOWN
 
 
 def test_type_error_is_none_for_known_and_empty_types():
-    assert db.type_error("") is None
-    for type_ in db.MEMORY_TYPES:
-        assert db.type_error(type_) is None
-    assert db.type_error("Task") == f"unknown type 'Task'; valid types: {VOCABULARY}"
+    assert memories.type_error("") is None
+    for type_ in memories.MEMORY_TYPES:
+        assert memories.type_error(type_) is None
+    assert memories.type_error("Task") == f"unknown type 'Task'; valid types: {VOCABULARY}"
 
 
 @pytest.mark.parametrize("call", [
@@ -56,8 +57,8 @@ DOMAIN = "acme/x100"
 
 def test_existing_handoffs_stay_readable(tmp_path, monkeypatch):
     monkeypatch.setenv("MEMAI_HOME", str(tmp_path))
-    with db.connect() as conn:
-        uid = db.insert_memory(conn, type="handoff", title="Parser handover",
+    with connection.connect() as conn:
+        uid = memories.insert_memory(conn, type="handoff", title="Parser handover",
                                content="The lexer is next.", domain=DOMAIN)
         assert pending.counts(conn, DOMAIN) == [{"type": "handoff", "count": 1}]
     assert server.get_memory(uid)["type"] == "handoff"
@@ -99,8 +100,8 @@ def seeded(store):
         why_wrong="It stalls the pipeline.", instead="Flush per line.", domain=DOMAIN)["uid"]
     server.set_confidence(bad, "contradicted")
     uids["ap_bad"] = bad
-    with db.connect() as conn:
-        uids["handoff"] = db.insert_memory(
+    with connection.connect() as conn:
+        uids["handoff"] = memories.insert_memory(
             conn, type="handoff", title="Parser handover",
             content="The lexer is next.", domain=DOMAIN)
     for n in range(3):
@@ -115,7 +116,7 @@ FULL = [{"type": "task", "count": 1}, {"type": "anti_pattern", "count": 1},
 
 
 def test_counts_follow_the_category_order_and_skip_empty_ones(seeded):
-    with db.connect() as conn:
+    with connection.connect() as conn:
         assert pending.counts(conn) == FULL
         conn.execute("UPDATE memories SET status = 'archived' WHERE uid = ?",
                      (seeded["handoff"],))
@@ -124,14 +125,14 @@ def test_counts_follow_the_category_order_and_skip_empty_ones(seeded):
 
 
 def test_counts_are_scoped(seeded):
-    with db.connect() as conn:
+    with connection.connect() as conn:
         assert pending.counts(conn, "other") == []
         assert pending.counts(conn, "acme") == FULL
 
 
 def test_task_headers_carry_progress_and_doing(seeded):
     server.task_item(seeded["open"], "i1", state="doing")
-    with db.connect() as conn:
+    with connection.connect() as conn:
         result = pending.headers(conn, "", "task")
     assert result["type"] == "task" and result["total"] == 1
     item = result["items"][0]
@@ -143,15 +144,15 @@ def test_task_headers_carry_progress_and_doing(seeded):
 def test_tasks_are_ordered_by_their_latest_item_update(store):
     older = _task("Older task")
     newer = _task("Newer task")
-    with db.connect() as conn:
+    with connection.connect() as conn:
         assert [i["uid"] for i in pending.headers(conn, "", "task")["items"]] == [newer, older]
     server.task_item(older, "i1", state="doing")
-    with db.connect() as conn:
+    with connection.connect() as conn:
         assert [i["uid"] for i in pending.headers(conn, "", "task")["items"]] == [older, newer]
 
 
 def test_headers_exclude_what_is_not_pending(seeded):
-    with db.connect() as conn:
+    with connection.connect() as conn:
         assert [i["uid"] for i in pending.headers(conn, "", "anti_pattern")["items"]] == [
             seeded["ap_good"]]
         assert [i["uid"] for i in pending.headers(conn, "", "task")["items"]] == [
@@ -161,7 +162,7 @@ def test_headers_exclude_what_is_not_pending(seeded):
 def test_headers_page(store):
     for n in range(12):
         server.note(title=f"Parser fact {n}", content=f"Fact number {n}.", domain=DOMAIN)
-    with db.connect() as conn:
+    with connection.connect() as conn:
         first = pending.headers(conn, "", "note")
         assert first["total"] == 12 and len(first["items"]) == 10
         assert first["next_offset"] == 10
@@ -174,12 +175,12 @@ def test_headers_page(store):
 def test_headers_are_newest_first(store):
     uids = [server.note(title=f"Parser fact {n}", content=f"Fact {n}.",
                         domain=DOMAIN)["uid"] for n in range(3)]
-    with db.connect() as conn:
+    with connection.connect() as conn:
         assert [i["uid"] for i in pending.headers(conn, "", "note")["items"]] == uids[::-1]
 
 
 def test_headers_have_no_bodies(seeded):
-    with db.connect() as conn:
+    with connection.connect() as conn:
         for type_ in pending.CATEGORIES:
             for item in pending.headers(conn, "", type_)["items"]:
                 assert "content" not in item
@@ -198,8 +199,8 @@ def test_pending_tool_with_a_type_lists_headers(seeded):
 
 def test_pending_tool_counts_what_it_returns_as_read(seeded):
     server.must_read(type="handoff")
-    with db.connect() as conn:
-        usage = db.usage_for(conn, [seeded["handoff"], seeded["ap_good"]])
+    with connection.connect() as conn:
+        usage = memories.usage_for(conn, [seeded["handoff"], seeded["ap_good"]])
     assert usage[seeded["handoff"]]["recalls"] == 1
     assert seeded["ap_good"] not in usage
 
@@ -294,7 +295,7 @@ def _raw_archive(conn, uid: str) -> None:
 
 def test_a_task_archived_without_syncing_its_state_is_not_counted(store):
     uid = _task("Ship the parser")
-    with db.connect() as conn:
+    with connection.connect() as conn:
         assert pending.counts(conn, DOMAIN) == [{"type": "task", "count": 1}]
         _raw_archive(conn, uid)
         assert conn.execute("SELECT state FROM tasks WHERE memory_uid = ?",
@@ -311,7 +312,7 @@ def _pier(conn, domain: str, also: str = "") -> str:
 
 
 def test_open_task_uids_resolve_each_domain_like_pending(store):
-    with db.connect() as conn:
+    with connection.connect() as conn:
         harbor = _pier(conn, "acme/harbor/pier")
         docks = _pier(conn, "acme/docks")
         _pier(conn, "zeta/other")
@@ -322,14 +323,14 @@ def test_open_task_uids_resolve_each_domain_like_pending(store):
 
 
 def test_a_task_in_two_listed_domains_counts_once(store):
-    with db.connect() as conn:
+    with connection.connect() as conn:
         uid = _pier(conn, "acme/harbor", also="acme/docks")
         assert pending.open_task_uids(conn, ["acme/docks"]) == [uid]
         assert pending.open_task_uids(conn, ["acme/harbor", "acme/docks", "acme"]) == [uid]
 
 
 def test_a_closed_task_and_a_blank_domain_are_not_counted(store):
-    with db.connect() as conn:
+    with connection.connect() as conn:
         done = _pier(conn, "acme/harbor")
         tasks.set_item_state(conn, done, "i1", "done")
         _pier(conn, "acme/docks")
@@ -343,7 +344,7 @@ def test_a_closed_task_and_a_blank_domain_are_not_counted(store):
 def test_a_task_cross_listed_into_a_domain_is_counted_there(store):
     uid = server.task(title="Repair the pier", goal="The pier holds", items="replace the planks",
                       domain="acme/harbor", also="acme/docks")["uid"]
-    with db.connect() as conn:
+    with connection.connect() as conn:
         assert pending.counts(conn, "acme/docks") == [{"type": "task", "count": 1}]
         assert [i["uid"] for i in pending.headers(conn, "acme/docks", "task")["items"]] == [uid]
         assert pending.counts(conn, "acme/elsewhere") == []
@@ -351,7 +352,7 @@ def test_a_task_cross_listed_into_a_domain_is_counted_there(store):
 
 def test_an_archived_diagram_is_not_counted(store):
     uid = _diagram()
-    with db.connect() as conn:
+    with connection.connect() as conn:
         assert pending.counts(conn, DOMAIN) == [{"type": "diagram", "count": 1}]
         conn.execute("UPDATE memories SET status = 'archived' WHERE uid = ?", (uid,))
         assert pending.counts(conn, DOMAIN) == []
@@ -380,14 +381,14 @@ def test_a_domain_that_normalizes_to_nothing_is_the_whole_project(seeded, domain
 
 
 def test_open_task_uids_skip_a_domain_that_normalizes_to_nothing(store):
-    with db.connect() as conn:
+    with connection.connect() as conn:
         _pier(conn, "acme/harbor")
         assert pending.open_task_uids(conn, ["/", " / "]) == []
 
 
 def test_list_by_domain_lists_a_task_memory_that_has_no_tasks_row(store):
-    with db.connect() as conn:
-        orphan = db.insert_memory(conn, type="task", title="Orphaned task",
+    with connection.connect() as conn:
+        orphan = memories.insert_memory(conn, type="task", title="Orphaned task",
                                   content="GOAL: nothing", domain=DOMAIN)
     good = _task("Ship the parser")
     found = {r["uid"]: r for r in server.list_by_domain(DOMAIN, type="task")["results"]}

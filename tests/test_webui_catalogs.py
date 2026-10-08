@@ -9,7 +9,8 @@ from pathlib import Path
 
 import pytest
 
-from memai import contract, db
+from memai import contract
+from memai.store import memories
 
 WEBUI = Path(__file__).resolve().parents[1] / "src" / "memai" / "webui"
 LOCALES = ("en", "pt-BR")
@@ -48,7 +49,7 @@ def test_every_key_the_dashboard_asks_for_exists(code):
 @pytest.mark.parametrize("code", LOCALES)
 def test_every_memory_type_has_a_label(code):
     strings = _catalog(code)
-    missing = [tp for tp in db.MEMORY_TYPES if f"type.{tp}" not in strings]
+    missing = [tp for tp in memories.MEMORY_TYPES if f"type.{tp}" not in strings]
     assert not missing, f"{code} lacks a label for {missing}"
 
 

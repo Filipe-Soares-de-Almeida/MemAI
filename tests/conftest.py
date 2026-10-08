@@ -10,7 +10,8 @@ from pathlib import Path
 
 import pytest
 
-from memai import db, sections, update
+from memai import sections, update
+from memai.store import memories
 
 
 @pytest.fixture(autouse=True)
@@ -51,7 +52,7 @@ def unmigrated(conn) -> None:
     useless for a test that needs the other state.
     """
     type_ = next(iter(sections.SECTION_SPEC))
-    uid = db.insert_memory(conn, type=type_, domain="acme",
+    uid = memories.insert_memory(conn, type=type_, domain="acme",
                            content=shaped(type_, "a body from before the spec"))
     conn.execute("DELETE FROM memory_sections WHERE memory_uid = ?", (uid,))
     conn.execute("DELETE FROM section_migration WHERE memory_uid = ?", (uid,))

@@ -116,7 +116,8 @@ def _session_start(args, payload) -> None:
     `--budget` governs the brief; the update note is outside it, the way the
     warden's ask is outside what `stop` says about the store.
     """
-    from memai import brief, db, update
+    from memai import brief, update
+    from memai.store import connection, domains, paths
 
     # Before the brief, never at its expense: `began` lets a later check spot an install made
     # mid-session, and a warden state left by an ended session is nobody else's to clean.
@@ -129,11 +130,11 @@ def _session_start(args, payload) -> None:
     # the end of a turn, where nobody waits.
     known = update.refresh(unseen_only=True)
     release = update.notice(known)
-    project = db.active_project()
-    with db.connect() as conn:
+    project = paths.active_project()
+    with connection.connect() as conn:
         text = brief.session_brief(conn, domain=args.domain, budget=args.budget,
                                    project=project)
-        total = db.domain_census(conn, args.domain)["total"]
+        total = domains.domain_census(conn, args.domain)["total"]
     system = []
     if text:
         system.append(f"MemAI: brief loaded ({total} memories in "
@@ -172,9 +173,9 @@ def _checkpoint_nudge(args) -> str:
     something was written in the last stretch, the session already did the
     thing being asked for, and it returns "".
     """
-    from memai import db
+    from memai.store import connection
 
-    with db.connect() as conn:
+    with connection.connect() as conn:
         if _wrote_recently(conn, args.quiet_minutes):
             return ""
         empty = not conn.execute("SELECT 1 FROM memories LIMIT 1").fetchone()
@@ -217,16 +218,17 @@ def _warden_ask(args, payload) -> str:
     written cancels it: a request the interval cannot see is a request that
     repeats every turn, which is the noise this whole mechanism dies of.
     """
-    from memai import db
+    from memai.store import connection
+    from memai.store import settings as store_settings
 
     session_id = payload.get("session_id", "")
-    with db.connect() as conn:
-        if not db.get_warden_enabled(conn):
+    with connection.connect() as conn:
+        if not store_settings.get_warden_enabled(conn):
             return ""
         # The flag is an override for one run; the store holds the standing
         # answer, which is what the dashboard writes.
         minutes = (args.warden_minutes if args.warden_minutes is not None
-                   else db.get_warden_minutes(conn))
+                   else store_settings.get_warden_minutes(conn))
     if not warden.due(session_id, minutes):
         return ""
     if not _warden_launchable(args, session_id):
@@ -249,7 +251,9 @@ def _task_ask(args, payload) -> str:
     store it cannot read.
     """
     try:
-        from memai import db, pending
+        from memai import pending
+        from memai.store import connection
+        from memai.store import settings as store_settings
 
         session_id = payload.get("session_id", "")
         if not warden.safe_id(session_id):
@@ -257,11 +261,11 @@ def _task_ask(args, payload) -> str:
         named = warden.read(session_id).get("domains")
         if not isinstance(named, list) or not named:
             return ""
-        with db.connect() as conn:
-            if not db.get_task_ask_enabled(conn):
+        with connection.connect() as conn:
+            if not store_settings.get_task_ask_enabled(conn):
                 return ""
             minutes = (args.task_minutes if args.task_minutes is not None
-                       else db.get_task_ask_minutes(conn))
+                       else store_settings.get_task_ask_minutes(conn))
             if not warden.task_due(session_id, minutes):
                 return ""
             open_tasks = len(pending.open_task_uids(conn, named))
@@ -368,15 +372,15 @@ def _statusline(args, payload) -> None:
 
     An empty store -- or an empty `--domain` scope -- emits no line.
     """
-    from memai import db
+    from memai.store import connection, domains, search
 
-    with db.connect() as conn:
-        census = db.domain_census(conn, args.domain)
+    with connection.connect() as conn:
+        census = domains.domain_census(conn, args.domain)
         if not census["total"]:
             return
-        tree = [d for d in db.list_domains(conn)
-                if not args.domain or db.in_domain(d["domain"], args.domain)]
-        checkpoint = db.latest_by_type(conn, "checkpoint", domain=args.domain,
+        tree = [d for d in domains.list_domains(conn)
+                if not args.domain or domains.in_domain(d["domain"], args.domain)]
+        checkpoint = search.latest_by_type(conn, "checkpoint", domain=args.domain,
                                        exclude_contradicted=True)
     # Ranked on memories filed or cross-listed on the path itself, so an implicit parent never
     # outranks its child; list_domains is newest first, so max() keeps the newest tie.
@@ -420,9 +424,9 @@ def _domain_of(uid: str) -> str:
     A read-only connection with a short timeout and no migration: opening the
     store the usual way writes, and this runs before every task call.
     """
-    from memai import db
+    from memai.store import paths
 
-    conn = sqlite3.connect(db.default_db_path().as_uri() + "?mode=ro", uri=True,
+    conn = sqlite3.connect(paths.default_db_path().as_uri() + "?mode=ro", uri=True,
                            timeout=1)
     try:
         row = conn.execute("SELECT domain FROM memories WHERE uid = ?", (uid,)).fetchone()
@@ -630,7 +634,7 @@ def main(argv: list[str] | None = None) -> int:
 
     import argparse
 
-    from memai import brief, db
+    from memai import brief, lite
 
     parser = argparse.ArgumentParser(
         prog="memai-hook",
@@ -655,12 +659,12 @@ def main(argv: list[str] | None = None) -> int:
                         help="how long a session goes before the warden subagent "
                              "is asked for again (stop only); overrides the "
                              "interval the dashboard writes, which defaults to "
-                             f"{db.WARDEN_MINUTES_DEFAULT}")
+                             f"{lite.WARDEN_MINUTES_DEFAULT}")
     parser.add_argument("--task-minutes", type=int, default=None,
                         help="how long a session goes before the open tasks are "
                              "asked about again (stop only); overrides the "
                              "interval the dashboard writes, which defaults to "
-                             f"{db.TASK_ASK_MINUTES_DEFAULT}")
+                             f"{lite.TASK_ASK_MINUTES_DEFAULT}")
     parser.add_argument("--settings", default="",
                         help="install into this settings file instead of the user's; "
                              "memai maintains the user's settings and checks nothing "

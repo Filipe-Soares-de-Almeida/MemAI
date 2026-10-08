@@ -16,7 +16,8 @@ from pathlib import Path
 import pytest
 from starlette.testclient import TestClient
 
-from memai import admin, db
+from memai.admin.app import app as admin_app
+from memai.store import connection, renders, settings
 
 DAY = 86400
 
@@ -29,7 +30,7 @@ def home(tmp_path, monkeypatch):
 
 @pytest.fixture
 def client(home):
-    with TestClient(admin.app) as c:
+    with TestClient(admin_app) as c:
         yield c
 
 
@@ -69,12 +70,12 @@ def aged(path, days: float) -> None:
     ("1d", {"fresh.svg"}),
 ])
 def test_retention_keeps_what_is_inside_the_window(home, mode, survivors):
-    folder = db.renders_dir()
+    folder = renders.renders_dir()
     for name, days in [("fresh.svg", 0.5), ("twoday.svg", 2),
                        ("tenday.svg", 10), ("old.svg", 60),
                        ("shell.html", 40)]:
         aged(folder / name, days)
-    db.prune_renders(mode)
+    renders.prune_renders(mode)
     assert {p.name for p in folder.iterdir() if p.is_file()} == survivors
 
 
@@ -85,13 +86,13 @@ def test_the_sweep_leaves_alone_what_it_did_not_create(home):
     alone would take the backups with it the first time someone pointed
     MEMAI_HOME at a directory that had some.
     """
-    folder = db.renders_dir()
+    folder = renders.renders_dir()
     aged(folder / "render.svg", 90)
     aged(folder / "notes.txt", 90)
     (folder / "sub").mkdir()
     aged(folder / "sub" / "deep.svg", 90)
 
-    db.prune_renders("1d")
+    renders.prune_renders("1d")
 
     assert not (folder / "render.svg").exists()
     assert (folder / "notes.txt").exists()
@@ -102,37 +103,37 @@ def test_the_sweep_never_deletes_the_render_being_written(home):
     """Whatever the retention window, the file this call just produced has
     to survive it -- otherwise a 1-day setting plus a clock skew hands the
     caller a path to a file that is already gone."""
-    folder = db.renders_dir()
+    folder = renders.renders_dir()
     aged(folder / "current.svg", 99)
-    db.prune_renders("1d", keep=folder / "current.svg")
+    renders.prune_renders("1d", keep=folder / "current.svg")
     assert (folder / "current.svg").exists()
 
 
 def test_prune_all_ignores_age(home):
-    folder = db.renders_dir()
+    folder = renders.renders_dir()
     aged(folder / "fresh.svg", 0)
     aged(folder / "old.svg", 99)
-    swept = db.prune_renders_all()
+    swept = renders.prune_renders_all()
     assert swept["pruned"] == 2 and swept["mode"] == "all"
     assert not any(p.suffix == ".svg" for p in folder.iterdir())
 
 
 def test_usage_counts_only_renders(home):
-    folder = db.renders_dir()
+    folder = renders.renders_dir()
     aged(folder / "a.svg", 1)
     aged(folder / "b.html", 1)
     aged(folder / "c.txt", 1)
-    usage = db.renders_usage()
+    usage = renders.renders_usage()
     assert usage["files"] == 2 and usage["bytes"] > 0
 
 
 def test_retention_setting_roundtrips(home):
-    with db.connect() as conn:
-        assert db.get_svg_retention(conn) == db.SVG_RETENTION_DEFAULT
-        assert db.set_svg_retention(conn, "30d") == "30d"
-        assert db.get_svg_retention(conn) == "30d"
+    with connection.connect() as conn:
+        assert settings.get_svg_retention(conn) == settings.SVG_RETENTION_DEFAULT
+        assert settings.set_svg_retention(conn, "30d") == "30d"
+        assert settings.get_svg_retention(conn) == "30d"
         with pytest.raises(ValueError):
-            db.set_svg_retention(conn, "forever")
+            settings.set_svg_retention(conn, "forever")
 
 
 # ── the MCP wire ────────────────────────────────────────────────────────
@@ -143,7 +144,7 @@ def test_get_diagram_writes_a_file_and_returns_a_thin_payload(mcp, fmt, suffix):
     uid = mcp.diagram(title="Nightly export", nodes=NODES, edges=EDGES)["uid"]
     out = mcp.get_diagram(uid, format=fmt)
 
-    written = db.renders_dir() / f"diagram-{uid}{suffix}"
+    written = renders.renders_dir() / f"diagram-{uid}{suffix}"
     assert out["path"] == str(written)
     assert written.is_file()
     assert out["bytes"] == len(written.read_text(encoding="utf-8").encode())
@@ -163,11 +164,11 @@ def test_get_diagram_writes_a_file_and_returns_a_thin_payload(mcp, fmt, suffix):
 
 def test_get_diagram_reports_what_it_swept(mcp):
     uid = mcp.diagram(title="Nightly export", nodes=NODES, edges=EDGES)["uid"]
-    aged(db.renders_dir() / "stale.svg", 40)
+    aged(renders.renders_dir() / "stale.svg", 40)
     out = mcp.get_diagram(uid, format="svg")
-    assert out["retention"] == db.SVG_RETENTION_DEFAULT
+    assert out["retention"] == settings.SVG_RETENTION_DEFAULT
     assert out["pruned"] == 1
-    assert not (db.renders_dir() / "stale.svg").exists()
+    assert not (renders.renders_dir() / "stale.svg").exists()
 
 
 def test_get_diagram_rejects_an_unknown_format(mcp):
@@ -293,8 +294,8 @@ def test_both_render_files_are_swept_by_retention(mcp, home):
     out = mcp.get_diagram(uid, format="svg-interactive")
     for path in (Path(out["path"]), Path(out["inline_path"])):
         os.utime(path, (time.time() - 40 * DAY,) * 2)
-    assert db.prune_renders("7d")["pruned"] == 2
-    assert db.renders_usage()["files"] == 0
+    assert renders.prune_renders("7d")["pruned"] == 2
+    assert renders.renders_usage()["files"] == 0
 
 
 def test_interactive_and_static_draw_the_same_flow(mcp):
@@ -308,24 +309,24 @@ def test_interactive_and_static_draw_the_same_flow(mcp):
 # ── the dashboard ───────────────────────────────────────────────────────
 
 def test_health_reports_render_usage(client, home):
-    aged(db.renders_dir() / "a.svg", 1)
+    aged(renders.renders_dir() / "a.svg", 1)
     body = client.get("/api/maintenance/health").json()
     assert body["renders"]["files"] == 1
-    assert body["renders"]["retention"] == db.SVG_RETENTION_DEFAULT
+    assert body["renders"]["retention"] == settings.SVG_RETENTION_DEFAULT
     assert body["renders"]["path"].endswith("renders")
 
 
 def test_prune_endpoint_honours_the_window(client, home):
-    aged(db.renders_dir() / "fresh.svg", 0)
-    aged(db.renders_dir() / "old.svg", 40)
+    aged(renders.renders_dir() / "fresh.svg", 0)
+    aged(renders.renders_dir() / "old.svg", 40)
     body = client.post("/api/maintenance/prune-renders", json={}).json()
     assert body["pruned"] == 1
     assert body["before"]["files"] == 2 and body["after"]["files"] == 1
 
 
 def test_prune_endpoint_can_clear_everything(client, home):
-    aged(db.renders_dir() / "fresh.svg", 0)
-    aged(db.renders_dir() / "old.svg", 40)
+    aged(renders.renders_dir() / "fresh.svg", 0)
+    aged(renders.renders_dir() / "old.svg", 40)
     body = client.post("/api/maintenance/prune-renders",
                        json={"all": True}).json()
     assert body["pruned"] == 2 and body["after"]["files"] == 0

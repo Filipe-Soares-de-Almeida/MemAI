@@ -6,7 +6,8 @@ import re
 import sqlite3
 from pathlib import Path
 
-from memai import contract, db, sections
+from memai import contract, lite, sections
+from memai.store import backups, domains, memories, paths
 
 SNIPPET_LIMIT = 280
 
@@ -69,7 +70,7 @@ def _paths(d: dict) -> dict:
     """
     blob = d.pop("also_domains", "")
     if blob:
-        d["also"] = db.parse_domains(blob)
+        d["also"] = domains.parse_domains(blob)
     return d
 
 
@@ -86,7 +87,7 @@ def _summary(row, limit: int = SNIPPET_LIMIT) -> dict:
 
 
 def _peer_card(conn: sqlite3.Connection, uid: str) -> dict | None:
-    row = db.get_memory(conn, uid)
+    row = memories.get_memory(conn, uid)
     if row is None:
         return None
     # `title` is what a peer is called; views name it by that, with the body as fallback and
@@ -127,8 +128,8 @@ def _scope_echo(conn: sqlite3.Connection, domain: str) -> dict:
     """
     if not domain:
         return {}
-    scopes = db.resolve_domain_scopes(conn, domain)
-    return {} if scopes == [db.normalize_domain(domain)] else {"domain_scope": scopes}
+    scopes = domains.resolve_domain_scopes(conn, domain)
+    return {} if scopes == [lite.normalize_domain(domain)] else {"domain_scope": scopes}
 
 
 def _file_size(path: Path) -> int:
@@ -141,8 +142,8 @@ def _file_size(path: Path) -> int:
 def _backup(kind: str = "") -> Path:
     """A fresh backup of the active project, in its own folder and named after
     it (db.backups_dir, db.backup_name)."""
-    project = db.active_project()
-    dest = db.backups_dir(project) / db.backup_name(project, kind)
+    project = paths.active_project()
+    dest = backups.backups_dir(project) / backups.backup_name(project, kind)
     if dest.exists():
         raise ValueError(f"backup already exists: {dest.name}")
-    return db.backup_to(dest, project=project)
+    return backups.backup_to(dest, project=project)

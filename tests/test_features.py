@@ -1,65 +1,65 @@
 """Tests for the warm-up / recall / discovery additions and the
 forget-audit and KNN-starvation fixes.
 
-Kept at the db layer, like the rest of the suite -- the MCP tools in
-server.py are thin wrappers that open db.connect() on the real user
+Kept at the store layer, like the rest of the suite -- the MCP tools in
+server.py are thin wrappers that open connection.connect() on the real user
 store, so exercising them directly would touch ~/.memai.
 """
 
 import pytest
 
 from conftest import shaped
-from memai import db
+from memai.store import connection, domains, memories, search
 
 
 @pytest.fixture
 def conn(tmp_path):
-    with db.connect(tmp_path / "test.db") as c:
+    with connection.connect(tmp_path / "test.db") as c:
         yield c
 
 
 def test_list_domains_counts_and_excludes_empty(conn):
-    db.insert_memory(conn, type="note", content="a", domain="d1")
-    db.insert_memory(conn, type="note", content="b", domain="d1")
-    db.insert_memory(conn, type="note", content="c", domain="d2")
-    db.insert_memory(conn, type="note", content="no domain here")  # domain=""
-    counts = {r["domain"]: r["count"] for r in db.list_domains(conn)}
+    memories.insert_memory(conn, type="note", content="a", domain="d1")
+    memories.insert_memory(conn, type="note", content="b", domain="d1")
+    memories.insert_memory(conn, type="note", content="c", domain="d2")
+    memories.insert_memory(conn, type="note", content="no domain here")  # domain=""
+    counts = {r["domain"]: r["count"] for r in domains.list_domains(conn)}
     assert counts == {"d1": 2, "d2": 1}
 
 
 def test_list_domains_excludes_archived(conn):
-    a = db.insert_memory(conn, type="note", content="x", domain="d1")
-    db.insert_memory(conn, type="note", content="y", domain="d1")
-    db.set_status(conn, a, "archived")
-    rows = db.list_domains(conn)
+    a = memories.insert_memory(conn, type="note", content="x", domain="d1")
+    memories.insert_memory(conn, type="note", content="y", domain="d1")
+    memories.set_status(conn, a, "archived")
+    rows = domains.list_domains(conn)
     assert len(rows) == 1
     assert rows[0]["domain"] == "d1"
     assert rows[0]["count"] == 1
 
 
 def test_set_status_with_reason_records_single_audit_edit(conn):
-    uid = db.insert_memory(conn, type="note", content="keep me")
-    assert db.set_status(conn, uid, "archived", note="archived: stale") is True
-    hist = db.get_edit_history(conn, uid)
+    uid = memories.insert_memory(conn, type="note", content="keep me")
+    assert memories.set_status(conn, uid, "archived", note="archived: stale") is True
+    hist = memories.get_edit_history(conn, uid)
     assert len(hist) == 1
     # content is untouched -- the audit entry is a status change, not an edit
     assert hist[0]["prev_content"] == hist[0]["new_content"] == "keep me"
     assert "stale" in hist[0]["note"]
-    row = db.get_memory(conn, uid)
+    row = memories.get_memory(conn, uid)
     assert row["status"] == "archived"
     assert row["content"] == "keep me"
 
 
 def test_set_status_without_reason_leaves_no_edit(conn):
-    uid = db.insert_memory(conn, type="note", content="keep me")
-    assert db.set_status(conn, uid, "archived") is True
-    assert db.get_edit_history(conn, uid) == []
+    uid = memories.insert_memory(conn, type="note", content="keep me")
+    assert memories.set_status(conn, uid, "archived") is True
+    assert memories.get_edit_history(conn, uid) == []
 
 
 def test_search_ranked_type_filter_scopes_to_notes(conn):
     # recall() is search(type='note'); the filter must exclude other types
-    note = db.insert_memory(conn, type="note", content="x100 rule detail")
-    db.insert_memory(conn, type="checkpoint", content=shaped("checkpoint", "x100 checkpoint state"))
-    results = db.search_ranked(conn, "x100", type="note")
+    note = memories.insert_memory(conn, type="note", content="x100 rule detail")
+    memories.insert_memory(conn, type="checkpoint", content=shaped("checkpoint", "x100 checkpoint state"))
+    results = search.search_ranked(conn, "x100", type="note")
     assert [r["uid"] for r in results] == [note]
 

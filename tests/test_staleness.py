@@ -14,12 +14,14 @@ from datetime import date, timedelta
 import pytest
 from starlette.testclient import TestClient
 
-from memai import admin, db, server
+from memai import server
+from memai.admin.app import app as admin_app
+from memai.store import connection, health, memories, search
 
 
 @pytest.fixture
 def conn(tmp_path):
-    with db.connect(tmp_path / "test.db") as c:
+    with connection.connect(tmp_path / "test.db") as c:
         yield c
 
 
@@ -32,7 +34,7 @@ def store(tmp_path, monkeypatch):
 @pytest.fixture
 def client(tmp_path, monkeypatch):
     monkeypatch.setenv("MEMAI_HOME", str(tmp_path))
-    with TestClient(admin.app) as c:
+    with TestClient(admin_app) as c:
         yield c
 
 
@@ -44,24 +46,24 @@ NEXT_YEAR = (date.today() + timedelta(days=365)).isoformat()
 
 @pytest.mark.parametrize("given", ["2026-11-01", "2026-11-01T09:30:00+00:00"])
 def test_a_date_is_kept_as_a_date(given):
-    assert db.normalize_review_after(given) == "2026-11-01"
+    assert health.normalize_review_after(given) == "2026-11-01"
 
 
 def test_a_span_is_resolved_against_today():
     """How the answer actually arrives: a writer knows "recheck in a
     quarter" and does not know today's date without asking."""
-    assert db.normalize_review_after("90d", today="2026-08-06") == "2026-11-04"
-    assert db.normalize_review_after("1 D", today="2026-08-06") == "2026-08-07"
+    assert health.normalize_review_after("90d", today="2026-08-06") == "2026-11-04"
+    assert health.normalize_review_after("1 D", today="2026-08-06") == "2026-08-07"
 
 
 def test_empty_means_never():
-    assert db.normalize_review_after("") == ""
+    assert health.normalize_review_after("") == ""
 
 
 def test_nonsense_is_refused_rather_than_stored(conn):
     """Free text kept in the column would simply never come due."""
     with pytest.raises(ValueError, match="review_after must be"):
-        db.normalize_review_after("sometime soon")
+        health.normalize_review_after("sometime soon")
 
 
 # ------------------------------------------------------------- on a memory
@@ -71,7 +73,7 @@ def test_a_writer_records_both_fields(store):
                       domain="acme/x100", review_after="30d",
                       source_ref="src/acme/x100/export.py")["uid"]
     row = server.get_memory(uid)
-    assert row["review_after"] == db.normalize_review_after("30d")
+    assert row["review_after"] == health.normalize_review_after("30d")
     assert row["source_ref"] == "src/acme/x100/export.py"
 
 
@@ -101,17 +103,17 @@ def test_a_diagram_can_be_dated_too(store):
 # ------------------------------------------------------------- coming due
 
 def test_due_lists_the_overdue_oldest_first(conn):
-    later = db.insert_memory(conn, type="note", content="b", review_after=YESTERDAY)
-    older = db.insert_memory(conn, type="note", content="a", review_after="2020-01-01")
-    db.insert_memory(conn, type="note", content="c", review_after=NEXT_YEAR)
-    db.insert_memory(conn, type="note", content="d")
-    assert [r["uid"] for r in db.due_for_review(conn)] == [older, later]
+    later = memories.insert_memory(conn, type="note", content="b", review_after=YESTERDAY)
+    older = memories.insert_memory(conn, type="note", content="a", review_after="2020-01-01")
+    memories.insert_memory(conn, type="note", content="c", review_after=NEXT_YEAR)
+    memories.insert_memory(conn, type="note", content="d")
+    assert [r["uid"] for r in search.due_for_review(conn)] == [older, later]
 
 
 def test_an_archived_memory_is_not_due(conn):
-    uid = db.insert_memory(conn, type="note", content="a", review_after=YESTERDAY)
-    db.set_status(conn, uid, "archived")
-    assert db.due_for_review(conn) == []
+    uid = memories.insert_memory(conn, type="note", content="a", review_after=YESTERDAY)
+    memories.set_status(conn, uid, "archived")
+    assert search.due_for_review(conn) == []
 
 
 def test_a_warm_up_counts_what_is_overdue_in_the_scope(store):
@@ -160,7 +162,7 @@ def test_the_staged_date_is_resolved_when_it_is_staged(store):
         "kind": "review", "target_uid": uid, "payload": {"review_after": "180d"},
         "rationale": "r", "verified": "v"}])
     staged = server.optimize_status(run["run_id"])["suggestions"][0]
-    assert staged["payload"]["review_after"] == db.normalize_review_after("180d")
+    assert staged["payload"]["review_after"] == health.normalize_review_after("180d")
 
 
 def test_an_unparseable_date_is_rejected_at_staging(store):
@@ -173,17 +175,17 @@ def test_an_unparseable_date_is_rejected_at_staging(store):
 
 
 def test_applying_and_undoing_a_review_restores_the_date(conn):
-    uid = db.insert_memory(conn, type="note", content="x", review_after=YESTERDAY)
-    db.set_review_after(conn, uid, "2030-01-01")
-    assert db.get_memory(conn, uid)["review_after"] == "2030-01-01"
-    db.set_review_after(conn, uid, YESTERDAY)
-    assert db.get_memory(conn, uid)["review_after"] == YESTERDAY
+    uid = memories.insert_memory(conn, type="note", content="x", review_after=YESTERDAY)
+    memories.set_review_after(conn, uid, "2030-01-01")
+    assert memories.get_memory(conn, uid)["review_after"] == "2030-01-01"
+    memories.set_review_after(conn, uid, YESTERDAY)
+    assert memories.get_memory(conn, uid)["review_after"] == YESTERDAY
 
 
 def test_moving_the_date_is_audited_but_not_re_embedded(conn):
-    uid = db.insert_memory(conn, type="note", content="x", review_after=YESTERDAY)
-    db.set_review_after(conn, uid, "2030-01-01")
-    notes = [e["note"] for e in db.get_edit_history(conn, uid)]
+    uid = memories.insert_memory(conn, type="note", content="x", review_after=YESTERDAY)
+    memories.set_review_after(conn, uid, "2030-01-01")
+    notes = [e["note"] for e in memories.get_edit_history(conn, uid)]
     assert any("review_after" in n for n in notes)
 
 
@@ -221,10 +223,10 @@ def test_the_body_and_the_reference_can_move_in_one_call(store):
 
 
 def test_repointing_at_the_same_reference_writes_no_audit_entry(conn):
-    uid = db.insert_memory(conn, type="note", content="x",
+    uid = memories.insert_memory(conn, type="note", content="x",
                            source_ref="src/acme/x100/export.py")
-    assert db.set_source_ref(conn, uid, "src/acme/x100/export.py")
-    assert db.get_edit_history(conn, uid) == []
+    assert memories.set_source_ref(conn, uid, "src/acme/x100/export.py")
+    assert memories.get_edit_history(conn, uid) == []
 
 
 # -------------------------------------------------------------- dashboard
@@ -235,7 +237,7 @@ def test_the_dashboard_can_set_and_clear_the_date(client):
     client.post(f"/api/memories/{uid}/meta", json={"review_after": "90d",
                                                    "source_ref": "src/acme/x100/export.py"})
     body = client.get(f"/api/memories/{uid}").json()
-    assert body["review_after"] == db.normalize_review_after("90d")
+    assert body["review_after"] == health.normalize_review_after("90d")
     assert body["source_ref"] == "src/acme/x100/export.py"
 
     client.post(f"/api/memories/{uid}/meta", json={"review_after": ""})

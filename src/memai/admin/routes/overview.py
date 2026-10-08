@@ -8,10 +8,12 @@ from typing import cast
 from starlette.routing import Route
 
 from memai import admin_schemas as schema
-from memai import db
 from memai.admin.api import api
 from memai.admin.shared import _file_size, _summary
-from memai.store import maintenance, queries
+from memai.store import connection, maintenance, paths, queries, search
+from memai.store import domains as store_domains
+from memai.store import health as store_health
+from memai.store.diagrams import persist as diagram_persist
 
 # How far back the health index compares itself, against a db.health_daily snapshot; there is no
 # delta until a snapshot that old exists.
@@ -49,7 +51,7 @@ def _symptoms(conn: sqlite3.Connection, active: int) -> list[dict]:
             "params": {"status": "active", **params},
         })
     # A broken flow counts in diagrams, not memories: its own denominator, no share of the store.
-    flows = db.diagram_overview(conn)
+    flows = diagram_persist.diagram_overview(conn)
     broken = sum(1 for d in flows if d["issues"])
     out.append({
         "key": "diagrams", "severity": "info", "count": broken,
@@ -66,18 +68,18 @@ def _symptoms(conn: sqlite3.Connection, active: int) -> list[dict]:
 
 
 def overview(request, payload) -> schema.Overview:
-    dbfile = db.default_db_path()
-    with db.connect() as conn:
+    dbfile = paths.default_db_path()
+    with connection.connect() as conn:
         counts = queries.overview_counts(conn)
-        health = db.health_axes(conn)
-        db.health_snapshot(conn, health)
-        was = db.health_since(conn, HEALTH_DELTA_DAYS)
+        health = store_health.health_axes(conn)
+        store_health.health_snapshot(conn, health)
+        was = store_health.health_since(conn, HEALTH_DELTA_DAYS)
         health["delta"] = health["score"] - was["score"] if was else None
         health["delta_days"] = HEALTH_DELTA_DAYS
         health["since"] = was["day"] if was else None
         symptoms = _symptoms(conn, health["active"])
-        domains = db.list_domains(conn)
-        recent = [_summary(r, 150) for r in db.list_recent(conn, limit=8)]
+        domains = store_domains.list_domains(conn)
+        recent = [_summary(r, 150) for r in search.list_recent(conn, limit=8)]
     return cast(schema.Overview, {
         "totals": {
             "memories": counts["total"],
@@ -99,7 +101,7 @@ def overview(request, payload) -> schema.Overview:
         "domains": domains[:10],
         "recent": recent,
         "db": {
-            "project": db.active_project(),
+            "project": paths.active_project(),
             "path": str(dbfile),
             "size": _file_size(dbfile),
             "wal_size": _file_size(dbfile.with_name(dbfile.name + "-wal")),
