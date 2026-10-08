@@ -337,7 +337,7 @@ def test_delete_item_happy_path(client):
     assert body["task"]["comments"] == []
     assert body["status"] == "active"
     added = client.post(f"/api/tasks/{uid}/items", json={"items": "a later step"}).json()
-    assert [i["key"] for i in added["task"]["items"]] == ["i1", "i2", "i4"]
+    assert [i["key"] for i in added["task"]["items"]] == ["i1", "i2", "i3"]
 
 
 def test_delete_item_completes_the_task_like_closing_the_last_item(client):

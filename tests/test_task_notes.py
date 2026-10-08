@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pytest
 
+from conftest import brief
 from memai import portable, tasks
 from memai.store import connection, memories, search, sections
 
@@ -88,10 +89,10 @@ def test_delete_note_removes_it(conn, uid):
 
 
 def test_deleting_an_item_keeps_the_note_on_its_other_items(conn, uid):
-    nid = tasks.add_note(conn, uid, title="T", body="b", items=["i1", "i2"])
+    nid = tasks.add_note(conn, uid, title="T", body=brief("b"), items=["i1", "i2"])
     tasks.delete_item(conn, uid, "i1")
-    assert tasks.notes(conn, uid, item="i2")[0]["items"] == ["i2"]
-    tasks.delete_item(conn, uid, "i2")
+    assert tasks.notes(conn, uid, item="i1")[0]["items"] == ["i1"]
+    tasks.delete_item(conn, uid, "i1")
     assert [n["id"] for n in tasks.notes(conn, uid)] == [nid]
 
 
@@ -102,14 +103,15 @@ def test_purging_the_task_removes_its_notes(conn, uid):
     assert conn.execute("SELECT COUNT(*) FROM task_note_items").fetchone()[0] == 0
 
 
-def test_item_changes_record_no_edit_but_a_goal_edit_does(conn, uid):
+def test_item_changes_record_no_edit_but_a_delete_and_a_goal_edit_do(conn, uid):
     tasks.set_item_state(conn, uid, "i1", "done")
     tasks.add_items(conn, uid, ["write the docs"])
-    tasks.delete_item(conn, uid, "i4")
     assert memories.get_edit_history(conn, uid) == []
+    tasks.delete_item(conn, uid, "i4")
+    assert len(memories.get_edit_history(conn, uid)) == 1
     assert "[x] i1" in memories.get_memory(conn, uid)["content"]
     tasks.set_goal(conn, uid, "Parse every config file fast")
-    assert len(memories.get_edit_history(conn, uid)) == 1
+    assert len(memories.get_edit_history(conn, uid)) == 2
 
 
 def test_export_and_import_carry_notes(tmp_path, monkeypatch):

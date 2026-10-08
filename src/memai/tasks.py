@@ -9,11 +9,9 @@ import sqlite3
 
 from . import budget, lite
 from .contract import GOAL_MAX, ITEM_MAX, ITEM_STATES, ITEMS_MAX, NOTE_MAX, TASK_STATES
-from .store import connection, memories, sections
+from .store import connection, memories, sections, task_items
 
 COMMENT_MAX = 2000
-
-MARKS = {"todo": "[ ]", "doing": "[~]", "done": "[x]", "dropped": "[-]"}
 
 _KEY_RE = re.compile(r"^i?([1-9][0-9]*)$")
 
@@ -29,13 +27,6 @@ def item_key(value: str) -> str:
     if match is None:
         raise ValueError(f"{value!r} is not an item key; use a number such as 3 or i3")
     return f"i{match.group(1)}"
-
-
-def render(goal: str, items: list[dict]) -> str:
-    """The generated content: a GOAL line, then one mark line per item."""
-    lines = [f"GOAL: {goal}"]
-    lines += [f"{MARKS[i['state']]} {i['key']} {i['text']}" for i in items]
-    return "\n".join(lines)
 
 
 def _validated(title: str, goal: str, items: list[str]) -> tuple[str, str, list[str]]:
@@ -79,7 +70,7 @@ def create_task(
         for n, text in enumerate(items, start=1)
     ]
     uid = memories.insert_memory(
-        conn, type=memories.TASK_TYPE, content=render(goal, rows), title=title,
+        conn, type=memories.TASK_TYPE, content=task_items.render(goal, rows), title=title,
         domain=domain, also=also, session=session, tags=tags,
     )
     conn.execute("INSERT INTO tasks (memory_uid, goal) VALUES (?, ?)", (uid, goal))
@@ -183,7 +174,7 @@ def _require_item(conn: sqlite3.Connection, uid: str, item: str) -> str:
 def _regenerate(conn: sqlite3.Connection, uid: str, note: str, *, record_edit: bool) -> None:
     """Rewrite the memory's content from the goal and items when it changed."""
     goal = conn.execute("SELECT goal FROM tasks WHERE memory_uid = ?", (uid,)).fetchone()["goal"]
-    content = render(goal, _items(conn, uid))
+    content = task_items.render(goal, _items(conn, uid))
     if content == memories.memory_row(conn, uid)["content"]:
         return
     if record_edit:
@@ -252,7 +243,7 @@ def set_item_state(
 
 
 def add_items(conn: sqlite3.Connection, uid: str, items: list[str], *, session: str = "") -> dict:
-    """Append items under the next unused keys; a closed task reopens."""
+    """Append items under the next positions; a closed task reopens."""
     items = [str(i).strip() for i in items]
     if not items or not all(items):
         raise ValueError("add at least one item, and no item may be empty")
@@ -260,14 +251,9 @@ def add_items(conn: sqlite3.Connection, uid: str, items: list[str], *, session: 
         if len(text) > ITEM_MAX:
             raise ValueError(f"an item is {len(text)} characters; the limit is {ITEM_MAX}")
     _lock(conn, uid)
-    last = conn.execute(
-        """SELECT MAX(COALESCE((SELECT MAX(seq) FROM task_items WHERE memory_uid = :uid), 0),
-                      (SELECT item_seq FROM tasks WHERE memory_uid = :uid))""",
-        {"uid": uid},
-    ).fetchone()[0]
-    count = len(_items(conn, uid))
-    if count + len(items) > ITEMS_MAX:
-        raise ValueError(f"a task holds at most {ITEMS_MAX} items; it has {count}")
+    last = len(_items(conn, uid))
+    if last + len(items) > ITEMS_MAX:
+        raise ValueError(f"a task holds at most {ITEMS_MAX} items; it has {last}")
     stamp = lite.now_iso()
     keys = [f"i{n}" for n in range(last + 1, last + len(items) + 1)]
     conn.executemany(
@@ -283,11 +269,13 @@ def add_items(conn: sqlite3.Connection, uid: str, items: list[str], *, session: 
 
 
 def delete_item(conn: sqlite3.Connection, uid: str, item: str, *, session: str = "") -> dict:
-    """Remove one item with its comments and links, then settle an open task.
+    """Remove one item with its comments and links, renumber the items after it, then settle an open task.
 
-    The deleted key stays retired: add_items numbers past it. A closed task
-    keeps its state. Raises ValueError for a non-task, an unknown item, or
-    the task's only item, before anything is written.
+    Every item after it moves up one key, and its links, comments and note
+    attachments move with it; `renumbered` maps each old key to its new one.
+    The deletion enters the edit history. A closed task keeps its state.
+    Raises ValueError for a non-task, an unknown item, or the task's only
+    item, before anything is written.
 
     `session` is accepted for signature parity with the other writers; the
     item it would stamp is the one removed, so nothing records it.
@@ -299,19 +287,24 @@ def delete_item(conn: sqlite3.Connection, uid: str, item: str, *, session: str =
         raise ValueError("a task keeps at least one item")
     gone = next(r for r in rows if r["key"] == key)
     conn.execute(
-        "UPDATE tasks SET item_seq = MAX(item_seq, ?) WHERE memory_uid = ?", (gone["seq"], uid)
-    )
-    conn.execute(
         "DELETE FROM task_note_items WHERE item_key = ? AND note_id IN "
         "(SELECT id FROM task_notes WHERE memory_uid = ?)", (key, uid))
     for table in ("task_comments", "task_item_links"):
         conn.execute(f"DELETE FROM {table} WHERE memory_uid = ? AND item_key = ?", (uid, key))
     conn.execute("DELETE FROM task_items WHERE memory_uid = ? AND item_key = ?", (uid, key))
-    _regenerate(conn, uid, f"item {key} deleted: {gone['text']}", record_edit=False)
+    moved = task_items.compact(conn, uid)
+    note = f"item {key} deleted: {gone['text']}"
+    if moved:
+        note += f"; {_span(list(moved))} renumbered to {_span(list(moved.values()))}"
+    _regenerate(conn, uid, note, record_edit=True)
     state = conn.execute("SELECT state FROM tasks WHERE memory_uid = ?", (uid,)).fetchone()["state"]
     if state == "open":
         _settle(conn, uid)
-    return {"uid": uid, "item": key, **_outcome(conn, uid)}
+    return {"uid": uid, "item": key, "renumbered": moved, **_outcome(conn, uid)}
+
+
+def _span(keys: list[str]) -> str:
+    return keys[0] if len(keys) == 1 else f"{keys[0]}..{keys[-1]}"
 
 
 def set_goal(conn: sqlite3.Connection, uid: str, goal: str) -> None:
@@ -499,8 +492,8 @@ def restore_task(conn: sqlite3.Connection, record: dict) -> None:
 
     Skips a link whose target is not in the store and writes no edit. A state
     outside TASK_STATES or ITEM_STATES, or an item_seq that is not a
-    non-negative integer, is a ValueError before any row is written. The task's
-    retired-key mark is the larger of item_seq and its items' highest seq.
+    non-negative integer, is a ValueError before any row is written. Items whose
+    keys are not their positions are renumbered after the rows are written.
     """
     uid = str(record["uid"])
     state = record.get("state", "open")
@@ -513,7 +506,6 @@ def restore_task(conn: sqlite3.Connection, record: dict) -> None:
     mark = record.get("item_seq", 0)
     if isinstance(mark, bool) or not isinstance(mark, int) or mark < 0:
         raise ValueError(f"{mark!r} is not an item_seq; use a non-negative integer")
-    mark = max(mark, *(int(i.get("seq", 0)) for i in record.get("items") or []), 0)
     conn.execute(
         "INSERT INTO tasks (memory_uid, goal, state, completed_at, item_seq) VALUES (?, ?, ?, ?, ?)",
         (uid, record.get("goal", ""), state, record.get("completed_at", ""), mark),
@@ -554,6 +546,8 @@ def restore_task(conn: sqlite3.Connection, record: dict) -> None:
             (uid, n["title"], n["body"], n.get("session", ""),
              n.get("created_at") or lite.now_iso(), n.get("updated_at") or lite.now_iso()))
         _set_note_items(conn, cur.lastrowid or 0, [k for k in n.get("items") or [] if k in known])
+    if task_items.compact(conn, uid):
+        task_items.regenerate(conn, uid)
 
 
 PARTS = ("items", "notes", "comments", "links")

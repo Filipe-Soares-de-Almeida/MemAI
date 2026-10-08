@@ -425,11 +425,11 @@ bind it, and what done looks like. Keep it short but complete enough to act on
 — a few compact paragraphs, at most 2000 characters; a one-liner leaves the
 next agent guessing. It is **plain prose**, never `GOAL:` / `WHY:` /
 `CONTEXT:` labelled fields: a task is not a sectioned type like `checkpoint`,
-and copying their `LABEL: text` shape only makes it look like one. Each item gets a key in the order it is added — `i1`, `i2`, … —
-and a key is never reused: an item that stops applying is `dropped`, never
-deleted. A tool takes `i3` or `3` for the third item. The task's content is
+and copying their `LABEL: text` shape only makes it look like one. Each item's key is its position — `i1`, `i2`, … — and a tool takes `i3` or
+`3` for the third item. An item that stops applying is `dropped`; deleting one
+(only the dashboard does) renumbers every item after it. The task's content is
 generated from the goal and the items (`[ ]` todo, `[~]` doing, `[x]` done,
-`[-]` dropped); only a goal edit enters the edit history.
+`[-]` dropped); a goal edit and an item deletion enter the edit history.
 
 Work it with:
 

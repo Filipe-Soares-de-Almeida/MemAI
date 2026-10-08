@@ -730,7 +730,7 @@ def task_item(uid: str, item: str, state: str = "", comment: str = "",
               related: str = "") -> dict:
     """Update one item of a task: its state, a comment on it, memories linked to it.
 
-    item: the key task() returned, such as i3 or 3.
+    item: the item's number, such as 3 or i3; an item's key is its position in the checklist.
 
     state: todo, doing, done or dropped. The write that closes the last open
     item archives the task (`archived` in the result); one that reopens an

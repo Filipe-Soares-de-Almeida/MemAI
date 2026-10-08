@@ -240,13 +240,13 @@ CREATE TABLE IF NOT EXISTS tasks (
     goal         TEXT NOT NULL,
     state        TEXT NOT NULL DEFAULT 'open',    -- open | completed | cancelled
     completed_at TEXT NOT NULL DEFAULT '',
-    item_seq     INTEGER NOT NULL DEFAULT 0       -- highest item seq ever deleted
+    item_seq     INTEGER NOT NULL DEFAULT 0       -- read by nothing; exports carry it
 );
 
 CREATE TABLE IF NOT EXISTS task_items (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
     memory_uid      TEXT NOT NULL REFERENCES memories(uid),
-    item_key        TEXT NOT NULL,                -- i1, i2, ... never reused
+    item_key        TEXT NOT NULL,                -- i<position>: i1, i2, ... in seq order
     seq             INTEGER NOT NULL,
     text            TEXT NOT NULL,
     state           TEXT NOT NULL DEFAULT 'todo', -- todo | doing | done | dropped
@@ -396,6 +396,22 @@ def _repair_task_states(conn: sqlite3.Connection) -> None:
         "(SELECT uid FROM memories WHERE status <> 'active')")
 
 
+def _compact_task_keys(conn: sqlite3.Connection) -> None:
+    """Renumber the items of any task whose keys are not their positions."""
+    # imported here: task_items reaches store.memories, which imports this module
+    from memai.store import task_items
+
+    stale = [r[0] for r in conn.execute(
+        """SELECT DISTINCT memory_uid FROM (
+             SELECT memory_uid, item_key, seq,
+                    ROW_NUMBER() OVER (PARTITION BY memory_uid ORDER BY seq, id) AS n
+             FROM task_items)
+           WHERE item_key <> 'i' || n OR seq <> n""")]
+    for uid in stale:
+        task_items.compact(conn, uid)
+        task_items.regenerate(conn, uid)
+
+
 def _ensure_diagram_titles(conn: sqlite3.Connection) -> None:
     """Give a diagram memory the name its graph already carries.
 
@@ -535,6 +551,7 @@ def connect(db_path: Path | None = None, *, project: str | None = None):
     _ensure_fts(conn)
     _ensure_diagram_titles(conn)
     _repair_task_states(conn)
+    _compact_task_keys(conn)
     try:
         yield conn
         conn.commit()
