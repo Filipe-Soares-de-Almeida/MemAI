@@ -56,3 +56,18 @@ def test_task_note_documents_the_brief_it_takes():
     for s in sections.BRIEF_SPEC:
         assert s.key in params and params[s.key].default == ""
         assert f"{s.label}:" in server.task_note.__doc__
+
+
+def test_every_tool_docstring_carries_no_indentation():
+    for name, fn in server._TOOLS.items():
+        assert fn.__doc__ == inspect.cleandoc(fn.__doc__), name
+
+
+def test_tool_strips_the_indentation_an_interpreter_leaves_in_a_docstring():
+    def probe():
+        pass
+
+    probe.__doc__ = "Summary.\n\n    Body line.\n        deeper\n    "
+    wrapped = server.tool("full")(probe)
+    assert wrapped.__doc__ == "Summary.\n\nBody line.\n    deeper"
+    server._GROUP_OF.pop("probe", None)
