@@ -16,8 +16,7 @@ EXECUTE = {"execute", "executemany", "executescript"}
 
 
 def _admin_sources() -> list[Path]:
-    package = PACKAGE / "admin"
-    return sorted(package.rglob("*.py")) if package.is_dir() else [PACKAGE / "admin.py"]
+    return sorted((PACKAGE / "admin").rglob("*.py"))
 
 
 def _sql_in(source: str) -> list[str]:
@@ -31,7 +30,9 @@ def _sql_in(source: str) -> list[str]:
 
 
 def test_admin_runs_no_sql_of_its_own():
-    found = {p.name: _sql_in(p.read_text(encoding="utf-8")) for p in _admin_sources()}
+    sources = _admin_sources()
+    assert sources
+    found = {str(p.relative_to(PACKAGE)): _sql_in(p.read_text(encoding="utf-8")) for p in sources}
     assert {name: lines for name, lines in found.items() if lines} == {}
 
 
