@@ -48,13 +48,29 @@ const entry = (label: string) => [...document.querySelectorAll<HTMLElement>('.ct
   .find(b => b.textContent?.includes(label)) as HTMLElement;
 
 describe('the checklist arithmetic', () => {
-  it('counts done and dropped against every item', () => {
+  it('counts done and dropped against every item, and the percentage leaves dropped out', () => {
     expect(progressOf(taskOf([item('i1', 'a', 'done'), item('i2', 'b', 'dropped'), item('i3', 'c')])))
-      .toEqual({ total: 3, done: 1, dropped: 1 });
+      .toEqual({ total: 3, done: 1, dropped: 1, pct: 50 });
+  });
+
+  it('pct is 100 when every live item is done, and 0 with nothing live', () => {
+    expect(progressOf(taskOf([item('i1', 'a', 'done'), item('i2', 'b', 'dropped')])).pct).toBe(100);
+    expect(progressOf(taskOf([item('i1', 'a', 'dropped')])).pct).toBe(0);
+    expect(progressOf(taskOf([item('i1', 'a', 'done'), item('i2', 'b'), item('i3', 'c')])).pct).toBe(33);
   });
 
   it('peeks at a note as plain words', () => {
     expect(notePeek('| a | b |\n|---|---|\n**Bold** `code`\n== Head ==')).toBe('a b Bold code Head');
+  });
+});
+
+describe('the checklist layout', () => {
+  it('reads goal, items, task notes, then the thread, with no progress bar of its own', async () => {
+    const notes = [{ id: 1, title: 'Bench rules', body: 'Flux first.', items: [], updated_at: '', body_links: {}, brief: null }];
+    const { host } = await mount(taskOf([item('i1', 'Solder the header')], { notes }));
+    const order = [...host.querySelectorAll('.tk > *')].map(el => el.className.split(' ').find(c => c.startsWith('tk-')));
+    expect(order).toEqual(['tk-head', 'tk-list', 'tk-tnotes', 'tk-thread']);
+    expect(host.querySelector('.tk-prog')).toBeNull();
   });
 });
 

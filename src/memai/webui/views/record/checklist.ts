@@ -29,9 +29,13 @@ export const notePeek = (text: string): string => text
   .replace(/```[^\n]*|={2,}|\|?\s*:?-{2,}:?\s*(?=\||$)|[|`*]/gm, ' ')
   .replace(/\s+/g, ' ').trim().slice(0, 180);
 
-export function progressOf(task: TaskRecord): { total: number; done: number; dropped: number } {
+export function progressOf(task: TaskRecord): { total: number; done: number; dropped: number; pct: number } {
   const count = (s: string) => task.items.filter(i => i.state === s).length;
-  return { total: task.items.length, done: count('done'), dropped: count('dropped') };
+  const total = task.items.length;
+  const done = count('done');
+  const dropped = count('dropped');
+  const live = total - dropped;
+  return { total, done, dropped, pct: live > 0 ? Math.floor((done / live) * 100) : 0 };
 }
 
 export const attr = (name: string, value: string | number): string => `[${name}="${CSS.escape(String(value))}"]`;

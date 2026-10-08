@@ -1,5 +1,5 @@
 <script setup lang="ts">
-/* The record's side: what the memory is and how far it is trusted, where it is filed and what it is
+/* The record's side: what the memory is and how far it is trusted, its progress when it is a task, where it is filed and what it is
    tagged, its relations and history, and the acts that archive or delete it. */
 import { computed } from 'vue';
 import { esc, fmtDate, fmtInt } from '../../core/dom.ts';
@@ -17,6 +17,7 @@ import UidChip from '../../components/UidChip.vue';
 import HistoryPanel from './HistoryPanel.vue';
 import MetaDialog from './MetaDialog.vue';
 import RelationsPanel from './RelationsPanel.vue';
+import TaskProgress from './TaskProgress.vue';
 import { tagList, useRefresh } from './record.ts';
 
 const props = defineProps<{ m: MemoryRecord }>();
@@ -143,6 +144,11 @@ async function purge() {
     </div>
 
     <div class="rs-body">
+      <div v-if="m.type === 'task' && m.task" class="rs-field rs-prog">
+        <div class="rs-field-head"><span class="mg-label">{{ t('task.progress.label') }}</span></div>
+        <TaskProgress :task="m.task" />
+      </div>
+
       <div class="rs-field">
         <div class="rs-field-head"><span id="dPinLabel" class="mg-label">{{ t('dr.pin.label') }}</span></div>
         <div id="dPin" class="seg rs-pin" role="group" aria-labelledby="dPinLabel">

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-/* A task's checklist: its goal and progress, the notes on the whole task, the items, and the thread. */
+/* A task's checklist: its goal, the items, the notes on the whole task, and the thread. */
 import { computed, watch } from 'vue';
 import { fmtDate } from '../../core/dom.ts';
 import { t } from '../../i18n.ts';
@@ -11,7 +11,6 @@ import TaskComposer from './TaskComposer.vue';
 import TaskGoal from './TaskGoal.vue';
 import TaskItemRow from './TaskItemRow.vue';
 import TaskNotes from './TaskNotes.vue';
-import TaskProgress from './TaskProgress.vue';
 import { OLDER_SHOWN, useChecklist } from './checklist.ts';
 
 const props = defineProps<{ uid: string; task: TaskRecord; status: string }>();
@@ -45,11 +44,7 @@ const hidden = computed(() => (ui.allComments ? 0 : Math.max(0, thread.value.len
               fmtDate(current.completed_at) }}</span> <span>{{ t(`task.closed.${current.state}` as I18nKey) }}</span></span>
       </div>
       <TaskGoal :c="c" />
-      <TaskProgress :task="current" />
     </div>
-    <section class="tk-tnotes tk-card" :aria-label="t('task.notes')">
-      <TaskNotes :c="c" scope="" :notes="current.notes.filter(n => !n.items.length)" />
-    </section>
     <div class="tk-list tk-card">
       <ul class="tk-items"><TaskItemRow v-for="item in current.items" :key="item.key" :c="c" :item="item" /></ul>
       <div v-if="ui.adding" class="tk-add is-open">
@@ -66,6 +61,9 @@ const hidden = computed(() => (ui.allComments ? 0 : Math.max(0, thread.value.len
       <div v-else class="tk-add"><button id="tkAddOpen" type="button" class="btn btn-sm btn-ghost"
            @click="c.openAdd()">{{ t('task.add.open') }}</button></div>
     </div>
+    <section class="tk-tnotes tk-card" :aria-label="t('task.notes')">
+      <TaskNotes :c="c" scope="" :notes="current.notes.filter(n => !n.items.length)" />
+    </section>
     <section class="tk-thread tk-card" :aria-label="t('task.comments.aria')">
       <h3 class="tk-h">{{ t('task.comments') }}<span class="rs-n">{{ thread.length }}</span></h3>
       <button v-if="hidden" id="tkOlder" type="button" class="rs-more tk-older" @click="ui.allComments = true">{{

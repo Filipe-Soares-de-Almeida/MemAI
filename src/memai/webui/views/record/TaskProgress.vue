@@ -1,5 +1,5 @@
 <script setup lang="ts">
-/* How far the task has got: done over all items, and the dropped share hatched after it. */
+/* How far the task has got: the done share of the items still in play as a percentage, the count under it, and the dropped share hatched on the bar. */
 import { computed, reactive, watch } from 'vue';
 import { fmtInt } from '../../core/dom.ts';
 import { t } from '../../i18n.ts';
@@ -25,6 +25,7 @@ const valueText = computed(() => t('task.progress.text', { done: p.value.done, t
 <!-- The catalog marks the count up; the values are formatted numbers. -->
 <template>
   <div class="tk-prog">
+    <span class="tk-prog-pct" data-progress-pct>{{ t('task.progress.pct', { n: p.pct }) }}</span>
     <div class="tk-prog-line">
       <span v-if="p.total" class="tk-prog-n"
             v-html="t('task.progress', { done: fmtInt(p.done), total: fmtInt(p.total) })"></span>
