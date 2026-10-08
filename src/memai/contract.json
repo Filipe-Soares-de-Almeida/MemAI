@@ -12,7 +12,16 @@
     "GOAL_MAX": 2000,
     "ITEM_MAX": 300,
     "ITEMS_MAX": 50,
-    "NOTE_MAX": 4000
+    "NOTE_MAX": 4000,
+    "BRIEF": [
+      {"key": "goal", "label": "GOAL"},
+      {"key": "context", "label": "CONTEXT"},
+      {"key": "steps", "label": "STEPS"},
+      {"key": "pitfalls", "label": "PITFALLS"},
+      {"key": "done_when", "label": "DONE WHEN"},
+      {"key": "depends_on", "label": "DEPENDS ON"},
+      {"key": "extra_info", "label": "EXTRA INFO", "optional": true}
+    ]
   },
   "admin": {
     "BULK_MAX": 500,

@@ -581,3 +581,60 @@ def test_a_translated_name_does_not_change_what_is_stored():
     assert pt["sec.checkpoint.intent"] != "INTENT"
     body = sections.render("checkpoint", sections.read("checkpoint", CHECKPOINT).sections)
     assert body.startswith("INTENT:")
+
+
+# ------------------------------------------------------------- the item brief
+
+BRIEF = (
+    "GOAL: drain the queue before the nightly export\n"
+    "CONTEXT: the worker parks a row after three retries\n"
+    "STEPS: 1. add a cursor\n2. drain the parked rows\n"
+    "PITFALLS: none known\n"
+    "DONE WHEN: the parked count reads zero\n"
+    "DEPENDS ON: none"
+)
+
+
+def test_a_brief_reads_into_its_six_fields():
+    reading = sections.read_spec(sections.BRIEF_SPEC, BRIEF)
+    assert reading.conforms
+    assert reading.sections["steps"] == "1. add a cursor\n2. drain the parked rows"
+    assert "extra_info" not in reading.sections
+
+
+def test_extra_info_is_optional_and_reads_last():
+    reading = sections.read_spec(sections.BRIEF_SPEC, BRIEF + "\nEXTRA INFO: the export runs at 02:00")
+    assert reading.conforms
+    assert reading.sections["extra_info"] == "the export runs at 02:00"
+
+
+@pytest.mark.parametrize("body, complaint", [
+    (BRIEF.replace("PITFALLS: none known\n", ""), "no line opens with PITFALLS"),
+    (BRIEF + "\nEXTRA INFO: a\nEXTRA INFO: b", "more than one line opens with EXTRA INFO"),
+    (BRIEF.replace("DEPENDS ON: none", "EXTRA INFO: x\nDEPENDS ON: none"), "out of order"),
+    (BRIEF + "\nEXTRA INFO:", "nothing under EXTRA INFO"),
+    ("Some preamble\n" + BRIEF, "does not open with GOAL"),
+])
+def test_a_brief_that_does_not_conform_says_what_stops_it(body, complaint):
+    reading = sections.read_spec(sections.BRIEF_SPEC, body)
+    assert not reading.conforms
+    assert any(complaint in p for p in reading.problems)
+
+
+def test_a_label_inside_a_field_reads_as_doubled():
+    body = BRIEF.replace("STEPS: 1. add a cursor", "STEPS: 1. add a cursor\nGOAL: restated")
+    assert any("more than one line opens with GOAL" in p
+               for p in sections.read_spec(sections.BRIEF_SPEC, body).problems)
+
+
+def test_rendering_a_brief_leaves_out_an_empty_optional_field():
+    values = sections.read_spec(sections.BRIEF_SPEC, BRIEF).sections
+    assert sections.render_spec(sections.BRIEF_SPEC, {**values, "extra_info": "  "}) == BRIEF
+    assert sections.read_spec(sections.BRIEF_SPEC,
+                              sections.render_spec(sections.BRIEF_SPEC, values)).conforms
+
+
+def test_the_brief_is_no_memory_type():
+    assert sections.BRIEF_SPEC and not any(
+        spec == sections.BRIEF_SPEC for spec in sections.SECTION_SPEC.values())
+    assert "task_note" not in sections.SECTION_SPEC
