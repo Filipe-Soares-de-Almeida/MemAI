@@ -63,6 +63,19 @@ const bodyOf = (brief: Record<string, string>): string => {
 };
 
 export interface NoteDraft { title: string; body: string; items: string[]; brief: Record<string, string> }
+
+/* The text moves between the draft's two shapes as its items go and come, so one holds it; a brief kept
+   alongside a body that still reads as it stays. */
+function setScope(d: NoteDraft, items: string[]) {
+  const had = d.items.length > 0;
+  d.items = items;
+  if (had && !items.length) {
+    d.body = bodyOf(d.brief);
+    d.brief = {};
+  } else if (!had && items.length && d.body.trim() !== bodyOf(d.brief)) {
+    d.brief = d.body.trim() ? { extra_info: d.body } : {};
+  }
+}
 interface Hooks { onStatus: (status: string) => void; onWrite: (answer: TaskAnswer) => void }
 type Call = (uid: string, body: Record<string, unknown>) => Promise<TaskAnswer>;
 
@@ -175,7 +188,7 @@ export function useChecklist(uid: string, task: TaskRecord, status: string, hook
     for (const [k, v] of drafts) if (k !== gone) ui.drafts.set(follow(k), v);
     if (ui.noteEdit === `new:${gone}`) { ui.noteEdit = ''; ui.noteDraft = null; }
     else if (ui.noteEdit.startsWith('new:')) ui.noteEdit = `new:${follow(ui.noteEdit.slice(4))}`;
-    if (ui.noteDraft) ui.noteDraft.items = ui.noteDraft.items.filter(k => k !== gone).map(follow);
+    if (ui.noteDraft) setScope(ui.noteDraft, ui.noteDraft.items.filter(k => k !== gone).map(follow));
   }
 
   /* Asks first, plays the row out, then focuses the mark that took the deleted item's place, else the
@@ -281,22 +294,19 @@ export function useChecklist(uid: string, task: TaskRecord, status: string, hook
   function scopeNote(key: string, on: boolean) {
     const d = ui.noteDraft;
     if (!d) return;
-    const had = d.items.length > 0;
-    d.items = on ? [...d.items.filter(k => k !== key), key] : d.items.filter(k => k !== key);
-    if (!had && d.items.length && d.body.trim() && !filled(d.brief).length) d.brief = { extra_info: d.body };
-    if (had && !d.items.length && filled(d.brief).length) d.body = bodyOf(d.brief);
+    setScope(d, on ? [...d.items.filter(k => k !== key), key] : d.items.filter(k => k !== key));
   }
-
-  const noteReady = () => {
-    const d = ui.noteDraft;
-    if (!d?.title.trim()) return false;
-    return d.items.length ? BRIEF.every(f => f.optional || (d.brief[f.key] || '').trim()) : Boolean(d.body.trim());
-  };
 
   const noteLength = () => {
     const d = ui.noteDraft;
     if (!d) return 0;
     return d.items.length ? renderBrief(d.brief).length : d.body.length;
+  };
+
+  const noteReady = () => {
+    const d = ui.noteDraft;
+    if (!d?.title.trim() || noteLength() > TASK.NOTE_MAX) return false;
+    return d.items.length ? BRIEF.every(f => f.optional || (d.brief[f.key] || '').trim()) : Boolean(d.body.trim());
   };
 
   async function submitNote() {

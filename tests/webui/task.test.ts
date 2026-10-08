@@ -473,6 +473,72 @@ describe('task notes', () => {
     expect(calls.at(-1)?.body).toEqual({ id: 3, title: 'Pinout', body: 'Pinout body', items: [] });
   });
 
+  const fieldOf = (host: HTMLElement, field: string) =>
+    host.querySelector(`[data-note-field="${field}"]`) as HTMLTextAreaElement;
+
+  it('carries an edit to the body back under extra info when an item is picked again', async () => {
+    const { host } = await mount(taskOf([item('i1', 'Solder the header')], { notes: [note(3, 'Pinout', ['i1'])] }));
+    await press(host.querySelector('[data-toggle="i1"]'));
+    await press(host.querySelector('[data-note-edit="3"]'));
+    await press(host.querySelector('[data-note-scope="i1"]'));
+    expect(fieldOf(host, 'body').value).toBe('Pinout body');
+    await type(host, 'body', 'Pinout body, revised');
+    await press(host.querySelector('[data-note-scope="i1"]'));
+    expect(fieldOf(host, 'extra_info').value).toBe('Pinout body, revised');
+    expect(fieldOf(host, 'goal').value).toBe('');
+  });
+
+  it('turns a brief into labelled text when its last item is unpicked, and an emptied brief into nothing', async () => {
+    const notes = [note(3, 'Header', ['i1'], BRIEF_BODY, FIELDS)];
+    const { host } = await mount(taskOf([item('i1', 'Solder the header')], { notes }));
+    await press(host.querySelector('[data-toggle="i1"]'));
+    await press(host.querySelector('[data-note-edit="3"]'));
+    await press(host.querySelector('[data-note-scope="i1"]'));
+    expect(fieldOf(host, 'body').value).toBe(BRIEF_BODY);
+    await press(host.querySelector('[data-note-scope="i1"]'));
+    for (const key of [...Object.keys(FIELDS), 'extra_info']) await type(host, key, '');
+    await press(host.querySelector('[data-note-scope="i1"]'));
+    expect(fieldOf(host, 'body').value).toBe('');
+    expect((host.querySelector('[data-note-save]') as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it('keeps the brief a whole-task note holds when an item is picked and its body is unchanged', async () => {
+    const notes = [note(5, 'Header', [], BRIEF_BODY, FIELDS)];
+    const { host } = await mount(taskOf([item('i1', 'Solder the header')], { notes }));
+    await press(host.querySelector('[data-note-edit="5"]'));
+    await press(host.querySelector('[data-note-scope="i1"]'));
+    expect(fieldOf(host, 'goal').value).toBe('Seat the header');
+    expect(fieldOf(host, 'extra_info').value).toBe('');
+  });
+
+  it("keeps a brief's text, as the body, when the item it applies to is deleted", async () => {
+    const items = [item('i1', 'Solder the header'), item('i2', 'Flash the board')];
+    serveApi(() => ({ task: taskOf([items[0]], { notes: [note(3, 'Header', [], BRIEF_BODY, FIELDS)] }), status: 'active' }));
+    const { host } = await mount(taskOf(items, { notes: [note(3, 'Header', ['i2'], BRIEF_BODY, FIELDS)] }));
+    await press(host.querySelector('[data-toggle="i2"]'));
+    await press(host.querySelector('[data-note-edit="3"]'));
+    await type(host, 'goal', 'Seat the header flush');
+    await press(menuOf(host, 'i2'));
+    entry(en['task.item.delete']).click();
+    (await until(() => document.querySelector<HTMLElement>('[data-ok]'))).click();
+    await until(() => host.querySelectorAll('.tk-item').length === 1);
+    await until(() => fieldOf(host, 'body'));
+    expect(fieldOf(host, 'body').value).toBe(BRIEF_BODY.replace('Seat the header\n', 'Seat the header flush\n'));
+  });
+
+  it('refuses a brief longer than a note may be, and marks the counter', async () => {
+    const { host } = await mount(taskOf([item('i1', 'Solder the header')], { notes: [note(3, 'Header', ['i1'], BRIEF_BODY, FIELDS)] }));
+    await press(host.querySelector('[data-toggle="i1"]'));
+    await press(host.querySelector('[data-note-edit="3"]'));
+    const save = host.querySelector('[data-note-save]') as HTMLButtonElement;
+    const count = host.querySelector('[data-note-count]') as HTMLElement;
+    expect(save.disabled).toBe(false);
+    expect(count.classList.contains('over')).toBe(false);
+    await type(host, 'steps', 'x'.repeat(4000));
+    expect(save.disabled).toBe(true);
+    expect(count.classList.contains('over')).toBe(true);
+  });
+
   it('keeps a draft through other changes and drops it on Escape', async () => {
     const { host } = await mount(taskOf([item('i1', 'Solder the header')]));
     await press(host.querySelector('[data-note-add=""]'));

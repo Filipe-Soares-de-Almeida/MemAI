@@ -88,8 +88,8 @@ def test_the_portuguese_task_strings_are_not_the_english_ones():
     en, pt = _catalog("en"), _catalog("pt-BR")
 
     def words(s: str) -> str:
-        """a string made only of placeholders reads the same in every language"""
-        return re.sub(r"\{\w+\}|[:.\s]", "", s)
+        """a string made only of placeholders and punctuation reads the same in every language"""
+        return re.sub(r"\{\w+\}|[:.%\s]", "", s)
 
     own = ("task.", "nm.task.", "ov.tasks.", "mn.ta.", "mn.msg.task")
     same = [k for k in en if k.startswith(own) and en[k] == pt[k] and words(en[k])]

@@ -48,7 +48,7 @@ function key(e: KeyboardEvent) {
         <div class="tk-note-foot">
           <span class="tk-hint"><KeyHint save :action="t('dr.key.save')" /><KeyHint :keys="['Esc']"
                 :action="t('dr.key.close')" /></span>
-          <span class="rf-count" data-note-count>{{ t('dr.sections.count', { n: c.noteLength(), max: NOTE_MAX }) }}</span>
+          <span class="rf-count" :class="{ over: c.noteLength() > NOTE_MAX }" data-note-count>{{ t('dr.sections.count', { n: c.noteLength(), max: NOTE_MAX }) }}</span>
         </div>
       </div>
     </div>
