@@ -449,8 +449,9 @@ Work it with:
   are required (`none` is an answer) and `extra_info` holds anything else. The
   body reads `GOAL:` / `CONTEXT:` / `STEPS:` / `PITFALLS:` / `DONE WHEN:` /
   `DEPENDS ON:` / `EXTRA INFO:`, and an edit that gives one field replaces only
-  that field. `body` is for a note on the whole task — a recipe or a rule every
-  item shares. It is not a memory, so search, recall, pulse and must_read never
+  that field. `items` puts the note on those items, empty puts it on the whole
+  task. `body` is for a note on the whole task — a recipe or a rule every item
+  shares. It is not a memory, so search, recall, pulse and must_read never
   return it; write with `note()` only what stands on its own outside the task.
   A `note_id` edits it in place.
 - **`get_memory(uid)`** returns the task's head: goal, state, progress and the
