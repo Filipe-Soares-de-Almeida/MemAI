@@ -14,6 +14,7 @@ import pytest
 
 from conftest import unmigrated
 from memai import db, guard, sections, server
+from memai.store import connection
 
 CHECKPOINT = (
     "INTENT: drain the queue before the nightly export\n"
@@ -216,7 +217,7 @@ def test_the_guard_requires_exactly_the_fields_the_spec_names(tool):
 
 @pytest.mark.parametrize("tool", sorted(sections.SECTION_SPEC))
 def test_the_writing_tool_composes_a_body_the_parser_reads_back(tool, monkeypatch, tmp_path):
-    monkeypatch.setattr(db, "default_db_path", lambda: tmp_path / "tool.db")
+    monkeypatch.setattr(connection, "default_db_path", lambda: tmp_path / "tool.db")
     values = {s.key: f"what goes under {s.label.lower()}"
               for s in sections.SECTION_SPEC[tool]}
     result = getattr(server, tool)(
@@ -551,7 +552,7 @@ def _catalogs() -> tuple[dict, dict]:
     from pathlib import Path
 
     from memai import admin
-    i18n = Path(admin.WEBUI_DIR) / "i18n"
+    i18n = Path(admin.pages.WEBUI_DIR) / "i18n"
     return (json.loads((i18n / "en.json").read_text(encoding="utf-8"))["strings"],
             json.loads((i18n / "pt-BR.json").read_text(encoding="utf-8"))["strings"])
 

@@ -1,4 +1,4 @@
-"""API tests for the admin dashboard server (memai/admin.py).
+"""API tests for the admin dashboard server (memai.admin).
 
 Same hermetic setup as the rest of the suite. MEMAI_HOME is pointed at a
 tmp dir per test, which is all the isolation the app needs -- every
@@ -412,7 +412,7 @@ def test_maintenance_suite(client):
     assert entries[0]["content_changed"] == 1
 
 
-@pytest.mark.skipif(not (admin.WEBUI_DIR / "index.html").is_file(),
+@pytest.mark.skipif(not (admin.pages.WEBUI_DIR / "index.html").is_file(),
                     reason="dashboard not built (npm run build)")
 def test_static_ui_served(client):
     """The built page, and every asset it names, come back over /static.
@@ -433,7 +433,7 @@ def test_static_ui_served(client):
 def test_the_index_says_what_to_run_when_there_is_no_build(client, tmp_path, monkeypatch):
     """An install that skipped the build answers with the command, not a
     stack trace from FileResponse on a path that is not there."""
-    monkeypatch.setattr(admin, "WEBUI_DIR", tmp_path / "dist")
+    monkeypatch.setattr(admin.pages, "WEBUI_DIR", tmp_path / "dist")
     res = client.get("/")
     assert res.status_code == 503
     assert "npm run build" in res.text
@@ -451,7 +451,7 @@ def test_fonts_css_never_names_a_missing_file(client):
     assert body.count("@font-face") == len(admin.WEBFONTS)
     assert "local('Roboto')" in body
 
-    fonts_dir = admin.WEBUI_DIR / "fonts"
+    fonts_dir = admin.pages.WEBUI_DIR / "fonts"
     for _family, _weight, filename, _locals in admin.WEBFONTS:
         if (fonts_dir / filename).is_file():
             assert f"url('/static/fonts/{filename}')" in body
@@ -463,7 +463,7 @@ def test_fonts_css_uses_a_face_once_fetched(client, tmp_path, monkeypatch):
     webui = tmp_path / "webui"
     (webui / "fonts").mkdir(parents=True)
     (webui / "fonts" / "roboto-400.woff2").write_bytes(b"not really a font")
-    monkeypatch.setattr(admin, "WEBUI_DIR", webui)
+    monkeypatch.setattr(admin.pages, "WEBUI_DIR", webui)
 
     body = client.get("/fonts.css").text
     assert "url('/static/fonts/roboto-400.woff2') format('woff2')" in body

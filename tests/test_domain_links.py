@@ -15,6 +15,7 @@ import pytest
 from starlette.testclient import TestClient
 
 from memai import admin, db, server
+from memai.store import connection
 
 
 @pytest.fixture
@@ -211,7 +212,7 @@ def test_the_census_omits_the_cross_listing_counts_when_there_are_none(conn):
 
 
 def test_pulse_warms_up_a_flow_that_owns_nothing(conn, monkeypatch, tmp_path):
-    monkeypatch.setattr(db, "default_db_path", lambda: tmp_path / "test.db")
+    monkeypatch.setattr(connection, "default_db_path", lambda: tmp_path / "test.db")
     _crossing(conn)
     conn.commit()
     p = server.pulse(domain="omni/x900")
@@ -280,7 +281,7 @@ def test_a_move_with_nothing_at_all_at_the_source_still_raises(conn):
 # ------------------------------------------------------------------- surfaces
 
 def test_mcp_writers_take_also_and_echo_what_was_stored(monkeypatch, tmp_path):
-    monkeypatch.setattr(db, "default_db_path", lambda: tmp_path / "test.db")
+    monkeypatch.setattr(connection, "default_db_path", lambda: tmp_path / "test.db")
     r = server.note("fixture title", content="queue drain step", domain="acme/x100/p200",
                     also="omni/x900, acme")
     # 'acme' is already covered by the filed path, so it is not stored
@@ -291,7 +292,7 @@ def test_mcp_writers_take_also_and_echo_what_was_stored(monkeypatch, tmp_path):
 
 
 def test_mcp_also_domain_and_unfile_domain(monkeypatch, tmp_path):
-    monkeypatch.setattr(db, "default_db_path", lambda: tmp_path / "test.db")
+    monkeypatch.setattr(connection, "default_db_path", lambda: tmp_path / "test.db")
     uid = server.note("fixture title", content="queue drain step", domain="acme/x100/p200")["uid"]
     assert server.also_domain(uid, "omni/x900")["also"] == ["omni/x900"]
     assert server.get_memory(uid)["also"] == ["omni/x900"]
@@ -301,7 +302,7 @@ def test_mcp_also_domain_and_unfile_domain(monkeypatch, tmp_path):
 
 
 def test_mcp_never_hands_back_the_indexing_mirror(monkeypatch, tmp_path):
-    monkeypatch.setattr(db, "default_db_path", lambda: tmp_path / "test.db")
+    monkeypatch.setattr(connection, "default_db_path", lambda: tmp_path / "test.db")
     uid = server.note("fixture title", content="x", domain="acme", also="omni/x900")["uid"]
     assert "also_domains" not in server.get_memory(uid)
     assert "also_domains" not in server.search("x")["results"][0]

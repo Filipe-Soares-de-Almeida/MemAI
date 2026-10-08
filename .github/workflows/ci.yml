@@ -31,7 +31,7 @@ jobs:
           node-version: "24"
           cache: npm
 
-      # memai/admin.py serves webui/dist, so the tests that fetch the dashboard
+      # memai.admin serves webui/dist, so the tests that fetch the dashboard
       # skip themselves until it is built.
       - name: Build the dashboard
         run: |

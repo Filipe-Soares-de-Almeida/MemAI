@@ -846,7 +846,7 @@ def test_corpus_truncates_long_tags(conn):
 
 
 def test_corpus_char_budget_caps_a_page(conn, monkeypatch):
-    monkeypatch.setattr(db, "CORPUS_CHAR_BUDGET", 1200)
+    monkeypatch.setattr("memai.store.corpus.CORPUS_CHAR_BUDGET", 1200)
     for i in range(20):
         _mk(conn, content=f"memory number {i} with some padding text")
     page1 = db.optimization_corpus(conn)
@@ -1575,7 +1575,7 @@ def test_a_preview_shows_prose_not_the_markup_around_it(body, shown):
     Flattened BEFORE the cut, so a 160-character snippet cannot sever a
     `**` and leave the stray half on the screen.
     """
-    assert admin._plain(body) == shown
+    assert admin.shared._plain(body) == shown
 
 
 def test_a_peer_snippet_is_flattened_before_it_is_cut(client):

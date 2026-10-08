@@ -1,14 +1,14 @@
 """Start the admin dashboard alongside the MCP server, at most once.
 
 Opt-in: set MEMAI_ADMIN_AUTOSTART to 1/true/yes/on. Off by default -- the
-dashboard has no authentication (see the warning in admin.main).
+dashboard has no authentication (see the warning in admin.cli.main).
 
 Three constraints shape the code below.
 
 ONE MCP SERVER IS NOT ONE PROCESS. A host spawns several and they start
 together at handshake, so whatever arbitrates has to be atomic across
 processes. That arbiter is bind(): the kernel guarantees one listener per
-port, so the losers of the race exit (see admin._bind). No lock file --
+port, so the losers of the race exit (see admin.cli._bind). No lock file --
 the host kills MCP servers abruptly at session end, and an
 abandoned lock would survive and disable the dashboard silently.
 
