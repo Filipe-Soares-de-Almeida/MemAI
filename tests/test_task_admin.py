@@ -8,7 +8,7 @@ import json
 import pytest
 from starlette.testclient import TestClient
 
-from conftest import brief
+from conftest import brief, item_at, item_of
 from memai import tasks
 from memai.admin.app import app as admin_app
 from memai.store import connection, memories
@@ -60,7 +60,7 @@ def test_create_task_from_text(client):
 def test_create_task_from_list(client):
     uid = _task(client, items=["one", "two", "three"])
     with connection.connect() as conn:
-        assert [i["key"] for i in tasks.get_task(conn, uid)["items"]] == ["i1", "i2", "i3"]
+        assert [i["n"] for i in tasks.get_task(conn, uid)["items"]] == [1, 2, 3]
 
 
 def test_create_task_refusals(client):
@@ -75,7 +75,7 @@ def test_create_task_refusals(client):
 
 def test_item_state_happy_path(client):
     uid = _task(client)
-    res = client.post(f"/api/tasks/{uid}/item", json={"item": "i1", "state": "doing"})
+    res = client.post(f"/api/tasks/{uid}/item", json={"item": item_of(uid, 1), "state": "doing"})
     assert res.status_code == 200, res.text
     body = res.json()
     assert body["task"]["items"][0]["state"] == "doing"
@@ -84,9 +84,9 @@ def test_item_state_happy_path(client):
 
 def test_item_state_refuses_an_unknown_item(client):
     uid = _task(client)
-    res = client.post(f"/api/tasks/{uid}/item", json={"item": "i9", "state": "done"})
+    res = client.post(f"/api/tasks/{uid}/item", json={"item": 999_999, "state": "done"})
     assert res.status_code == 400
-    assert "i9" in res.json()["error"]
+    assert "no item 999999" in res.json()["error"]
 
 
 def test_closing_the_last_item_from_the_dashboard_archives(client):
@@ -96,7 +96,7 @@ def test_closing_the_last_item_from_the_dashboard_archives(client):
     body = res.json()
     assert body["status"] == "archived"
     assert body["task"]["state"] == "completed"
-    back = client.post(f"/api/tasks/{uid}/item", json={"item": "i1", "state": "todo"}).json()
+    back = client.post(f"/api/tasks/{uid}/item", json={"item": item_of(uid, 1), "state": "todo"}).json()
     assert back["status"] == "active" and back["task"]["state"] == "open"
 
 
@@ -104,10 +104,9 @@ def test_add_items_happy_path(client):
     uid = _task(client)
     res = client.post(f"/api/tasks/{uid}/items", json={"items": "third step\nfourth step"})
     assert res.status_code == 200, res.text
-    keys = [i["key"] for i in res.json()["task"]["items"]]
-    assert keys == ["i1", "i2", "i3", "i4"]
+    assert [i["n"] for i in res.json()["task"]["items"]] == [1, 2, 3, 4]
     res = client.post(f"/api/tasks/{uid}/items", json={"items": ["fifth step"]})
-    assert res.json()["task"]["items"][-1]["key"] == "i5"
+    assert res.json()["task"]["items"][-1]["id"] == item_of(uid, 5)
 
 
 def test_add_items_refuses_nothing_to_add(client):
@@ -129,11 +128,11 @@ def test_a_refused_link_leaves_the_task_unchanged(client):
     uid = _task(client)
     real = _note(client)
     before = _snapshot(uid)
-    res = client.post(f"/api/tasks/{uid}/link", json={"item": "i1", "target": "nope0000"})
+    res = client.post(f"/api/tasks/{uid}/link", json={"item": item_of(uid, 1), "target": "nope0000"})
     assert res.status_code == 400
     assert "nope0000" in res.json()["error"]
     assert _snapshot(uid) == before
-    res = client.post(f"/api/tasks/{uid}/link", json={"item": "i1", "target": [real, "nope0000"]})
+    res = client.post(f"/api/tasks/{uid}/link", json={"item": item_of(uid, 1), "target": [real, "nope0000"]})
     assert res.status_code == 400
     assert _snapshot(uid) == before
 
@@ -146,7 +145,7 @@ def test_a_refusal_after_rows_changed_rolls_them_back(client, monkeypatch):
         raise ValueError("refused after the item row changed")
 
     monkeypatch.setattr(tasks, "_regenerate", refuse)
-    res = client.post(f"/api/tasks/{uid}/item", json={"item": "i1", "state": "done"})
+    res = client.post(f"/api/tasks/{uid}/item", json={"item": item_of(uid, 1), "state": "done"})
     assert res.status_code == 400
     assert _snapshot(uid) == before
 
@@ -172,9 +171,9 @@ def test_comment_happy_path_and_target_item(client):
     uid = _task(client)
     res = client.post(f"/api/tasks/{uid}/comment", json={"body": "looks good"})
     assert res.status_code == 200, res.text
-    on_item = client.post(f"/api/tasks/{uid}/comment", json={"body": "needs a pass", "item": "i2"})
+    on_item = client.post(f"/api/tasks/{uid}/comment", json={"body": "needs a pass", "item": item_of(uid, 2)})
     comments = on_item.json()["task"]["comments"]
-    assert [(c["item"], c["body"]) for c in comments] == [("", "looks good"), ("i2", "needs a pass")]
+    assert [(c["item"], c["body"]) for c in comments] == [(None, "looks good"), (item_of(uid, 2), "needs a pass")]
 
 
 def test_person_comments_are_marked(client):
@@ -186,7 +185,7 @@ def test_person_comments_are_marked(client):
 def test_comment_refuses_an_empty_body_and_an_unknown_item(client):
     uid = _task(client)
     assert client.post(f"/api/tasks/{uid}/comment", json={"body": "  "}).status_code == 400
-    bad = client.post(f"/api/tasks/{uid}/comment", json={"body": "hi", "item": "i9"})
+    bad = client.post(f"/api/tasks/{uid}/comment", json={"body": "hi", "item": 999_999})
     assert bad.status_code == 400
     assert client.get(f"/api/memories/{uid}").json()["task"]["comments"] == []
 
@@ -194,11 +193,11 @@ def test_comment_refuses_an_empty_body_and_an_unknown_item(client):
 def test_link_and_unlink_happy_path(client):
     uid = _task(client)
     note = _note(client)
-    res = client.post(f"/api/tasks/{uid}/link", json={"item": "i1", "target": note})
+    res = client.post(f"/api/tasks/{uid}/link", json={"item": item_of(uid, 1), "target": note})
     assert res.status_code == 200, res.text
     links = res.json()["task"]["items"][0]["links"]
     assert [link["uid"] for link in links] == [note]
-    gone = client.request("DELETE", f"/api/tasks/{uid}/link", json={"item": "i1", "target": note})
+    gone = client.request("DELETE", f"/api/tasks/{uid}/link", json={"item": item_of(uid, 1), "target": note})
     assert gone.status_code == 200, gone.text
     assert gone.json()["task"]["items"][0]["links"] == []
 
@@ -206,26 +205,26 @@ def test_link_and_unlink_happy_path(client):
 def test_unlink_accepts_a_list_of_uids(client):
     uid = _task(client)
     first, second, kept = _note(client), _note(client), _note(client)
-    res = client.post(f"/api/tasks/{uid}/link", json={"item": "i1", "target": [first, second, kept]})
+    res = client.post(f"/api/tasks/{uid}/link", json={"item": item_of(uid, 1), "target": [first, second, kept]})
     assert res.status_code == 200, res.text
     gone = client.request("DELETE", f"/api/tasks/{uid}/link",
-                          json={"item": "i1", "target": [first, second]})
+                          json={"item": item_of(uid, 1), "target": [first, second]})
     assert gone.status_code == 200, gone.text
     assert [link["uid"] for link in gone.json()["task"]["items"][0]["links"]] == [kept]
 
 
 def test_unlink_refuses_an_unknown_item(client):
     uid = _task(client)
-    res = client.request("DELETE", f"/api/tasks/{uid}/link", json={"item": "i9", "target": "x"})
+    res = client.request("DELETE", f"/api/tasks/{uid}/link", json={"item": 999_999, "target": "x"})
     assert res.status_code == 400
 
 
 @pytest.mark.parametrize("route,body", [
-    ("item", {"item": "i1", "state": "done"}),
+    ("item", {"item": 1, "state": "done"}),
     ("items", {"items": "more"}),
     ("goal", {"goal": "new goal"}),
     ("comment", {"body": "hello"}),
-    ("link", {"item": "i1", "target": "abc"}),
+    ("link", {"item": 1, "target": "abc"}),
 ])
 def test_a_post_to_a_non_task_is_refused(client, route, body):
     note = _note(client)
@@ -238,7 +237,7 @@ def test_a_post_to_a_non_task_is_refused(client, route, body):
 
 def test_delete_link_on_a_non_task_is_refused(client):
     note = _note(client)
-    res = client.request("DELETE", f"/api/tasks/{note}/link", json={"item": "i1", "target": "x"})
+    res = client.request("DELETE", f"/api/tasks/{note}/link", json={"item": 1, "target": "x"})
     assert res.status_code == 400
     assert "no task" in res.json()["error"]
 
@@ -254,7 +253,7 @@ def test_detail_carries_the_task_block(client):
 
 def test_list_rows_carry_progress(client):
     uid = _task(client, items="a\nb\nc")
-    client.post(f"/api/tasks/{uid}/item", json={"item": "i1", "state": "done"})
+    client.post(f"/api/tasks/{uid}/item", json={"item": item_of(uid, 1), "state": "done"})
     note = _note(client)
     rows = {r["uid"]: r for r in client.get("/api/memories").json()["items"]}
     assert rows[uid]["progress"] == {"done": 1, "total": 3}
@@ -267,15 +266,15 @@ def test_list_rows_carry_progress(client):
 
 def test_list_progress_leaves_dropped_items_out_of_the_total(client):
     uid = _task(client, items="a\nb\nc")
-    client.post(f"/api/tasks/{uid}/item", json={"item": "i1", "state": "done"})
-    client.post(f"/api/tasks/{uid}/item", json={"item": "i2", "state": "dropped"})
+    client.post(f"/api/tasks/{uid}/item", json={"item": item_of(uid, 1), "state": "done"})
+    client.post(f"/api/tasks/{uid}/item", json={"item": item_of(uid, 2), "state": "dropped"})
     rows = {r["uid"]: r for r in client.get("/api/memories").json()["items"]}
     assert rows[uid]["progress"] == {"done": 1, "total": 2}
 
 
 def test_list_progress_of_an_all_dropped_task_is_zero_of_zero(client):
     uid = _task(client, items="a")
-    client.post(f"/api/tasks/{uid}/item", json={"item": "i1", "state": "dropped"})
+    client.post(f"/api/tasks/{uid}/item", json={"item": item_of(uid, 1), "state": "dropped"})
     rows = {r["uid"]: r for r in client.get("/api/memories").json()["items"]}
     assert rows[uid]["progress"] == {"done": 0, "total": 0}
 
@@ -284,8 +283,8 @@ def test_list_filters_by_task_state(client):
     open_uid = _task(client, items="a\nb")
     done_uid = _task(client, items="only")
     gone_uid = _task(client, items="dropped one")
-    client.post(f"/api/tasks/{done_uid}/item", json={"item": "i1", "state": "done"})
-    client.post(f"/api/tasks/{gone_uid}/item", json={"item": "i1", "state": "dropped"})
+    client.post(f"/api/tasks/{done_uid}/item", json={"item": item_of(done_uid, 1), "state": "done"})
+    client.post(f"/api/tasks/{gone_uid}/item", json={"item": item_of(gone_uid, 1), "state": "dropped"})
     note = _note(client)
 
     def uids(state: str) -> set[str]:
@@ -306,7 +305,7 @@ def test_overview_counts_open_tasks(client):
     assert client.get("/api/overview").json()["open_tasks"] == 0
     _task(client, items="a\nb")
     done_uid = _task(client, items="only")
-    client.post(f"/api/tasks/{done_uid}/item", json={"item": "i1", "state": "done"})
+    client.post(f"/api/tasks/{done_uid}/item", json={"item": item_of(done_uid, 1), "state": "done"})
     assert client.get("/api/overview").json()["open_tasks"] == 1
 
 
@@ -344,40 +343,29 @@ def test_comment_refuses_a_tool_calls_closing_tag(client):
 def test_delete_item_happy_path(client):
     uid = _task(client, items="draft the plan\nreview the plan\nship the plan")
     note = _note(client)
-    client.post(f"/api/tasks/{uid}/link", json={"item": "i3", "target": note})
-    client.post(f"/api/tasks/{uid}/comment", json={"body": "on the last step", "item": "i3"})
-    res = client.request("DELETE", f"/api/tasks/{uid}/item", json={"item": "i3"})
+    client.post(f"/api/tasks/{uid}/link", json={"item": item_of(uid, 3), "target": note})
+    client.post(f"/api/tasks/{uid}/comment", json={"body": "on the last step", "item": item_of(uid, 3)})
+    res = client.request("DELETE", f"/api/tasks/{uid}/item", json={"item": item_of(uid, 3)})
     assert res.status_code == 200, res.text
     body = res.json()
-    assert [i["key"] for i in body["task"]["items"]] == ["i1", "i2"]
+    assert [i["n"] for i in body["task"]["items"]] == [1, 2]
     assert body["task"]["comments"] == []
     assert body["status"] == "active"
     added = client.post(f"/api/tasks/{uid}/items", json={"items": "a later step"}).json()
-    assert [i["key"] for i in added["task"]["items"]] == ["i1", "i2", "i3"]
-
-
-def test_a_delete_naming_stale_text_is_refused_and_writes_nothing(client):
-    uid = _task(client, items=["draft the plan", "review the plan", "ship the plan"])
-    before = _snapshot(uid)
-    res = client.request("DELETE", f"/api/tasks/{uid}/item", json={"item": "i2", "text": "ship the plan"})
-    assert res.status_code == 400 and "reload" in res.json()["error"]
-    assert _snapshot(uid) == before
-    res = client.request("DELETE", f"/api/tasks/{uid}/item", json={"item": "i2", "text": "review the plan"})
-    assert res.status_code == 200, res.text
-    assert [i["text"] for i in res.json()["task"]["items"]] == ["draft the plan", "ship the plan"]
+    assert [i["n"] for i in added["task"]["items"]] == [1, 2, 3]
 
 
 def test_delete_item_completes_the_task_like_closing_the_last_item(client):
     uid = _task(client)
-    client.post(f"/api/tasks/{uid}/item", json={"item": "i1", "state": "done"})
-    body = client.request("DELETE", f"/api/tasks/{uid}/item", json={"item": "i2"}).json()
+    client.post(f"/api/tasks/{uid}/item", json={"item": item_of(uid, 1), "state": "done"})
+    body = client.request("DELETE", f"/api/tasks/{uid}/item", json={"item": item_of(uid, 2)}).json()
     assert body["status"] == "archived" and body["task"]["state"] == "completed"
 
 
 def test_delete_item_refuses_the_only_item_and_writes_nothing(client):
     uid = _task(client, items="only step")
     before = _snapshot(uid)
-    res = client.request("DELETE", f"/api/tasks/{uid}/item", json={"item": "i1"})
+    res = client.request("DELETE", f"/api/tasks/{uid}/item", json={"item": item_of(uid, 1)})
     assert res.status_code == 400
     assert res.json()["error"] == "a task keeps at least one item"
     assert _snapshot(uid) == before
@@ -386,13 +374,13 @@ def test_delete_item_refuses_the_only_item_and_writes_nothing(client):
 def test_delete_item_refuses_an_unknown_item_and_a_non_task(client):
     uid = _task(client)
     before = _snapshot(uid)
-    res = client.request("DELETE", f"/api/tasks/{uid}/item", json={"item": "i9"})
-    assert res.status_code == 400 and "i9" in res.json()["error"]
+    res = client.request("DELETE", f"/api/tasks/{uid}/item", json={"item": 999_999})
+    assert res.status_code == 400 and "no item 999999" in res.json()["error"]
     assert client.request("DELETE", f"/api/tasks/{uid}/item", json={}).status_code == 400
     assert _snapshot(uid) == before
-    res = client.request("DELETE", f"/api/tasks/{_note(client)}/item", json={"item": "i1"})
+    res = client.request("DELETE", f"/api/tasks/{_note(client)}/item", json={"item": 1})
     assert res.status_code == 400 and "no task" in res.json()["error"]
-    assert client.request("DELETE", "/api/tasks/ghost0000/item", json={"item": "i1"}).status_code == 400
+    assert client.request("DELETE", "/api/tasks/ghost0000/item", json={"item": 1}).status_code == 400
 
 
 def test_a_delete_item_refusal_after_rows_changed_rolls_them_back(client, monkeypatch):
@@ -403,7 +391,7 @@ def test_a_delete_item_refusal_after_rows_changed_rolls_them_back(client, monkey
         raise ValueError("refused after the item row was deleted")
 
     monkeypatch.setattr(tasks, "_regenerate", refuse)
-    res = client.request("DELETE", f"/api/tasks/{uid}/item", json={"item": "i1"})
+    res = client.request("DELETE", f"/api/tasks/{uid}/item", json={"item": item_of(uid, 1)})
     assert res.status_code == 400
     assert _snapshot(uid) == before
 
@@ -412,7 +400,7 @@ def test_delete_item_refuses_a_foreign_origin(client):
     uid = _task(client)
     before = _snapshot(uid)
     for headers in ({"Origin": "https://evil.example.com"}, {"Sec-Fetch-Site": "cross-site"}):
-        res = client.request("DELETE", f"/api/tasks/{uid}/item", json={"item": "i1"},
+        res = client.request("DELETE", f"/api/tasks/{uid}/item", json={"item": item_of(uid, 1)},
                              headers=headers)
         assert res.status_code == 403
     assert _snapshot(uid) == before
@@ -422,15 +410,15 @@ def test_delete_item_refuses_a_foreign_origin(client):
 
 POST_ROUTES = [
     ("/api/tasks", {"title": "t", "goal": "g", "items": "a"}),
-    ("/api/tasks/{uid}/item", {"item": "i1", "state": "done"}),
+    ("/api/tasks/{uid}/item", {"item": 1, "state": "done"}),
     ("/api/tasks/{uid}/items", {"items": "more"}),
     ("/api/tasks/{uid}/goal", {"goal": "new goal"}),
     ("/api/tasks/{uid}/comment", {"body": "hello"}),
-    ("/api/tasks/{uid}/link", {"item": "i1", "target": "abc"}),
+    ("/api/tasks/{uid}/link", {"item": 1, "target": "abc"}),
 ]
 DELETE_ROUTES = [
-    ("/api/tasks/{uid}/item", {"item": "i1"}),
-    ("/api/tasks/{uid}/link", {"item": "i1", "target": "abc"}),
+    ("/api/tasks/{uid}/item", {"item": 1}),
+    ("/api/tasks/{uid}/link", {"item": 1, "target": "abc"}),
 ]
 FOREIGN = [{"Origin": "https://evil.example.com"}, {"Sec-Fetch-Site": "cross-site"}]
 
@@ -464,10 +452,10 @@ def test_a_task_write_from_a_foreign_origin_is_refused(client, method, path, bod
 def test_task_note_routes_round_trip(client):
     uid = _task(client)
     made = client.post(f"/api/tasks/{uid}/note",
-                       json={"title": "Chart rules", "body": brief("chart the depths"), "items": ["i2"]})
+                       json={"title": "Chart rules", "body": brief("chart the depths"), "items": [item_of(uid, 2)]})
     assert made.status_code == 200, made.text
     note = made.json()["task"]["notes"][0]
-    assert (note["title"], note["items"]) == ("Chart rules", ["i2"])
+    assert (note["title"], note["items"]) == ("Chart rules", [item_of(uid, 2)])
     edited = client.post(f"/api/tasks/{uid}/note",
                          json={"id": note["id"], "body": "Depths in fathoms.", "items": []}).json()
     assert edited["task"]["notes"][0]["body"] == "Depths in fathoms."
@@ -480,14 +468,14 @@ def test_a_bad_task_note_is_refused(client):
     uid = _task(client)
     res = client.post(f"/api/tasks/{uid}/note", json={"title": "T", "body": "", "items": []})
     assert res.status_code == 400
-    res = client.post(f"/api/tasks/{uid}/note", json={"title": "T", "body": brief("b"), "items": ["i9"]})
+    res = client.post(f"/api/tasks/{uid}/note", json={"title": "T", "body": brief("b"), "items": [999_999]})
     assert res.status_code == 400
 
 
 def test_the_record_carries_every_task_note(client):
     uid = _task(client)
     client.post(f"/api/tasks/{uid}/note", json={"title": "Top", "body": "b", "items": []})
-    client.post(f"/api/tasks/{uid}/note", json={"title": "Solder brief", "body": brief("b"), "items": ["i1"]})
+    client.post(f"/api/tasks/{uid}/note", json={"title": "Solder brief", "body": brief("b"), "items": [item_of(uid, 1)]})
     record = client.get(f"/api/memories/{uid}").json()
     assert [n["title"] for n in record["task"]["notes"]] == ["Top", "Solder brief"]
 
@@ -506,7 +494,7 @@ def test_a_note_carries_its_brief_fields_or_null(client):
     uid = _task(client)
     client.post(f"/api/tasks/{uid}/note", json={"title": "Top", "body": "free", "items": []})
     client.post(f"/api/tasks/{uid}/note",
-                json={"title": "Solder brief", "body": brief("solder it", extra_info="flux first"), "items": ["i1"]})
+                json={"title": "Solder brief", "body": brief("solder it", extra_info="flux first"), "items": [item_of(uid, 1)]})
     notes = client.get(f"/api/memories/{uid}").json()["task"]["notes"]
     assert notes[0]["brief"] is None
     assert notes[1]["brief"]["goal"] == "solder it" and notes[1]["brief"]["extra_info"] == "flux first"
@@ -514,7 +502,7 @@ def test_a_note_carries_its_brief_fields_or_null(client):
 
 def test_a_free_body_on_items_is_a_400_and_writes_nothing(client):
     uid = _task(client)
-    res = client.post(f"/api/tasks/{uid}/note", json={"title": "T", "body": "free", "items": ["i1"]})
+    res = client.post(f"/api/tasks/{uid}/note", json={"title": "T", "body": "free", "items": [item_of(uid, 1)]})
     assert res.status_code == 400 and "a note on items is a brief" in res.text
     assert client.get(f"/api/memories/{uid}").json()["task"]["notes"] == []
 
@@ -527,24 +515,23 @@ def test_a_note_carries_its_parsed_depends_or_null(client):
     uid = _task(client)
     client.post(f"/api/tasks/{uid}/note", json={"title": "Top", "body": "free", "items": []})
     client.post(f"/api/tasks/{uid}/note",
-                json={"title": "Solder brief", "body": brief("solder it"), "items": ["i1"]})
+                json={"title": "Solder brief", "body": brief("solder it"), "items": [item_of(uid, 1)]})
     res = client.post(f"/api/tasks/{uid}/note",
-                      json={"title": "Ship brief", "body": brief("ship it", depends_on="i1 (the plan)"),
-                            "items": ["i2"]})
+                      json={"title": "Ship brief", "body": brief("ship it", depends_on=f"{item_of(uid, 1)} (the plan)"),
+                            "items": [item_of(uid, 2)]})
     assert res.status_code == 200, res.text
     notes = _notes(client, uid)
     assert notes[0]["depends"] is None
     assert notes[1]["depends"] == []
-    assert notes[2]["depends"] == [{"item": "i1", "deleted": "", "reason": "the plan"}]
+    assert notes[2]["depends"] == [{"item": item_of(uid, 1), "text": "", "reason": "the plan"}]
 
 
 def test_a_note_whose_depends_on_is_free_text_carries_null(client):
     uid = _task(client)
     client.post(f"/api/tasks/{uid}/note",
-                json={"title": "Solder brief", "body": brief("solder it"), "items": ["i1"]})
+                json={"title": "Solder brief", "body": brief("solder it"), "items": [item_of(uid, 1)]})
     with connection.connect() as conn:
-        conn.execute("UPDATE task_notes SET body = REPLACE(body, 'DEPENDS ON: none', "
-                     "'DEPENDS ON: Item 7')")
+        conn.execute("UPDATE task_notes SET body = ?, split_depends = 0", (brief("solder it", depends_on="Item 7"),))
     note = _notes(client, uid)[0]
     assert note["depends"] is None and note["brief"]["depends_on"] == "Item 7"
 
@@ -552,7 +539,7 @@ def test_a_note_whose_depends_on_is_free_text_carries_null(client):
 def test_a_dependency_on_an_unknown_item_is_a_400_and_writes_nothing(client):
     uid = _task(client)
     res = client.post(f"/api/tasks/{uid}/note",
-                      json={"title": "T", "body": brief("b", depends_on="i9"), "items": ["i1"]})
+                      json={"title": "T", "body": brief("b", depends_on="999999"), "items": [item_of(uid, 1)]})
     assert res.status_code == 400 and "DEPENDS ON is none" in res.text
     assert _notes(client, uid) == []
 
@@ -560,8 +547,37 @@ def test_a_dependency_on_an_unknown_item_is_a_400_and_writes_nothing(client):
 def test_deleting_an_item_marks_the_dependency_the_view_reads(client):
     uid = _task(client)
     client.post(f"/api/tasks/{uid}/note",
-                json={"title": "Ship brief", "body": brief("ship it", depends_on="i1"), "items": ["i2"]})
+                json={"title": "Ship brief", "body": brief("ship it", depends_on=str(item_of(uid, 1))),
+                      "items": [item_of(uid, 2)]})
     with connection.connect() as conn:
-        tasks.delete_item(conn, uid, "i1")
+        tasks.delete_item(conn, uid, item_at(conn, uid, 1))
     assert _notes(client, uid)[0]["depends"] == [
-        {"item": "", "deleted": "draft the plan", "reason": ""}]
+        {"item": None, "text": "draft the plan", "reason": ""}]
+
+
+def test_the_task_view_keys_items_by_id_and_resolves_mentions(client):
+    uid = _task(client)
+    ids = [i["id"] for i in client.get(f"/api/memories/{uid}").json()["task"]["items"]]
+    client.post(f"/api/tasks/{uid}/comment", json={"body": f"after [[#{ids[0]}]]"})
+    task = client.get(f"/api/memories/{uid}").json()["task"]
+    assert [i["n"] for i in task["items"]] == [1, 2]
+    assert task["refs"] == {str(ids[0]): {"n": 1, "text": "draft the plan", "state": "todo"}}
+
+
+def test_an_item_delete_needs_only_its_id(client):
+    uid = _task(client, items="draft the plan\nreview the plan\nship the map")
+    ids = [i["id"] for i in client.get(f"/api/memories/{uid}").json()["task"]["items"]]
+    res = client.request("DELETE", f"/api/tasks/{uid}/item", json={"item": ids[0]})
+    assert res.status_code == 200, res.text
+    assert [i["id"] for i in res.json()["task"]["items"]] == ids[1:]
+
+
+def test_a_note_carries_its_dependencies_as_rows(client):
+    uid = _task(client)
+    ids = [i["id"] for i in client.get(f"/api/memories/{uid}").json()["task"]["items"]]
+    res = client.post(f"/api/tasks/{uid}/note", json={
+        "title": "Review", "items": [ids[1]], "body": brief("check it", depends_on=f"{ids[0]} (the draft)")})
+    assert res.status_code == 200, res.text
+    note = res.json()["task"]["notes"][0]
+    assert note["items"] == [ids[1]]
+    assert note["depends"] == [{"item": ids[0], "text": "", "reason": "the draft"}]
