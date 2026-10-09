@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.11.0](https://github.com/Filipe-Soares-de-Almeida/MemAI/compare/v0.10.0...v0.11.0) (2026-10-09)
+
+
+### ⚠ BREAKING CHANGES
+
+* **tasks:** identify task items by id ([#95](https://github.com/Filipe-Soares-de-Almeida/MemAI/issues/95))
+* **server:** ITEM_MAX drops from 300 to 80, and writes that cite an item key outside DEPENDS ON are refused.
+
+### Features
+
+* **server:** describe every tool for the agents that call it, and let a task be corrected in place ([#90](https://github.com/Filipe-Soares-de-Almeida/MemAI/issues/90)) ([abb7d04](https://github.com/Filipe-Soares-de-Almeida/MemAI/commit/abb7d04e4c2c782c05661a5fa7d708ea1fdc29bd))
+* **tasks:** identify task items by id ([#95](https://github.com/Filipe-Soares-de-Almeida/MemAI/issues/95)) ([97e511e](https://github.com/Filipe-Soares-de-Almeida/MemAI/commit/97e511edc2b9e5f8f865a7b326960c25ee3becbf))
+* **webui:** mention items with # only and always animate the dashboard ([#96](https://github.com/Filipe-Soares-de-Almeida/MemAI/issues/96)) ([720e10f](https://github.com/Filipe-Soares-de-Almeida/MemAI/commit/720e10fbeefd62f98c50d41ecd285e80bb4281e4))
+
 ## [0.10.0](https://github.com/Filipe-Soares-de-Almeida/MemAI/compare/v0.9.1...v0.10.0) (2026-10-09)
 
 
