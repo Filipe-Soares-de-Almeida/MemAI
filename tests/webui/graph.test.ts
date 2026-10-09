@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { nextTick } from 'vue';
 import GraphView from '../../src/memai/webui/views/graph/GraphView.vue';
 import { graphParams, initialMode, initialShow } from '../../src/memai/webui/views/graph/graph.ts';
@@ -43,16 +43,25 @@ async function show(params: Record<string, string> = {}) {
 }
 
 describe('the graph canvas', () => {
-  it('animates by the root data-motion, whatever the system preference says', () => {
-    const motion = Object.getOwnPropertyDescriptor(GraphCanvas.prototype, 'motion')?.get as () => boolean;
-    const root = document.documentElement;
-    const was = root.dataset.motion;
+  it('glides to fit and to a memory even when the system and an old stored choice ask for less motion', async () => {
+    const asked = window.matchMedia;
     window.matchMedia = (() => ({ matches: true, addEventListener() {} })) as never;
-    root.dataset.motion = 'full';
-    expect(motion.call({})).toBe(true);
-    root.dataset.motion = 'reduce';
-    expect(motion.call({})).toBe(false);
-    root.dataset.motion = was;
+    localStorage.setItem('memai.motion', 'never');
+    vi.resetModules();
+    const { GraphCanvas: Fresh } = await import('../../src/memai/webui/engines/graph-2d.ts');
+    const glides: number[] = [];
+    const canvas = Object.assign(Object.create(Fresh.prototype), {
+      cam: { k: 1, frame: (_: unknown, ms: number) => glides.push(ms),
+             goTo: (_x: number, _y: number, _k: number, ms: number) => glides.push(ms) },
+      arr: { box: () => ({}), locate: () => ({ x: 0, y: 0 }) },
+      _wake() {},
+    });
+    canvas.fit();
+    canvas.travel('u1');
+    localStorage.removeItem('memai.motion');
+    window.matchMedia = asked;
+    expect(glides).toHaveLength(2);
+    expect(glides.every(ms => ms > 0)).toBe(true);
   });
 });
 

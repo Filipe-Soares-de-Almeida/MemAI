@@ -320,19 +320,8 @@ kbd {
 .anim > *:nth-child(4) { animation-delay: .11s; }
 .anim > *:nth-child(5) { animation-delay: .14s; }
 .anim > *:nth-child(n+6) { animation-delay: .17s; }
-/* the travel is a variable so that reduced motion can take it away and
-   leave the fade -- see the media query below */
 @keyframes rise { from { opacity: 0; transform: translateY(var(--rise-y, 6px)); } }
 
-/* Reduced motion is the root's data-motion="reduce" (core/motion.ts), not the media query:
-   travel goes, fades stay, and the spinner breathes instead of turning. */
-:root[data-motion="reduce"] { --rise-y: 0px; }
-:root[data-motion="reduce"] .bar-fill,
-:root[data-motion="reduce"] .ratio-fill,
-:root[data-motion="reduce"] .gs-fill { transition: none; }
-:root[data-motion="reduce"] .spin { animation: breathe 1.5s ease-in-out infinite; }
-:root[data-motion="reduce"] .dom-strip { scroll-behavior: auto; }
-@keyframes breathe { 50% { opacity: .25; } }
 
 /* ── brand ────────────────────────────────────────────────────────────────── */
 
@@ -2320,7 +2309,7 @@ button.rs-mono:hover { color: var(--accent); }
 /* the row a DEPENDS ON chip points at: the accent wash, fading out over the time the class stays */
 .tk-item.is-flash > .tk-row { animation: tk-flash 1.2s cubic-bezier(.3, 0, .6, 1) both; }
 @keyframes tk-flash { from { background: var(--accent-dim); } 60% { background: var(--accent-dim); } to { background: transparent; } }
-@keyframes tk-leave { to { opacity: 0; transform: translateX(var(--leave-x, -10px)); } }
+@keyframes tk-leave { to { opacity: 0; transform: translateX(-10px); } }
 
 .tk-item[data-s="doing"] > .tk-row { background: color-mix(in srgb, var(--f-live) 7%, transparent); }
 .tk-item.is-open > .tk-row { background: var(--hover-2); }
@@ -2365,7 +2354,7 @@ button.rs-mono:hover { color: var(--accent); }
   stroke-dasharray: 1 2;
   animation: tk-draw .3s .1s cubic-bezier(.3, .7, .2, 1) both;
 }
-@keyframes tk-pop { from { opacity: .2; transform: scale(var(--pop-from, .6)); } }
+@keyframes tk-pop { from { opacity: .2; transform: scale(.6); } }
 @keyframes tk-draw { from { stroke-dashoffset: 1; } }
 
 .tk-main {
@@ -2412,7 +2401,7 @@ button.rs-mono:hover { color: var(--accent); }
 }
 .tk-item:last-child .tk-panel { border-radius: 0 0 var(--r-lg) var(--r-lg); }
 .tk-panel.is-enter { animation: tk-in .22s cubic-bezier(.2, .7, .3, 1) both; }
-@keyframes tk-in { from { opacity: 0; transform: translateY(var(--tk-in-y, -4px)); } }
+@keyframes tk-in { from { opacity: 0; transform: translateY(-4px); } }
 .tk-sub { display: flex; align-items: baseline; gap: var(--sp-2); }
 .tk-sub-h {
   font: 500 var(--fs-sm) var(--font-ui); color: var(--ink-2);
@@ -2621,13 +2610,6 @@ input.tk-dep-add { width: min(100%, 34ch); height: var(--ctl-h-sm); font-size: v
 /* closing the task: the banner arrives and its mark scales in */
 .tk-closed.is-new { animation: rise .4s cubic-bezier(.2, .7, .3, 1) both; }
 .tk-closed.is-new .tk-closed-mark { animation: tk-pop .4s .12s cubic-bezier(.2, .8, .2, 1) both; }
-
-/* Nothing turns, draws or slides; the fades and the colour changes stay. */
-:root[data-motion="reduce"] .tk { --pop-from: 1; --leave-x: 0px; --tk-in-y: 0px; }
-:root[data-motion="reduce"] .tk-state[data-s="doing"] .ico { animation: none; }
-:root[data-motion="reduce"] .tk-state.is-pulse[data-s="done"] .ico path { animation: none; }
-:root[data-motion="reduce"] .tk-item.is-flash > .tk-row { animation: none; background: var(--accent-dim); }
-:root[data-motion="reduce"] :is(.tk-ring, .tk-chev, .tk-row, .tk-reply) { transition: none; }
 
 /* a task in the memories list: how far it has got, as a short bar and the
    count it is drawn from */
