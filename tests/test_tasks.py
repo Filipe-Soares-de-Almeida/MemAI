@@ -96,11 +96,11 @@ def test_creation_refuses_out_of_limit_input_and_writes_nothing(conn, kwargs):
 def test_creation_accepts_input_exactly_at_each_limit(conn):
     uid = tasks.create_task(
         conn, title="At the limits", goal="g" * 2000,
-        items=["x" * 300] + [f"step {n}" for n in range(49)],
+        items=["x" * tasks.ITEM_MAX] + [f"step {n}" for n in range(49)],
     )
     task = tasks.get_task(conn, uid)
     assert len(task["goal"]) == 2000
-    assert len(task["items"]) == 50 and len(task["items"][0]["text"]) == 300
+    assert len(task["items"]) == 50 and len(task["items"][0]["text"]) == tasks.ITEM_MAX
 
 
 def test_a_created_task_records_its_session_tags_and_cross_listing(conn):
@@ -116,14 +116,14 @@ def test_a_created_task_records_its_session_tags_and_cross_listing(conn):
     assert [i["updated_session"] for i in items] == ["session-7", "session-7"]
 
 
-def test_add_items_accepts_up_to_fifty_items_and_an_item_of_exactly_three_hundred(conn):
+def test_add_items_accepts_up_to_fifty_items_and_an_item_at_the_length_limit(conn):
     uid = _make(conn)
-    keys = tasks.add_items(conn, uid, ["x" * 300] + [f"step {n}" for n in range(47)])["keys"]
+    keys = tasks.add_items(conn, uid, ["x" * tasks.ITEM_MAX] + [f"step {n}" for n in range(47)])["keys"]
     assert len(keys) == 48 and len(tasks.get_task(conn, uid)["items"]) == 50
     with pytest.raises(ValueError):
         tasks.add_items(conn, uid, ["one too many"])
     with pytest.raises(ValueError):
-        tasks.add_items(conn, uid, ["x" * 301])
+        tasks.add_items(conn, uid, ["x" * (tasks.ITEM_MAX + 1)])
     assert len(tasks.get_task(conn, uid)["items"]) == 50
 
 

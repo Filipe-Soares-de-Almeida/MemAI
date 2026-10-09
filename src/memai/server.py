@@ -248,9 +248,12 @@ _ACTIVE_SETS = frozenset(
 _GROUP_OF: dict[str, str] = {}
 _PARAM_TEXT: dict[str, dict[str, str]] = {}
 
-# Parameter text several writer tools share. A docstring line holding only
-# `@param <key>` is replaced by the entry, at that line's indentation.
+# Text several tools share. A docstring line holding only `@param <key>` is
+# replaced by the entry, at that line's indentation.
 PARAM_DOCS: dict[str, str] = {
+    "cite_rule": """\
+Name another item by what it does: its key belongs only in a brief's
+DEPENDS ON, since keys renumber when an item is deleted.""",
     "offset": """\
 offset: where the page starts; `next_offset`, when present, starts the next.""",
     "title": """\
@@ -781,8 +784,10 @@ def task(title: str, goal: str, items: str, domain: str = "", also: str = "",
     and discuss it with task_comment(); it archives itself once every item is
     done or dropped, and must_read() lists the open ones.
 
-    title: one line naming what this task delivers, in the words someone
-    would look for it by. At most 120 characters.
+    @param cite_rule
+
+    title: what the task delivers, in a few words someone would look for
+    it by. At most 120 characters.
 
     @param domain
 
@@ -793,9 +798,11 @@ def task(title: str, goal: str, items: str, domain: str = "", also: str = "",
     task is not a sectioned type, so no `INTENT:` / `GOAL:` / `WHY:` labels --
     those are how checkpoint, anti_pattern and reasoning bodies are read back.
 
-    items: one checklist item per line, blank lines ignored. At most 50
-    items of 300 characters each. Each gets a key (i1, i2, ...) that
-    task_item() takes back.
+    items: one checklist item per line, blank lines ignored, at most 50.
+    Each is a short label, verb first, at most 80 characters: lists and
+    every DEPENDS ON that names it show it whole, so its detail goes in the
+    item's brief (task_note). Each gets a key (i1, i2, ...), its position,
+    that task_item() takes back.
 
     @param also
 
@@ -839,6 +846,8 @@ def task_item(uid: str, item: str, state: str = "", comment: str = "",
 
     Give at least one of state, comment and related. They apply together, or
     not at all.
+
+    @param cite_rule
     """
     if not any(str(v).strip() for v in (state, comment, related)):
         return _errors(["give at least one of state, comment and related"])
@@ -873,12 +882,15 @@ def task_add(uid: str, items: str) -> dict:
     For work the checklist is missing. To move or comment on an item that
     exists, task_item(); to give an item its detail, task_note().
 
+    @param cite_rule
+
     Returns {"uid", "items", "progress", "task_state", "archived"}: the keys
     the new items got, and the task as it stands.
 
     uid: the task.
 
-    items: one item per line, blank lines ignored, as task() takes them.
+    items: one item per line, blank lines ignored, each a short label as
+    task() takes them.
     """
     try:
         with connection.connect() as conn:
@@ -898,6 +910,8 @@ def task_comment(uid: str, body: str, item: str = "") -> dict:
     item is worked from -- its brief, a rule several items share -- is a
     task_note(); a comment that goes with a change of state rides on
     task_item(), in its `comment`.
+
+    @param cite_rule
 
     Returns {"uid", "comment_id"}.
 
@@ -979,7 +993,9 @@ def task_note(uid: str, title: str = "", body: str = "", items: str = "", note_i
 
     depends_on: none, or the keys of the items this one waits for, each
     with an optional reason in parentheses ("i3 (why), i9"); the keys are
-    renumbered with the items.
+    renumbered with the items. The only field an item key belongs in:
+    free text is never rewritten when keys renumber, so every other field
+    names an item by what it does.
 
     extra_info: anything else worth knowing; optional.
     """

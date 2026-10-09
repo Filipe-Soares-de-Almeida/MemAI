@@ -418,7 +418,7 @@ task(title, goal, items, domain, also, tags, session)
   items: one checklist item per line; blank lines are ignored
 ```
 
-A task is a `goal` and up to 50 items of up to 300 characters. The `goal` is
+A task is a `goal` and up to 50 items of up to 80 characters. The `goal` is
 the **brief** an agent with none of the writing session's context works from:
 what the work is and why, where it lives, the decisions and constraints that
 bind it, and what done looks like. Keep it short but complete enough to act on
@@ -432,6 +432,29 @@ stops applying is `dropped`; deleting one (only the dashboard does) renumbers
 every item after it. The task's content is
 generated from the goal and the items (`[ ]` todo, `[~]` doing, `[x]` done,
 `[-]` dropped); a goal edit and an item deletion enter the edit history.
+
+**Write it so it reads back.** The server refuses a write that breaks these:
+
+- **The title names what the task delivers, in a few words.** Every list
+  shows it.
+- **An item is a short label, verb first, at most 80 characters.** Lists,
+  progress and every `DEPENDS ON` in another item's brief show it whole, so a
+  long one floods each brief that depends on it. The step's detail goes in
+  that item's brief (`task_note`).
+- **An item is cited by its key only in a brief's `DEPENDS ON`.** Deleting an
+  item renumbers the rest and `DEPENDS ON` follows, but free text — the goal,
+  an item's text, a note's title or other fields, a comment — is never
+  rewritten, so an `i3` there silently comes to mean another item. Order and
+  prerequisites go in `DEPENDS ON`; anywhere else, name the item by what it
+  does.
+
+```
+Refused:  item   "Write the CSV exporter with the column mapping, once i2 is merged"
+          steps  "Reuse the mapping i2 built"
+Accepted: item   "Write the CSV exporter"
+          steps  "Reuse the column mapping the schema item built"
+          depends_on  "i2 (the column mapping)"
+```
 
 Work it with:
 
