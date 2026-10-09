@@ -141,6 +141,23 @@ def test_anti_pattern_says_what_it_returns():
     assert "Returns" in doc and "uid" in doc and "similar" in doc
 
 
+@pytest.mark.parametrize("name, phrases", [
+    ("forget", ("purge_memory()", "restore", "Returns")),
+    ("set_confidence", ("contradicted", "sorts last", "must_read()", "Returns")),
+    ("diagram_link", ("link_memories()", "diagram_jump()", "Returns")),
+    ("task_add", ("task_item()", "task_note()", "Returns")),
+    ("task_comment", ("task_note()", "task_item()", "Returns")),
+])
+def test_a_tool_names_its_sibling_and_its_result(name, phrases):
+    doc = _flat(_descriptions()[name])
+    assert [p for p in phrases if p not in doc] == []
+
+
+def test_forget_points_a_live_replacement_at_a_supersedes_edge():
+    text = _schemas()["forget"]["properties"]["superseded_by"]["description"]
+    assert "link_memories" in text and "supersedes" in text
+
+
 def test_anti_pattern_states_the_pattern_ceiling():
     [pattern] = [s for s in sections.SECTION_SPEC["anti_pattern"] if s.key == "pattern"]
     text = _schemas()["anti_pattern"]["properties"]["pattern"]["description"]

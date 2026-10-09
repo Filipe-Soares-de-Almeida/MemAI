@@ -870,7 +870,11 @@ def task_item(uid: str, item: str, state: str = "", comment: str = "",
 def task_add(uid: str, items: str) -> dict:
     """Append items to a task, one per line; a closed task reopens.
 
-    Returns the keys the new items got, and the progress.
+    For work the checklist is missing. To move or comment on an item that
+    exists, task_item(); to give an item its detail, task_note().
+
+    Returns {"uid", "items", "progress", "task_state", "archived"}: the keys
+    the new items got, and the task as it stands.
 
     uid: the task.
 
@@ -890,7 +894,12 @@ def task_comment(uid: str, body: str, item: str = "") -> dict:
     """Comment on a task, or on one of its items when `item` names a key.
 
     A comment never edits the task's content, so it carries what the
-    checklist cannot: why an item is blocked, what a review said.
+    checklist cannot: why an item is blocked, what a review said. Text an
+    item is worked from -- its brief, a rule several items share -- is a
+    task_note(); a comment that goes with a change of state rides on
+    task_item(), in its `comment`.
+
+    Returns {"uid", "comment_id"}.
 
     uid: the task.
 
@@ -1149,10 +1158,15 @@ def diagram_link(
     What turns a diagram into an index of its domain: the step states
     what happens, the linked note/anti_pattern/reasoning states why it is
     that way. Point at the step the memory actually concerns -- for an
-    edge to the diagram as a whole use link_memories() instead.
+    edge to the diagram as a whole use link_memories() instead, and to say
+    the branch continues in another flow, diagram_jump().
 
     get_memory() on the linked memory reports the diagrams that reference
     it, so the connection is visible from both ends.
+
+    Returns {"ok": True}, or {"ok": False, "errors": [...]} for an unknown
+    diagram, step or memory, a link from a diagram to itself, or a delete
+    with no such link.
 
     uid: the diagram.
 
@@ -2201,6 +2215,16 @@ def get_relations(uid: str, part: str = "relations", offset: int = 0) -> dict:
 def set_confidence(uid: str, confidence: str) -> dict:
     """Set a memory's confidence: unverified | confirmed | contradicted.
 
+    Call it once evidence settles a claim: the code, a run or a source
+    checked against the memory. A contradicted memory sorts last in search
+    and is left out of the notes, pitfalls and handoffs must_read() lists
+    and of the checkpoint pulse() returns, so a claim known to be wrong
+    stops steering work while it stays readable; unverified and confirmed
+    rank alike. To correct the text, edit_memory(); to retire it, forget().
+
+    Returns {"ok": True}, {"ok": False} for an unknown uid, or an error for
+    any other value.
+
     uid: the memory.
 
     confidence: unverified, confirmed or contradicted.
@@ -2216,14 +2240,24 @@ def set_confidence(uid: str, confidence: str) -> dict:
 def forget(uid: str, reason: str = "", superseded_by: str = "") -> dict:
     """Archive a memory (soft delete -- content is kept, just excluded from default search/list).
 
-    Archiving an open task cancels it; its items keep their states.
+    The call for a memory that is wrong, stale or a copy. It is reversible:
+    the dashboard's restore brings an archived memory back, and
+    list_by_domain(status='archived') still reads it. purge_memory() is the
+    irreversible delete, only on the user's explicit request; to correct a
+    memory instead of retiring it, edit_memory(). Archiving an open task
+    cancels it; its items keep their states.
+
+    Returns {"ok": True}, or {"ok": False} for an unknown uid.
 
     uid: the memory.
 
     reason: why it is archived, recorded as a status-change audit entry
     without touching the content.
 
-    superseded_by: the uid of the memory that replaces this one.
+    superseded_by: the uid of the memory that replaces this one, kept on
+    the archived record. To mark a memory that stays active as replaced,
+    draw link_memories(new, old, 'supersedes') instead: search then flags
+    the old one `succeeded_by`.
     """
     with connection.connect() as conn:
         ok = memories.set_status(
