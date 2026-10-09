@@ -168,7 +168,8 @@ def render_depends(entries: list[DependsEntry]) -> str:
         return "none"
     parts = []
     for e in entries:
-        head = e.item or f'deleted "{e.deleted.replace(chr(34), chr(39))}"'
+        text = " ".join(e.deleted.replace('"', "'").split())
+        head = e.item or f'deleted "{text}"'
         parts.append(f"{head} ({e.reason})" if e.reason else head)
     return ", ".join(parts)
 

@@ -307,3 +307,23 @@ def test_a_task_level_brief_built_from_fields_is_held_to_known_items(conn, uid):
 
 def test_a_free_task_note_is_not_read_for_depends(conn, uid):
     tasks.add_note(conn, uid, title="Pick-up", body="DEPENDS ON: Item 9", items=[])
+
+
+def test_a_scope_edit_may_not_put_a_brief_on_its_own_dependency(conn, uid):
+    nid = _depends_note(conn, uid, "i1 (the spec), i3")
+    with pytest.raises(ValueError, match="i1 is an item this note applies to"):
+        tasks.edit_note(conn, uid, nid, items=["i1"])
+    with pytest.raises(ValueError, match="i3 is an item this note applies to"):
+        tasks.edit_note(conn, uid, nid, items=["i2", "i3"])
+    tasks.edit_note(conn, uid, nid, items=[])
+    assert tasks.note(conn, uid, nid)["items"] == []
+    tasks.edit_note(conn, uid, nid, items=["i2"])
+    assert tasks.note(conn, uid, nid)["items"] == ["i2"]
+
+
+def test_a_scope_edit_leaves_a_pre_grammar_brief_lenient(conn, uid):
+    nid = _depends_note(conn, uid, "none")
+    conn.execute("UPDATE task_notes SET body = REPLACE(body, 'DEPENDS ON: none', 'DEPENDS ON: Item 9') "
+                 "WHERE id = ?", (nid,))
+    tasks.edit_note(conn, uid, nid, items=["i3"])
+    assert tasks.note(conn, uid, nid)["items"] == ["i3"]

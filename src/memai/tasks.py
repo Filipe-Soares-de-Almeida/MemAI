@@ -438,17 +438,29 @@ def _require_brief(body: str, *, on_items: bool = True) -> None:
 DEPENDS_FORMAT = "DEPENDS ON is none, or item keys with an optional reason in parentheses: i3 (why), i9"
 
 
-def _require_depends(conn: sqlite3.Connection, uid: str, body: str, applies_to: list[str]) -> None:
-    """Refuse a brief whose DEPENDS ON does not read, names an item the task lacks, or names the note's own item."""
+def depends_error(conn: sqlite3.Connection, uid: str, body: str, applies_to: list[str], *,
+                  overlap_only: bool = False) -> str | None:
+    """The problems with the brief's DEPENDS ON, or None when it reads, names only items of the task, and none the note applies to.
+
+    overlap_only checks just the last of those, and only for a field that reads.
+    """
     entries, problems = sections.parse_depends((brief_fields(body) or {}).get("depends_on", "none"))
+    if overlap_only:
+        problems = []
     known = {i["key"] for i in _items(conn, uid)}
     for e in entries:
-        if e.item and e.item not in known:
+        if e.item and e.item not in known and not overlap_only:
             problems.append(f"{e.item} is not an item of this task")
         elif e.item in applies_to:
             problems.append(f"{e.item} is an item this note applies to")
-    if problems:
-        raise ValueError(f"{DEPENDS_FORMAT} — {'; '.join(problems)}")
+    return "; ".join(problems) or None
+
+
+def _require_depends(conn: sqlite3.Connection, uid: str, body: str, applies_to: list[str], *,
+                     overlap_only: bool = False) -> None:
+    error = depends_error(conn, uid, body, applies_to, overlap_only=overlap_only)
+    if error:
+        raise ValueError(f"{DEPENDS_FORMAT} — {error}")
 
 
 def brief_depends(body: str) -> list[sections.DependsEntry] | None:
@@ -568,6 +580,8 @@ def edit_note(conn: sqlite3.Connection, uid: str, note_id: int, *, title: str = 
         applies_to = keys if keys is not None else [r["item_key"] for r in conn.execute(
             "SELECT item_key FROM task_note_items WHERE note_id = ?", (note_id,))]
         _require_depends(conn, uid, body, applies_to)
+    elif keys and had:
+        _require_depends(conn, uid, body, keys, overlap_only=True)
     conn.execute("UPDATE task_notes SET title = ?, body = ?, updated_at = ? WHERE id = ?",
                  (title, body, lite.now_iso(), note_id))
     if keys is not None:

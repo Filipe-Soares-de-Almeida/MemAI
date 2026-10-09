@@ -294,3 +294,15 @@ def test_the_references_in_a_store_with_gaps_follow_the_compaction_when_it_opens
     with connection.connect(path) as c:
         assert _keys(c, uid) == ["i1", "i2", "i3", "i4", "i5"]
         assert _depends(c, uid, nid) == "i4 (the beam), i3"
+
+
+def test_deleting_an_item_a_brief_near_the_note_limit_depends_on_is_not_refused(conn):
+    text = "x" * 290
+    uid = tasks.create_task(conn, title="Ship it", goal="Ship it", items=[text, "pack the box"],
+                            domain="acme/lantern")
+    nid = tasks.add_note(conn, uid, title="Pack", items=["i2"],
+                         body=brief("pack", depends_on="i1", context="c" * (tasks.NOTE_MAX - 150)))
+    assert len(tasks.note(conn, uid, nid)["body"]) > tasks.NOTE_MAX - 160
+    tasks.delete_item(conn, uid, "i1")
+    body = tasks.note(conn, uid, nid)["body"]
+    assert len(body) > tasks.NOTE_MAX and _depends(conn, uid, nid) == f'deleted "{text}"'

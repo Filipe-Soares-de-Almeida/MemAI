@@ -704,3 +704,9 @@ def test_a_quote_in_a_deleted_text_renders_as_an_apostrophe():
     rendered = sections.render_depends([DEP("", 'Fix the "lens" mount', "")])
     assert rendered == "deleted \"Fix the 'lens' mount\""
     assert sections.parse_depends(rendered)[1] == []
+
+
+def test_a_newline_in_a_deleted_text_collapses_so_the_field_stays_one_line():
+    rendered = sections.render_depends([DEP("", "Fix the mount\nGOAL:  again", "")])
+    assert rendered == 'deleted "Fix the mount GOAL: again"'
+    assert sections.parse_depends(rendered)[1] == []

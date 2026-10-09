@@ -95,3 +95,22 @@ def test_a_memory_that_would_land_on_items_must_already_be_a_brief(setup):
     out = portable.adopt(setup["task"], [setup["free"], setup["brief"]])
     assert out["refused"] == [{"uid": setup["free"], "reason": "not a brief"}]
     assert [p["uid"] for p in out["plan"]] == [setup["brief"]]
+
+
+def test_only_briefs_whose_depends_on_reads_are_planned_and_a_real_run_adopts_them(setup):
+    with connection.connect() as conn:
+        made = {depends: memories.insert_memory(conn, type="note", content=brief("Lexer.", depends_on=depends),
+                                                title=f"Lexer {n}", domain="acme")
+                for n, depends in enumerate(("none", "Item 1 first", "i9"))}
+        tasks.link_item(conn, setup["task"], "i2", list(made.values()))
+    ok, free, unknown = made["none"], made["Item 1 first"], made["i9"]
+    dry = portable.adopt(setup["task"], [ok, free, unknown])
+    assert [p["uid"] for p in dry["plan"]] == [ok]
+    reasons = {r["uid"]: r["reason"] for r in dry["refused"]}
+    assert reasons[free].startswith("DEPENDS ON does not read: ")
+    assert "i9 is not an item of this task" in reasons[unknown]
+    real = portable.adopt(setup["task"], [ok, free, unknown], dry_run=False)
+    assert [p["uid"] for p in real["plan"]] == [ok]
+    with connection.connect() as conn:
+        assert memories.get_memory(conn, ok) is None
+        assert memories.get_memory(conn, free) is not None and memories.get_memory(conn, unknown) is not None
