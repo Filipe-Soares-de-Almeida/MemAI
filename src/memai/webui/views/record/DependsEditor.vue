@@ -1,9 +1,10 @@
 <script setup lang="ts">
 /* A brief's DEPENDS ON as chips: each item it waits for with an optional reason, added from the items
    the note neither applies to nor already waits for. */
-import { computed } from 'vue';
+import { computed, ref } from 'vue';
 import { t } from '../../i18n.ts';
 import AppIcon from '../../components/AppIcon.vue';
+import MentionMenu from './MentionMenu.vue';
 import { MARK } from './checklist.ts';
 import type { Checklist, NoteDraft } from './checklist.ts';
 
@@ -17,12 +18,8 @@ const rows = computed(() => props.draft.depends.map(d => ({
 const eligible = computed(() => numbered.value.filter(i => !props.draft.items.includes(i.id)
   && !props.draft.depends.some(d => d.item === i.id)));
 
-function add(e: Event) {
-  const box = e.target as HTMLSelectElement;
-  const id = Number(box.value);
-  box.value = '';
-  if (id) props.draft.depends.push({ item: id, text: '', reason: '' });
-}
+const adder = ref<HTMLElement | null>(null);
+const add = (id: number) => { props.draft.depends.push({ item: id, text: '', reason: '' }); };
 
 const remove = (at: number) => { props.draft.depends.splice(at, 1); };
 </script>
@@ -48,10 +45,11 @@ const remove = (at: number) => { props.draft.depends.splice(at, 1); };
       </li>
     </ul>
     <p v-else class="tk-dep-none">{{ t('task.depends.none') }}</p>
-    <select v-if="eligible.length" class="pick tk-dep-add" data-dep-add :aria-label="t('task.depends.add')" @change="add">
-      <option value="">{{ t('task.depends.add') }}</option>
-      <option v-for="i in eligible" :key="i.id" :value="i.id">{{ i.n }} · {{ i.text }}</option>
-    </select>
+    <div v-if="eligible.length" ref="adder" class="tk-dep-adder">
+      <input class="tk-dep-add" type="text" data-dep-add data-mention="bare" spellcheck="false"
+             :placeholder="t('task.depends.add')" :aria-label="t('task.depends.add')">
+      <MentionMenu :host="adder" :items="eligible" @chose="add" />
+    </div>
     <p v-if="issue" :id="issueId" class="field-error tk-brief-err" data-depends-error>{{ issue }}</p>
   </div>
 </template>

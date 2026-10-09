@@ -1,7 +1,7 @@
 <script setup lang="ts">
 /* A task note's editor: the record field's card without its preview; picking an item turns the body
    into the brief's fields, picking none turns it back. */
-import { computed } from 'vue';
+import { computed, ref } from 'vue';
 import { sectionLabel } from '../../core/shared.js';
 import { t } from '../../i18n.ts';
 import { MEMORY, TASK } from '../../contract.ts';
@@ -9,6 +9,7 @@ import type { TaskNote } from '../../api/types.ts';
 import AppIcon from '../../components/AppIcon.vue';
 import KeyHint from '../../components/KeyHint.vue';
 import DependsEditor from './DependsEditor.vue';
+import MentionMenu from './MentionMenu.vue';
 import { BRIEF } from './checklist.ts';
 import type { Checklist } from './checklist.ts';
 
@@ -18,6 +19,7 @@ const { current, ui } = props.c;
 const { NOTE_MAX } = TASK;
 
 const id = computed(() => (props.note ? String(props.note.id) : `new:${props.scope}`));
+const form = ref<HTMLElement | null>(null);
 const d = computed(() => ui.noteDraft ?? { title: '', body: '', items: [], brief: {}, depends: [], legacy: '' });
 const issue = computed(() => props.c.dependsIssue());
 const sum = computed(() => (d.value.items.length ? t('task.note.scope.n', { n: d.value.items.length })
@@ -30,7 +32,7 @@ function key(e: KeyboardEvent) {
 </script>
 
 <template>
-  <section class="rf is-open tk-note" :data-note-form="id" @keydown="key">
+  <section ref="form" class="rf is-open tk-note" :data-note-form="id" @keydown="key">
     <header class="rf-head">
       <input v-model="d.title" class="tk-note-title-box" data-note-field="title" :maxlength="MEMORY.TITLE_MAX"
              spellcheck="false" :aria-label="t('task.note.title')" :placeholder="t('task.note.title')">
@@ -44,12 +46,12 @@ function key(e: KeyboardEvent) {
             <label v-else class="tk-brief-in">
               <span class="rf-sub">{{ sectionLabel('task_note', f) }}<span v-if="f.optional" class="tk-opt"> · {{
                 t('task.note.optional') }}</span></span>
-              <textarea v-model="d.brief[f.key]" :data-note-field="f.key" rows="3" spellcheck="false"
+              <textarea v-model="d.brief[f.key]" :data-note-field="f.key" rows="3" spellcheck="false" data-mention
                         :aria-required="f.optional ? undefined : 'true'"></textarea>
             </label>
           </template>
         </template>
-        <textarea v-else v-model="d.body" data-note-field="body" rows="12" spellcheck="false" :maxlength="NOTE_MAX"
+        <textarea v-else v-model="d.body" data-note-field="body" rows="12" spellcheck="false" data-mention :maxlength="NOTE_MAX"
                   :aria-label="t('task.note.body')" :placeholder="t('task.note.body')"></textarea>
         <div class="tk-note-foot">
           <span class="tk-hint"><KeyHint save :action="t('dr.key.save')" /><KeyHint :keys="['Esc']"
@@ -78,5 +80,6 @@ function key(e: KeyboardEvent) {
       <button v-if="note" type="button" class="btn btn-sm btn-danger tk-note-del" :data-note-del="note.id"
               @click="c.deleteNote()"><AppIcon name="trash" />{{ t('task.note.delete') }}</button>
     </div>
+    <MentionMenu :host="form" :items="current.items" />
   </section>
 </template>

@@ -2505,11 +2505,15 @@ textarea.tk-box {
 .tk-dep-chip.is-static:hover { color: var(--ink); border-color: var(--line-soft); }
 input.tk-dep-why-box { flex: 1 1 12ch; min-width: 0; height: var(--ctl-h-sm); font-size: var(--fs-sm); }
 .tk-dep-x { flex: none; --ico: 12px; }
-select.tk-dep-add {
-  appearance: none; align-self: flex-start; max-width: 100%; height: var(--ctl-h-sm);
-  margin-top: var(--sp-1); font-size: var(--fs-sm); color: var(--ink-2);
+.tk-dep-adder { margin-top: var(--sp-1); }
+input.tk-dep-add { width: min(100%, 34ch); height: var(--ctl-h-sm); font-size: var(--fs-sm); }
+/* the items a mention can name, hung under the field typed in; the highlighted one is the one Tab takes */
+.tk-mention { max-height: min(40vh, 320px); overflow-y: auto; }
+.tk-mention-opt {
+  display: flex; align-items: center; overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
+  font-variant-numeric: tabular-nums; cursor: pointer;
 }
-select.tk-dep-add:hover, select.tk-dep-add:focus-visible { color: var(--ink); border-color: var(--accent); }
+.tk-mention-opt.is-active { background: var(--hover-2); color: var(--accent); }
 .tk-dep-legacy { margin: 0; font: 400 var(--fs-sm)/1.5 var(--font-ui); color: var(--ink-2); overflow-wrap: anywhere; }
 @media (max-width: 600px) {
   .tk-dep-row { flex-wrap: wrap; row-gap: var(--sp-1); }

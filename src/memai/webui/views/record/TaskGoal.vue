@@ -4,6 +4,7 @@ import { nextTick, ref, watch } from 'vue';
 import { t } from '../../i18n.ts';
 import AppIcon from '../../components/AppIcon.vue';
 import RichText from '../../components/RichText.vue';
+import MentionMenu from './MentionMenu.vue';
 import type { Checklist } from './checklist.ts';
 
 const props = defineProps<{ c: Checklist }>();
@@ -11,6 +12,7 @@ const { current, ui } = props.c;
 
 const text = ref('');
 const box = ref<HTMLTextAreaElement | null>(null);
+const wrap = ref<HTMLElement | null>(null);
 watch(() => ui.goalEditing, open => {
   if (!open) return;
   text.value = current.value.goal;
@@ -22,10 +24,11 @@ watch(() => ui.goalEditing, open => {
 </script>
 
 <template>
-  <div v-if="ui.goalEditing" class="tk-goal is-editing">
-    <textarea id="tkGoalBox" ref="box" v-model="text" class="tk-box tk-goal-box" rows="3"
+  <div v-if="ui.goalEditing" ref="wrap" class="tk-goal is-editing">
+    <textarea id="tkGoalBox" ref="box" v-model="text" class="tk-box tk-goal-box" rows="3" data-mention
               :aria-label="t('task.goal.aria')" @keydown.esc="c.leaveGoal()"
               @keydown.ctrl.enter.prevent="c.saveGoal(text)" @keydown.meta.enter.prevent="c.saveGoal(text)"></textarea>
+    <MentionMenu :host="wrap" :items="current.items" />
     <div class="tk-actions">
       <button id="tkGoalSave" type="button" class="btn btn-sm btn-solid" @click="c.saveGoal(text)">{{
         t('common.save') }}</button>

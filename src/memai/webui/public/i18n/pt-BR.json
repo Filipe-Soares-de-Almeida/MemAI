@@ -1170,6 +1170,7 @@
     "task.item.renameAria": "Novo texto do item {n}",
     "task.link.add": "Vincular memórias",
     "task.mention.deleted": "item excluído",
+    "task.mention.menu": "Itens desta task",
     "task.mention.open": "Ir para o item {n}: {text}",
     "task.link.pickTitle": "Vincular memórias a este item",
     "task.link.remove": "Remover este vínculo",
