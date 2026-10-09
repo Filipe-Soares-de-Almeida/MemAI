@@ -1,9 +1,10 @@
-/* A memory body drawn read-only as headings, paragraphs, lists, GFM tables, code, bold and [[uid]]
-   links; unknown lines keep their whitespace. Everything is escaped before any tag is added. */
+/* A memory body drawn read-only: headings, paragraphs, lists, GFM tables, code, bold, [[uid]] links and
+   [[#id]] item mentions; unknown lines keep their whitespace, and everything is escaped first. */
 
 import { esc } from './dom.ts';
 import { icon } from './icons.js';
 import { t } from '../i18n.ts';
+import { ITEM_MARK } from './vocab.js';
 
 const UID = /^[0-9a-f]{16}$/;
 
@@ -34,7 +35,7 @@ const alignOf = spec => {
 
 const SLOT = String.fromCharCode(0);
 
-function inline(raw, links) {
+function inline(raw, ctx) {
   const code = [];
   let text = esc(raw).replace(/`([^`\n]+)`/g, (_, body) => {
     code.push(body);
@@ -43,12 +44,22 @@ function inline(raw, links) {
 
   text = text.replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>');
 
+  if (ctx.items) text = text.replace(/\[\[#([0-9]+)\]\]/g, (_, id) => {
+    const ref = ctx.items[id];
+    if (!ref || ref.deleted) return `<span class="rt-item is-gone">${esc(t('task.mention.deleted'))}</span>`;
+    const mark = ITEM_MARK[ref.state] ? icon(ITEM_MARK[ref.state]) : '';
+    return `<button type="button" class="rt-item" data-item="${id}"`
+      + ` aria-label="${esc(t('task.mention.open', { n: ref.n, text: ref.text }))}">`
+      + `<span class="tk-dep-mark" data-s="${esc(ref.state)}" aria-hidden="true"><span class="tk-ring">${mark}</span></span>`
+      + `${ref.n} · ${esc(ref.text)}</button>`;
+  });
+
   text = text.replace(/\[\[([^\]\n]+)\]\]/g, (whole, target) => {
     if (!UID.test(target)) {
       /* a name, not a uid: slug references nothing resolves, so nothing pretends to */
       return `<span class="rt-link-plain" title="${esc(whole)}">${target}</span>`;
     }
-    const found = links && links[target];
+    const found = ctx.links && ctx.links[target];
     if (!found || found.missing) {
       return `<span class="rt-link-dead" title="${esc(target)}">${target}</span>`;
     }
@@ -70,7 +81,7 @@ function inline(raw, links) {
 
 /* ── blocks ───────────────────────────────────────────────────────────── */
 
-function table(rows, links) {
+function table(rows, ctx) {
   const head = cells(rows[0]);
   const align = cells(rows[1]).map(alignOf);
   const style = i => (align[i] ? ` style="text-align:${align[i]}"` : '');
@@ -78,16 +89,16 @@ function table(rows, links) {
     const cs = cells(r);
     /* a short row is padded rather than dropped: the columns after it are
        empty, which is what the writer typed */
-    return `<tr>${head.map((_, i) => `<td${style(i)}>${inline(cs[i] || '', links)}</td>`).join('')}</tr>`;
+    return `<tr>${head.map((_, i) => `<td${style(i)}>${inline(cs[i] || '', ctx)}</td>`).join('')}</tr>`;
   }).join('');
   return `<div class="rt-table-wrap"><table class="rt-table"><thead><tr>`
-    + head.map((h, i) => `<th${style(i)}>${inline(h, links)}</th>`).join('')
+    + head.map((h, i) => `<th${style(i)}>${inline(h, ctx)}</th>`).join('')
     + `</tr></thead><tbody>${body}</tbody></table></div>`;
 }
 
 /* One level of items and everything indented under them. `at` is where the
    run starts; the caller gets back the html and where to carry on from. */
-function list(lines, at, links) {
+function list(lines, at, ctx) {
   const opener = ITEM.exec(lines[at]);
   const base = opener[1].length;
   const ordered = /^\d/.test(opener[2]);
@@ -114,7 +125,7 @@ function list(lines, at, links) {
     if (!m || m[1].length < base) break;
     if (m[1].length > base) {
       if (!items.length) break;
-      const nested = list(lines, i, links);
+      const nested = list(lines, i, ctx);
       items[items.length - 1] += nested.html;
       i = nested.next;
       continue;
@@ -128,7 +139,7 @@ function list(lines, at, links) {
       parts.push(lines[i].trim());
       i += 1;
     }
-    items.push(inline(parts.join('\n'), links));
+    items.push(inline(parts.join('\n'), ctx));
   }
   const tag = ordered ? 'ol' : 'ul';
   const attrs = `class="rt-list${loose ? ' rt-list-loose' : ''}"`
@@ -147,7 +158,8 @@ export function headings(body) {
     .filter(Boolean);
 }
 
-export function renderRich(body, links) {
+export function renderRich(body, links, items) {
+  const ctx = { links, items };
   const lines = String(body ?? '').split('\n');
   const out = [];
   let i = 0;
@@ -155,7 +167,7 @@ export function renderRich(body, links) {
 
   const flush = () => {
     if (!para.length) return;
-    out.push(`<p class="rt-p">${inline(para.join('\n'), links)}</p>`);
+    out.push(`<p class="rt-p">${inline(para.join('\n'), ctx)}</p>`);
     para = [];
   };
 
@@ -189,7 +201,7 @@ export function renderRich(body, links) {
     const heading = HEADING.exec(line);
     if (heading) {
       flush();
-      out.push(`<h4 class="rt-h">${inline(heading[1], links)}</h4>`);
+      out.push(`<h4 class="rt-h">${inline(heading[1], ctx)}</h4>`);
       i += 1;
       continue;
     }
@@ -198,16 +210,16 @@ export function renderRich(body, links) {
       const rows = [];
       while (i < lines.length && isPipeRow(lines[i])) { rows.push(lines[i]); i += 1; }
       flush();
-      if (rows.length >= 2 && SEPARATOR.test(rows[1].trim())) out.push(table(rows, links));
+      if (rows.length >= 2 && SEPARATOR.test(rows[1].trim())) out.push(table(rows, ctx));
       /* pipes with no separator under them are not a grid, and collapsing
          their spacing would lose the alignment the writer lined up by hand */
-      else out.push(`<pre class="rt-raw">${inline(rows.join('\n'), links)}</pre>`);
+      else out.push(`<pre class="rt-raw">${inline(rows.join('\n'), ctx)}</pre>`);
       continue;
     }
 
     if (ITEM.test(line)) {
       flush();
-      const built = list(lines, i, links);
+      const built = list(lines, i, ctx);
       out.push(built.html);
       i = built.next;
       continue;
@@ -220,10 +232,13 @@ export function renderRich(body, links) {
   return out.join('');
 }
 
-/* Wire what was drawn: [[uid]] opens its record, code blocks copy through `copy` (core/ui.js). */
-export function wireRich(root, { open, copy }) {
+/* Wire what was drawn: [[uid]] opens its record, [[#id]] goes to its item through `item`, code blocks
+   copy through `copy` (core/ui.js). */
+export function wireRich(root, { open, copy, item }) {
   root.querySelectorAll('.rt-link').forEach(
     b => b.addEventListener('click', e => { e.stopPropagation(); open(b.dataset.uid); }));
+  root.querySelectorAll('.rt-item[data-item]').forEach(
+    b => b.addEventListener('click', e => { e.stopPropagation(); item?.(Number(b.dataset.item)); }));
   root.querySelectorAll('[data-copy-code]').forEach(b => b.addEventListener('click', e => {
     e.stopPropagation();
     copy(b.closest('.rt-code-block').querySelector('code').textContent);

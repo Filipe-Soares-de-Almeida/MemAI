@@ -3,10 +3,11 @@
    then the message. */
 import { fmtAgo } from '../../core/dom.ts';
 import { t } from '../../i18n.ts';
-import type { TaskComment } from '../../api/types.ts';
+import type { ItemRef, TaskComment } from '../../api/types.ts';
 import AppIcon from '../../components/AppIcon.vue';
+import RichText from '../../components/RichText.vue';
 
-defineProps<{ comment: TaskComment; fresh?: boolean }>();
+defineProps<{ comment: TaskComment; fresh?: boolean; refs?: Record<string, ItemRef>; onItem?: (id: number) => void }>();
 </script>
 
 <template>
@@ -20,7 +21,8 @@ defineProps<{ comment: TaskComment; fresh?: boolean }>();
         <time class="tk-c-when" :datetime="comment.created_at" :title="comment.created_at">{{
           fmtAgo(comment.created_at) }}</time>
       </header>
-      <p class="tk-c-body">{{ comment.body }}</p>
+      <div class="tk-c-body"><RichText :text="comment.body" :prose="false" :highlight="false" :items="refs"
+           :on-item="onItem" /></div>
     </div>
   </article>
 </template>

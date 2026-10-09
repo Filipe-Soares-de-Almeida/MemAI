@@ -3,6 +3,7 @@
 import { nextTick, ref, watch } from 'vue';
 import { t } from '../../i18n.ts';
 import AppIcon from '../../components/AppIcon.vue';
+import RichText from '../../components/RichText.vue';
 import type { Checklist } from './checklist.ts';
 
 const props = defineProps<{ c: Checklist }>();
@@ -33,7 +34,8 @@ watch(() => ui.goalEditing, open => {
     </div>
   </div>
   <div v-else class="tk-goal">
-    <p v-if="current.goal" class="tk-goal-text">{{ current.goal }}</p>
+    <div v-if="current.goal" class="tk-goal-text"><RichText :text="current.goal" :prose="false" :highlight="false"
+         :items="current.refs" :on-item="c.flashItem" /></div>
     <p v-else class="tk-goal-text is-empty">{{ t('task.goal.empty') }}</p>
     <button id="tkGoalEdit" type="button" class="icon-btn" :title="t('task.goal.edit')" :aria-label="t('task.goal.edit')"
             @click="c.editGoal()"><AppIcon name="pencil" /></button>

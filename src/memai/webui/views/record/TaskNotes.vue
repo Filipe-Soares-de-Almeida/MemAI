@@ -14,14 +14,14 @@ import type { Checklist } from './checklist.ts';
 const props = defineProps<{ c: Checklist; scope: string; notes: TaskNote[] }>();
 const { current, ui } = props.c;
 
-const itemOf = (key: string) => {
-  const at = current.value.items.findIndex(i => i.key === key);
+const itemOf = (id: number) => {
+  const at = current.value.items.findIndex(i => i.id === id);
   if (at < 0) return null;
   const { text, state } = current.value.items[at];
   return { n: at + 1, text, state, stateName: t(`task.state.${state}` as I18nKey) };
 };
 
-const resolved = (depends: TaskNote['depends']) => (depends ?? []).map(d => ({ d, it: d.item ? itemOf(d.item) : null }));
+const resolved = (depends: TaskNote['depends']) => (depends ?? []).map(d => ({ d, it: d.item != null ? itemOf(d.item) : null }));
 
 const writing = computed(() => ui.noteEdit === `new:${props.scope}`);
 </script>
@@ -55,7 +55,7 @@ const writing = computed(() => ui.noteEdit === `new:${props.scope}`);
               <ul v-if="f.key === 'depends_on' && n.depends" class="tk-deps">
                 <li v-if="!n.depends.length" class="tk-dep-none">{{ t('task.depends.none') }}</li>
                 <li v-for="({ d, it }, at) in resolved(n.depends)" :key="at" class="tk-dep">
-                  <template v-if="d.item">
+                  <template v-if="d.item != null">
                     <button v-if="it" type="button" class="tk-dep-chip" :data-dep="d.item"
                             :aria-label="t('task.depends.open', { n: it.n, text: it.text, state: it.stateName })"
                             @click="c.flashItem(d.item)"><span class="tk-dep-mark" :data-s="it.state"
@@ -63,15 +63,15 @@ const writing = computed(() => ui.noteEdit === `new:${props.scope}`);
                             :name="MARK[it.state]" /></span></span>{{ it.n }} · {{ it.text }}</button>
                     <span v-else class="tk-dep-key">{{ d.item }}</span>
                   </template>
-                  <span v-else class="tk-dep-gone"><s>{{ d.deleted }}</s><span class="sr-only"> ({{
+                  <span v-else class="tk-dep-gone"><s>{{ d.text }}</s><span class="sr-only"> ({{
                     t('task.depends.deleted') }})</span></span>
                   <span v-if="d.reason" class="tk-dep-why">{{ d.reason }}</span>
                 </li>
               </ul>
-              <RichText v-else :text="f.text" :links="n.body_links" />
+              <RichText v-else :text="f.text" :links="n.body_links" :items="current.refs" :on-item="c.flashItem" />
             </section>
           </template>
-          <RichText v-else :text="n.body" :links="n.body_links" />
+          <RichText v-else :text="n.body" :links="n.body_links" :items="current.refs" :on-item="c.flashItem" />
         </div>
       </article>
     </template>

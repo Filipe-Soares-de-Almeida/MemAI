@@ -8,6 +8,7 @@ import { MEMORY, TASK } from '../../contract.ts';
 import type { TaskNote } from '../../api/types.ts';
 import AppIcon from '../../components/AppIcon.vue';
 import KeyHint from '../../components/KeyHint.vue';
+import DependsEditor from './DependsEditor.vue';
 import { BRIEF } from './checklist.ts';
 import type { Checklist } from './checklist.ts';
 
@@ -17,7 +18,7 @@ const { current, ui } = props.c;
 const { NOTE_MAX } = TASK;
 
 const id = computed(() => (props.note ? String(props.note.id) : `new:${props.scope}`));
-const d = computed(() => ui.noteDraft ?? { title: '', body: '', items: [], brief: {} });
+const d = computed(() => ui.noteDraft ?? { title: '', body: '', items: [], brief: {}, depends: [], legacy: '' });
 const issue = computed(() => props.c.dependsIssue());
 const sum = computed(() => (d.value.items.length ? t('task.note.scope.n', { n: d.value.items.length })
   : t('task.note.scope.all')));
@@ -38,17 +39,14 @@ function key(e: KeyboardEvent) {
       <div class="rf-pane">
         <template v-if="d.items.length">
           <template v-for="f in BRIEF" :key="f.key">
-            <label class="tk-brief-in">
+            <DependsEditor v-if="f.key === 'depends_on'" :c="c" :draft="d" :label="sectionLabel('task_note', f)"
+                           :issue="issue" :issue-id="`${id}-dep`" />
+            <label v-else class="tk-brief-in">
               <span class="rf-sub">{{ sectionLabel('task_note', f) }}<span v-if="f.optional" class="tk-opt"> · {{
                 t('task.note.optional') }}</span></span>
               <textarea v-model="d.brief[f.key]" :data-note-field="f.key" rows="3" spellcheck="false"
-                        :aria-required="f.optional ? undefined : 'true'"
-                        :placeholder="f.key === 'depends_on' ? t('task.depends.placeholder') : undefined"
-                        :aria-invalid="f.key === 'depends_on' && issue ? 'true' : undefined"
-                        :aria-describedby="f.key === 'depends_on' && issue ? `${id}-dep` : undefined"></textarea>
+                        :aria-required="f.optional ? undefined : 'true'"></textarea>
             </label>
-            <p v-if="f.key === 'depends_on' && issue" :id="`${id}-dep`" class="field-error tk-brief-err"
-               data-depends-error>{{ issue }}</p>
           </template>
         </template>
         <textarea v-else v-model="d.body" data-note-field="body" rows="12" spellcheck="false" :maxlength="NOTE_MAX"
@@ -66,9 +64,9 @@ function key(e: KeyboardEvent) {
         <span class="tk-scope-sum" data-note-scope-sum>{{ sum }}</span>
       </div>
       <div class="tk-scope-list" role="group" :aria-label="t('task.note.scope.aria')">
-        <label v-for="(i, at) in current.items" :key="i.key" class="tk-scope-row" :title="i.text"><input type="checkbox"
-               :data-note-scope="i.key" :aria-label="`${at + 1}. ${i.text}`" :checked="d.items.includes(i.key)"
-               @change="c.scopeNote(i.key, ($event.target as HTMLInputElement).checked)"> <span
+        <label v-for="(i, at) in current.items" :key="i.id" class="tk-scope-row" :title="i.text"><input type="checkbox"
+               :data-note-scope="i.id" :aria-label="`${at + 1}. ${i.text}`" :checked="d.items.includes(i.id)"
+               @change="c.scopeNote(i.id, ($event.target as HTMLInputElement).checked)"> <span
                class="tk-scope-text"><span class="tk-scope-n"
                aria-hidden="true">{{ at + 1 }}</span>{{ i.text }}</span></label>
       </div>
