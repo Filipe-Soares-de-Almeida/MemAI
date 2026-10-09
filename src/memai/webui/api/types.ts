@@ -192,7 +192,8 @@ export interface TaskLink {
 }
 
 export interface TaskItem {
-  key: string;
+  id: number;
+  n: number;
   seq: number;
   text: string;
   state: string;
@@ -203,7 +204,7 @@ export interface TaskItem {
 
 export interface TaskComment {
   id: number;
-  item: string;
+  item: number | null;
   body: string;
   author: string;
   session: string;
@@ -211,16 +212,23 @@ export interface TaskComment {
 }
 
 export interface TaskDepend {
-  item: string;
-  deleted: string;
+  item: number | null;
+  text: string;
   reason: string;
+}
+
+export interface ItemRef {
+  n?: number;
+  text?: string;
+  state?: string;
+  deleted?: boolean;
 }
 
 export interface TaskNote {
   id: number;
   title: string;
   body: string;
-  items: string[];
+  items: number[];
   updated_at: string;
   body_links: Record<string, BodyLink>;
   brief: Record<string, string> | null;
@@ -234,6 +242,8 @@ export interface TaskRecord {
   items: TaskItem[];
   comments: TaskComment[];
   notes: TaskNote[];
+  refs: Record<string, ItemRef>;
+  body_links: Record<string, BodyLink>;
 }
 
 export interface EditEntry {

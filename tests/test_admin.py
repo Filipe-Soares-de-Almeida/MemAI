@@ -929,16 +929,19 @@ def _task(**kw) -> str:
 def test_clean_orphans_removes_dangling_item_links(client):
     uid = _task()
     note = _create(client, content="the lexer reads one token")
+    from memai import tasks
+
     with connection.connect() as conn:
+        first, second = tasks.item_ids(conn, uid)
         conn.execute(
-            "INSERT INTO task_item_links (memory_uid, item_key, target_uid, created_at) "
-            "VALUES (?, 'i1', ?, '2026-01-01T00:00:00+00:00')", (uid, note))
+            "INSERT INTO task_item_links (memory_uid, item_id, target_uid, created_at) "
+            "VALUES (?, ?, ?, '2026-01-01T00:00:00+00:00')", (uid, first, note))
     raw = sqlite3.connect(paths.default_db_path())
     try:
         raw.execute("PRAGMA foreign_keys=OFF")
         raw.execute(
-            "INSERT INTO task_item_links (memory_uid, item_key, target_uid, created_at) "
-            "VALUES (?, 'i2', 'ffffffffffffffff', '2026-01-01T00:00:00+00:00')", (uid,))
+            "INSERT INTO task_item_links (memory_uid, item_id, target_uid, created_at) "
+            "VALUES (?, ?, 'ffffffffffffffff', '2026-01-01T00:00:00+00:00')", (uid, second))
         raw.commit()
     finally:
         raw.close()

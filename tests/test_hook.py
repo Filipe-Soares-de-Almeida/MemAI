@@ -798,7 +798,7 @@ def test_no_block_without_open_tasks(store, capsysbinary):
     with connection.connect() as conn:
         uid = tasks.create_task(conn, title="Ship the retry path", goal="Retries back off",
                                 items=["add the backoff"], domain="acme/x100")
-        tasks.set_item_state(conn, uid, "i1", "done")
+        tasks.set_item_state(conn, uid, tasks.item_ids(conn, uid)[0], "done")
     warden.record_domain("session-1", "acme/x100")
     assert _run("stop", {"session_id": "session-1"}, capsysbinary) is None
 

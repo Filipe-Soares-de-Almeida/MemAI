@@ -14,6 +14,7 @@ import pytest
 from starlette.routing import Route
 from starlette.testclient import TestClient
 
+from conftest import item_at
 from memai import tasks
 from memai.admin.app import app as admin_app
 from memai.store import backups, connection, memories, optimizer, paths, relations
@@ -94,7 +95,7 @@ def store(tmp_path_factory):
         task = tasks.create_task(conn, title="Refill the lanterns", goal="Every lantern burns tonight.",
                                  items=["Buy oil", "Trim wicks"], domain="acme/x100")
         tasks.add_note(conn, task, title="Where the oil is", body=f"In the shed, by [[{other}]].", items=[])
-        tasks.link_item(conn, task, "i2", [other])
+        tasks.link_item(conn, task, item_at(conn, task, 2), [other])
         tasks.add_comment(conn, task, "Oil is on order.", item="", author="person")
         diagram, _ = diagram_persist.insert_diagram(
             conn, title="Refill routine", domain="acme/x100",

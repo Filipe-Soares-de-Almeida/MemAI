@@ -12,7 +12,7 @@ import sys
 
 import pytest
 
-from conftest import brief
+from conftest import brief, item_of
 from memai import budget, hook, sections, server, tasks
 from memai.store import connection, memories, relations, search
 
@@ -52,13 +52,13 @@ def worst(tmp_path_factory):
         task = tasks.create_task(conn, title=_text(120), goal=_text(tasks.GOAL_MAX),
                                  items=[_text(tasks.ITEM_MAX, f"{n} ") for n in range(tasks.ITEMS_MAX)],
                                  domain="acme/m000")
-        keys = [f"i{n}" for n in range(1, tasks.ITEMS_MAX + 1)]
+        keys = tasks.item_ids(conn, task)
         for n in range(300):
             tasks.add_note(conn, task, title=_text(120, f"n{n} "), body=_text(tasks.NOTE_MAX) if n % 5 == 0
                            else brief(_text(tasks.NOTE_MAX - len(brief("")))),
                            items=[] if n % 5 == 0 else [keys[n % 50], keys[(n + 1) % 50]])
             tasks.add_comment(conn, task, _text(tasks.COMMENT_MAX, f"c{n} "),
-                              item="" if n % 2 else keys[n % 50])
+                              item=0 if n % 2 else keys[n % 50])
         for key in keys[:5]:
             tasks.link_item(conn, task, key, uids[3:203])
         ids["task"] = task
@@ -97,8 +97,9 @@ def _walk(call) -> list:
 
 
 def _parts(w):
-    calls = [("items", ""), ("notes", ""), ("notes", "i1"), ("comments", ""),
-             ("comments", "i2"), ("links", "i3")]
+    first, second, third = (item_of(w["task"], n) for n in (1, 2, 3))
+    calls = [("items", 0), ("notes", 0), ("notes", first), ("comments", 0),
+             ("comments", second), ("links", third)]
     return [p for part, item in calls
             for p in _walk(lambda o, part=part, item=item: server.task_read(w["task"], part, item, o))]
 
@@ -167,7 +168,7 @@ SCENARIOS = {
     "task_add": lambda w: [server.task_add(server.task("t", "g", "a")["uid"],
                                            "\n".join(_text(tasks.ITEM_MAX) for _ in range(49)))],
     "task_comment": lambda w: [server.task_comment(w["task"], _text(tasks.COMMENT_MAX))],
-    "task_item": lambda w: [server.task_item(w["task"], "i4", state="doing",
+    "task_item": lambda w: [server.task_item(w["task"], item_of(w["task"], 4), state="doing",
                                              comment=_text(tasks.COMMENT_MAX))],
     "task_note": lambda w: [server.task_note(w["task"], title=_text(120), goal=_text(3800),
                                              context="c", steps="s", pitfalls="p", done_when="d",
@@ -249,7 +250,7 @@ WALKS = {
                    "pairs", None),
     "optimize_status": (lambda w, o: server.optimize_status(w["run"], offset=o), "suggestions", "id"),
     "optimize_runs": (lambda w, o: server.optimize_runs(offset=o), "runs", "id"),
-    "task_read": (lambda w, o: server.task_read(w["task"], "notes", "i2", o), "records", "id"),
+    "task_read": (lambda w, o: server.task_read(w["task"], "notes", item_of(w["task"], 2), o), "records", "id"),
 }
 
 

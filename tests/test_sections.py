@@ -14,6 +14,7 @@ import pytest
 
 from conftest import unmigrated
 from memai import guard, sections, server
+from memai.sections import Dependency
 from memai.store import connection, memories, optimizer
 from memai.store import sections as store_sections
 
@@ -640,25 +641,35 @@ def test_the_brief_is_no_memory_type():
     assert "task_note" not in sections.SECTION_SPEC
 
 
-DEP = sections.DependsEntry
+def KEY(key: str, reason: str = "") -> Dependency:
+    return Dependency(None, key, "", reason)
+
+
+def GONE(text: str, reason: str = "") -> Dependency:
+    return Dependency(None, "", text, reason)
+
+
+def ID(item: int, reason: str = "") -> Dependency:
+    return Dependency(item, "", "", reason)
 
 
 @pytest.mark.parametrize("text, entries", [
     ("none", []),
     ("  NONE ", []),
-    ("i9", [DEP("i9", "", "")]),
-    ("I3", [DEP("i3", "", "")]),
-    ("i3 (needs the baseline), i9", [DEP("i3", "", "needs the baseline"), DEP("i9", "", "")]),
-    ("i3(tight)\ni4", [DEP("i3", "", "tight"), DEP("i4", "", "")]),
-    ("i1,\n i2 ,i3", [DEP("i1", "", ""), DEP("i2", "", ""), DEP("i3", "", "")]),
-    ("i2 (one, two; three)", [DEP("i2", "", "one, two; three")]),
+    ("i9", [KEY("i9")]),
+    ("I3", [KEY("i3")]),
+    ("i3 (needs the baseline), i9", [KEY("i3", "needs the baseline"), KEY("i9")]),
+    ("i3(tight)\ni4", [KEY("i3", "tight"), KEY("i4")]),
+    ("i1,\n i2 ,i3", [KEY("i1"), KEY("i2"), KEY("i3")]),
+    ("i2 (one, two; three)", [KEY("i2", "one, two; three")]),
+    ("4812(tight), #77 (why)", [ID(4812, "tight"), ID(77, "why")]),
     ('deleted "Run the week-long battery test" (the shelf was cancelled)',
-     [DEP("", "Run the week-long battery test", "the shelf was cancelled")]),
-    ('deleted "Seal the case, then test (twice)", i2',
-     [DEP("", "Seal the case, then test (twice)", ""), DEP("i2", "", "")]),
+     [GONE("Run the week-long battery test", "the shelf was cancelled")]),
+    ('deleted "Seal the case, then test (twice)", [[#12]]',
+     [GONE("Seal the case, then test (twice)"), ID(12)]),
 ])
 def test_a_depends_field_parses(text, entries):
-    assert sections.parse_depends(text) == (entries, [])
+    assert sections.read_depends(text) == (entries, [])
 
 
 @pytest.mark.parametrize("text, complaint", [
@@ -666,6 +677,7 @@ def test_a_depends_field_parses(text, entries):
     ("R01", "R01"),
     ("i0", "i0"),
     ("i3 needs the baseline", "outside parentheses"),
+    ("4812 needs the baseline", "outside parentheses"),
     ("i3 (needs the baseline) and more", "outside parentheses"),
     ("i3 (a (b))", "nested"),
     ("i3 (a", "unbalanced"),
@@ -674,39 +686,103 @@ def test_a_depends_field_parses(text, entries):
     ("i1,, i2", "empty entry"),
     ("i1, i2,", "empty entry"),
     ("i3, I3 (again)", "i3 listed twice"),
+    ("12, #12", "12 listed twice"),
     ('deleted ""', "empty"),
     ("deleted Run it", "deleted"),
     ("none, i2", "none"),
     ("", "empty"),
 ])
 def test_a_depends_field_that_breaks_the_grammar_says_which_piece(text, complaint):
-    entries, problems = sections.parse_depends(text)
+    entries, problems = sections.read_depends(text)
     assert problems and any(complaint in p for p in problems), problems
 
 
 def test_a_depends_problem_names_every_bad_piece():
-    _, problems = sections.parse_depends("i1, Item 9, R01")
+    _, problems = sections.read_depends("i1, Item 9, R01")
     assert len(problems) == 2
 
 
 @pytest.mark.parametrize("entries, text", [
     ([], "none"),
-    ([DEP("i9", "", "")], "i9"),
-    ([DEP("i3", "", "why"), DEP("i9", "", "")], "i3 (why), i9"),
-    ([DEP("", "Run the test", "cancelled")], 'deleted "Run the test" (cancelled)'),
+    ([ID(9)], "[[#9]]"),
+    ([ID(3, "why"), ID(9)], "[[#3]] (why), [[#9]]"),
+    ([GONE("Run the test", "cancelled")], 'deleted "Run the test" (cancelled)'),
 ])
 def test_depends_render_and_read_back(entries, text):
-    assert sections.render_depends(entries) == text
-    assert sections.parse_depends(text) == (entries, [])
+    assert sections.write_depends(entries) == text
+    assert sections.read_depends(text) == (entries, [])
 
 
 def test_a_quote_in_a_deleted_text_renders_as_an_apostrophe():
-    rendered = sections.render_depends([DEP("", 'Fix the "lens" mount', "")])
+    rendered = sections.write_depends([GONE('Fix the "lens" mount')])
     assert rendered == "deleted \"Fix the 'lens' mount\""
-    assert sections.parse_depends(rendered)[1] == []
+    assert sections.read_depends(rendered)[1] == []
 
 
 def test_a_newline_in_a_deleted_text_collapses_so_the_field_stays_one_line():
-    rendered = sections.render_depends([DEP("", "Fix the mount\nGOAL:  again", "")])
+    rendered = sections.write_depends([GONE("Fix the mount\nGOAL:  again")])
     assert rendered == 'deleted "Fix the mount GOAL: again"'
-    assert sections.parse_depends(rendered)[1] == []
+    assert sections.read_depends(rendered)[1] == []
+
+
+def test_read_depends_takes_an_id_in_each_spelling():
+    entries, problems = sections.read_depends("4812, #4815 (the handle)\n[[#4816]]")
+    assert problems == []
+    assert entries == [Dependency(4812, "", "", ""), Dependency(4815, "", "", "the handle"),
+                       Dependency(4816, "", "", "")]
+
+
+def test_read_depends_reads_a_position_key_and_a_deleted_entry():
+    entries, problems = sections.read_depends('i3 (why), deleted "Wire the bench" (gone)')
+    assert problems == []
+    assert entries == [Dependency(None, "i3", "", "why"), Dependency(None, "", "Wire the bench", "gone")]
+
+
+def test_read_depends_reads_none_and_refuses_an_empty_field():
+    assert sections.read_depends("none") == ([], [])
+    assert sections.read_depends("  ")[1] == ["the field is empty"]
+
+
+def test_read_depends_refuses_an_id_listed_twice():
+    _, problems = sections.read_depends("4812, [[#4812]]")
+    assert problems == ["4812 listed twice"]
+
+
+def test_read_depends_names_what_does_not_read():
+    _, problems = sections.read_depends("4812 then 4815, the lexer")
+    assert problems == ["text outside parentheses after 4812 in '4812 then 4815'",
+                        "'the lexer' is not an item id"]
+
+
+def test_write_depends_writes_tokens_and_deleted_text():
+    entries = [Dependency(4812, "", "", "why"), Dependency(None, "", 'Say "hi"', "")]
+    assert sections.write_depends(entries) == "[[#4812]] (why), deleted \"Say 'hi'\""
+    assert sections.write_depends([]) == "none"
+    assert sections.read_depends(sections.write_depends(entries))[0] == [
+        Dependency(4812, "", "", "why"), Dependency(None, "", "Say 'hi'", "")]
+
+
+def test_write_depends_refuses_a_position_key():
+    with pytest.raises(ValueError, match="i3 is a position key"):
+        sections.write_depends([Dependency(None, "i3", "", "")])
+
+
+def test_item_tokens_lists_each_mention_once_in_order():
+    assert sections.item_tokens("after [[#12]] and [[#7]], then [[#12]]; not #9 or [[abc]]") == [12, 7]
+
+
+def test_map_item_tokens_moves_known_ids_and_zeroes_the_rest():
+    assert sections.map_item_tokens("[[#12]] before [[#7]]", {12: 501}) == "[[#501]] before [[#0]]"
+
+
+def test_a_brief_round_trips_through_without_and_with_depends():
+    body = sections.render_spec(sections.BRIEF_SPEC, {
+        "goal": "g", "context": "c", "steps": "s", "pitfalls": "p", "done_when": "d",
+        "depends_on": "[[#4812]]", "extra_info": "x"})
+    stored = sections.without_depends(body)
+    assert stored is not None and "DEPENDS ON" not in stored
+    assert sections.with_depends(stored, "[[#4812]]") == body
+
+
+def test_without_depends_is_none_for_a_body_that_is_no_brief():
+    assert sections.without_depends("just a note") is None

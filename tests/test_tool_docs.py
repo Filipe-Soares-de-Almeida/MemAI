@@ -106,7 +106,7 @@ def test_task_note_documents_the_brief_it_takes():
 
 def test_task_note_documents_the_depends_on_format():
     text = _schemas()["task_note"]["properties"]["depends_on"]["description"]
-    assert "i3 (why), i9" in text and "renumbered" in text
+    assert "4812 (why), 4815" in text and 'deleted "its text"' in text
 
 
 def test_every_tool_docstring_carries_no_indentation():
@@ -162,3 +162,22 @@ def test_anti_pattern_states_the_pattern_ceiling():
     [pattern] = [s for s in sections.SECTION_SPEC["anti_pattern"] if s.key == "pattern"]
     text = _schemas()["anti_pattern"]["properties"]["pattern"]["description"]
     assert f"{pattern.max_len} characters" in text
+
+
+def test_the_task_tools_take_an_item_id():
+    schemas = _schemas()
+    for name in ("task_item", "task_comment", "task_read"):
+        assert schemas[name]["properties"]["item"]["type"] == "integer", name
+    assert "expect" not in schemas["task_item"]["properties"]
+
+
+def test_the_cite_rule_teaches_the_mention_token():
+    text = _flat(server.PARAM_DOCS["cite_rule"])
+    assert "[[#id]]" in text and "never carries one" in text
+    assert "key" not in text
+
+
+def test_no_task_tool_mentions_a_position_key():
+    for name in ("task", "task_item", "task_add", "task_comment", "task_read", "task_note"):
+        text = _descriptions()[name]
+        assert not re.search(r"\bi[0-9]\b|such as 3 or i3|renumber", text), name

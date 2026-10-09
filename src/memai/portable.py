@@ -159,13 +159,13 @@ def _task_record(conn, uid: str) -> dict | None:
     if head is None:
         return None
     items = conn.execute(
-        "SELECT item_key, seq, text, state, updated_at, updated_session FROM task_items "
+        "SELECT id, seq, text, state, updated_at, updated_session FROM task_items "
         "WHERE memory_uid = ? ORDER BY seq, id", (uid,)).fetchall()
     links = conn.execute(
-        "SELECT item_key, target_uid, created_at FROM task_item_links "
+        "SELECT item_id, target_uid, created_at FROM task_item_links "
         "WHERE memory_uid = ? ORDER BY created_at, target_uid", (uid,)).fetchall()
     comments = conn.execute(
-        "SELECT item_key, body, author, session, created_at FROM task_comments "
+        "SELECT item_id, body, author, session, created_at FROM task_comments "
         "WHERE memory_uid = ? ORDER BY created_at, id", (uid,)).fetchall()
     notes = conn.execute(
         "SELECT id, title, body, session, created_at, updated_at FROM task_notes "
@@ -173,14 +173,13 @@ def _task_record(conn, uid: str) -> dict | None:
     note_items = tasks._note_item_map(conn, uid)
     return {
         "record": "task", "uid": uid, "goal": head["goal"], "state": head["state"],
-        "completed_at": head["completed_at"], "item_seq": head["item_seq"],
-        "items": [{"key": r["item_key"], **{k: r[k] for k in (
-            "seq", "text", "state", "updated_at", "updated_session")}} for r in items],
+        "completed_at": head["completed_at"],
+        "items": [dict(r) for r in items],
         "links": [dict(r) for r in links],
         "comments": [dict(r) for r in comments],
         "notes": [{"title": r["title"], "body": r["body"], "items": note_items.get(r["id"], []),
-                   "session": r["session"], "created_at": r["created_at"],
-                   "updated_at": r["updated_at"]} for r in notes],
+                   "depends": tasks.dependencies(conn, r["id"]), "session": r["session"],
+                   "created_at": r["created_at"], "updated_at": r["updated_at"]} for r in notes],
     }
 
 
@@ -364,7 +363,7 @@ def boundary(conn, uids) -> dict:
                 "SELECT memory_uid AS diagram_uid, node_key, target_uid FROM diagram_node_links "
                 f"WHERE (memory_uid {held}) <> (target_uid {held}) ORDER BY created_at"),
             "task_links": crossing(
-                "SELECT memory_uid AS task_uid, item_key, target_uid FROM task_item_links "
+                "SELECT memory_uid AS task_uid, item_id, target_uid FROM task_item_links "
                 f"WHERE (memory_uid {held}) <> (target_uid {held}) ORDER BY created_at"),
             "diagram_jumps": crossing(
                 "SELECT from_uid, from_node, to_uid FROM diagram_jumps "
@@ -475,8 +474,8 @@ def move(source: str, target: str, *, uids=(), domain: str = "", dry_run: bool =
             "errors": result["errors"], **report}
 
 
-def _adopt_refusal(conn, row, keys: list[str]) -> str:
-    if row is None or not keys:
+def _adopt_refusal(conn, row, ids: list[int]) -> str:
+    if row is None or not ids:
         return "not linked to this task"
     if store_relations.get_relations(conn, row["uid"]):
         return "has relations"
@@ -501,30 +500,29 @@ def adopt(task_uid: str, uids: list[str], *, dry_run: bool = True) -> dict:
     with connection.connect() as conn:
         if not tasks.is_task(conn, task_uid):
             raise ValueError(f"no task {task_uid}")
-        all_keys = [r["item_key"] for r in conn.execute(
-            "SELECT item_key FROM task_items WHERE memory_uid = ? ORDER BY seq", (task_uid,))]
+        all_ids = tasks.item_ids(conn, task_uid)
         for uid in dict.fromkeys(uids):
             row = store_memories.get_memory(conn, uid)
-            keys = [r["item_key"] for r in conn.execute(
-                "SELECT l.item_key FROM task_item_links l JOIN task_items t "
-                "ON t.memory_uid = l.memory_uid AND t.item_key = l.item_key "
-                "WHERE l.memory_uid = ? AND l.target_uid = ? ORDER BY t.seq", (task_uid, uid))]
-            if row is None or (reason := _adopt_refusal(conn, row, keys)):
+            ids = [r["item_id"] for r in conn.execute(
+                "SELECT l.item_id FROM task_item_links l JOIN task_items t ON t.id = l.item_id "
+                "WHERE l.memory_uid = ? AND l.target_uid = ? ORDER BY t.seq, t.id", (task_uid, uid))]
+            if row is None or (reason := _adopt_refusal(conn, row, ids)):
                 refused.append({"uid": uid, "reason": reason if row else "not linked to this task"})
                 continue
-            whole = set(keys) == set(all_keys)
+            whole = set(ids) == set(all_ids)
             if not whole and tasks.brief_error(row["content"]):
                 refused.append({"uid": uid, "reason": "not a brief"})
                 continue
-            if not whole and (error := tasks.depends_error(conn, task_uid, row["content"], keys)):
+            field = (tasks.brief_fields(row["content"]) or {}).get("depends_on", "none")
+            if not whole and (error := tasks.depends_error(conn, task_uid, field, ids)):
                 refused.append({"uid": uid, "reason": f"DEPENDS ON does not read: {error}"})
                 continue
             cited = {"title": row["title"], **tasks.free_text(row["content"])}
-            if error := tasks.cited_key_error(cited, len(all_keys)):
+            if error := tasks.cited_key_error(cited, len(all_ids), all_ids):
                 refused.append({"uid": uid, "reason": error})
                 continue
             plan.append({"uid": uid, "title": row["title"], "body": row["content"],
-                         "items": [] if whole else keys, "level": "task" if whole else "item"})
+                         "items": [] if whole else ids, "level": "task" if whole else "item"})
         edits = store_memories.edit_count(conn, task_uid)
     report = {"task": task_uid, "refused": refused, "edits_dropped": edits,
               "plan": [{k: p[k] for k in ("uid", "title", "items", "level")} for p in plan]}

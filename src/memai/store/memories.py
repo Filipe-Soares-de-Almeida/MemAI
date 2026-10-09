@@ -578,6 +578,9 @@ def purge_memory(conn: sqlite3.Connection, uid: str) -> bool:
     conn.execute("DELETE FROM diagram_edges WHERE memory_uid = ?", (uid,))
     conn.execute("DELETE FROM diagrams WHERE memory_uid = ?", (uid,))
     conn.execute(
+        "DELETE FROM task_note_depends WHERE note_id IN "
+        "(SELECT id FROM task_notes WHERE memory_uid = ?)", (uid,))
+    conn.execute(
         "DELETE FROM task_note_items WHERE note_id IN "
         "(SELECT id FROM task_notes WHERE memory_uid = ?)", (uid,))
     conn.execute("DELETE FROM task_notes WHERE memory_uid = ?", (uid,))

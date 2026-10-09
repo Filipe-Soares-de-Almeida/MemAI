@@ -14,6 +14,7 @@ from pathlib import Path
 import pytest
 from starlette.testclient import TestClient
 
+from conftest import item_at
 from memai import portable, server
 from memai.admin.app import app as admin_app
 from memai.store import backups, connection, memories, paths, projects, relations, search
@@ -283,19 +284,20 @@ def test_moving_a_task_reports_and_drops_a_link_left_behind(home):
                                 domain="zeta/x100")
         uid = tasks.create_task(conn, title="Ship the parser", goal="Parse every config file",
                                 items=["read the spec", "write the lexer"], domain="acme/x100")
-        tasks.link_item(conn, uid, "i2", [kept])
-        tasks.add_comment(conn, uid, "lexer drafted", item="i2")
+        second = item_at(conn, uid, 2)
+        tasks.link_item(conn, uid, second, [kept])
+        tasks.add_comment(conn, uid, "lexer drafted", item=item_at(conn, uid, 2))
         report = portable.boundary(conn, [uid])
     assert report["task_links"]["count"] == 1
     assert report["task_links"]["items"][0] == {
-        "task_uid": uid, "item_key": "i2", "target_uid": kept}
+        "task_uid": uid, "item_id": second, "target_uid": kept}
 
     result = portable.move("General", "acme", uids=[uid], dry_run=False)
     assert result["moved"] == 1 and result["errors"] == []
     assert result["tasks"] == 1
     with connection.connect(project="acme") as dst:
         task = tasks.get_task(dst, uid)
-        assert [i["key"] for i in task["items"]] == ["i1", "i2"]
+        assert [(i["n"], i["text"]) for i in task["items"]] == [(1, "read the spec"), (2, "write the lexer")]
         assert [c["body"] for c in task["comments"]] == ["lexer drafted"]
         assert task["items"][1]["links"] == []
     with connection.connect(project="General") as src:

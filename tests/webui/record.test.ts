@@ -138,13 +138,13 @@ describe('deleting for good', () => {
 describe('a task shown in its record', () => {
   it('reads the record again after a checklist write and repaints the side panel from it', async () => {
     const uid = 'a1b2c3d4e5f60004';
-    const task = { goal: 'Ship the lantern firmware', state: 'open', completed_at: '', comments: [], notes: [],
-                   items: [{ key: 'i1', seq: 1, text: 'Solder the header', state: 'todo', updated_at: '',
+    const task = { goal: 'Ship the lantern firmware', state: 'open', completed_at: '', comments: [], notes: [], refs: {},
+                   items: [{ id: 1, n: 1, seq: 1, text: 'Solder the header', state: 'todo', updated_at: '',
                              updated_session: '', links: [] }] };
     const m = memory(uid, { type: 'task', task, content: 'GOAL: Ship the lantern firmware' });
     const later = { ...m, updated_at: '2026-03-04T12:00:00+00:00', content: `${m.content}\n- [~] Solder the header`,
                     edit_history: [{ id: 1, memory_uid: uid, edited_at: '2026-03-04T12:00:00+00:00', prev_content: '',
-                                     new_content: '', note: 'item i1: doing' }] };
+                                     new_content: '', note: 'item 1: doing' }] };
     let reads = 0;
     serveApi((path: string, call: Call) => {
       if (path === `/api/memories/${uid}` && call.method === 'GET') return reads++ ? later : m;
@@ -159,19 +159,19 @@ describe('a task shown in its record', () => {
     const updated = () => view.querySelector('[data-rs="updated"]') as HTMLElement;
     expect(updated().title).toBe(m.updated_at);
 
-    (view.querySelector('[data-step="i1"]') as HTMLElement).click();
+    (view.querySelector('[data-step="1"]') as HTMLElement).click();
     await until(() => updated().title === later.updated_at);
     expect(reads).toBe(2);
-    expect(view.querySelector('[data-rs="history"] .rs-hist-note')?.textContent).toBe('item i1: doing');
+    expect(view.querySelector('[data-rs="history"] .rs-hist-note')?.textContent).toBe('item 1: doing');
   });
 });
 
 describe('a task shown in its record, progress', () => {
   it('shows the progress in the side panel and moves it with the checklist', async () => {
     const uid = 'a1b2c3d4e5f60005';
-    const items = [{ key: 'i1', seq: 1, text: 'Solder the header', state: 'todo', updated_at: '', updated_session: '', links: [] },
-                   { key: 'i2', seq: 2, text: 'Flash the board', state: 'dropped', updated_at: '', updated_session: '', links: [] }];
-    const task = { goal: 'Ship the lantern firmware', state: 'open', completed_at: '', comments: [], notes: [], items };
+    const items = [{ id: 1, n: 1, seq: 1, text: 'Solder the header', state: 'todo', updated_at: '', updated_session: '', links: [] },
+                   { id: 2, n: 2, seq: 2, text: 'Flash the board', state: 'dropped', updated_at: '', updated_session: '', links: [] }];
+    const task = { goal: 'Ship the lantern firmware', state: 'open', completed_at: '', comments: [], notes: [], refs: {}, items };
     const m = memory(uid, { type: 'task', task, content: 'GOAL: Ship the lantern firmware' });
     serveApi((path: string, call: Call) => {
       if (path === `/api/memories/${uid}` && call.method === 'GET') return m;
@@ -198,7 +198,7 @@ describe('a task shown in its record, progress', () => {
     expect(line.parentElement?.className).toBe('tk-prog');
     expect(line.nextElementSibling).toBe(bar());
     expect(view.querySelector('.rec-side [data-progress-pct]')?.closest('.tk-prog-line')).toBe(line);
-    (view.querySelector('[data-step="i1"]') as HTMLElement).click();
+    (view.querySelector('[data-step="1"]') as HTMLElement).click();
     await until(() => pct() === '100%');
     expect(bar().getAttribute('aria-valuetext')).toBe('100%, 1 of 1 done');
     expect(view.querySelector('.tk-item.is-new')).toBeNull();
