@@ -826,14 +826,18 @@ def task(title: str, goal: str, items: str, domain: str = "", also: str = "",
     return result
 
 
-@tool("core", ADD)
+@tool("core", REWRITE)
 def task_item(uid: str, item: str, state: str = "", comment: str = "",
-              related: str = "") -> dict:
-    """Update one item of a task: its state, a comment on it, memories linked to it.
+              related: str = "", text: str = "") -> dict:
+    """Update one item of a task: its text, its state, a comment on it, memories linked to it.
 
     uid: the task.
 
     item: the item's number, such as 3 or i3; an item's key is its position in the checklist.
+
+    text: the item's new text, a short label as task() takes it. The item
+    keeps its key, state, brief, comments and links; the previous text
+    stays in the edit history.
 
     state: todo, doing, done or dropped. The write that closes the last open
     item archives the task (`archived` in the result); one that reopens an
@@ -844,16 +848,18 @@ def task_item(uid: str, item: str, state: str = "", comment: str = "",
     related: comma-separated uids of memories this item produced or depends
     on. An unknown uid refuses the whole call, and nothing is written.
 
-    Give at least one of state, comment and related. They apply together, or
-    not at all.
+    Give at least one of text, state, comment and related. They apply
+    together, or not at all.
 
     @param cite_rule
     """
-    if not any(str(v).strip() for v in (state, comment, related)):
-        return _errors(["give at least one of state, comment and related"])
+    if not any(str(v).strip() for v in (text, state, comment, related)):
+        return _errors(["give at least one of text, state, comment and related"])
     try:
         with connection.connect() as conn:
             key = tasks.item_key(item)
+            if text.strip():
+                tasks.rename_item(conn, uid, key, text, session=SESSION)
             targets = [t.strip() for t in related.split(",") if t.strip()]
             if targets:
                 tasks.link_item(conn, uid, key, targets)

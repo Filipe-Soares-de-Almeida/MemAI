@@ -303,6 +303,40 @@ def set_item_state(
     return {"uid": uid, "item": key, "state": state, "changed": changed, **_outcome(conn, uid)}
 
 
+def rename_item(
+    conn: sqlite3.Connection, uid: str, item: str, text: str, *,
+    expect: str | None = None, session: str = "",
+) -> dict:
+    """Give one item a new text; its key, state, notes, comments and links stay.
+
+    The previous text stays in the edit history. Raises ValueError for an
+    empty, over-long or key-citing text, an unknown item, or an item whose
+    text differs from `expect` (the text the caller saw), before anything is
+    written. The same text again writes nothing and reports changed=False.
+    """
+    text = str(text).strip()
+    if not text:
+        raise ValueError("an item's text may not be empty")
+    if error := _item_length_error(text):
+        raise ValueError(error)
+    _lock(conn, uid)
+    key = _require_item(conn, uid, item)
+    rows = _items(conn, uid)
+    old = next(r["text"] for r in rows if r["key"] == key)
+    if expect is not None and old != expect:
+        raise ValueError(f"item {key} is no longer {expect!r}; reload the task before renaming")
+    _require_no_cited_key({f"item {key[1:]}": text}, len(rows))
+    changed = old != text
+    if changed:
+        conn.execute(
+            """UPDATE task_items SET text = ?, updated_at = ?, updated_session = ?
+               WHERE memory_uid = ? AND item_key = ?""",
+            (text, lite.now_iso(), session, uid, key),
+        )
+        _regenerate(conn, uid, f"item {key} renamed: {old} -> {text}", record_edit=True)
+    return {"uid": uid, "item": key, "text": text, "changed": changed, **_outcome(conn, uid)}
+
+
 def add_items(conn: sqlite3.Connection, uid: str, items: list[str], *, session: str = "") -> dict:
     """Append items under the next positions; a closed task reopens."""
     items = [str(i).strip() for i in items]

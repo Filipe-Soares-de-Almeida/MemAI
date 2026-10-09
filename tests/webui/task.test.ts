@@ -310,13 +310,83 @@ describe('deleting an item', () => {
     expect(del.textContent).toContain(en['task.item.deleteLast']);
   });
 
-  it('lists the other states above a separator, then the delete entry', async () => {
+  it('lists the other states above a separator, then renaming and deleting', async () => {
     const { host } = await mount(taskOf([item('i1', 'Solder the header', 'doing'), item('i2', 'Flash the board')]));
     await press(menuOf(host, 'i1'));
     const menu = document.querySelector('.ctx-menu') as HTMLElement;
     const parts = [...menu.children].map(el => (el.classList.contains('ctx-sep') ? '---' : el.textContent?.trim()));
     expect(parts).toEqual([en['task.mark.todo'], en['task.mark.done'], en['task.mark.dropped'],
-                           '---', en['task.item.delete']]);
+                           '---', en['task.item.rename'], en['task.item.delete']]);
+  });
+});
+
+describe('renaming an item', () => {
+  const items = () => [item('i1', 'Solder the header'), item('i2', 'Flash the board')];
+  const textOf = (host: HTMLElement, key: string) => host.querySelector(`[data-key="${key}"] .tk-text`)?.textContent;
+  const type = async (box: HTMLInputElement, text: string) => {
+    box.value = text;
+    box.dispatchEvent(new Event('input'));
+    await nextTick();
+  };
+  const key = (box: Element, name: string) => box.dispatchEvent(new KeyboardEvent('keydown', { key: name }));
+
+  async function open(host: HTMLElement, at: string) {
+    await press(menuOf(host, at));
+    entry(en['task.item.rename']).click();
+    return until(() => host.querySelector<HTMLInputElement>(`[data-rename="${at}"]`));
+  }
+
+  it('edits the text in place and sends it with the text the view last saw', async () => {
+    serveApi((path: string, { body }: { body: { text: string } }) =>
+      ({ task: taskOf([item('i1', 'Solder the header'), item('i2', body.text)]), status: 'active' }));
+    const { host, uid } = await mount(taskOf(items()));
+    const box = await open(host, 'i2');
+    expect(box.value).toBe('Flash the board');
+    await until(() => document.activeElement === box);
+
+    await type(box, 'Flash the bootloader');
+    key(box, 'Enter');
+    await until(() => textOf(host, 'i2') === 'Flash the bootloader');
+    expect(calls.at(-1)).toEqual({ path: `/api/tasks/${uid}/item/text`, method: 'POST',
+      body: { item: 'i2', text: 'Flash the bootloader', expect: 'Flash the board' } });
+    await until(() => document.activeElement === host.querySelector('[data-toggle="i2"]'));
+  });
+
+  it('leaves on Escape without a write, focus back on the item', async () => {
+    serveApi(() => { throw new Error('unexpected write'); });
+    const { host } = await mount(taskOf(items()));
+    const box = await open(host, 'i1');
+    await type(box, 'Something else');
+    key(box, 'Escape');
+    await until(() => !host.querySelector('[data-rename]'));
+    expect(calls).toHaveLength(0);
+    expect(textOf(host, 'i1')).toBe('Solder the header');
+    await until(() => document.activeElement === host.querySelector('[data-toggle="i1"]'));
+  });
+
+  it('keeps the box and the typed text when the server refuses, and says why', async () => {
+    serveApi(() => { throw new Error('item 2 cites i1: name the item by what it does'); });
+    const { host } = await mount(taskOf(items()));
+    const box = await open(host, 'i2');
+    await type(box, 'Flash after i1');
+    key(box, 'Enter');
+    await until(() => document.querySelector('.toast')?.textContent?.includes(en['task.err.rename']));
+    expect(document.querySelector('.toast')?.textContent).toContain('cites i1');
+    expect(host.querySelector<HTMLInputElement>('[data-rename="i2"]')?.value).toBe('Flash after i1');
+  });
+
+  it('counts the text against the item limit and will not save past it', async () => {
+    serveApi(() => { throw new Error('unexpected write'); });
+    const { host } = await mount(taskOf(items()));
+    const box = await open(host, 'i1');
+    await type(box, 'x'.repeat(81));
+    const count = host.querySelector('[data-rename-count]') as HTMLElement;
+    expect(count.textContent).toBe('81/80');
+    expect(count.classList.contains('over')).toBe(true);
+    expect((host.querySelector('[data-rename-save]') as HTMLButtonElement).disabled).toBe(true);
+    key(box, 'Enter');
+    await new Promise(done => setTimeout(done, 20));
+    expect(calls).toHaveLength(0);
   });
 });
 
