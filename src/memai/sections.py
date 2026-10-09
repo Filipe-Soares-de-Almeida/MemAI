@@ -69,17 +69,6 @@ BRIEF_SPEC: tuple[Section, ...] = tuple(
     Section(f["key"], f["label"], optional=bool(f.get("optional"))) for f in contract.TASK_BRIEF)
 
 
-class DependsEntry(NamedTuple):
-    item: str      # an `iN` key, or "" for a dependency on a deleted item
-    deleted: str   # the deleted item's text, or "" for a key
-    reason: str
-
-
-_DEPENDS_ENTRY = re.compile(
-    r'(?:(?P<key>[iI][1-9][0-9]*)|(?i:deleted)\s+"(?P<text>[^"]*)")\s*(?:\((?P<reason>[^()]*)\))?')
-_DEPENDS_KEY_HEAD = re.compile(r"[iI][1-9][0-9]*")
-
-
 def _depends_pieces(text: str) -> tuple[list[tuple[str, str, str]], list[str]]:
     """The text split at commas and newlines outside parentheses and quotes.
 
@@ -110,23 +99,39 @@ def _depends_pieces(text: str) -> tuple[list[tuple[str, str, str]], list[str]]:
     return pieces, []
 
 
-def _depends_complaint(piece: str) -> str:
+class Dependency(NamedTuple):
+    """One DEPENDS ON entry: an item id, an `iN` position key from an older store, or a deleted item's text."""
+
+    item: int | None
+    key: str
+    text: str
+    reason: str
+
+
+_DEPENDENCY = re.compile(
+    r'(?:\[\[#(?P<token>[0-9]+)\]\]|#?(?P<id>[0-9]+)|(?P<key>[iI][1-9][0-9]*)'
+    r'|(?i:deleted)\s+"(?P<text>[^"]*)")\s*(?:\((?P<reason>[^()]*)\))?')
+_DEPENDENCY_HEAD = re.compile(r"\[\[#[0-9]+\]\]|#?[0-9]+|[iI][1-9][0-9]*")
+
+
+def _dependency_complaint(piece: str) -> str:
     shown = piece if len(piece) <= 40 else piece[:37] + "..."
     if piece.count("(") > 1:
         return f"nested or repeated parentheses in {shown!r}"
-    head = _DEPENDS_KEY_HEAD.match(piece)
+    head = _DEPENDENCY_HEAD.match(piece)
     if head and piece[head.end():].strip():
         return f"text outside parentheses after {head.group().lower()} in {shown!r}"
     if re.match(r"(?i)deleted\b", piece):
         return f'{shown!r} is not deleted "<item text>" with an optional (reason)'
-    return f"{shown!r} is not an item key"
+    return f"{shown!r} is not an item id"
 
 
-def parse_depends(text: str) -> tuple[list[DependsEntry], list[str]]:
+def read_depends(text: str) -> tuple[list[Dependency], list[str]]:
     """The entries of a DEPENDS ON field and what stops it reading.
 
     The field is `none`, or entries separated by commas or newlines: an item
-    key `iN`, or `deleted "<item text>"`, each with an optional `(reason)`.
+    id written `4812`, `#4812` or `[[#4812]]`, a position key `iN`, or
+    `deleted "<item text>"`, each with an optional `(reason)`.
     """
     text = str(text).strip()
     if text.lower() == "none":
@@ -134,42 +139,72 @@ def parse_depends(text: str) -> tuple[list[DependsEntry], list[str]]:
     if not text:
         return [], ["the field is empty"]
     pieces, problems = _depends_pieces(text)
-    entries: list[DependsEntry] = []
+    entries: list[Dependency] = []
     for piece, before, after in pieces:
         piece = piece.strip()
         if not piece:
             if "\n" not in (before, after) and (before or after):
                 problems.append("an empty entry")
             continue
-        found = _DEPENDS_ENTRY.fullmatch(piece)
+        found = _DEPENDENCY.fullmatch(piece)
         if found is None:
-            problems.append(_depends_complaint(piece))
+            problems.append(_dependency_complaint(piece))
             continue
         reason = (found.group("reason") or "").strip()
         if found.group("reason") is not None and not reason:
             problems.append(f"an empty reason in {piece!r}")
             continue
-        if found.group("key"):
-            key = found.group("key").lower()
-            if any(e.item == key for e in entries):
-                problems.append(f"{key} listed twice")
-                continue
-            entries.append(DependsEntry(key, "", reason))
+        number = found.group("token") or found.group("id")
+        if number is not None:
+            entry = Dependency(int(number), "", "", reason)
+        elif found.group("key"):
+            entry = Dependency(None, found.group("key").lower(), "", reason)
         elif found.group("text"):
-            entries.append(DependsEntry("", found.group("text"), reason))
+            entry = Dependency(None, "", found.group("text"), reason)
         else:
             problems.append("a deleted entry with an empty item text")
+            continue
+        twice = ((entry.item is not None and any(e.item == entry.item for e in entries))
+                 or (entry.key and any(e.key == entry.key for e in entries)))
+        if twice:
+            problems.append(f"{entry.key or entry.item} listed twice")
+            continue
+        entries.append(entry)
     return entries, problems
 
 
-def render_depends(entries: list[DependsEntry]) -> str:
-    """The field text for `entries`: `none` for an empty list; parse_depends reads it back."""
+ITEM_TOKEN = re.compile(r"\[\[#([0-9]+)\]\]")
+
+
+def item_token(item_id: int) -> str:
+    return f"[[#{item_id}]]"
+
+
+def item_tokens(text: str) -> list[int]:
+    """The item ids `text` mentions, each once, in the order first mentioned."""
+    return list(dict.fromkeys(int(m[1]) for m in ITEM_TOKEN.finditer(str(text))))
+
+
+def map_item_tokens(text: str, mapping: dict[int, int]) -> str:
+    """`text` with each mention moved through `mapping`; an id it lacks becomes [[#0]], the deleted item."""
+    return ITEM_TOKEN.sub(lambda m: item_token(mapping.get(int(m[1]), 0)), str(text))
+
+
+def write_depends(entries: list[Dependency]) -> str:
+    """The field text for `entries`, `none` for an empty list; read_depends reads it back.
+
+    A stored field never holds a position key, so an entry carrying one is a ValueError.
+    """
     if not entries:
         return "none"
     parts = []
     for e in entries:
-        text = " ".join(e.deleted.replace('"', "'").split())
-        head = e.item or f'deleted "{text}"'
+        if e.key:
+            raise ValueError(f"{e.key} is a position key, not an item id")
+        if e.item is not None:
+            head = item_token(e.item)
+        else:
+            head = 'deleted "{}"'.format(" ".join(e.text.replace('"', "'").split()))
         parts.append(f"{head} ({e.reason})" if e.reason else head)
     return ", ".join(parts)
 
@@ -318,3 +353,22 @@ def read_spec(spec: tuple[Section, ...], content: str) -> Reading:
     faults += [f"{s.label} runs to {len(values[s.key])} characters and holds {s.max_len}"
                for s in present if s.max_len and len(values[s.key]) > s.max_len]
     return Reading(values, faults)
+
+
+_BRIEF_BODY = tuple(s for s in BRIEF_SPEC if s.key != "depends_on")
+
+
+def without_depends(body: str) -> str | None:
+    """A brief's body with its DEPENDS ON line taken out, or None when `body` is no brief."""
+    reading = read_spec(BRIEF_SPEC, body)
+    if not reading.conforms:
+        return None
+    return render_spec(_BRIEF_BODY, reading.sections)
+
+
+def with_depends(body: str, field: str) -> str:
+    """A body stored by without_depends, with its DEPENDS ON field put back as `field`."""
+    reading = read_spec(_BRIEF_BODY, body)
+    if not reading.conforms:
+        return body
+    return render_spec(BRIEF_SPEC, {**reading.sections, "depends_on": field})

@@ -7,6 +7,9 @@ import sqlite3
 from contextlib import contextmanager
 from pathlib import Path
 
+from memai.store.item_ids import INDEXES as ITEM_INDEXES
+from memai.store.item_ids import migrate as migrate_item_ids
+from memai.store.item_ids import schema as item_schema
 from memai.store.paths import default_db_path, project_path
 from memai.store.settings import _get_meta, _set_meta
 
@@ -239,61 +242,21 @@ CREATE TABLE IF NOT EXISTS tasks (
     memory_uid   TEXT PRIMARY KEY REFERENCES memories(uid),
     goal         TEXT NOT NULL,
     state        TEXT NOT NULL DEFAULT 'open',    -- open | completed | cancelled
-    completed_at TEXT NOT NULL DEFAULT '',
-    item_seq     INTEGER NOT NULL DEFAULT 0       -- read by nothing; exports carry it
+    completed_at TEXT NOT NULL DEFAULT ''
 );
-
-CREATE TABLE IF NOT EXISTS task_items (
-    id              INTEGER PRIMARY KEY AUTOINCREMENT,
-    memory_uid      TEXT NOT NULL REFERENCES memories(uid),
-    item_key        TEXT NOT NULL,                -- i<position>: i1, i2, ... in seq order
-    seq             INTEGER NOT NULL,
-    text            TEXT NOT NULL,
-    state           TEXT NOT NULL DEFAULT 'todo', -- todo | doing | done | dropped
-    updated_at      TEXT NOT NULL,
-    updated_session TEXT NOT NULL DEFAULT '',
-    UNIQUE (memory_uid, item_key)
-);
-
-CREATE INDEX IF NOT EXISTS idx_task_items_mem ON task_items(memory_uid);
-
-CREATE TABLE IF NOT EXISTS task_item_links (
-    memory_uid TEXT NOT NULL REFERENCES memories(uid),
-    item_key   TEXT NOT NULL,
-    target_uid TEXT NOT NULL REFERENCES memories(uid),
-    created_at TEXT NOT NULL,
-    PRIMARY KEY (memory_uid, item_key, target_uid)
-);
-
-CREATE TABLE IF NOT EXISTS task_comments (
-    id         INTEGER PRIMARY KEY AUTOINCREMENT,
-    memory_uid TEXT NOT NULL REFERENCES memories(uid),
-    item_key   TEXT NOT NULL DEFAULT '',          -- '' = on the task as a whole
-    body       TEXT NOT NULL,
-    author     TEXT NOT NULL DEFAULT 'agent',     -- agent | person
-    session    TEXT NOT NULL DEFAULT '',
-    created_at TEXT NOT NULL
-);
-
-CREATE INDEX IF NOT EXISTS idx_task_comments_mem ON task_comments(memory_uid);
 
 CREATE TABLE IF NOT EXISTS task_notes (
-    id         INTEGER PRIMARY KEY AUTOINCREMENT,
-    memory_uid TEXT NOT NULL REFERENCES memories(uid),
-    title      TEXT NOT NULL,
-    body       TEXT NOT NULL,
-    session    TEXT NOT NULL DEFAULT '',
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    memory_uid    TEXT NOT NULL REFERENCES memories(uid),
+    title         TEXT NOT NULL,
+    body          TEXT NOT NULL,
+    split_depends INTEGER NOT NULL DEFAULT 0, -- 1: a brief stored without DEPENDS ON; task_note_depends holds it
+    session       TEXT NOT NULL DEFAULT '',
+    created_at    TEXT NOT NULL,
+    updated_at    TEXT NOT NULL
 );
 
 CREATE INDEX IF NOT EXISTS idx_task_notes_mem ON task_notes(memory_uid);
-
-CREATE TABLE IF NOT EXISTS task_note_items (
-    note_id  INTEGER NOT NULL REFERENCES task_notes(id),
-    item_key TEXT NOT NULL,
-    PRIMARY KEY (note_id, item_key)
-);
 
 CREATE TABLE IF NOT EXISTS meta (
     key    TEXT PRIMARY KEY,
@@ -363,7 +326,7 @@ def est_tokens(chars: int) -> int:
 # be nullable or carry a default: ADD COLUMN fills existing rows with it.
 _ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
     ("diagrams", "font_scale", "REAL NOT NULL DEFAULT 1"),
-    ("tasks", "item_seq", "INTEGER NOT NULL DEFAULT 0"),
+    ("task_notes", "split_depends", "INTEGER NOT NULL DEFAULT 0"),
     ("diagram_nodes", "w", "REAL"),
     ("diagram_nodes", "h", "REAL"),
     ("memories", "also_domains", "TEXT NOT NULL DEFAULT ''"),
@@ -394,23 +357,6 @@ def _repair_task_states(conn: sqlite3.Connection) -> None:
     conn.execute(
         "UPDATE tasks SET state = 'cancelled' WHERE state = 'open' AND memory_uid IN "
         "(SELECT uid FROM memories WHERE status <> 'active')")
-
-
-def _compact_task_keys(conn: sqlite3.Connection) -> None:
-    """Renumber the items of any task whose keys are not their positions."""
-    # imported here: task_items reaches store.memories, which imports this module
-    from memai.store import task_items
-
-    stale = [r[0] for r in conn.execute(
-        """SELECT DISTINCT memory_uid FROM (
-             SELECT memory_uid, item_key, seq,
-                    ROW_NUMBER() OVER (PARTITION BY memory_uid ORDER BY seq, id) AS n
-             FROM task_items
-             WHERE memory_uid IN (SELECT memory_uid FROM tasks))
-           WHERE item_key <> 'i' || n OR seq <> n""")]
-    for uid in stale:
-        task_items.compact(conn, uid)
-        task_items.regenerate(conn, uid, touch=False)
 
 
 def _ensure_diagram_titles(conn: sqlite3.Connection) -> None:
@@ -547,12 +493,14 @@ def connect(db_path: Path | None = None, *, project: str | None = None):
     conn.execute("PRAGMA synchronous=NORMAL;")
     conn.execute("PRAGMA foreign_keys=ON;")
     conn.executescript(SCHEMA)
+    conn.executescript(item_schema())
     _ensure_columns(conn)
     _drop_vector_store(conn)
     _ensure_fts(conn)
     _ensure_diagram_titles(conn)
     _repair_task_states(conn)
-    _compact_task_keys(conn)
+    migrate_item_ids(conn, path)
+    conn.executescript(ITEM_INDEXES)
     try:
         yield conn
         conn.commit()

@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from conftest import shaped
+from conftest import item_of, shaped
 from memai import brief, pending, portable, server
 from memai.store import connection, memories, paths
 
@@ -171,7 +171,7 @@ def test_a_closed_task_pin_is_not_counted(store):
     with connection.connect() as conn:
         memories.set_pin(conn, uid, "global")
         assert _types(pending.pinned_counts(conn)) == {"task": 1}
-    server.task_item(uid, "i1", state="done")
+    server.task_item(uid, item_of(uid, 1), state="done")
     with connection.connect() as conn:
         assert pending.pinned_counts(conn) == []
 

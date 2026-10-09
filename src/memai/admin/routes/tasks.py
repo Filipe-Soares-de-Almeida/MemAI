@@ -22,14 +22,27 @@ def _lines(value) -> list[str]:
     return []
 
 
+def _item(payload) -> int:
+    """The item a request names, as an id; 0 when it names none."""
+    try:
+        return int(payload.get("item") or 0)
+    except (TypeError, ValueError):
+        raise ValueError(f"{payload.get('item')!r} is not an item id") from None
+
+
 def _task_view(conn: sqlite3.Connection, uid: str) -> dict | None:
-    """The task, each note carrying what its [[uid]] links point at, and its brief fields and dependencies, if it is one."""
+    """The task with what each [[uid]] and [[#id]] in it names, and its notes' brief fields and dependencies."""
     task = tasks.get_task(conn, uid)
-    for note in (task or {}).get("notes", []):
+    if task is None:
+        return None
+    for note in task["notes"]:
         note["body_links"] = sections.body_links(conn, uid, note["body"])
         note["brief"] = tasks.brief_fields(note["body"])
-        depends = tasks.brief_depends(note["body"])
-        note["depends"] = None if depends is None else [dict(e._asdict()) for e in depends]
+        note["depends"] = tasks.dependencies(conn, note["id"])
+    task["refs"] = tasks.refs(conn, uid, [task["goal"], *(n["body"] for n in task["notes"]),
+                                          *(c["body"] for c in task["comments"])])
+    task["body_links"] = sections.body_links(
+        conn, uid, "\n".join([task["goal"], *(c["body"] for c in task["comments"])]))
     return task
 
 
@@ -58,22 +71,21 @@ def create_task(request, payload) -> schema.TaskCreated:
 def task_item_state(request, payload) -> schema.TaskAnswer:
     uid = request.path_params["uid"]
     with connection.connect() as conn:
-        tasks.set_item_state(conn, uid, payload.get("item") or "", payload.get("state") or "")
+        tasks.set_item_state(conn, uid, _item(payload), payload.get("state") or "")
         return _task_answer(conn, uid)
 
 
 def task_item_text(request, payload) -> schema.TaskAnswer:
     uid = request.path_params["uid"]
     with connection.connect() as conn:
-        tasks.rename_item(conn, uid, payload.get("item") or "", payload.get("text") or "",
-                          expect=payload.get("expect"))
+        tasks.rename_item(conn, uid, _item(payload), payload.get("text") or "")
         return _task_answer(conn, uid)
 
 
 def task_delete_item(request, payload) -> schema.TaskAnswer:
     uid = request.path_params["uid"]
     with connection.connect() as conn:
-        tasks.delete_item(conn, uid, payload.get("item") or "", expect=payload.get("text"))
+        tasks.delete_item(conn, uid, _item(payload))
         return _task_answer(conn, uid)
 
 
@@ -95,13 +107,13 @@ def task_comment(request, payload) -> schema.TaskAnswer:
     uid = request.path_params["uid"]
     with connection.connect() as conn:
         tasks.add_comment(conn, uid, payload.get("body") or "",
-                          item=str(payload.get("item") or ""), author="person")
+                          item=_item(payload), author="person")
         return _task_answer(conn, uid)
 
 
 def task_note(request, payload) -> schema.TaskAnswer:
     uid = request.path_params["uid"]
-    items = [str(k) for k in payload.get("items") or []]
+    items = [int(k) for k in payload.get("items") or []]
     with connection.connect() as conn:
         if payload.get("id"):
             tasks.edit_note(conn, uid, int(payload["id"]), title=payload.get("title") or "",
@@ -128,7 +140,7 @@ def _targets(value) -> list[str]:
 def task_link(request, payload) -> schema.TaskAnswer:
     uid = request.path_params["uid"]
     with connection.connect() as conn:
-        tasks.link_item(conn, uid, payload.get("item") or "", _targets(payload.get("target")))
+        tasks.link_item(conn, uid, _item(payload), _targets(payload.get("target")))
         return _task_answer(conn, uid)
 
 
@@ -136,7 +148,7 @@ def task_unlink(request, payload) -> schema.TaskAnswer:
     uid = request.path_params["uid"]
     with connection.connect() as conn:
         for target in _targets(payload.get("target")) or [""]:
-            tasks.unlink_item(conn, uid, payload.get("item") or "", target)
+            tasks.unlink_item(conn, uid, _item(payload), target)
         return _task_answer(conn, uid)
 
 

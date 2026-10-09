@@ -114,8 +114,9 @@ def test_the_reminder_copy_names_the_domains_a_session_worked_in():
 
 
 @pytest.mark.parametrize("code", LOCALES)
-def test_the_depends_error_keys_built_from_a_problem_kind_exist(code):
-    kinds = ["empty", "parens", "blank", "key", "outside", "deleted", "reason", "twice", "unknown", "self"]
+def test_the_depends_editor_keeps_one_error_and_no_typed_grammar(code):
     strings = _catalog(code)
-    assert not [k for k in kinds if f"task.depends.error.{k}" not in strings]
+    assert "{n}" in strings["task.depends.error.self"]
+    assert not [k for k in strings if k.startswith("task.depends.error.") and k != "task.depends.error.self"]
+    assert "task.depends.placeholder" not in strings
     assert "task.dropped" not in strings and "task.dropped.why" not in strings

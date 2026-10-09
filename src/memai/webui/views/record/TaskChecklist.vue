@@ -46,7 +46,7 @@ const hidden = computed(() => (ui.allComments ? 0 : Math.max(0, thread.value.len
       <TaskGoal :c="c" />
     </div>
     <div class="tk-list tk-card">
-      <ul class="tk-items"><TaskItemRow v-for="(item, at) in current.items" :key="item.key" :c="c" :item="item"
+      <ul class="tk-items"><TaskItemRow v-for="(item, at) in current.items" :key="item.id" :c="c" :item="item"
                                       :n="at + 1" /></ul>
       <div v-if="ui.adding" class="tk-add is-open">
         <textarea id="tkAddBox" v-model="adding" class="tk-box" rows="4" :placeholder="t('task.add.placeholder')"
@@ -70,7 +70,8 @@ const hidden = computed(() => (ui.allComments ? 0 : Math.max(0, thread.value.len
       <button v-if="hidden" id="tkOlder" type="button" class="rs-more tk-older" @click="ui.allComments = true">{{
         t('task.comments.older', { n: hidden }) }}</button>
       <div class="tk-cs">
-        <TaskComment v-for="cm in thread.slice(hidden)" :key="cm.id" :comment="cm" :fresh="enter.comments.has(cm.id)" />
+        <TaskComment v-for="cm in thread.slice(hidden)" :key="cm.id" :comment="cm" :fresh="enter.comments.has(cm.id)"
+                     :refs="current.refs" :links="current.body_links" :on-item="c.flashItem" />
         <div v-if="!thread.length" class="hint-sm tk-empty">{{ t('task.comments.empty') }}</div>
         <TaskComposer :c="c" scope="" :reply="thread.length > 0" />
       </div>

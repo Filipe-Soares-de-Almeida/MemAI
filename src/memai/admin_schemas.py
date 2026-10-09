@@ -184,7 +184,8 @@ class TaskLink(TypedDict):
 
 
 class TaskItem(TypedDict):
-    key: str
+    id: int
+    n: int
     seq: int
     text: str
     state: str
@@ -195,7 +196,7 @@ class TaskItem(TypedDict):
 
 class TaskComment(TypedDict):
     id: int
-    item: str
+    item: int | None
     body: str
     author: str
     session: str
@@ -203,16 +204,23 @@ class TaskComment(TypedDict):
 
 
 class TaskDepend(TypedDict):
-    item: str
-    deleted: str
+    item: int | None
+    text: str
     reason: str
+
+
+class ItemRef(TypedDict):
+    n: NotRequired[int]
+    text: NotRequired[str]
+    state: NotRequired[str]
+    deleted: NotRequired[bool]
 
 
 class TaskNote(TypedDict):
     id: int
     title: str
     body: str
-    items: list[str]
+    items: list[int]
     updated_at: str
     body_links: dict[str, BodyLink]
     brief: dict[str, str] | None
@@ -226,6 +234,8 @@ class TaskRecord(TypedDict):
     items: list[TaskItem]
     comments: list[TaskComment]
     notes: list[TaskNote]
+    refs: dict[str, ItemRef]
+    body_links: dict[str, BodyLink]
 
 
 class EditEntry(TypedDict):

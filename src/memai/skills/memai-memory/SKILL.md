@@ -253,7 +253,7 @@ When the session-start hook fires, or when resuming work:
    `{"categories": [{"type", "count"}, ...]}`; with `type` (`task`, `anti_pattern`, `handoff`, `note` or `diagram`) it
    returns `{type, total, items, next_offset}`: one page of **headers** — `uid`,
    `title`, `domain`, `est_tokens` — newest first, a task by its latest item
-   update. A task header adds `progress` (`{done, total}`) and `doing`, the keys
+   update. A task header adds `progress` (`{done, total}`) and `doing`, the ids
    of its items in progress. Open a header with `get_memory(uid)`;
    `next_offset` is absent on the last page and `limit` is at most 50.
    Without `type` the response adds `pinned` when a pin is in scope.
@@ -432,12 +432,14 @@ bind it, and what done looks like. Keep it short but complete enough to act on
 next agent guessing. The goal is **plain prose**, never `GOAL:` / `WHY:` /
 `CONTEXT:` labelled fields: a task is not a sectioned type like `checkpoint`,
 and copying their `LABEL: text` shape only makes it look like one. The labelled
-shape belongs to an item's brief (`task_note`). Each item's key is its position
-— `i1`, `i2`, … — and a tool takes `i3` or `3` for the third item. An item that
-stops applying is `dropped`; deleting one renumbers every item after it. The
-task's content is
+shape belongs to an item's brief (`task_note`). Each item has an **id**:
+`task()` and `task_add()` return them, `task_read(part='items')` lists them with
+`n`, the number the item shows on its list, and every tool takes the id. The
+number is display only: it follows the order, and deleting an item moves no
+other id. An item that stops applying is `dropped`. The task's content is
 generated from the goal and the items (`[ ]` todo, `[~]` doing, `[x]` done,
-`[-]` dropped); a goal edit and an item deletion enter the edit history.
+`[-]` dropped, then the id); a goal edit and an item deletion enter the edit
+history.
 
 **Write it so it reads back.** The server refuses a write that breaks these:
 
@@ -447,37 +449,38 @@ generated from the goal and the items (`[ ]` todo, `[~]` doing, `[x]` done,
   progress and every `DEPENDS ON` in another item's brief show it whole, so a
   long one floods each brief that depends on it. The step's detail goes in
   that item's brief (`task_note`).
-- **An item is cited by its key only in a brief's `DEPENDS ON`.** Deleting an
-  item renumbers the rest and `DEPENDS ON` follows, but free text — the goal,
-  an item's text, a note's title or other fields, a comment — is never
-  rewritten, so an `i3` there silently comes to mean another item. Order and
-  prerequisites go in `DEPENDS ON`; anywhere else, name the item by what it
-  does.
+- **Free text cites an item as `[[#id]]`, never by its number.** The goal, a
+  brief's fields, a note on the whole task and a comment may hold `[[#4812]]`;
+  it reads back as the item's current number and label, and as a deleted item
+  once the item is gone. A label — the task's title, an item's text, a note's
+  title — never carries one, and `i3` in free text is refused. Order and
+  prerequisites go in `DEPENDS ON`.
 
 ```
 Refused:  item   "Write the CSV exporter with the column mapping, once i2 is merged"
           steps  "Reuse the mapping i2 built"
 Accepted: item   "Write the CSV exporter"
-          steps  "Reuse the column mapping the schema item built"
-          depends_on  "i2 (the column mapping)"
+          steps  "Reuse the column mapping [[#4812]] built"
+          depends_on  "4812 (the column mapping)"
 ```
 
 Work it with:
 
-- **`task_item(uid, item, state, comment, related, text, expect, delete)`** — set
-  an item's `state` (`todo`, `doing`, `done`, `dropped`), comment on it, link the
-  memories it produced or depends on (`related`: comma-separated uids; an
-  unknown uid refuses the whole call), and rename it with `text`: the item keeps
-  its key, state, brief, comments and links. Give at least one; they apply
-  together or not at all. The result carries `progress`
-  (`{done, dropped, total}`), `task_state` and `archived`.
-  `delete=True` removes the item, alone in its call and given `expect`, the
-  item's current text as last read — a key names whichever item holds that
-  position now. The result's `renumbered` maps the keys that moved. Delete a
-  mistake or a duplicate; mark work decided against `dropped`, which keeps it.
-- **`task_add(uid, items)`** — append items, one per line, each a short label.
+- **`task_item(uid, item, state, comment, related, text, delete)`** — `item`
+  is the id. Set an item's `state` (`todo`, `doing`, `done`, `dropped`), comment
+  on it, link the memories it produced or depends on (`related`: comma-separated
+  uids; an unknown uid refuses the whole call), and rename it with `text`: the
+  item keeps its id, state, brief, comments and links. Give at least one; they
+  apply together or not at all. The result carries `progress`
+  (`{done, dropped, total}`), `task_state` and `archived`. A number that is not
+  an id of the task is refused, and the error names the id at that position.
+  `delete=True` removes the item, alone in its call; no other item moves, and a
+  `DEPENDS ON` that named it keeps its text, marked deleted. Delete a mistake or
+  a duplicate; mark work decided against `dropped`, which keeps it.
+- **`task_add(uid, items)`** — append items, one per line, each a short label;
+  the result lists their ids.
 - **`task_comment(uid, body, item)`** — a comment on the task, or on one item
-  when `item` names a key. A comment never edits the content, so it carries
+  when `item` is its id. A comment never edits the content, so it carries
   what a checklist cannot: why an item is blocked, what a review said.
 - **`task_note(uid, title, body, items, note_id, delete, goal, context, steps, pitfalls, done_when, depends_on, extra_info)`**
   — a note the task owns. A note on items is that item's **brief**, written as
@@ -485,11 +488,12 @@ Work it with:
   are required (`none` is an answer) and `extra_info` holds anything else. The
   body reads `GOAL:` / `CONTEXT:` / `STEPS:` / `PITFALLS:` / `DONE WHEN:` /
   `DEPENDS ON:` / `EXTRA INFO:`, and an edit that gives one field replaces only
-  that field. `depends_on` is `none`, or item keys with an optional reason in
-  parentheses (`i3 (why), i9`); a key the task lacks, or the note's own item, is
-  refused. The keys are renumbered with the items, and deleting an item marks
-  a dependency on it `deleted "<text>"`. `items` puts the note on those items, empty puts it on the whole
-  task. `body` is for a note on the whole task — a recipe or a rule every item
+  that field. `depends_on` is `none`, or item ids with an optional reason in
+  parentheses (`4812 (why), 4815`); an id the task lacks, or the note's own
+  item, is refused. It reads back as `[[#4812]] (why)`, and deleting an item
+  marks a dependency on it `deleted "<text>"`. `items` takes the ids the note
+  is on (`"4812,4815"`), empty puts it on the whole task. `body` is for a note
+  on the whole task — a recipe or a rule every item
   shares. It is not a memory, so search, recall, pulse and must_read never
   return it; write with `note()` only what stands on its own outside the task.
   A `note_id` edits it in place.
@@ -497,9 +501,10 @@ Work it with:
   count of items, task notes and task comments, with `next` naming the
   `task_read` call for each. It lists no items.
 - **`task_read(uid, part, item, offset)`** — one page of one collection:
-  `items` (each with its counts), `notes` and `comments` (the task's own, or
-  with `item` that item's), `links` (an item's linked memories). Follow
-  `next_offset` until it is absent.
+  `items` (each with its id, its number `n` and its counts), `notes` and
+  `comments` (the task's own, or with `item` that item's; a page that mentions
+  items carries `refs`, what each `[[#id]]` names), `links` (an item's linked
+  memories). Follow `next_offset` until it is absent.
 
 **Lifecycle.** A task is `open` while any item is `todo` or `doing`. The
 write that leaves every item `done` or `dropped` closes it itself: at least one
@@ -703,7 +708,7 @@ always published, `diagrams` and `curation` only when named (or under the
 | `anti_pattern(title, pattern, why_wrong, instead, domain, also, tags, session, review_after, source_ref)` | A pitfall → `type='anti_pattern'` (counted by `pulse`, listed by `must_read`) | core |
 | `checkpoint(title, intent, established, pursuing, open_questions, session, domain, also, tags)` | Where the work stands → `type='checkpoint'` (summary, not an archive) | core |
 | `task(title, goal, items, domain, also, tags, session)` | A goal and a checklist, one item per line → `type='task'` | core |
-| `task_item(uid, item, state, comment, related, text, expect, delete)` | One item's state (`todo` \| `doing` \| `done` \| `dropped`), a comment on it, memories linked to it, its text; or its deletion, given its current text; the last close archives the task | core |
+| `task_item(uid, item, state, comment, related, text, delete)` | One item, by id: its state (`todo` \| `doing` \| `done` \| `dropped`), a comment on it, memories linked to it, its text; or its deletion; the last close archives the task | core |
 | `task_add(uid, items)` | Append items to a task, one per line; a closed task reopens | core |
 | `task_comment(uid, body, item)` | A comment on a task, or on one item | core |
 | `task_note(uid, title, body, items, note_id, delete, goal, context, steps, pitfalls, done_when, depends_on, extra_info)` | A note owned by the task: a brief on items, free text on the whole task; never a memory | core |

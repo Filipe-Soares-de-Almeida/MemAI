@@ -10,3 +10,6 @@ export const TYPE_ORDER = MEMORY.TYPES;
    step to a memory. The API accepts any string; these are suggestions. */
 export const REL_SUGGEST = ['relates_to', 'supersedes', 'contradicts', 'duplicates', 'links_to'];
 export const DG_REL_SUGGEST = ['explains', 'contradicts', 'relates_to'];
+
+/* the icon inside a task item's state ring; todo is the bare ring */
+export const ITEM_MARK = { doing: 'ongoing', done: 'check', dropped: 'minus' };

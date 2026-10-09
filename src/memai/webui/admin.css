@@ -2499,6 +2499,26 @@ textarea.tk-box {
 .tk-dep-chip:hover { color: var(--accent-hi); border-color: rgba(187, 134, 252, .4); }
 .tk-dep-gone s, .tk-dep-key { color: var(--ink-3); }
 .tk-dep-why, .tk-dep-none { color: var(--ink-2); }
+/* DEPENDS ON being written: the chip names the item, the reason is typed beside it, and a cross takes it out */
+.tk-dep-row { flex-wrap: nowrap; column-gap: var(--sp-2); }
+.tk-dep-chip.is-static { flex: 0 1 auto; min-width: 0; cursor: default; color: var(--ink); }
+.tk-dep-chip.is-static:hover { color: var(--ink); border-color: var(--line-soft); }
+input.tk-dep-why-box { flex: 1 1 12ch; min-width: 0; height: var(--ctl-h-sm); font-size: var(--fs-sm); }
+.tk-dep-x { flex: none; --ico: 12px; }
+.tk-dep-adder { margin-top: var(--sp-1); }
+input.tk-dep-add { width: min(100%, 34ch); height: var(--ctl-h-sm); font-size: var(--fs-sm); }
+/* the items a mention can name, hung under the field typed in; the highlighted one is the one Tab takes */
+.tk-mention { max-height: min(40vh, 320px); overflow-y: auto; }
+.tk-mention-opt {
+  display: flex; align-items: center; overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
+  font-variant-numeric: tabular-nums; cursor: pointer;
+}
+.tk-mention-opt.is-active { background: var(--hover-2); color: var(--accent); }
+.tk-dep-legacy { margin: 0; font: 400 var(--fs-sm)/1.5 var(--font-ui); color: var(--ink-2); overflow-wrap: anywhere; }
+@media (max-width: 600px) {
+  .tk-dep-row { flex-wrap: wrap; row-gap: var(--sp-1); }
+  input.tk-dep-why-box { flex-basis: calc(100% - var(--ctl-h-sm) - var(--sp-2)); }
+}
 /* under the box: how to save on the left, how much room is left on the right */
 .tk-note-foot { display: flex; align-items: center; gap: var(--sp-3); }
 .tk-note-foot .rf-count { margin-left: auto; }
@@ -2759,6 +2779,19 @@ textarea.tk-box {
   border: 1px dashed var(--line-soft); text-decoration: line-through;
 }
 .rt-link-plain { color: var(--ink-3); background: var(--inset); }
+
+/* An item of the task, named in its text: the DEPENDS ON chip at the size of the line it sits in */
+.rt-item {
+  display: inline-flex; align-items: center; max-width: 100%; vertical-align: bottom;
+  padding: 0 var(--sp-2); line-height: 1.6; cursor: pointer;
+  font: 500 .92em var(--font-ui); color: var(--accent); font-variant-numeric: tabular-nums;
+  background: var(--chip-fill); border: 1px solid var(--line-soft); border-radius: var(--r-pill);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  transition: color .15s, border-color .15s;
+}
+.rt-item:hover { color: var(--accent-hi); border-color: rgba(187, 134, 252, .4); }
+.rt-item .tk-dep-mark { margin-right: 6px; }
+.rt-item.is-gone { cursor: default; color: var(--ink-3); background: var(--inset); border-style: dashed; }
 
 .rt-url { color: var(--accent); word-break: break-word; }
 

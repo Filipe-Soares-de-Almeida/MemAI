@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from conftest import brief
+from conftest import brief, item_at
 from memai import budget, tasks
 from memai.store import connection, memories
 
@@ -21,12 +21,12 @@ def uid(conn):
     u = tasks.create_task(conn, title="Ship the parser", goal="Parse every config file",
                           items=["read the spec", "write the lexer"], domain="acme/parser")
     tasks.add_note(conn, u, title="Pick-up rules", body="Claim first.", items=[])
-    tasks.add_note(conn, u, title="Lexer rules", body=brief("ASCII only."), items=["i2"])
+    tasks.add_note(conn, u, title="Lexer rules", body=brief("ASCII only."), items=[item_at(conn, u, 2)])
     tasks.add_comment(conn, u, "on the task")
-    tasks.add_comment(conn, u, "on the lexer", item="i2")
+    tasks.add_comment(conn, u, "on the lexer", item=item_at(conn, u, 2))
     other = memories.insert_memory(conn, type="note", content="Lexers are fun.", title="Lexers",
                              domain="acme/parser")
-    tasks.link_item(conn, u, "i2", [other])
+    tasks.link_item(conn, u, item_at(conn, u, 2), [other])
     return u
 
 
@@ -42,21 +42,21 @@ def test_head_counts_task_level_records_only(conn, uid):
 def test_items_page_carries_per_item_counts(conn, uid):
     page = tasks.read_part(conn, uid, "items")
     assert page["total"] == 2 and "next_offset" not in page
-    assert page["records"][1] == {"key": "i2", "state": "todo", "text": "write the lexer",
+    assert page["records"][1] == {"id": item_at(conn, uid, 2), "n": 2, "state": "todo", "text": "write the lexer",
                                   "counts": {"notes": 1, "comments": 1, "links": 1}}
 
 
 def test_each_part_scopes_by_item(conn, uid):
     assert [n["title"] for n in tasks.read_part(conn, uid, "notes")["records"]] == ["Pick-up rules"]
-    assert [n["title"] for n in tasks.read_part(conn, uid, "notes", "i2")["records"]] == ["Lexer rules"]
+    assert [n["title"] for n in tasks.read_part(conn, uid, "notes", item_at(conn, uid, 2))["records"]] == ["Lexer rules"]
     assert [c["body"] for c in tasks.read_part(conn, uid, "comments")["records"]] == ["on the task"]
-    assert [c["body"] for c in tasks.read_part(conn, uid, "comments", "2")["records"]] == ["on the lexer"]
-    link = tasks.read_part(conn, uid, "links", "i2")["records"][0]
+    assert [c["body"] for c in tasks.read_part(conn, uid, "comments", str(item_at(conn, uid, 2)))["records"]] == ["on the lexer"]
+    link = tasks.read_part(conn, uid, "links", item_at(conn, uid, 2))["records"][0]
     assert set(link) == {"uid", "type", "title", "est_tokens"}
 
 
-@pytest.mark.parametrize("part,item", [("links", ""), ("items", "i1"), ("bogus", ""),
-                                       ("notes", "i9")])
+@pytest.mark.parametrize("part,item", [("links", 0), ("items", 1), ("bogus", 0),
+                                       ("notes", 999_999), ("notes", "i1")])
 def test_invalid_reads_are_value_errors(conn, uid, part, item):
     with pytest.raises(ValueError):
         tasks.read_part(conn, uid, part, item)

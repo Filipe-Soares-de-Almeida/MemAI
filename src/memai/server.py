@@ -252,8 +252,9 @@ _PARAM_TEXT: dict[str, dict[str, str]] = {}
 # replaced by the entry, at that line's indentation.
 PARAM_DOCS: dict[str, str] = {
     "cite_rule": """\
-Name another item by what it does: its key belongs only in a brief's
-DEPENDS ON, since keys renumber when an item is deleted.""",
+Cite another item in free text as [[#id]], with the id task_read(part='items')
+lists; it reads back as the item's current number and label. A label -- a
+title or an item's text -- never carries one.""",
     "offset": """\
 offset: where the page starts; `next_offset`, when present, starts the next.""",
     "title": """\
@@ -802,8 +803,8 @@ def task(title: str, goal: str, items: str, domain: str = "", also: str = "",
     items: one checklist item per line, blank lines ignored, at most 50.
     Each is a short label, verb first, at most 80 characters: lists and
     every DEPENDS ON that names it show it whole, so its detail goes in the
-    item's brief (task_note). Each gets a key (i1, i2, ...), its position,
-    that task_item() takes back.
+    item's brief (task_note). Each gets an id, which task_item() takes
+    back; the result lists them in order.
 
     @param also
 
@@ -821,24 +822,24 @@ def task(title: str, goal: str, items: str, domain: str = "", also: str = "",
                                     domain=domain, also=also, tags=tags,
                                     session=session or SESSION)
             result = _write_result(conn, uid, warning, also, tags)
+            result["items"] = tasks.item_ids(conn, uid)
     except ValueError as exc:
         return _errors([str(exc)])
-    result["items"] = [f"i{n}" for n in range(1, len(lines) + 1)]
     return result
 
 
 @tool("core", REWRITE)
-def task_item(uid: str, item: str, state: str = "", comment: str = "",
-              related: str = "", text: str = "", expect: str = "", delete: bool = False) -> dict:
+def task_item(uid: str, item: int, state: str = "", comment: str = "",
+              related: str = "", text: str = "", delete: bool = False) -> dict:
     """Update one item of a task -- its text, its state, a comment on it, memories linked to it -- or delete it.
 
     uid: the task.
 
-    item: the item's number, such as 3 or i3; an item's key is its position in the checklist.
+    item: the item's id, as task_read(part='items') lists it.
 
     text: the item's new text, a short label as task() takes it. The item
-    keeps its key, state, brief, comments and links; the previous text
-    stays in the edit history.
+    keeps its id, state, brief, comments and links; the previous text stays
+    in the edit history.
 
     state: todo, doing, done or dropped. The write that closes the last open
     item archives the task (`archived` in the result); one that reopens an
@@ -849,15 +850,11 @@ def task_item(uid: str, item: str, state: str = "", comment: str = "",
     related: comma-separated uids of memories this item produced or depends
     on. An unknown uid refuses the whole call, and nothing is written.
 
-    expect: the item's current text, as last read. Required to delete,
-    optional to rename; a mismatch refuses the call, since a key names
-    whichever item holds that position now.
-
     delete: removes the item with its comments, links and note attachments,
-    alone in its call and given `expect`. Each later item moves up one key,
-    DEPENDS ON follows, and `renumbered` maps old keys to new; a brief on
-    only that item stays, on the whole task. Delete a mistake or a
-    duplicate; mark work decided against as dropped, which keeps it.
+    alone in its call. No other item moves; a DEPENDS ON that named it keeps
+    its text, marked deleted, and a brief on only that item stays, on the
+    whole task. Delete a mistake or a duplicate; mark work decided against
+    as dropped, which keeps it.
 
     Give at least one of text, state, comment and related, or delete. They
     apply together, or not at all.
@@ -868,11 +865,9 @@ def task_item(uid: str, item: str, state: str = "", comment: str = "",
     if delete:
         if edits:
             return _errors(["a delete stands alone: give no text, state, comment or related with it"])
-        if not expect.strip():
-            return _errors(["a delete needs the item's current text in expect"])
         try:
             with connection.connect() as conn:
-                out = tasks.delete_item(conn, uid, item, expect=expect, session=SESSION)
+                out = tasks.delete_item(conn, uid, item, session=SESSION)
         except ValueError as exc:
             return _errors([str(exc)])
         return {**out, "deleted": True}
@@ -880,22 +875,24 @@ def task_item(uid: str, item: str, state: str = "", comment: str = "",
         return _errors(["give at least one of text, state, comment and related, or delete"])
     try:
         with connection.connect() as conn:
-            key = tasks.item_key(item)
+            if not tasks.is_task(conn, uid):
+                raise ValueError(f"no task {uid}")
+            item_id = tasks.require_item(conn, uid, item)
             if text.strip():
-                tasks.rename_item(conn, uid, key, text, expect=expect or None, session=SESSION)
+                tasks.rename_item(conn, uid, item_id, text, session=SESSION)
             targets = [t.strip() for t in related.split(",") if t.strip()]
             if targets:
-                tasks.link_item(conn, uid, key, targets)
+                tasks.link_item(conn, uid, item_id, targets)
             if comment.strip():
-                tasks.add_comment(conn, uid, comment, item=key, session=SESSION)
+                tasks.add_comment(conn, uid, comment, item=item_id, session=SESSION)
             if state.strip():
-                tasks.set_item_state(conn, uid, key, state.strip(), session=SESSION)
+                tasks.set_item_state(conn, uid, item_id, state.strip(), session=SESSION)
             head = tasks.get_task(conn, uid)
             if head is None:
                 raise ValueError(f"no task {uid}")
-            current = next(i["state"] for i in head["items"] if i["key"] == key)
+            current = next(i["state"] for i in head["items"] if i["id"] == item_id)
             result = {
-                "uid": uid, "item": key, "state": current,
+                "uid": uid, "item": item_id, "state": current,
                 "progress": tasks.progress(conn, uid), "task_state": head["state"],
                 "archived": memories.memory_row(conn, uid)["status"] == "archived",
             }
@@ -913,7 +910,7 @@ def task_add(uid: str, items: str) -> dict:
 
     @param cite_rule
 
-    Returns {"uid", "items", "progress", "task_state", "archived"}: the keys
+    Returns {"uid", "items", "progress", "task_state", "archived"}: the ids
     the new items got, and the task as it stands.
 
     uid: the task.
@@ -926,13 +923,13 @@ def task_add(uid: str, items: str) -> dict:
             added = tasks.add_items(conn, uid, tasks.split_items(items), session=SESSION)
     except ValueError as exc:
         return _errors([str(exc)])
-    return {"uid": uid, "items": added["keys"], "progress": added["progress"],
+    return {"uid": uid, "items": added["ids"], "progress": added["progress"],
             "task_state": added["task_state"], "archived": added["archived"]}
 
 
 @tool("core", ADD)
-def task_comment(uid: str, body: str, item: str = "") -> dict:
-    """Comment on a task, or on one of its items when `item` names a key.
+def task_comment(uid: str, body: str, item: int = 0) -> dict:
+    """Comment on a task, or on one of its items when `item` names its id.
 
     A comment never edits the task's content, so it carries what the
     checklist cannot: why an item is blocked, what a review said. Text an
@@ -948,7 +945,7 @@ def task_comment(uid: str, body: str, item: str = "") -> dict:
 
     body: the comment.
 
-    item: the item's number, such as 3 or i3; empty comments on the task itself.
+    item: the item's id; 0, the default, comments on the task itself.
     """
     try:
         with connection.connect() as conn:
@@ -959,19 +956,20 @@ def task_comment(uid: str, body: str, item: str = "") -> dict:
 
 
 @tool("core", READ)
-def task_read(uid: str, part: str, item: str = "", offset: int = 0) -> dict:
+def task_read(uid: str, part: str, item: int = 0, offset: int = 0) -> dict:
     """Read one collection of a task, one page at a time.
 
     Follow `next_offset` until it is absent.
 
     uid: the task.
 
-    part: `items` (each with its state and counts), `notes` and `comments`
-    (the task's own; with `item`, that item's) or `links` (the memories
-    linked to `item`).
+    part: `items` (each with its id, its number on the list, its state and
+    counts), `notes` and `comments` (the task's own; with `item`, that
+    item's; a page that mentions items carries `refs`, what each [[#id]]
+    names) or `links` (the memories linked to `item`).
 
-    item: the item's number, such as 3 or i3, for an item's notes,
-    comments or links.
+    item: the item's id, for an item's notes, comments or links; 0, the
+    default, is the task's own.
 
     @param offset
     """
@@ -1007,7 +1005,7 @@ def task_note(uid: str, title: str = "", body: str = "", items: str = "", note_i
     body: a note on the whole task, up to 4000 characters; it errors
     beside a brief field.
 
-    items: the keys of the items the note is on, such as "i3,i7"; empty
+    items: the ids of the items the note is on, such as "4812,4815"; empty
     or "-" is the whole task.
 
     goal: what the item must achieve.
@@ -1020,15 +1018,18 @@ def task_note(uid: str, title: str = "", body: str = "", items: str = "", note_i
 
     done_when: how to tell the item is finished.
 
-    depends_on: none, or the keys of the items this one waits for, each
-    with an optional reason in parentheses ("i3 (why), i9"); the keys are
-    renumbered with the items. The only field an item key belongs in:
-    free text is never rewritten when keys renumber, so every other field
-    names an item by what it does.
+    depends_on: none, or the ids of the items this one waits for, each with
+    an optional reason in parentheses ("4812 (why), 4815"). A deleted item
+    reads back as deleted "its text".
 
     extra_info: anything else worth knowing; optional.
+
+    @param cite_rule
     """
-    keys = [k.strip() for k in items.split(",") if k.strip() and k.strip() != "-"]
+    raw = [k.strip() for k in items.split(",") if k.strip() and k.strip() != "-"]
+    if not all(k.isdigit() for k in raw):
+        return _errors([f'items takes item ids separated by commas, such as "4812,4815"; got {items!r}'])
+    ids = [int(k) for k in raw]
     brief = {"goal": goal, "context": context, "steps": steps, "pitfalls": pitfalls,
              "done_when": done_when, "depends_on": depends_on, "extra_info": extra_info}
     try:
@@ -1038,9 +1039,9 @@ def task_note(uid: str, title: str = "", body: str = "", items: str = "", note_i
                 return {"uid": uid, "note_id": note_id, "deleted": True}
             if note_id:
                 tasks.edit_note(conn, uid, note_id, title=title, body=body,
-                                items=keys if items.strip() else None, brief=brief)
+                                items=ids if items.strip() else None, brief=brief)
             else:
-                note_id = tasks.add_note(conn, uid, title=title, body=body, items=keys,
+                note_id = tasks.add_note(conn, uid, title=title, body=body, items=ids,
                                          brief=brief, session=SESSION)
             on = tasks.note(conn, uid, note_id)["items"]
     except ValueError as exc:
@@ -1803,7 +1804,7 @@ def must_read(domain: str = "", type: str = "", limit: int = 10, offset: int = 0
     person pinned as mandatory reading -- when any pin is in scope. A pinned
     memory still counts in its category. With type: {"type", "total",
     "items", "next_offset"} -- one page of headers (uid, title, domain,
-    est_tokens; a task adds `progress` {done, total} and `doing`, the keys of
+    est_tokens; a task adds `progress` {done, total} and `doing`, the ids of
     its items in progress), newest first, a task by its latest item update.
     Open a header with get_memory(uid). `next_offset` is absent on the last
     page.

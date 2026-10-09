@@ -6,7 +6,7 @@ import json
 
 import pytest
 
-from conftest import brief
+from conftest import brief, item_at
 from memai import lite, portable, tasks
 from memai.store import connection, memories, relations
 
@@ -29,10 +29,10 @@ def setup(tmp_path, monkeypatch):
         free = memories.insert_memory(conn, type="note", content="Free lexer notes.",
                                       title="Parser P2: notes", domain="acme")
         relations.add_relation(conn, general, other, "relates_to")
-        tasks.link_item(conn, uid, "i2", [lexer, general, big])
-        tasks.link_item(conn, uid, "i2", [free])
-        tasks.link_item(conn, uid, "i1", [playbook])
-        tasks.link_item(conn, uid, "i2", [playbook])
+        tasks.link_item(conn, uid, item_at(conn, uid, 2), [lexer, general, big])
+        tasks.link_item(conn, uid, item_at(conn, uid, 2), [free])
+        tasks.link_item(conn, uid, item_at(conn, uid, 1), [playbook])
+        tasks.link_item(conn, uid, item_at(conn, uid, 2), [playbook])
         conn.execute(
             "INSERT INTO edits (memory_uid, edited_at, prev_content, new_content, note) "
             "VALUES (?, ?, 'a', 'b', 'item i1: todo -> doing')", (uid, lite.now_iso()))
@@ -44,7 +44,9 @@ def test_dry_run_plans_and_writes_nothing(setup):
     out = portable.adopt(setup["task"], [setup["brief"], setup["playbook"]])
     assert out["dry_run"] is True and out["edits_dropped"] == 1
     plan = {p["uid"]: p for p in out["plan"]}
-    assert plan[setup["brief"]]["items"] == ["i2"] and plan[setup["brief"]]["level"] == "item"
+    with connection.connect() as conn:
+        second = item_at(conn, setup["task"], 2)
+    assert plan[setup["brief"]]["items"] == [second] and plan[setup["brief"]]["level"] == "item"
     assert plan[setup["playbook"]]["level"] == "task"
     with connection.connect() as conn:
         assert memories.get_memory(conn, setup["brief"]) is not None
@@ -57,7 +59,8 @@ def test_real_run_moves_notes_purges_memories_and_backs_up(setup):
     with connection.connect() as conn:
         assert memories.get_memory(conn, setup["brief"]) is None
         assert memories.get_memory(conn, setup["playbook"]) is None
-        assert [n["title"] for n in tasks.notes(conn, setup["task"], "i2")] == ["Parser P2: lexer"]
+        second = item_at(conn, setup["task"], 2)
+        assert [n["title"] for n in tasks.notes(conn, setup["task"], second)] == ["Parser P2: lexer"]
         assert [n["title"] for n in tasks.notes(conn, setup["task"])] == ["Parser: pick-up rules"]
         assert tasks.notes(conn, setup["task"])[0]["body"] == "Claim first."
         assert memories.get_edit_history(conn, setup["task"]) == []
@@ -101,14 +104,15 @@ def test_only_briefs_whose_depends_on_reads_are_planned_and_a_real_run_adopts_th
     with connection.connect() as conn:
         made = {depends: memories.insert_memory(conn, type="note", content=brief("Lexer.", depends_on=depends),
                                                 title=f"Lexer {n}", domain="acme")
-                for n, depends in enumerate(("none", "Item 1 first", "i9"))}
-        tasks.link_item(conn, setup["task"], "i2", list(made.values()))
-    ok, free, unknown = made["none"], made["Item 1 first"], made["i9"]
-    dry = portable.adopt(setup["task"], [ok, free, unknown])
+                for n, depends in enumerate(("none", "Item 1 first", "999999", "i1"))}
+        tasks.link_item(conn, setup["task"], item_at(conn, setup["task"], 2), list(made.values()))
+    ok, free, unknown, keyed = made["none"], made["Item 1 first"], made["999999"], made["i1"]
+    dry = portable.adopt(setup["task"], [ok, free, unknown, keyed])
     assert [p["uid"] for p in dry["plan"]] == [ok]
     reasons = {r["uid"]: r["reason"] for r in dry["refused"]}
     assert reasons[free].startswith("DEPENDS ON does not read: ")
-    assert "i9 is not an item of this task" in reasons[unknown]
+    assert "999999 is not an item of this task" in reasons[unknown]
+    assert "i1 is a position; name the item by its id" in reasons[keyed]
     real = portable.adopt(setup["task"], [ok, free, unknown], dry_run=False)
     assert [p["uid"] for p in real["plan"]] == [ok]
     with connection.connect() as conn:

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import pytest
 
+from conftest import item_at, item_of
 from memai import pending, server, tasks
 from memai.store import connection, memories
 
@@ -89,8 +90,8 @@ def seeded(store):
     one handoff, three notes and one diagram, all under acme/x100."""
     uids = {"open": _task("Ship the parser")}
     done = _task("Retire the legacy lexer")
-    server.task_item(done, "i1", state="done")
-    server.task_item(done, "i2", state="done")
+    server.task_item(done, item_of(done, 1), state="done")
+    server.task_item(done, item_of(done, 2), state="done")
     uids["done"] = done
     uids["ap_good"] = server.anti_pattern(
         title="Lexing twice", pattern="Lexing the input twice.",
@@ -131,14 +132,14 @@ def test_counts_are_scoped(seeded):
 
 
 def test_task_headers_carry_progress_and_doing(seeded):
-    server.task_item(seeded["open"], "i1", state="doing")
+    server.task_item(seeded["open"], item_of(seeded["open"], 1), state="doing")
     with connection.connect() as conn:
         result = pending.headers(conn, "", "task")
     assert result["type"] == "task" and result["total"] == 1
     item = result["items"][0]
     assert item["uid"] == seeded["open"]
     assert item["progress"] == {"done": 0, "total": 2}
-    assert item["doing"] == ["i1"]
+    assert item["doing"] == [item_of(seeded["open"], 1)]
 
 
 def test_tasks_are_ordered_by_their_latest_item_update(store):
@@ -146,7 +147,7 @@ def test_tasks_are_ordered_by_their_latest_item_update(store):
     newer = _task("Newer task")
     with connection.connect() as conn:
         assert [i["uid"] for i in pending.headers(conn, "", "task")["items"]] == [newer, older]
-    server.task_item(older, "i1", state="doing")
+    server.task_item(older, item_of(older, 1), state="doing")
     with connection.connect() as conn:
         assert [i["uid"] for i in pending.headers(conn, "", "task")["items"]] == [older, newer]
 
@@ -332,7 +333,7 @@ def test_a_task_in_two_listed_domains_counts_once(store):
 def test_a_closed_task_and_a_blank_domain_are_not_counted(store):
     with connection.connect() as conn:
         done = _pier(conn, "acme/harbor")
-        tasks.set_item_state(conn, done, "i1", "done")
+        tasks.set_item_state(conn, done, item_at(conn, done, 1), "done")
         _pier(conn, "acme/docks")
         assert pending.open_task_uids(conn, ["acme/harbor"]) == []
         assert pending.open_task_uids(conn, ["", "  "]) == []

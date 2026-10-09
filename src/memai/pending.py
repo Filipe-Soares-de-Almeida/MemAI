@@ -95,9 +95,9 @@ def open_task_uids(conn: sqlite3.Connection, domains: list[str]) -> list[str]:
     return list(found)
 
 
-def _doing(conn: sqlite3.Connection, uid: str) -> list[str]:
-    return [r["item_key"] for r in conn.execute(
-        "SELECT item_key FROM task_items WHERE memory_uid = ? AND state = 'doing' "
+def _doing(conn: sqlite3.Connection, uid: str) -> list[int]:
+    return [r["id"] for r in conn.execute(
+        "SELECT id FROM task_items WHERE memory_uid = ? AND state = 'doing' "
         "ORDER BY seq, id", (uid,))]
 
 
