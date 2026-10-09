@@ -114,7 +114,7 @@ function menu(e: MouseEvent) {
       <div class="tk-sub"><h3 class="tk-sub-h">{{ t('task.comments') }}<span class="rs-n">{{ thread.length }}</span></h3></div>
       <div class="tk-cs">
         <TaskComment v-for="cm in thread" :key="cm.id" :comment="cm" :fresh="enter.comments.has(cm.id)"
-                     :refs="current.refs" :on-item="c.flashItem" />
+                     :refs="current.refs" :links="current.body_links" :on-item="c.flashItem" />
         <TaskComposer :c="c" :scope="key" :reply="thread.length > 0" />
       </div>
     </div>

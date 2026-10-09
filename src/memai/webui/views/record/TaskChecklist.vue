@@ -71,7 +71,7 @@ const hidden = computed(() => (ui.allComments ? 0 : Math.max(0, thread.value.len
         t('task.comments.older', { n: hidden }) }}</button>
       <div class="tk-cs">
         <TaskComment v-for="cm in thread.slice(hidden)" :key="cm.id" :comment="cm" :fresh="enter.comments.has(cm.id)"
-                     :refs="current.refs" :on-item="c.flashItem" />
+                     :refs="current.refs" :links="current.body_links" :on-item="c.flashItem" />
         <div v-if="!thread.length" class="hint-sm tk-empty">{{ t('task.comments.empty') }}</div>
         <TaskComposer :c="c" scope="" :reply="thread.length > 0" />
       </div>

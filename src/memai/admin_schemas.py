@@ -235,6 +235,7 @@ class TaskRecord(TypedDict):
     comments: list[TaskComment]
     notes: list[TaskNote]
     refs: dict[str, ItemRef]
+    body_links: dict[str, BodyLink]
 
 
 class EditEntry(TypedDict):

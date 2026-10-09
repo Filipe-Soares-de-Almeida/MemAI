@@ -243,6 +243,7 @@ export interface TaskRecord {
   comments: TaskComment[];
   notes: TaskNote[];
   refs: Record<string, ItemRef>;
+  body_links: Record<string, BodyLink>;
 }
 
 export interface EditEntry {

@@ -176,3 +176,46 @@ def test_a_legacy_export_record_imports_by_key(tmp_path):
         assert task["notes"][0]["items"] == [ids[1]]
         note_id = task["notes"][0]["id"]
         assert tasks.dependencies(conn, note_id) == [{"item": ids[0], "text": "", "reason": "power"}]
+
+
+def test_a_store_from_before_task_notes_opens_migrated(tmp_path):
+    uid, target, *_ = _old_store(tmp_path / "old.db")
+    raw = sqlite3.connect(tmp_path / "old.db")
+    try:
+        raw.executescript("DROP TABLE task_note_items; DROP TABLE task_notes;")
+        raw.commit()
+    finally:
+        raw.close()
+    with connection.connect(tmp_path / "old.db") as conn:
+        assert not item_ids.needs_migration(conn)
+        task = tasks.get_task(conn, uid)
+        assert [i["text"] for i in task["items"]] == ["step i1", "step i2", "step i3"]
+        assert task["items"][0]["links"][0]["uid"] == target
+        assert task["notes"] == []
+
+
+def test_a_migration_that_keeps_failing_takes_one_backup(tmp_path, monkeypatch):
+    _old_store(tmp_path / "old.db")
+
+    def boom(conn):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(item_ids, "_split_briefs", boom)
+    for _ in range(3):
+        with pytest.raises(RuntimeError), connection.connect(tmp_path / "old.db"):
+            pass
+    assert len(list(tmp_path.glob("old-item-ids-*.db"))) == 1
+
+
+def test_a_brief_of_a_task_whose_memory_is_gone_does_not_stop_the_store_opening(tmp_path):
+    uid, *_ = _old_store(tmp_path / "old.db")
+    raw = sqlite3.connect(tmp_path / "old.db")
+    try:
+        raw.execute("PRAGMA foreign_keys = OFF")
+        raw.execute("DELETE FROM memories WHERE uid = ?", (uid,))
+        raw.commit()
+    finally:
+        raw.close()
+    with connection.connect(tmp_path / "old.db") as conn:
+        assert not item_ids.needs_migration(conn)
+        assert conn.execute("SELECT COUNT(*) FROM task_note_depends").fetchone()[0] == 0

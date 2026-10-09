@@ -48,7 +48,7 @@ describe('the menu', () => {
   let apps: App[] = [];
   afterEach(() => { apps.forEach(app => app.unmount()); apps = []; });
 
-  async function mount({ bare = false, onChose = (_: number) => {}, onEscape = () => {} } = {}) {
+  async function mount({ bare = false, onChose = (_: number) => {}, onKey = (_: KeyboardEvent) => {} } = {}) {
     const host = document.getElementById('view') as HTMLElement;
     const scope = ref<HTMLElement | null>(null);
     const text = ref('');
@@ -57,7 +57,7 @@ describe('the menu', () => {
         h('textarea', {
           value: text.value, 'data-mention': bare ? 'bare' : '',
           onInput: (e: Event) => { text.value = (e.target as HTMLTextAreaElement).value; },
-          onKeydown: (e: KeyboardEvent) => { if (e.key === 'Escape') onEscape(); },
+          onKeydown: (e: KeyboardEvent) => onKey(e),
         }),
         h(MentionMenu, { host: scope.value, items: ITEMS, onChose }),
       ]),
@@ -76,8 +76,8 @@ describe('the menu', () => {
     box.dispatchEvent(new Event('input', { bubbles: true }));
     await nextTick();
   };
-  const key = async (box: HTMLTextAreaElement, name: string) => {
-    box.dispatchEvent(new KeyboardEvent('keydown', { key: name, bubbles: true, cancelable: true }));
+  const key = async (box: HTMLTextAreaElement, name: string, mods: KeyboardEventInit = {}) => {
+    box.dispatchEvent(new KeyboardEvent('keydown', { key: name, bubbles: true, cancelable: true, ...mods }));
     await nextTick();
   };
   const options = () => [...document.querySelectorAll<HTMLElement>('[data-mention-menu] [role="option"]')];
@@ -100,11 +100,43 @@ describe('the menu', () => {
     expect(options()).toHaveLength(0);
   });
 
-  it('chooses with Enter', async () => {
+  it('chooses with Enter once an arrow key has picked the item', async () => {
     const { box, text } = await mount();
     await type(box, '@fla');
+    await key(box, 'ArrowDown');
+    await key(box, 'ArrowUp');
     await key(box, 'Enter');
     expect(text.value).toBe('[[#42]]');
+  });
+
+  it('lets Enter through, the text as typed, when nothing was picked by arrow or pointer', async () => {
+    const seen: string[] = [];
+    const { box, text } = await mount({ onKey: e => seen.push(e.key) });
+    await type(box, 'Issue #2');
+    await key(box, 'Enter');
+    expect(text.value).toBe('Issue #2');
+    expect(seen).toEqual(['Enter']);
+    expect(options()).toHaveLength(0);
+  });
+
+  it('closes on Ctrl+Enter and lets the editor save the text as typed', async () => {
+    const seen: string[] = [];
+    const { box, text } = await mount({ onKey: e => seen.push(`${e.ctrlKey ? 'Ctrl+' : ''}${e.key}`) });
+    await type(box, 'Merged PR #2');
+    await key(box, 'ArrowDown');
+    await key(box, 'Enter', { ctrlKey: true });
+    expect(text.value).toBe('Merged PR #2');
+    expect(seen).toEqual(['Ctrl+Enter']);
+    expect(options()).toHaveLength(0);
+  });
+
+  it('lets Shift+Tab move focus back without choosing', async () => {
+    const seen: string[] = [];
+    const { box, text } = await mount({ onKey: e => seen.push(e.key) });
+    await type(box, 'after #');
+    await key(box, 'Tab', { shiftKey: true });
+    expect(text.value).toBe('after #');
+    expect(seen).toEqual(['Tab']);
   });
 
   it('chooses with a click', async () => {
@@ -118,7 +150,7 @@ describe('the menu', () => {
 
   it('closes on Escape, leaving the text as typed and the editor open', async () => {
     let escaped = 0;
-    const { box, text } = await mount({ onEscape: () => { escaped += 1; } });
+    const { box, text } = await mount({ onKey: e => { if (e.key === 'Escape') escaped += 1; } });
     await type(box, 'after #fla');
     await key(box, 'Escape');
     expect(options()).toHaveLength(0);
@@ -145,5 +177,18 @@ describe('the menu', () => {
     await key(box, 'Enter');
     expect(chose).toEqual([42]);
     expect(text.value).toBe('');
+  });
+
+  it('lets Tab leave a bare field nothing was typed in, choosing nothing', async () => {
+    const chose: number[] = [];
+    const seen: string[] = [];
+    const { box } = await mount({ bare: true, onChose: (id: number) => { chose.push(id); }, onKey: e => seen.push(e.key) });
+    box.focus();
+    box.dispatchEvent(new FocusEvent('focusin', { bubbles: true }));
+    await nextTick();
+    expect(options()).toHaveLength(2);
+    await key(box, 'Tab');
+    expect(chose).toEqual([]);
+    expect(seen).toEqual(['Tab']);
   });
 });

@@ -31,7 +31,7 @@ def _item(payload) -> int:
 
 
 def _task_view(conn: sqlite3.Connection, uid: str) -> dict | None:
-    """The task with its notes' [[uid]] links, brief fields and dependencies, and what each [[#id]] names."""
+    """The task with what each [[uid]] and [[#id]] in it names, and its notes' brief fields and dependencies."""
     task = tasks.get_task(conn, uid)
     if task is None:
         return None
@@ -41,6 +41,8 @@ def _task_view(conn: sqlite3.Connection, uid: str) -> dict | None:
         note["depends"] = tasks.dependencies(conn, note["id"])
     task["refs"] = tasks.refs(conn, uid, [task["goal"], *(n["body"] for n in task["notes"]),
                                           *(c["body"] for c in task["comments"])])
+    task["body_links"] = sections.body_links(
+        conn, uid, "\n".join([task["goal"], *(c["body"] for c in task["comments"])]))
     return task
 
 

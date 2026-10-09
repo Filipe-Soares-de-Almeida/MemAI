@@ -14,7 +14,8 @@ const props = defineProps<{ host: HTMLElement | null; items: TaskItem[] }>();
 const emit = defineEmits<{ chose: [id: number] }>();
 
 const uid = `tkm-${Math.random().toString(36).slice(2, 9)}`;
-const state = reactive({ field: null as Field | null, start: 0, query: '', active: 0, top: 0, left: 0, width: 0 });
+const state = reactive({ field: null as Field | null, start: 0, query: '', active: 0, picked: false,
+                         top: 0, left: 0, width: 0 });
 
 const shown = computed(() => (state.field ? matchItems(props.items, state.query) : []));
 const optionId = (at: number) => `${uid}-${at}`;
@@ -59,6 +60,7 @@ function read(el: Field) {
   state.start = found.start;
   state.query = found.query;
   state.active = 0;
+  state.picked = false;
   place(el);
   nextTick(() => mark(el, Boolean(state.field)));
 }
@@ -82,17 +84,28 @@ function onInput(e: Event) {
   if (el && !(e as InputEvent).isComposing) read(el);
 }
 
-/* in the capture phase on the document, so an open menu takes Enter, Tab and Esc before the editor does */
+/* Captured on the document, so an open menu reads its keys before the editor. Enter chooses only after an
+   arrow or the pointer, so "#2" and Enter stay text; Ctrl, Cmd, Alt and Shift+Tab close it and pass on. */
 function onKey(e: KeyboardEvent) {
   const el = state.field;
   if (!el || e.target !== el || e.isComposing) return;
+  if (e.ctrlKey || e.metaKey || e.altKey || (e.key === 'Tab' && e.shiftKey)) { close(); return; }
+  const bare = isBare(el);
   const count = shown.value.length;
-  const move = (step: number) => { state.active = (state.active + step + count) % count; mark(el, true); };
+  const move = (step: number) => {
+    state.active = (state.active + step + count) % count;
+    state.picked = true;
+    mark(el, true);
+  };
   if (e.key === 'ArrowDown') move(1);
   else if (e.key === 'ArrowUp') move(-1);
-  else if (e.key === 'Enter' || e.key === 'Tab') choose(state.active);
+  else if (e.key === 'Enter' && (bare || state.picked)) choose(state.active);
+  else if (e.key === 'Tab' && (!bare || state.picked || el.value.trim())) choose(state.active);
   else if (e.key === 'Escape') close();
-  else return;
+  else {
+    if (e.key === 'Enter' || e.key === 'Tab') close();
+    return;
+  }
   e.preventDefault();
   e.stopPropagation();
 }
@@ -130,7 +143,7 @@ onBeforeUnmount(() => { bind(null); document.removeEventListener('keydown', onKe
          :style="{ top: `${state.top}px`, left: `${state.left}px`, minWidth: `${Math.min(state.width, 320)}px` }">
       <div v-for="(i, at) in shown" :id="optionId(at)" :key="i.id" class="ctx-item tk-mention-opt" role="option"
            :aria-selected="at === state.active" :class="{ 'is-active': at === state.active }"
-           @mousedown.prevent @click="choose(at)" @mousemove="state.active = at"><span class="tk-dep-mark"
+           @mousedown.prevent @click="choose(at)" @mousemove="state.active = at; state.picked = true"><span class="tk-dep-mark"
            :data-s="i.state" aria-hidden="true"><span class="tk-ring"><AppIcon v-if="MARK[i.state]"
            :name="MARK[i.state]" /></span></span>{{ i.n }} · {{ i.text }}</div>
     </div>

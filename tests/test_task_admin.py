@@ -581,3 +581,12 @@ def test_a_note_carries_its_dependencies_as_rows(client):
     note = res.json()["task"]["notes"][0]
     assert note["items"] == [ids[1]]
     assert note["depends"] == [{"item": ids[0], "text": "", "reason": "the draft"}]
+
+
+def test_the_task_view_resolves_memory_links_in_the_goal_and_comments(client):
+    uid = _task(client)
+    fact = _note(client)
+    client.post(f"/api/tasks/{uid}/goal", json={"goal": f"the map is live, as [[{fact}]] says"})
+    client.post(f"/api/tasks/{uid}/comment", json={"body": f"see [[{fact}]]"})
+    links = client.get(f"/api/memories/{uid}").json()["task"]["body_links"]
+    assert fact in links and not links[fact].get("missing")

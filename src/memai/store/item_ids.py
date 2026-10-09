@@ -105,19 +105,28 @@ def needs_migration(conn: sqlite3.Connection) -> bool:
     return "item_key" in {r[1] for r in conn.execute("PRAGMA table_info(task_items)")}
 
 
-def backup_path(db_path: Path) -> Path:
-    """Where the copy taken before the migration goes: the project's backup shelf for a store
-    file in the store home, beside the file for any other."""
+def _shelf(db_path: Path) -> tuple[str, Path]:
+    """The project a store file belongs to and the folder its backups go in: the project's backup
+    shelf for a file in the store home, beside the file for any other."""
     db_path = Path(db_path).resolve()
     root = home().resolve()
     if db_path == root / paths.GENERAL_FILE:
-        project = paths.GENERAL_PROJECT
-        folder = backups.backups_dir(project)
-    elif db_path.parent == root / paths.PROJECTS_DIRNAME:
-        project = db_path.stem
-        folder = backups.backups_dir(project)
-    else:
-        project, folder = db_path.stem, db_path.parent
+        return paths.GENERAL_PROJECT, backups.backups_dir(paths.GENERAL_PROJECT)
+    if db_path.parent == root / paths.PROJECTS_DIRNAME:
+        return db_path.stem, backups.backups_dir(db_path.stem)
+    return db_path.stem, db_path.parent
+
+
+def taken_backup(db_path: Path) -> Path | None:
+    """A copy an earlier attempt took before migrating this store, if one is on its shelf."""
+    project, folder = _shelf(db_path)
+    found = sorted(folder.glob(f"{project}-{KIND}-*.db"))
+    return found[0] if found else None
+
+
+def backup_path(db_path: Path) -> Path:
+    """Where the copy taken before the migration goes, a name no file holds yet."""
+    project, folder = _shelf(db_path)
     name = Path(backups.backup_name(project, KIND))
     dest, n = folder / name, 1
     while dest.exists():
@@ -160,7 +169,7 @@ _COPY = {
         SELECT c.id, c.memory_uid, i.id, c.body, c.author, c.session, c.created_at
         FROM task_comments c
         LEFT JOIN task_items i ON i.memory_uid = c.memory_uid AND i.item_key = c.item_key
-        WHERE c.memory_uid IN (SELECT memory_uid FROM tasks)
+        WHERE c.memory_uid IN (SELECT t.memory_uid FROM tasks t JOIN memories m ON m.uid = t.memory_uid)
           AND (c.item_key = '' OR i.id IN (SELECT id FROM task_items_new))""",
     "task_note_items": """
         INSERT OR IGNORE INTO task_note_items_new (note_id, item_id)
@@ -185,7 +194,8 @@ def _keep_sequence(conn: sqlite3.Connection, table: str, seq: int) -> None:
 def _split_briefs(conn: sqlite3.Connection) -> None:
     """Move every brief's DEPENDS ON into rows, reading keys through the tables not yet dropped."""
     keys: dict[str, dict[str, int]] = {}
-    for r in conn.execute("SELECT memory_uid, item_key, id FROM task_items"):
+    for r in conn.execute("SELECT memory_uid, item_key, id FROM task_items "
+                          "WHERE id IN (SELECT id FROM task_items_new)"):
         keys.setdefault(r["memory_uid"], {})[r["item_key"]] = r["id"]
     for n in conn.execute("SELECT id, memory_uid, body FROM task_notes WHERE split_depends = 0").fetchall():
         split = split_legacy(n["body"], keys.get(n["memory_uid"], {}))
@@ -199,7 +209,8 @@ def _split_briefs(conn: sqlite3.Connection) -> None:
 def migrate(conn: sqlite3.Connection, db_path: Path) -> Path | None:
     """Move a store whose task rows name items by position key onto item ids.
 
-    Returns the backup taken first, or None when the store needed nothing.
+    Returns the backup taken first, or reused from an attempt that failed, or None when the
+    store needed nothing.
     The rebuild is one transaction under the write lock and checks again
     inside it, so a process that lost the race finds nothing to do; any
     failure rolls it all back.
@@ -210,8 +221,10 @@ def migrate(conn: sqlite3.Connection, db_path: Path) -> Path | None:
     if not needs_migration(conn):
         return None
     conn.commit()
-    dest = backup_path(db_path)
-    conn.execute("VACUUM INTO ?", (str(dest),))
+    dest = taken_backup(db_path)
+    if dest is None:
+        dest = backup_path(db_path)
+        conn.execute("VACUUM INTO ?", (str(dest),))
     # a no-op inside a transaction, so it is switched before BEGIN and back after COMMIT
     conn.execute("PRAGMA foreign_keys = OFF")
     try:
@@ -220,14 +233,17 @@ def migrate(conn: sqlite3.Connection, db_path: Path) -> Path | None:
             conn.rollback()
             return dest
         sequences = {t: _sequence(conn, t) for t in ("task_items", "task_comments")}
-        for name, ddl in TABLES.items():
-            conn.execute(ddl.format(table=f"{name}_new"))
-        for name in TABLES:
+        # a store older than task notes gets task_note_items from SCHEMA, already keyed by id
+        old = [name for name in TABLES
+               if "item_key" in {r[1] for r in conn.execute(f"PRAGMA table_info({name})")}]
+        for name in old:
+            conn.execute(TABLES[name].format(table=f"{name}_new"))
+        for name in old:
             conn.execute(_COPY[name])
         _split_briefs(conn)
-        for name in TABLES:
+        for name in old:
             conn.execute(f"DROP TABLE {name}")
-        for name in TABLES:
+        for name in old:
             conn.execute(f"ALTER TABLE {name}_new RENAME TO {name}")
         for table, seq in sequences.items():
             _keep_sequence(conn, table, seq)
@@ -240,7 +256,7 @@ def migrate(conn: sqlite3.Connection, db_path: Path) -> Path | None:
         for table in (*TABLES, "task_note_depends"):
             if conn.execute(f"PRAGMA foreign_key_check({table})").fetchone():
                 raise sqlite3.IntegrityError(f"the item-id migration left a dangling reference in {table}")
-        for (uid,) in conn.execute("SELECT memory_uid FROM tasks").fetchall():
+        for (uid,) in conn.execute("SELECT t.memory_uid FROM tasks t JOIN memories m ON m.uid = t.memory_uid").fetchall():
             task_items.regenerate(conn, uid, touch=False)
         conn.commit()
     except BaseException:

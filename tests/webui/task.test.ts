@@ -15,7 +15,8 @@ const item = (id: number, text: string, state = 'todo') =>
 
 const taskOf = (items: ReturnType<typeof item>[], extra = {}) => ({
   goal: 'Ship the lantern firmware', state: 'open', completed_at: '',
-  items, comments: [] as unknown[], notes: [] as unknown[], refs: {} as Record<string, unknown>, ...extra,
+  items, comments: [] as unknown[], notes: [] as unknown[], refs: {} as Record<string, unknown>,
+  body_links: {} as Record<string, unknown>, ...extra,
 });
 
 let apps: App[] = [];
@@ -909,6 +910,17 @@ A late thought.`);
         expect(rows(host)).toHaveLength(0);
         expect(host.querySelector('[data-dep-legacy]')?.textContent).toContain('Item 9 and the bench');
       });
+
+      it('carries a field written before the grammar into extra info when the brief is saved', async () => {
+        answer();
+        const { host } = await mount(withDepends(null, 'Item 9 and the bench'));
+        await edit(host);
+        await press(save(host));
+        await until(() => calls.length);
+        const body = (calls.at(-1)?.body as { body: string }).body;
+        expect(sent()).toBe('DEPENDS ON: none');
+        expect(body).toContain(`EXTRA INFO: ${en['task.depends.carried'].replace('{text}', 'Item 9 and the bench')}`);
+      });
     });
   });
 
@@ -959,6 +971,14 @@ describe('mentions', () => {
     const { host } = await mount(withGoal('After [[#42]]', { 42: { n: 2, text: 'Flash the board', state: 'done' } }));
     await press(host.querySelector('.tk-goal .rt-item[data-item="42"]'));
     expect(host.querySelector('.tk-item[data-key="42"]')?.classList.contains('is-flash')).toBe(true);
+  });
+
+  it('draws a memory link in the goal live, from the links the task carries', async () => {
+    const link = { type: 'note', domain: 'lantern', snippet: 'flux first', linked: true };
+    const { host } = await mount(taskOf([item(41, 'Solder the header')],
+      { goal: 'See [[a1b2c3d4e5f60001]]', body_links: { a1b2c3d4e5f60001: link } }));
+    expect(host.querySelector('.tk-goal .rt-link')).not.toBeNull();
+    expect(host.querySelector('.tk-goal .rt-link-dead')).toBeNull();
   });
 
   it('draws mentions in a comment', async () => {

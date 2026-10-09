@@ -86,8 +86,14 @@ export interface NoteDraft {
   depends: TaskDepend[]; legacy: string;
 }
 
-/* the brief a draft sends: its fields, and DEPENDS ON written from its chips */
-const briefToSend = (d: NoteDraft): Record<string, string> => ({ ...d.brief, depends_on: writeDepends(d.depends) });
+/* the brief a draft sends: its fields, DEPENDS ON written from its chips, and a field written before the
+   chips kept under EXTRA INFO */
+const briefToSend = (d: NoteDraft): Record<string, string> => ({
+  ...d.brief,
+  ...(d.legacy ? { extra_info: [(d.brief.extra_info || '').trim(), t('task.depends.carried', { text: d.legacy })]
+    .filter(Boolean).join('\n') } : {}),
+  depends_on: writeDepends(d.depends),
+});
 
 /* the brief a draft leaving its items turns into text: DEPENDS ON only beside another field, or when it names something */
 const briefOfDraft = (d: NoteDraft): Record<string, string> => (d.depends.length
@@ -322,7 +328,8 @@ export function useChecklist(uid: string, task: TaskRecord, status: string, hook
     const scope = which.startsWith('new:') ? which.slice(4) : '';
     const brief: Record<string, string> = note?.brief ? { ...note.brief }
       : note?.items.length ? { extra_info: note.body } : {};
-    const legacy = note?.brief && !note.depends ? brief.depends_on || '' : '';
+    const field = (brief.depends_on || '').trim();
+    const legacy = note?.brief && !note.depends && field.toLowerCase() !== 'none' ? field : '';
     delete brief.depends_on;
     ui.noteEdit = which;
     ui.noteDraft = { title: note?.title || '', body: note?.body || '', brief, legacy,

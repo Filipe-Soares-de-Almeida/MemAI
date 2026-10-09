@@ -38,7 +38,7 @@ watch(() => ui.goalEditing, open => {
   </div>
   <div v-else class="tk-goal">
     <div v-if="current.goal" class="tk-goal-text"><RichText :text="current.goal" :prose="false" :highlight="false"
-         :items="current.refs" :on-item="c.flashItem" /></div>
+         :links="current.body_links" :items="current.refs" :on-item="c.flashItem" /></div>
     <p v-else class="tk-goal-text is-empty">{{ t('task.goal.empty') }}</p>
     <button id="tkGoalEdit" type="button" class="icon-btn" :title="t('task.goal.edit')" :aria-label="t('task.goal.edit')"
             @click="c.editGoal()"><AppIcon name="pencil" /></button>
