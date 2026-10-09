@@ -518,7 +518,7 @@ def adopt(task_uid: str, uids: list[str], *, dry_run: bool = True) -> dict:
                 refused.append({"uid": uid, "reason": f"DEPENDS ON does not read: {error}"})
                 continue
             cited = {"title": row["title"], **tasks.free_text(row["content"])}
-            if error := tasks.cited_key_error(cited, len(all_ids)):
+            if error := tasks.cited_key_error(cited, len(all_ids), all_ids):
                 refused.append({"uid": uid, "reason": error})
                 continue
             plan.append({"uid": uid, "title": row["title"], "body": row["content"],

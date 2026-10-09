@@ -17,9 +17,7 @@ COMMENT_MAX = 2000
 
 _CITED_KEY_RE = re.compile(r"\bi([1-9][0-9]*)\b", re.I)
 
-CITE_RULE = ("an item is cited by its key only in DEPENDS ON: keys renumber when an item is "
-             "deleted, and free text is never rewritten. Name the item by what it does, or "
-             "put the dependency in DEPENDS ON")
+CITE_RULE = "an item is cited in free text as [[#id]], never by its position"
 
 
 def _item_length_error(text: str) -> str | None:
@@ -29,25 +27,65 @@ def _item_length_error(text: str) -> str | None:
             "label of a few words; its detail goes in a brief (task_note)")
 
 
-def cited_key_error(fields: dict[str, str], count: int) -> str | None:
+def cited_key_error(fields: dict[str, str], count: int, ids: list[int] | None = None) -> str | None:
     """Why `fields` (free text by field name) may not be written, or None.
 
-    A field fails when it names one of the task's `count` item keys; a
-    number past the last item is not a key.
+    A field fails when it names one of the task's `count` position keys; a
+    number past the last item is not a key. Given the task's `ids`, each
+    key is shown with the token of the item at that position.
     """
     problems = []
     for name, text in fields.items():
-        cited = dict.fromkeys(f"i{int(m[1])}" for m in _CITED_KEY_RE.finditer(str(text))
-                              if int(m[1]) <= count)
+        cited = dict.fromkeys(int(m[1]) for m in _CITED_KEY_RE.finditer(str(text)) if int(m[1]) <= count)
         if cited:
-            problems.append(f"{name} cites {', '.join(cited)}")
+            shown = [f"i{n} ({sections.item_token(ids[n - 1])})" if ids and n <= len(ids) else f"i{n}"
+                     for n in cited]
+            problems.append(f"{name} cites {', '.join(shown)}")
     return f"{'; '.join(problems)}: {CITE_RULE}" if problems else None
 
 
-def _require_no_cited_key(fields: dict[str, str], count: int) -> None:
-    error = cited_key_error(fields, count)
+def _require_no_cited_key(fields: dict[str, str], count: int, ids: list[int] | None = None) -> None:
+    _require(cited_key_error(fields, count, ids))
+
+
+def label_error(fields: dict[str, str]) -> str | None:
+    """Why a label (a title, an item's text) may not be written, or None: a label never carries a mention."""
+    cited = [f"{name} carries {', '.join(sections.item_token(i) for i in sections.item_tokens(text))}"
+             for name, text in fields.items() if sections.item_tokens(text)]
+    return f"a label never carries a mention: {'; '.join(cited)}" if cited else None
+
+
+def mention_error(conn: sqlite3.Connection, uid: str, fields: dict[str, str], stored: str = "") -> str | None:
+    """Why the mentions in `fields` may not be written, or None.
+
+    Each must name a live item of the task; one that `stored`, the text being
+    replaced, already holds passes as it is.
+    """
+    live = set(item_ids(conn, uid))
+    kept = set(sections.item_tokens(stored))
+    problems = []
+    for name, text in fields.items():
+        bad = [i for i in sections.item_tokens(text) if i not in live and i not in kept]
+        if bad:
+            verb = "is not an item" if len(bad) == 1 else "are not items"
+            tokens = ", ".join(sections.item_token(i) for i in bad)
+            problems.append(f"{name} mentions {tokens}, which {verb} of this task")
+    return f"{'; '.join(problems)}; task_read(part='items') lists the ids" if problems else None
+
+
+def _require(error: str | None) -> None:
     if error:
         raise ValueError(error)
+
+
+def refs(conn: sqlite3.Connection, uid: str, texts) -> dict[str, dict]:
+    """What each [[#id]] in `texts` names: its number, text and state, or {"deleted": True}."""
+    wanted = list(dict.fromkeys(i for text in texts for i in sections.item_tokens(text)))
+    if not wanted:
+        return {}
+    items = {i["id"]: i for i in _items(conn, uid)}
+    return {str(i): ({"n": items[i]["n"], "text": items[i]["text"], "state": items[i]["state"]}
+                     if i in items else {"deleted": True}) for i in wanted}
 
 
 _BRIEF_LABELS = {s.key: s.label for s in sections.BRIEF_SPEC}
@@ -92,8 +130,12 @@ def _validated(title: str, goal: str, items: list[str]) -> tuple[str, str, list[
     for text in items:
         if error := _item_length_error(text):
             raise ValueError(error)
-    _require_no_cited_key({"title": title, "goal": goal,
-                           **{f"item {n}": t for n, t in enumerate(items, start=1)}}, len(items))
+    labels = {"title": title, **{f"item {n}": t for n, t in enumerate(items, start=1)}}
+    _require_no_cited_key({**labels, "goal": goal}, len(items))
+    _require(label_error(labels))
+    if sections.item_tokens(goal):
+        raise ValueError("a new task's goal cannot mention its items, which have no ids yet; "
+                         "add the mention with edit_memory(goal=...)")
     return title, goal, items
 
 
@@ -317,7 +359,8 @@ def rename_item(conn: sqlite3.Connection, uid: str, item: int, text: str, *, ses
     item_id = require_item(conn, uid, item)
     rows = _items(conn, uid)
     row = next(r for r in rows if r["id"] == item_id)
-    _require_no_cited_key({f"item {row['n']}": text}, len(rows))
+    _require_no_cited_key({f"item {row['n']}": text}, len(rows), [r["id"] for r in rows])
+    _require(label_error({f"item {row['n']}": text}))
     changed = row["text"] != text
     if changed:
         conn.execute(
@@ -340,8 +383,9 @@ def add_items(conn: sqlite3.Connection, uid: str, items: list[str], *, session: 
     count = len(_items(conn, uid))
     if count + len(items) > ITEMS_MAX:
         raise ValueError(f"a task holds at most {ITEMS_MAX} items; it has {count}")
-    _require_no_cited_key({f"item {count + n}": t for n, t in enumerate(items, start=1)},
-                          count + len(items))
+    labels = {f"item {count + n}": t for n, t in enumerate(items, start=1)}
+    _require_no_cited_key(labels, count + len(items), item_ids(conn, uid))
+    _require(label_error(labels))
     last = conn.execute("SELECT COALESCE(MAX(seq), 0) FROM task_items WHERE memory_uid = ?",
                         (uid,)).fetchone()[0]
     stamp = lite.now_iso()
@@ -395,7 +439,10 @@ def set_goal(conn: sqlite3.Connection, uid: str, goal: str, *, note: str = "") -
     if len(goal) > GOAL_MAX:
         raise ValueError(f"goal is {len(goal)} characters; the limit is {GOAL_MAX}")
     _lock(conn, uid)
-    _require_no_cited_key({"goal": goal}, len(_items(conn, uid)))
+    ids = item_ids(conn, uid)
+    _require_no_cited_key({"goal": goal}, len(ids), ids)
+    stored = conn.execute("SELECT goal FROM tasks WHERE memory_uid = ?", (uid,)).fetchone()["goal"]
+    _require(mention_error(conn, uid, {"goal": goal}, stored))
     conn.execute("UPDATE tasks SET goal = ? WHERE memory_uid = ?", (goal, uid))
     _regenerate(conn, uid, note or "goal edited", record_edit=True)
 
@@ -418,7 +465,9 @@ def add_comment(
         raise ValueError(f"{author!r} is not a comment author; use agent or person")
     _lock(conn, uid)
     item_id = require_item(conn, uid, item) if item else None
-    _require_no_cited_key({"comment": body}, len(_items(conn, uid)))
+    ids = item_ids(conn, uid)
+    _require_no_cited_key({"comment": body}, len(ids), ids)
+    _require(mention_error(conn, uid, {"comment": body}))
     cur = conn.execute(
         """INSERT INTO task_comments (memory_uid, item_id, body, author, session, created_at)
            VALUES (?, ?, ?, ?, ?, ?)""",
@@ -635,7 +684,10 @@ def add_note(conn: sqlite3.Connection, uid: str, *, title: str, body: str = "",
     on_items = any(str(i).strip() for i in items)
     title, body = _note_fields(title, _compose(body, brief, "", on_items=on_items))
     _lock(conn, uid)
-    _require_no_cited_key({"title": title, **free_text(body)}, len(_items(conn, uid)))
+    known = item_ids(conn, uid)
+    _require_no_cited_key({"title": title, **free_text(body)}, len(known), known)
+    _require(label_error({"title": title}))
+    _require(mention_error(conn, uid, free_text(body)))
     ids = _note_ids(conn, uid, items)
     if ids:
         _require_brief(body)
@@ -665,9 +717,13 @@ def edit_note(conn: sqlite3.Connection, uid: str, note_id: int, *, title: str = 
     """
     _lock(conn, uid)
     note_id = _require_note(conn, uid, note_id)
-    _require_no_cited_key(_given_free_text(title, body, brief), len(_items(conn, uid)))
+    known = item_ids(conn, uid)
+    written = _given_free_text(title, body, brief)
+    _require_no_cited_key(written, len(known), known)
+    _require(label_error({"title": str(title)}))
     row = conn.execute("SELECT * FROM task_notes WHERE id = ?", (note_id,)).fetchone()
     current = _read_body(conn, row)
+    _require(mention_error(conn, uid, {k: v for k, v in written.items() if k != "title"}, current))
     had = conn.execute("SELECT 1 FROM task_note_items WHERE note_id = ?", (note_id,)).fetchone() is not None
     ids = None if items is None else _note_ids(conn, uid, items)
     on_items = bool(ids) if ids is not None else had
@@ -761,6 +817,9 @@ def restore_task(conn: sqlite3.Connection, record: dict) -> None:
             (uid, i["seq"], i["text"], i.get("state", "todo"),
              i.get("updated_at") or lite.now_iso(), i.get("updated_session", "")))
         ids[i["id"] if "id" in i else i["key"]] = cur.lastrowid
+    moved = {k: v for k, v in ids.items() if isinstance(k, int)}
+    conn.execute("UPDATE tasks SET goal = ? WHERE memory_uid = ?",
+                 (sections.map_item_tokens(record.get("goal", ""), moved), uid))
     links = [(link.get("item_id", link.get("item_key")), link) for link in record.get("links") or []]
     conn.executemany(
         """INSERT OR IGNORE INTO task_item_links (memory_uid, item_id, target_uid, created_at)
@@ -776,7 +835,7 @@ def restore_task(conn: sqlite3.Connection, record: dict) -> None:
         """INSERT INTO task_comments (memory_uid, item_id, body, author, session, created_at)
            VALUES (?, ?, ?, ?, ?, ?)""",
         [
-            (uid, ids.get(handle), c["body"], c.get("author", "agent"),
+            (uid, ids.get(handle), sections.map_item_tokens(c["body"], moved), c.get("author", "agent"),
              c.get("session", ""), c.get("created_at") or lite.now_iso())
             for handle, c in comments
             if handle is None or handle in ids
@@ -784,7 +843,7 @@ def restore_task(conn: sqlite3.Connection, record: dict) -> None:
     )
     by_key = {k: v for k, v in ids.items() if isinstance(k, str)}
     for n in record.get("notes") or []:
-        body, depends = n["body"], n.get("depends")
+        body, depends = sections.map_item_tokens(n["body"], moved), n.get("depends")
         if "depends" in n:
             entries = None if depends is None else _restored_dependencies(depends, ids)
         else:
@@ -827,7 +886,7 @@ def _item_counts(conn: sqlite3.Connection, item_id: int) -> dict:
 def head(conn: sqlite3.Connection, uid: str) -> dict:
     """Goal, state, progress and the size of each task-level collection; no records."""
     row = _require_task(conn, uid)
-    return {
+    out = {
         "goal": row["goal"], "state": row["state"], "progress": progress(conn, uid),
         "counts": {
             "items": _count(conn, "SELECT COUNT(*) FROM task_items WHERE memory_uid = ?", uid),
@@ -838,6 +897,9 @@ def head(conn: sqlite3.Connection, uid: str) -> dict:
                                      "WHERE memory_uid = ? AND item_id IS NULL", uid),
         },
     }
+    if found := refs(conn, uid, [row["goal"]]):
+        out["refs"] = found
+    return out
 
 
 def _records(conn: sqlite3.Connection, uid: str, part: str, item_id: int | None) -> list[dict]:
@@ -875,6 +937,8 @@ def read_part(conn: sqlite3.Connection, uid: str, part: str, item: int = 0,
     rows, nxt = budget.page(records, offset)
     out = {"uid": uid, "part": part, "item": item_id or 0, "total": len(records),
            "offset": offset, "records": rows}
+    if part in ("notes", "comments") and (found := refs(conn, uid, [r["body"] for r in rows])):
+        out["refs"] = found
     if nxt is not None:
         out["next_offset"] = nxt
     return out

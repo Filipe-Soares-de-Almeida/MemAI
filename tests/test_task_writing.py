@@ -1,4 +1,4 @@
-"""Tasks written the way they read back: short item labels, items cited by key only in DEPENDS ON."""
+"""Tasks written the way they read back: short item labels, items cited by id, never by position."""
 
 from __future__ import annotations
 
@@ -6,8 +6,8 @@ import asyncio
 
 import pytest
 
-from conftest import brief
-from memai import contract, portable, server, tasks
+from conftest import brief, item_at
+from memai import contract, portable, sections, server, tasks
 from memai.store import connection, memories
 
 ITEMS = ["Draft the grammar", "Write the lexer", "Wire the CLI"]
@@ -62,7 +62,7 @@ def test_an_added_long_item_is_refused_the_same_way(conn):
     ("item 2", {"items": ["Draft the grammar", "Lex once i1 lands", "Wire the CLI"]}),
 ])
 def test_a_new_task_refuses_an_item_key_in_its_free_text(conn, field, given):
-    with pytest.raises(ValueError, match=rf"{field} cites i\d.*DEPENDS ON.*what it does"):
+    with pytest.raises(ValueError, match=rf"{field} cites i\d.*cited in free text as \[\[#id\]\]"):
         _task(conn, **given)
 
 
@@ -80,22 +80,22 @@ def test_an_added_item_may_not_cite_a_key(conn):
 def test_a_comment_may_not_cite_a_key(conn):
     uid = _task(conn)
     with pytest.raises(ValueError, match="comment cites i2"):
-        tasks.add_comment(conn, uid, "blocked on i2", item="i3")
+        tasks.add_comment(conn, uid, "blocked on i2", item=item_at(conn, uid, 3))
 
 
-def test_a_brief_cites_item_keys_only_in_depends_on(conn):
+def test_a_brief_cites_items_by_id_in_depends_on_and_never_by_key(conn):
     uid = _task(conn)
-    assert tasks.add_note(conn, uid, title="Lexer", items=["i2"],
-                          body=brief("tokenize the config", depends_on="i1 (the grammar)"))
+    assert tasks.add_note(conn, uid, title="Lexer", items=[item_at(conn, uid, 2)],
+                          body=brief("tokenize the config", depends_on=f"{item_at(conn, uid, 1)} (the grammar)"))
     with pytest.raises(ValueError, match="STEPS cites i1"):
-        tasks.add_note(conn, uid, title="CLI", items=["i3"],
+        tasks.add_note(conn, uid, title="CLI", items=[item_at(conn, uid, 3)],
                        body=brief("wire the flags", steps="reuse what i1 built"))
 
 
 def test_brief_fields_given_one_by_one_are_held_to_the_same_rule(conn):
     uid = _task(conn)
     with pytest.raises(ValueError, match="CONTEXT cites i2"):
-        tasks.add_note(conn, uid, title="CLI", items=["i3"], brief=_fields(context="after i2"))
+        tasks.add_note(conn, uid, title="CLI", items=[item_at(conn, uid, 3)], brief=_fields(context="after i2"))
 
 
 def test_a_note_on_the_whole_task_may_not_cite_a_key(conn):
@@ -112,8 +112,8 @@ def test_a_note_title_may_not_cite_a_key(conn):
 
 def test_an_edit_holds_only_the_fields_it_gives_to_the_rule(conn):
     uid = _task(conn)
-    nid = tasks.add_note(conn, uid, title="Lexer", body=brief("tokenize"), items=["i2"])
-    older = brief("tokenize", steps="reuse what i1 built")
+    nid = tasks.add_note(conn, uid, title="Lexer", body=brief("tokenize"), items=[item_at(conn, uid, 2)])
+    older = sections.without_depends(brief("tokenize", steps="reuse what i1 built"))
     conn.execute("UPDATE task_notes SET body = ? WHERE id = ?", (older, nid))
     tasks.edit_note(conn, uid, nid, brief={"pitfalls": "greedy regexes"})
     with pytest.raises(ValueError, match="PITFALLS cites i1"):
@@ -137,11 +137,11 @@ def test_the_task_tool_answers_a_cited_key_with_an_error(tmp_path, monkeypatch):
 
 def test_a_task_written_before_the_rules_still_imports(tmp_path, conn):
     uid = _task(conn)
-    conn.execute("UPDATE task_items SET text = ? WHERE memory_uid = ? AND item_key = 'i1'",
-                 ("x" * 120, uid))
+    conn.execute("UPDATE task_items SET text = ? WHERE id = ?", ("x" * 120, item_at(conn, uid, 1)))
     conn.execute("UPDATE tasks SET goal = 'Finish i2 first.' WHERE memory_uid = ?", (uid,))
-    conn.execute("INSERT INTO task_comments (memory_uid, item_key, body, author, session, created_at) "
-                 "VALUES (?, 'i3', 'waits on i2', 'agent', '', '2026-01-01T00:00:00+00:00')", (uid,))
+    conn.execute("INSERT INTO task_comments (memory_uid, item_id, body, author, session, created_at) "
+                 "VALUES (?, ?, 'waits on i2', 'agent', '', '2026-01-01T00:00:00+00:00')",
+                 (uid, item_at(conn, uid, 3)))
     records = portable.export_records(conn, uids=[uid])
     with connection.connect(tmp_path / "copy.db") as target:
         assert portable.import_records(target, records)["errors"] == []
@@ -155,7 +155,7 @@ def test_task_adopt_refuses_a_memory_that_cites_a_key_outside_depends_on(tmp_pat
         uid = _task(c)
         older = memories.insert_memory(c, type="note", title="Lexer", domain="acme/parser",
                                        content=brief("tokenize", steps="after i1"))
-        tasks.link_item(c, uid, "i2", [older])
+        tasks.link_item(c, uid, item_at(c, uid, 2), [older])
     out = portable.adopt(uid, [older])
     assert out["plan"] == [] and "cites i1" in out["refused"][0]["reason"]
 
