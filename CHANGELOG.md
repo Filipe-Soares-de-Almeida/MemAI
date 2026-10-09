@@ -1,5 +1,29 @@
 # Changelog
 
+## [0.10.0](https://github.com/Filipe-Soares-de-Almeida/MemAI/compare/v0.9.1...v0.10.0) (2026-10-09)
+
+
+### ⚠ BREAKING CHANGES
+
+* **tasks:** hold item notes to a brief template, link their dependencies and number items by position ([#89](https://github.com/Filipe-Soares-de-Almeida/MemAI/issues/89))
+
+### Features
+
+* **tasks:** hold item notes to a brief template, link their dependencies and number items by position ([#89](https://github.com/Filipe-Soares-de-Almeida/MemAI/issues/89)) ([d0a76a3](https://github.com/Filipe-Soares-de-Almeida/MemAI/commit/d0a76a39c007108119e074bdd975c9fda739397d))
+* **webui:** move every dashboard view to Vue 3 ([#83](https://github.com/Filipe-Soares-de-Almeida/MemAI/issues/83)) ([4c345d9](https://github.com/Filipe-Soares-de-Almeida/MemAI/commit/4c345d99a07ae8a637385628657892aa7da71e8f))
+
+
+### Code Refactoring
+
+* **store:** retire the db facade and the legacy dashboard helpers ([#86](https://github.com/Filipe-Soares-de-Almeida/MemAI/issues/86)) ([5a45562](https://github.com/Filipe-Soares-de-Almeida/MemAI/commit/5a45562e367b570e6d4aa4e2db303c6a513ede1b))
+* **store:** split db.py and admin.py into the store and admin packages ([#85](https://github.com/Filipe-Soares-de-Almeida/MemAI/issues/85)) ([a86b887](https://github.com/Filipe-Soares-de-Almeida/MemAI/commit/a86b8870b9e80a022b2d053b4ad30720d7dac230))
+* **webui:** share constants with Python and type the dashboard and its API client ([#82](https://github.com/Filipe-Soares-de-Almeida/MemAI/issues/82)) ([ced7ded](https://github.com/Filipe-Soares-de-Almeida/MemAI/commit/ced7ded75ee139bbbb6dc19ce60123b128e384bf))
+
+
+### Documentation
+
+* **skills:** the bundled skills name all 13 suggestion kinds and no db module ([#88](https://github.com/Filipe-Soares-de-Almeida/MemAI/issues/88)) ([e25f46c](https://github.com/Filipe-Soares-de-Almeida/MemAI/commit/e25f46cfb8ada838306325ae7ec861b0545be5c7))
+
 ## [0.9.1](https://github.com/Filipe-Soares-de-Almeida/MemAI/compare/v0.9.0...v0.9.1) (2026-10-05)
 
 
