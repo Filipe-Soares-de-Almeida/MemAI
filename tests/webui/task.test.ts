@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createApp, nextTick } from 'vue';
 import type { App } from 'vue';
 import TaskChecklist from '../../src/memai/webui/views/record/TaskChecklist.vue';
-import { notePeek, progressOf } from '../../src/memai/webui/views/record/checklist.ts';
+import { dependsProblem, notePeek, parseDepends, progressOf } from '../../src/memai/webui/views/record/checklist.ts';
 import { calls, catalog, serveApi } from './support.js';
 
 const en = catalog('en');
@@ -48,13 +48,38 @@ const entry = (label: string) => [...document.querySelectorAll<HTMLElement>('.ct
   .find(b => b.textContent?.includes(label)) as HTMLElement;
 
 describe('the checklist arithmetic', () => {
-  it('counts done and dropped against every item', () => {
+  it('counts done against the items not dropped, and the percentage agrees with the count', () => {
     expect(progressOf(taskOf([item('i1', 'a', 'done'), item('i2', 'b', 'dropped'), item('i3', 'c')])))
-      .toEqual({ total: 3, done: 1, dropped: 1 });
+      .toEqual({ total: 2, done: 1, pct: 50 });
+  });
+
+  it('pct is 100 when every live item is done, and 0 with nothing live', () => {
+    expect(progressOf(taskOf([item('i1', 'a', 'done'), item('i2', 'b', 'dropped')])).pct).toBe(100);
+    expect(progressOf(taskOf([item('i1', 'a', 'dropped')])).pct).toBe(0);
+    expect(progressOf(taskOf([item('i1', 'a', 'done'), item('i2', 'b'), item('i3', 'c')])).pct).toBe(33);
+  });
+
+  it('pct floors the exact ratio, with no floating-point slip', () => {
+    const items = [
+      ...Array.from({ length: 29 }, (_, i) => item(`d${i}`, 'a', 'done')),
+      ...Array.from({ length: 21 }, (_, i) => item(`t${i}`, 'b')),
+      item('x1', 'c', 'dropped'), item('x2', 'd', 'dropped'),
+    ];
+    expect(progressOf(taskOf(items)).pct).toBe(58);
   });
 
   it('peeks at a note as plain words', () => {
     expect(notePeek('| a | b |\n|---|---|\n**Bold** `code`\n== Head ==')).toBe('a b Bold code Head');
+  });
+});
+
+describe('the checklist layout', () => {
+  it('reads goal, items, task notes, then the thread, with no progress bar of its own', async () => {
+    const notes = [{ id: 1, title: 'Bench rules', body: 'Flux first.', items: [], updated_at: '', body_links: {}, brief: null, depends: null }];
+    const { host } = await mount(taskOf([item('i1', 'Solder the header')], { notes }));
+    const order = [...host.querySelectorAll('.tk > *')].map(el => el.className.split(' ').find(c => c.startsWith('tk-')));
+    expect(order).toEqual(['tk-head', 'tk-list', 'tk-tnotes', 'tk-thread']);
+    expect(host.querySelector('.tk-prog')).toBeNull();
   });
 });
 
@@ -79,6 +104,22 @@ describe('an item row', () => {
     await press(host.querySelector('[data-toggle="i1"]'));
     await press(host.querySelector('[data-toggle="i2"]'));
     expect([...host.querySelectorAll('.tk-panel')].map(p => p.id)).toEqual(['tkp-i2']);
+  });
+});
+
+describe('item numbers', () => {
+  it('shows each item its position before the state mark, and names it to a screen reader', async () => {
+    const { host } = await mount(taskOf([item('i1', 'Solder the header'), item('i2', 'Flash the board')]));
+    const rows = [...host.querySelectorAll('.tk-row')];
+    expect(rows.map(r => r.querySelector('.tk-num')?.textContent)).toEqual(['1', '2']);
+    expect(rows[1].firstElementChild?.classList.contains('tk-num')).toBe(true);
+    expect(host.querySelector('[data-step="i2"]')?.getAttribute('aria-label')).toMatch(/^2\. Flash the board:/);
+  });
+
+  it('numbers the items a note can apply to', async () => {
+    const { host } = await mount(taskOf([item('i1', 'Solder the header'), item('i2', 'Flash the board')]));
+    await press(host.querySelector('[data-note-add=""]'));
+    expect([...host.querySelectorAll('.tk-scope-n')].map(n => n.textContent)).toEqual(['1', '2']);
   });
 });
 
@@ -140,6 +181,74 @@ describe('deleting an item', () => {
     ok.click();
   }
 
+  async function ask(host: HTMLElement, key: string) {
+    await press(menuOf(host, key));
+    entry(en['task.item.delete']).click();
+    return until(() => document.querySelector<HTMLElement>('.modal'));
+  }
+  const cancel = () => (document.querySelector('[data-x]') as HTMLElement).click();
+
+  it('says which items move up when it is not the last one', async () => {
+    serveApi(() => { throw new Error('unexpected write'); });
+    const { host } = await mount(taskOf([item('i1', 'a'), item('i2', 'b'), item('i3', 'c'), item('i4', 'd')]));
+    expect((await ask(host, 'i2')).textContent).toContain('Items 3–4 become 2–3.');
+    cancel();
+  });
+
+  it('says nothing about numbers when the last item goes', async () => {
+    serveApi(() => { throw new Error('unexpected write'); });
+    const { host } = await mount(taskOf([item('i1', 'a'), item('i2', 'b')]));
+    expect((await ask(host, 'i2')).textContent).not.toContain('become');
+    cancel();
+  });
+
+  const dependent = (id: number, applies: string[], on: string[]) => ({
+    id, title: `Plan ${id}`, body: 'x', items: applies, updated_at: '', body_links: {}, brief: {},
+    depends: on.map(key => ({ item: key, deleted: '', reason: '' })),
+  });
+
+  it('names the one item that depends on the item being deleted', async () => {
+    serveApi(() => { throw new Error('unexpected write'); });
+    const items = [item('i1', 'a'), item('i2', 'b'), item('i3', 'c')];
+    const { host } = await mount(taskOf(items, { notes: [dependent(1, ['i3'], ['i2'])] }));
+    expect((await ask(host, 'i2')).textContent)
+      .toContain('Item 3 depends on this one; its reference will be marked as deleted.');
+    cancel();
+  });
+
+  it('names every item that depends on it, by the numbers they have now', async () => {
+    serveApi(() => { throw new Error('unexpected write'); });
+    const items = [item('i1', 'a'), item('i2', 'b'), item('i3', 'c'), item('i4', 'd')];
+    const notes = [dependent(1, ['i3'], ['i2']), dependent(2, ['i4', 'i3'], ['i2', 'i1']), dependent(3, ['i1'], ['i4'])];
+    const { host } = await mount(taskOf(items, { notes }));
+    expect((await ask(host, 'i2')).textContent)
+      .toContain('Items 3 and 4 depend on this one; their references will be marked as deleted.');
+    cancel();
+  });
+
+  it('says nothing about dependents when no note depends on the item', async () => {
+    serveApi(() => { throw new Error('unexpected write'); });
+    const items = [item('i1', 'a'), item('i2', 'b')];
+    const { host } = await mount(taskOf(items, { notes: [dependent(1, ['i2'], ['i1'])] }));
+    expect((await ask(host, 'i2')).textContent).not.toContain('depend');
+    cancel();
+  });
+
+  it('says the rest moved up once a middle item is gone, and plainly deleted for the last', async () => {
+    const items = [item('i1', 'a'), item('i2', 'b'), item('i3', 'c')];
+    let left = [...items];
+    serveApi((path: string, { body }: { body: { item: string } }) => {
+      left = left.filter(i => i.key !== body.item);
+      return { task: taskOf(left), status: 'active' };
+    });
+    const { host } = await mount(taskOf(items));
+    await remove(host, 'i2');
+    await until(() => document.querySelector('.toast')?.textContent?.includes(en['task.toast.renumbered']));
+    await remove(host, 'i3');
+    await until(() => host.querySelectorAll('.tk-item').length === 1);
+    expect([...document.querySelectorAll('.toast')].some(t => t.textContent?.startsWith(en['task.toast.deleted'] + '×'))).toBe(true);
+  });
+
   it('asks first, and does nothing when the question is cancelled', async () => {
     serveApi(() => { throw new Error('unexpected write'); });
     const { host } = await mount(taskOf([item('i1', 'Solder the header'), item('i2', 'Flash the board')]));
@@ -149,23 +258,48 @@ describe('deleting an item', () => {
     expect(host.querySelectorAll('.tk-item')).toHaveLength(2);
   });
 
-  it('sends a DELETE for the item and moves focus to the next item, else the previous, else the add control', async () => {
-    const items = [item('i1', 'Solder the header'), item('i2', 'Flash the board'), item('i3', 'Seal the case')];
+  const serveRenumbering = (items: ReturnType<typeof item>[]) => {
     let left = [...items];
     serveApi((path: string, { body }: { body: { item: string } }) => {
-      left = left.filter(i => i.key !== body.item);
+      left = left.filter(i => i.key !== body.item).map((i, at) => ({ ...i, key: `i${at + 1}`, seq: at + 1 }));
       return { task: taskOf(left), status: 'active' };
     });
+  };
+  const textOf = (host: HTMLElement, key: string) => host.querySelector(`[data-key="${key}"] .tk-text`)?.textContent;
+
+  it('sends a DELETE for the item and moves focus to the item that took its place, else the previous, else the add control', async () => {
+    const items = [item('i1', 'Solder the header'), item('i2', 'Flash the board'), item('i3', 'Seal the case')];
+    serveRenumbering(items);
     const { host, uid } = await mount(taskOf(items));
 
     await remove(host, 'i2');
     await until(() => host.querySelectorAll('.tk-item').length === 2);
-    expect(calls.at(-1)).toEqual({ path: `/api/tasks/${uid}/item`, method: 'DELETE', body: { item: 'i2' } });
-    await until(() => document.activeElement === host.querySelector('[data-step="i3"]'));
+    expect(calls.at(-1)).toEqual({ path: `/api/tasks/${uid}/item`, method: 'DELETE',
+      body: { item: 'i2', text: 'Flash the board' } });
+    expect(textOf(host, 'i2')).toBe('Seal the case');
+    await until(() => document.activeElement === host.querySelector('[data-step="i2"]'));
 
-    await remove(host, 'i3');
+    await remove(host, 'i2');
     await until(() => host.querySelectorAll('.tk-item').length === 1);
     await until(() => document.activeElement === host.querySelector('[data-step="i1"]'));
+  });
+
+  it('keeps an open panel and a comment draft with the item they belong to when earlier keys shift', async () => {
+    const items = [item('i1', 'a'), item('i2', 'b'), item('i3', 'c'), item('i4', 'd')];
+    serveRenumbering(items);
+    const { host } = await mount(taskOf(items));
+    await press(host.querySelector('[data-toggle="i4"]'));
+    const box = host.querySelector('.tk-panel [data-draft="i4"]') as HTMLTextAreaElement;
+    box.value = 'Needs the second flux pen';
+    box.dispatchEvent(new Event('input'));
+    await nextTick();
+
+    await remove(host, 'i2');
+    await until(() => host.querySelectorAll('.tk-item').length === 3);
+    await until(() => host.querySelector('.tk-panel'));
+    expect(host.querySelector('.tk-panel')?.id).toBe('tkp-i3');
+    expect(textOf(host, 'i3')).toBe('d');
+    expect((host.querySelector('.tk-panel [data-draft="i3"]') as HTMLTextAreaElement).value).toBe('Needs the second flux pen');
   });
 
   it('is offered for the only item as a disabled entry that gives its reason', async () => {
@@ -249,8 +383,13 @@ describe('the in-progress arc', () => {
 });
 
 describe('task notes', () => {
-  const note = (id: number, title: string, items: string[] = [], body = `${title} body`) =>
-    ({ id, title, body, items, updated_at: '', body_links: {} });
+  const note = (id: number, title: string, items: string[] = [], body = `${title} body`,
+                brief: Record<string, string> | null = null, depends: unknown[] | null = null) =>
+    ({ id, title, body, items, updated_at: '', body_links: {}, brief, depends });
+  const FIELDS = { goal: 'Seat the header', context: 'Pin 1 is square', steps: 'Tack two corners',
+                   pitfalls: 'Cold joints', done_when: 'Every pin is wet', depends_on: 'none' };
+  const BRIEF_BODY = 'GOAL: Seat the header\nCONTEXT: Pin 1 is square\nSTEPS: Tack two corners\n'
+    + 'PITFALLS: Cold joints\nDONE WHEN: Every pin is wet\nDEPENDS ON: none';
   const type = async (host: HTMLElement, field: string, value: string) => {
     const box = host.querySelector(`[data-note-field="${field}"]`) as HTMLInputElement;
     box.value = value;
@@ -305,11 +444,53 @@ describe('task notes', () => {
     await press(host.querySelector('.tk-panel [data-note-add="i1"]'));
     expect((host.querySelector('[data-note-scope="i1"]') as HTMLInputElement).checked).toBe(true);
     await type(host, 'title', 'Header pinout');
-    await type(host, 'body', 'Pin 1 is square.');
+    for (const [key, value] of Object.entries(FIELDS)) await type(host, key, value);
     await press(host.querySelector('[data-note-save]'));
     await until(() => host.querySelector('.tk-panel .tk-note-title'));
     expect(calls.at(-1)).toEqual({ path: `/api/tasks/${uid}/note`, method: 'POST',
-      body: { title: 'Header pinout', body: 'Pin 1 is square.', items: ['i1'] } });
+      body: { title: 'Header pinout', body: BRIEF_BODY, items: ['i1'] } });
+  });
+
+  it('draws a brief field by field, extra info last and only when present', async () => {
+    const notes = [note(1, 'Header', ['i1'], BRIEF_BODY, FIELDS)];
+    const { host } = await mount(taskOf([item('i1', 'Solder the header')], { notes }));
+    await press(host.querySelector('[data-toggle="i1"]'));
+    const keys = [...host.querySelectorAll('.tk-panel [data-brief]')].map(el => el.getAttribute('data-brief'));
+    expect(keys).toEqual(['goal', 'context', 'steps', 'pitfalls', 'done_when', 'depends_on']);
+    expect(host.querySelector('[data-brief="goal"] .tk-brief-h')?.textContent).toBe(en['sec.task_note.goal']);
+  });
+
+  it('peeks at a shut brief by its goal', async () => {
+    const notes = [note(1, 'Header', [], BRIEF_BODY, FIELDS), note(2, 'Parts')];
+    const { host } = await mount(taskOf([item('i1', 'Solder the header')], { notes }));
+    expect(host.querySelector('.tk-note-peek')?.textContent).toBe('Seat the header');
+  });
+
+  it('asks for every required field once an item is picked, and sends the brief as its body', async () => {
+    serveApi((path: string, { body }: { body: { title: string; items: string[] } }) =>
+      ({ task: taskOf([item('i1', 'Solder the header')], { notes: [note(7, body.title, body.items, BRIEF_BODY, FIELDS)] }), status: 'active' }));
+    const { host, uid } = await mount(taskOf([item('i1', 'Solder the header')]));
+    await press(host.querySelector('[data-toggle="i1"]'));
+    await press(host.querySelector('.tk-panel [data-note-add="i1"]'));
+    expect(host.querySelector('[data-note-field="body"]')).toBeNull();
+    const save = () => host.querySelector('[data-note-save]') as HTMLButtonElement;
+    await type(host, 'title', 'Header');
+    for (const [key, value] of Object.entries(FIELDS).slice(0, 5)) await type(host, key, value);
+    expect(save().disabled).toBe(true);
+    await type(host, 'depends_on', 'none');
+    expect(save().disabled).toBe(false);
+    await press(save());
+    await until(() => calls.length);
+    expect(calls.at(-1)).toEqual({ path: `/api/tasks/${uid}/note`, method: 'POST',
+      body: { title: 'Header', body: BRIEF_BODY, items: ['i1'] } });
+  });
+
+  it('opens a stored free item note with its text under extra info', async () => {
+    const { host } = await mount(taskOf([item('i1', 'Solder the header')], { notes: [note(3, 'Pinout', ['i1'])] }));
+    await press(host.querySelector('[data-toggle="i1"]'));
+    await press(host.querySelector('[data-note-edit="3"]'));
+    expect((host.querySelector('[data-note-field="extra_info"]') as HTMLTextAreaElement).value).toBe('Pinout body');
+    expect((host.querySelector('[data-note-field="goal"]') as HTMLTextAreaElement).value).toBe('');
   });
 
   it('moves a note to the whole task when its last item is unpicked', async () => {
@@ -325,6 +506,323 @@ describe('task notes', () => {
     expect(calls.at(-1)?.body).toEqual({ id: 3, title: 'Pinout', body: 'Pinout body', items: [] });
   });
 
+  const fieldOf = (host: HTMLElement, field: string) =>
+    host.querySelector(`[data-note-field="${field}"]`) as HTMLTextAreaElement;
+
+  it('carries an edit to the body back under extra info when an item is picked again', async () => {
+    const { host } = await mount(taskOf([item('i1', 'Solder the header')], { notes: [note(3, 'Pinout', ['i1'])] }));
+    await press(host.querySelector('[data-toggle="i1"]'));
+    await press(host.querySelector('[data-note-edit="3"]'));
+    await press(host.querySelector('[data-note-scope="i1"]'));
+    expect(fieldOf(host, 'body').value).toBe('Pinout body');
+    await type(host, 'body', 'Pinout body, revised');
+    await press(host.querySelector('[data-note-scope="i1"]'));
+    expect(fieldOf(host, 'extra_info').value).toBe('Pinout body, revised');
+    expect(fieldOf(host, 'goal').value).toBe('');
+  });
+
+  it('turns a brief into labelled text when its last item is unpicked, and an emptied brief into nothing', async () => {
+    const notes = [note(3, 'Header', ['i1'], BRIEF_BODY, FIELDS)];
+    const { host } = await mount(taskOf([item('i1', 'Solder the header')], { notes }));
+    await press(host.querySelector('[data-toggle="i1"]'));
+    await press(host.querySelector('[data-note-edit="3"]'));
+    await press(host.querySelector('[data-note-scope="i1"]'));
+    expect(fieldOf(host, 'body').value).toBe(BRIEF_BODY);
+    await press(host.querySelector('[data-note-scope="i1"]'));
+    for (const key of [...Object.keys(FIELDS), 'extra_info']) await type(host, key, '');
+    await press(host.querySelector('[data-note-scope="i1"]'));
+    expect(fieldOf(host, 'body').value).toBe('');
+    expect((host.querySelector('[data-note-save]') as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it('restores the fields of a stored brief when its last item is unpicked and picked again', async () => {
+    const notes = [note(3, 'Header', ['i1'], BRIEF_BODY, FIELDS)];
+    const { host } = await mount(taskOf([item('i1', 'Solder the header')], { notes }));
+    await press(host.querySelector('[data-toggle="i1"]'));
+    await press(host.querySelector('[data-note-edit="3"]'));
+    await press(host.querySelector('[data-note-scope="i1"]'));
+    await press(host.querySelector('[data-note-scope="i1"]'));
+    expect(fieldOf(host, 'goal').value).toBe('Seat the header');
+    expect(fieldOf(host, 'extra_info').value).toBe('');
+  });
+
+  it('puts an edit made while no item was picked under extra info when one is picked again', async () => {
+    const notes = [note(3, 'Header', ['i1'], BRIEF_BODY, FIELDS)];
+    const { host } = await mount(taskOf([item('i1', 'Solder the header')], { notes }));
+    await press(host.querySelector('[data-toggle="i1"]'));
+    await press(host.querySelector('[data-note-edit="3"]'));
+    await press(host.querySelector('[data-note-scope="i1"]'));
+    await type(host, 'body', `${BRIEF_BODY}
+A late thought.`);
+    await press(host.querySelector('[data-note-scope="i1"]'));
+    expect(fieldOf(host, 'extra_info').value).toBe(`${BRIEF_BODY}
+A late thought.`);
+    expect(fieldOf(host, 'goal').value).toBe('');
+  });
+
+  it('marks the required brief fields and leaves extra info unmarked', async () => {
+    const notes = [note(3, 'Header', ['i1'], BRIEF_BODY, FIELDS)];
+    const { host } = await mount(taskOf([item('i1', 'Solder the header')], { notes }));
+    await press(host.querySelector('[data-toggle="i1"]'));
+    await press(host.querySelector('[data-note-edit="3"]'));
+    for (const key of Object.keys(FIELDS)) expect(fieldOf(host, key).getAttribute('aria-required')).toBe('true');
+    expect(fieldOf(host, 'extra_info').hasAttribute('aria-required')).toBe(false);
+    expect(fieldOf(host, 'extra_info').hasAttribute('aria-label')).toBe(false);
+  });
+
+  it('names each scope checkbox by its number and text', async () => {
+    const { host } = await mount(taskOf([item('i1', 'Solder the header'), item('i2', 'Flash the board')]));
+    await press(host.querySelector('[data-note-add=""]'));
+    expect(host.querySelector('[data-note-scope="i2"]')?.getAttribute('aria-label')).toBe('2. Flash the board');
+  });
+
+  it('keeps the brief a whole-task note holds when an item is picked and its body is unchanged', async () => {
+    const notes = [note(5, 'Header', [], BRIEF_BODY, FIELDS)];
+    const { host } = await mount(taskOf([item('i1', 'Solder the header')], { notes }));
+    await press(host.querySelector('[data-note-edit="5"]'));
+    await press(host.querySelector('[data-note-scope="i1"]'));
+    expect(fieldOf(host, 'goal').value).toBe('Seat the header');
+    expect(fieldOf(host, 'extra_info').value).toBe('');
+  });
+
+  it("keeps a brief's text, as the body, when the item it applies to is deleted", async () => {
+    const items = [item('i1', 'Solder the header'), item('i2', 'Flash the board')];
+    serveApi(() => ({ task: taskOf([items[0]], { notes: [note(3, 'Header', [], BRIEF_BODY, FIELDS)] }), status: 'active' }));
+    const { host } = await mount(taskOf(items, { notes: [note(3, 'Header', ['i2'], BRIEF_BODY, FIELDS)] }));
+    await press(host.querySelector('[data-toggle="i2"]'));
+    await press(host.querySelector('[data-note-edit="3"]'));
+    await type(host, 'goal', 'Seat the header flush');
+    await press(menuOf(host, 'i2'));
+    entry(en['task.item.delete']).click();
+    (await until(() => document.querySelector<HTMLElement>('[data-ok]'))).click();
+    await until(() => host.querySelectorAll('.tk-item').length === 1);
+    await until(() => fieldOf(host, 'body'));
+    expect(fieldOf(host, 'body').value).toBe(BRIEF_BODY.replace('Seat the header\n', 'Seat the header flush\n'));
+  });
+
+  it('refuses a brief longer than a note may be, and marks the counter', async () => {
+    const { host } = await mount(taskOf([item('i1', 'Solder the header')], { notes: [note(3, 'Header', ['i1'], BRIEF_BODY, FIELDS)] }));
+    await press(host.querySelector('[data-toggle="i1"]'));
+    await press(host.querySelector('[data-note-edit="3"]'));
+    const save = host.querySelector('[data-note-save]') as HTMLButtonElement;
+    const count = host.querySelector('[data-note-count]') as HTMLElement;
+    expect(save.disabled).toBe(false);
+    expect(count.classList.contains('over')).toBe(false);
+    await type(host, 'steps', 'x'.repeat(4000));
+    expect(save.disabled).toBe(true);
+    expect(count.classList.contains('over')).toBe(true);
+  });
+
+  describe('DEPENDS ON', () => {
+    const items = [item('i1', 'Solder the header'), item('i2', 'Flash the board'), item('i3', 'Run the week-long battery test')];
+    const withDepends = (depends: unknown[] | null, text = 'i1 (needs the header), deleted "Old step"') =>
+      taskOf(items, { notes: [note(1, 'Flash plan', ['i2'], BRIEF_BODY, { ...FIELDS, depends_on: text }, depends)] });
+    const OPENS = [{ item: 'i1', deleted: '', reason: 'needs the header' }, { item: '', deleted: 'Old step', reason: '' }];
+    const field = (host: HTMLElement) => host.querySelector('.tk-panel [data-brief="depends_on"]') as HTMLElement;
+    const openPanel = async (host: HTMLElement, key = 'i2') => press(host.querySelector(`[data-toggle="${key}"]`));
+
+    it('draws an item as a chip with its number and text, then the reason', async () => {
+      const { host } = await mount(withDepends(OPENS));
+      await openPanel(host);
+      const chip = field(host).querySelector('button') as HTMLElement;
+      expect(chip.textContent).toBe('1 · Solder the header');
+      expect(chip.getAttribute('aria-label')).toBe(`Go to item 1: Solder the header, ${en['task.state.todo']}`);
+      expect(chip.closest('li')?.querySelector('.tk-dep-why')?.textContent).toBe('needs the header');
+    });
+
+    it('draws a deleted entry struck through, named for assistive tech, with no button', async () => {
+      const { host } = await mount(withDepends(OPENS));
+      await openPanel(host);
+      expect(field(host).querySelectorAll('button')).toHaveLength(1);
+      const gone = field(host).querySelector('s') as HTMLElement;
+      expect(gone.textContent).toBe('Old step');
+      expect(gone.closest('li')?.querySelector('.sr-only')?.textContent).toContain(en['task.depends.deleted']);
+    });
+
+    it('draws a key that is not an item plainly', async () => {
+      const { host } = await mount(withDepends([{ item: 'i9', deleted: '', reason: '' }]));
+      await openPanel(host);
+      expect(field(host).querySelector('button')).toBeNull();
+      expect(field(host).textContent).toContain('i9');
+    });
+
+    describe('the state mark on a chip', () => {
+      const STATES = ['todo', 'doing', 'done', 'dropped'];
+      const states = STATES.map((s, at) => item(`i${at + 1}`, `Step ${s}`, s));
+      const target = item('i5', 'Close the lid');
+      const asks = STATES.map((_, at) => ({ item: `i${at + 1}`, deleted: '', reason: '' }));
+      const withStates = () => taskOf([...states, target],
+        { notes: [note(1, 'Lid plan', ['i5'], BRIEF_BODY, { ...FIELDS, depends_on: 'i1, i2, i3, i4' }, asks)] });
+      const chips = (host: HTMLElement) => [...field(host).querySelectorAll<HTMLElement>('.tk-dep-chip')];
+      const markOf = (chip: HTMLElement) => chip.querySelector<HTMLElement>('.tk-dep-mark');
+
+      it('opens each chip with the mark its row uses, and ends its name with the state', async () => {
+        const { host } = await mount(withStates());
+        await openPanel(host, 'i5');
+        expect(chips(host)).toHaveLength(4);
+        chips(host).forEach((chip, at) => {
+          const state = STATES[at];
+          expect(markOf(chip)?.dataset.s).toBe(state);
+          expect(chip.firstElementChild).toBe(markOf(chip));
+          const row = host.querySelector(`.tk-state[data-step="i${at + 1}"] .tk-ring`) as HTMLElement;
+          expect(markOf(chip)?.querySelector('.tk-ring')?.innerHTML).toBe(row.innerHTML);
+          expect(chip.getAttribute('aria-label')).toBe(`Go to item ${at + 1}: Step ${state}, ${en[`task.state.${state}`]}`);
+          expect(chip.textContent?.trim()).toBe(`${at + 1} · Step ${state}`);
+        });
+        expect(markOf(chips(host)[0])?.querySelector('svg')).toBeNull();
+        expect(markOf(chips(host)[1])?.querySelector('svg')).not.toBeNull();
+      });
+
+      it('follows the item when its state changes, without redrawing the chip', async () => {
+        serveApi((path: string, { body }: { body: { item: string; state: string } }) =>
+          ({ task: { ...withStates(), items: states.map(s => (s.key === body.item ? { ...s, state: body.state } : s)).concat(target) },
+             status: 'active' }));
+        const { host } = await mount(withStates());
+        await openPanel(host, 'i5');
+        const chip = chips(host)[0];
+        const mark = markOf(chip) as HTMLElement;
+        expect(mark.dataset.s).toBe('todo');
+        await press(host.querySelector('[data-step="i1"]'));
+        await until(() => mark.dataset.s === 'doing');
+        expect(chips(host)[0]).toBe(chip);
+        expect(markOf(chip)).toBe(mark);
+        expect(chip.getAttribute('aria-label')).toContain(en['task.state.doing']);
+      });
+
+      it('holds the doing mark still', async () => {
+        const { host } = await mount(withStates());
+        await openPanel(host, 'i5');
+        const doing = markOf(chips(host)[1]) as HTMLElement;
+        expect(doing.dataset.s).toBe('doing');
+        expect(doing.outerHTML).not.toContain('spin');
+        expect(doing.style.getPropertyValue('--spin-at')).toBe('');
+        expect(doing.querySelector('.tk-ring')?.getAttribute('style')).toBeNull();
+        expect(doing.querySelector('svg')?.getAttribute('style')).toBeNull();
+      });
+
+      it('leaves a deleted entry and an unknown key without a mark', async () => {
+        const { host } = await mount(withDepends([{ item: 'i9', deleted: '', reason: '' }, { item: '', deleted: 'Old step', reason: '' }]));
+        await openPanel(host);
+        expect(field(host).querySelector('.tk-dep-mark')).toBeNull();
+      });
+    });
+
+    it('reads none as the translated word', async () => {
+      const { host } = await mount(withDepends([], 'none'));
+      await openPanel(host);
+      expect(field(host).querySelector('button')).toBeNull();
+      expect(field(host).textContent).toContain(en['task.depends.none']);
+    });
+
+    it('draws the text of a field that predates the grammar', async () => {
+      const { host } = await mount(withDepends(null, 'Item 9 and the bench'));
+      await openPanel(host);
+      expect(field(host).querySelector('button')).toBeNull();
+      expect(field(host).textContent).toContain('Item 9 and the bench');
+    });
+
+    describe('a chip', () => {
+      afterEach(() => { vi.useRealTimers(); });
+
+      it('focuses the item, flashes its row for a moment, and opens nothing', async () => {
+        const { host } = await mount(withDepends(OPENS));
+        await openPanel(host);
+        vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+        await press(field(host).querySelector('button'));
+        const row = host.querySelector('.tk-item[data-key="i1"]') as HTMLElement;
+        expect(document.activeElement).toBe(host.querySelector('[data-toggle="i1"]'));
+        expect(row.classList.contains('is-flash')).toBe(true);
+        expect(host.querySelector('[data-toggle="i1"]')?.getAttribute('aria-expanded')).toBe('false');
+        expect(host.querySelector('#tkp-i1')).toBeNull();
+        vi.advanceTimersByTime(1300);
+        await nextTick();
+        expect(row.classList.contains('is-flash')).toBe(false);
+      });
+
+      it('restarts the flash on a second click', async () => {
+        const { host } = await mount(withDepends(OPENS));
+        await openPanel(host);
+        vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+        const chip = field(host).querySelector('button');
+        const row = host.querySelector('.tk-item[data-key="i1"]') as HTMLElement;
+        await press(chip);
+        vi.advanceTimersByTime(800);
+        await press(chip);
+        await nextTick();
+        await nextTick();
+        vi.advanceTimersByTime(800);
+        await nextTick();
+        expect(row.classList.contains('is-flash')).toBe(true);
+        vi.advanceTimersByTime(500);
+        await nextTick();
+        expect(row.classList.contains('is-flash')).toBe(false);
+      });
+    });
+
+    describe('in the editor', () => {
+      const edit = async (host: HTMLElement) => {
+        await openPanel(host, 'i2');
+        await press(host.querySelector('[data-note-edit="1"]'));
+      };
+      const save = (host: HTMLElement) => host.querySelector('[data-note-save]') as HTMLButtonElement;
+      const problem = (host: HTMLElement) => host.querySelector('[data-depends-error]')?.textContent;
+
+      it('shows the format as the placeholder', async () => {
+        const { host } = await mount(withDepends(OPENS));
+        await edit(host);
+        expect(fieldOf(host, 'depends_on').placeholder).toBe(en['task.depends.placeholder']);
+      });
+
+      it('opens a stored field that predates the grammar as it is, with the problem showing and Save off', async () => {
+        const { host } = await mount(withDepends(null, 'Item 9'));
+        await edit(host);
+        expect(fieldOf(host, 'depends_on').value).toBe('Item 9');
+        expect(problem(host)).toBeTruthy();
+        expect(save(host).disabled).toBe(true);
+        expect(fieldOf(host, 'depends_on').getAttribute('aria-invalid')).toBe('true');
+      });
+
+      it('refuses prose, a key that is no item, and a key the note applies to', async () => {
+        const { host } = await mount(withDepends(OPENS, 'none'));
+        await edit(host);
+        expect(save(host).disabled).toBe(false);
+        expect(problem(host)).toBeUndefined();
+        for (const [text, kind, shown] of [['Item 9', 'key', 'Item 9'], ['i9', 'unknown', 'i9'], ['i2 (why)', 'self', 'i2']]) {
+          await type(host, 'depends_on', text);
+          expect(save(host).disabled).toBe(true);
+          expect(problem(host)).toBe(en[`task.depends.error.${kind}`].replace('{text}', shown));
+        }
+      });
+
+      it('accepts none and an item with a reason', async () => {
+        const { host } = await mount(withDepends(OPENS, 'i9'));
+        await edit(host);
+        await type(host, 'depends_on', 'i1 (why)');
+        expect(save(host).disabled).toBe(false);
+        expect(problem(host)).toBeUndefined();
+        await type(host, 'depends_on', 'none');
+        expect(save(host).disabled).toBe(false);
+      });
+
+      it('leaves an empty field to the required mark, without a message', async () => {
+        const { host } = await mount(withDepends(OPENS, 'none'));
+        await edit(host);
+        await type(host, 'depends_on', '');
+        expect(save(host).disabled).toBe(true);
+        expect(problem(host)).toBeUndefined();
+      });
+
+      it('checks the field against the items picked as they change', async () => {
+        const { host } = await mount(withDepends(OPENS, 'i3'));
+        await edit(host);
+        expect(save(host).disabled).toBe(false);
+        await press(host.querySelector('[data-note-scope="i3"]'));
+        expect(problem(host)).toContain('i3');
+        expect(save(host).disabled).toBe(true);
+      });
+    });
+  });
+
   it('keeps a draft through other changes and drops it on Escape', async () => {
     const { host } = await mount(taskOf([item('i1', 'Solder the header')]));
     await press(host.querySelector('[data-note-add=""]'));
@@ -335,6 +833,52 @@ describe('task notes', () => {
       ?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
     await nextTick();
     expect(host.querySelector('[data-note-form]')).toBeNull();
+  });
+});
+
+describe('the DEPENDS ON grammar', () => {
+  const read = (text: string) => parseDepends(text);
+  const kinds = (text: string) => read(text).problems.map(p => p.kind);
+
+  it('reads none in any case, and entries split at commas and newlines', () => {
+    expect(read(' None ')).toEqual({ entries: [], problems: [] });
+    expect(read('i1 (needs the header), I3\ndeleted "Old step" (gone)').entries).toEqual([
+      { item: 'i1', deleted: '', reason: 'needs the header' },
+      { item: 'i3', deleted: '', reason: '' },
+      { item: '', deleted: 'Old step', reason: 'gone' },
+    ]);
+  });
+
+  it('keeps a comma inside a reason or a deleted text', () => {
+    expect(read('i2 (a, b), deleted "x, y"').entries.map(e => e.reason || e.deleted)).toEqual(['a, b', 'x, y']);
+  });
+
+  it('tolerates a blank line or a trailing newline, but not an empty comma entry', () => {
+    expect(kinds('i1\n\ni2\n')).toEqual([]);
+    expect(kinds('i1,,i2')).toEqual(['blank']);
+    expect(kinds('i1,')).toEqual(['blank']);
+  });
+
+  it('names each fault', () => {
+    expect(kinds('')).toEqual(['empty']);
+    expect(kinds('Item 9')).toEqual(['key']);
+    expect(kinds('i1 because')).toEqual(['outside']);
+    expect(kinds('deleted Old')).toEqual(['deleted']);
+    expect(kinds('deleted ""')).toEqual(['deleted']);
+    expect(kinds('i1 ()')).toEqual(['reason']);
+    expect(kinds('i1, I1')).toEqual(['twice']);
+    expect(kinds('i1 (a) (b)')).toEqual(['parens']);
+    expect(kinds('i1 (a')).toEqual(['parens']);
+    expect(kinds('i1 a)')).toEqual(['parens']);
+  });
+
+  it('adds the two checks the server makes, naming the key', () => {
+    const keys = ['i1', 'i2', 'i3'];
+    expect(dependsProblem('i1, i2', keys, ['i3'])).toBeNull();
+    expect(dependsProblem('i9', keys, ['i3'])).toEqual({ kind: 'unknown', text: 'i9' });
+    expect(dependsProblem('i2 (x)', keys, ['i2'])).toEqual({ kind: 'self', text: 'i2' });
+    expect(dependsProblem('deleted "Old"', keys, ['i2'])).toBeNull();
+    expect(dependsProblem('', keys, [])).toEqual({ kind: 'empty', text: '' });
   });
 });
 

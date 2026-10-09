@@ -40,6 +40,13 @@ def shaped(type_: str, text: str) -> str:
         type_, {s.key: text if i == 0 else "nothing to add" for i, s in enumerate(spec)})
 
 
+def brief(goal: str = "drain the queue", **fields: str) -> str:
+    """A task note body that reads as a brief: `goal` and any field given, filler in the rest, no dependencies."""
+    values = {s.key: "nothing to add" for s in sections.BRIEF_SPEC if not s.optional}
+    return sections.render_spec(
+        sections.BRIEF_SPEC, {**values, "depends_on": "none", "goal": goal, **fields})
+
+
 def unmigrated(conn) -> None:
     """Put the store in the state it is in before it has been read.
 

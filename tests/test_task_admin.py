@@ -8,6 +8,7 @@ import json
 import pytest
 from starlette.testclient import TestClient
 
+from conftest import brief
 from memai import tasks
 from memai.admin.app import app as admin_app
 from memai.store import connection, memories
@@ -141,7 +142,7 @@ def test_a_refusal_after_rows_changed_rolls_them_back(client, monkeypatch):
     uid = _task(client)
     before = _snapshot(uid)
 
-    def refuse(conn, uid, note, *, record_edit):
+    def refuse(conn, uid, note, **_):
         raise ValueError("refused after the item row changed")
 
     monkeypatch.setattr(tasks, "_regenerate", refuse)
@@ -264,6 +265,21 @@ def test_list_rows_carry_progress(client):
     assert task_row["progress"] == {"done": 1, "total": 3}
 
 
+def test_list_progress_leaves_dropped_items_out_of_the_total(client):
+    uid = _task(client, items="a\nb\nc")
+    client.post(f"/api/tasks/{uid}/item", json={"item": "i1", "state": "done"})
+    client.post(f"/api/tasks/{uid}/item", json={"item": "i2", "state": "dropped"})
+    rows = {r["uid"]: r for r in client.get("/api/memories").json()["items"]}
+    assert rows[uid]["progress"] == {"done": 1, "total": 2}
+
+
+def test_list_progress_of_an_all_dropped_task_is_zero_of_zero(client):
+    uid = _task(client, items="a")
+    client.post(f"/api/tasks/{uid}/item", json={"item": "i1", "state": "dropped"})
+    rows = {r["uid"]: r for r in client.get("/api/memories").json()["items"]}
+    assert rows[uid]["progress"] == {"done": 0, "total": 0}
+
+
 def test_list_filters_by_task_state(client):
     open_uid = _task(client, items="a\nb")
     done_uid = _task(client, items="only")
@@ -337,7 +353,18 @@ def test_delete_item_happy_path(client):
     assert body["task"]["comments"] == []
     assert body["status"] == "active"
     added = client.post(f"/api/tasks/{uid}/items", json={"items": "a later step"}).json()
-    assert [i["key"] for i in added["task"]["items"]] == ["i1", "i2", "i4"]
+    assert [i["key"] for i in added["task"]["items"]] == ["i1", "i2", "i3"]
+
+
+def test_a_delete_naming_stale_text_is_refused_and_writes_nothing(client):
+    uid = _task(client, items=["draft the plan", "review the plan", "ship the plan"])
+    before = _snapshot(uid)
+    res = client.request("DELETE", f"/api/tasks/{uid}/item", json={"item": "i2", "text": "ship the plan"})
+    assert res.status_code == 400 and "reload" in res.json()["error"]
+    assert _snapshot(uid) == before
+    res = client.request("DELETE", f"/api/tasks/{uid}/item", json={"item": "i2", "text": "review the plan"})
+    assert res.status_code == 200, res.text
+    assert [i["text"] for i in res.json()["task"]["items"]] == ["draft the plan", "ship the plan"]
 
 
 def test_delete_item_completes_the_task_like_closing_the_last_item(client):
@@ -372,7 +399,7 @@ def test_a_delete_item_refusal_after_rows_changed_rolls_them_back(client, monkey
     uid = _task(client)
     before = _snapshot(uid)
 
-    def refuse(conn, uid, note, *, record_edit):
+    def refuse(conn, uid, note, **_):
         raise ValueError("refused after the item row was deleted")
 
     monkeypatch.setattr(tasks, "_regenerate", refuse)
@@ -437,7 +464,7 @@ def test_a_task_write_from_a_foreign_origin_is_refused(client, method, path, bod
 def test_task_note_routes_round_trip(client):
     uid = _task(client)
     made = client.post(f"/api/tasks/{uid}/note",
-                       json={"title": "Chart rules", "body": "Depths in metres.", "items": ["i2"]})
+                       json={"title": "Chart rules", "body": brief("chart the depths"), "items": ["i2"]})
     assert made.status_code == 200, made.text
     note = made.json()["task"]["notes"][0]
     assert (note["title"], note["items"]) == ("Chart rules", ["i2"])
@@ -453,14 +480,14 @@ def test_a_bad_task_note_is_refused(client):
     uid = _task(client)
     res = client.post(f"/api/tasks/{uid}/note", json={"title": "T", "body": "", "items": []})
     assert res.status_code == 400
-    res = client.post(f"/api/tasks/{uid}/note", json={"title": "T", "body": "b", "items": ["i9"]})
+    res = client.post(f"/api/tasks/{uid}/note", json={"title": "T", "body": brief("b"), "items": ["i9"]})
     assert res.status_code == 400
 
 
 def test_the_record_carries_every_task_note(client):
     uid = _task(client)
     client.post(f"/api/tasks/{uid}/note", json={"title": "Top", "body": "b", "items": []})
-    client.post(f"/api/tasks/{uid}/note", json={"title": "On i1", "body": "b", "items": ["i1"]})
+    client.post(f"/api/tasks/{uid}/note", json={"title": "On i1", "body": brief("b"), "items": ["i1"]})
     record = client.get(f"/api/memories/{uid}").json()
     assert [n["title"] for n in record["task"]["notes"]] == ["Top", "On i1"]
 
@@ -473,3 +500,68 @@ def test_task_notes_carry_what_their_wikilinks_point_at(client):
     assert answer["task"]["notes"][0]["body_links"][fact]["type"] == "note"
     shown = client.get(f"/api/memories/{uid}").json()
     assert fact in shown["task"]["notes"][0]["body_links"]
+
+
+def test_a_note_carries_its_brief_fields_or_null(client):
+    uid = _task(client)
+    client.post(f"/api/tasks/{uid}/note", json={"title": "Top", "body": "free", "items": []})
+    client.post(f"/api/tasks/{uid}/note",
+                json={"title": "On i1", "body": brief("solder it", extra_info="flux first"), "items": ["i1"]})
+    notes = client.get(f"/api/memories/{uid}").json()["task"]["notes"]
+    assert notes[0]["brief"] is None
+    assert notes[1]["brief"]["goal"] == "solder it" and notes[1]["brief"]["extra_info"] == "flux first"
+
+
+def test_a_free_body_on_items_is_a_400_and_writes_nothing(client):
+    uid = _task(client)
+    res = client.post(f"/api/tasks/{uid}/note", json={"title": "T", "body": "free", "items": ["i1"]})
+    assert res.status_code == 400 and "a note on items is a brief" in res.text
+    assert client.get(f"/api/memories/{uid}").json()["task"]["notes"] == []
+
+
+def _notes(client, uid):
+    return client.get(f"/api/memories/{uid}").json()["task"]["notes"]
+
+
+def test_a_note_carries_its_parsed_depends_or_null(client):
+    uid = _task(client)
+    client.post(f"/api/tasks/{uid}/note", json={"title": "Top", "body": "free", "items": []})
+    client.post(f"/api/tasks/{uid}/note",
+                json={"title": "On i1", "body": brief("solder it"), "items": ["i1"]})
+    res = client.post(f"/api/tasks/{uid}/note",
+                      json={"title": "On i2", "body": brief("ship it", depends_on="i1 (the plan)"),
+                            "items": ["i2"]})
+    assert res.status_code == 200, res.text
+    notes = _notes(client, uid)
+    assert notes[0]["depends"] is None
+    assert notes[1]["depends"] == []
+    assert notes[2]["depends"] == [{"item": "i1", "deleted": "", "reason": "the plan"}]
+
+
+def test_a_note_whose_depends_on_is_free_text_carries_null(client):
+    uid = _task(client)
+    client.post(f"/api/tasks/{uid}/note",
+                json={"title": "On i1", "body": brief("solder it"), "items": ["i1"]})
+    with connection.connect() as conn:
+        conn.execute("UPDATE task_notes SET body = REPLACE(body, 'DEPENDS ON: none', "
+                     "'DEPENDS ON: Item 7')")
+    note = _notes(client, uid)[0]
+    assert note["depends"] is None and note["brief"]["depends_on"] == "Item 7"
+
+
+def test_a_dependency_on_an_unknown_item_is_a_400_and_writes_nothing(client):
+    uid = _task(client)
+    res = client.post(f"/api/tasks/{uid}/note",
+                      json={"title": "T", "body": brief("b", depends_on="i9"), "items": ["i1"]})
+    assert res.status_code == 400 and "DEPENDS ON is none" in res.text
+    assert _notes(client, uid) == []
+
+
+def test_deleting_an_item_marks_the_dependency_the_view_reads(client):
+    uid = _task(client)
+    client.post(f"/api/tasks/{uid}/note",
+                json={"title": "On i2", "body": brief("ship it", depends_on="i1"), "items": ["i2"]})
+    with connection.connect() as conn:
+        tasks.delete_item(conn, uid, "i1")
+    assert _notes(client, uid)[0]["depends"] == [
+        {"item": "", "deleted": "draft the plan", "reason": ""}]

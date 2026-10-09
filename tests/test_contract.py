@@ -104,3 +104,12 @@ def test_the_svg_export_keeps_its_metrics_as_floats():
 
 def test_the_dashboard_reads_the_same_file():
     assert webui_constants()["types"] == CONTRACT["memory"]["TYPES"]
+
+
+def test_the_brief_template_is_one_list_both_sides_read():
+    from memai import contract, sections
+    assert [(s.key, s.label, s.optional) for s in sections.BRIEF_SPEC] == [
+        (f["key"], f["label"], bool(f.get("optional"))) for f in contract.TASK_BRIEF]
+    assert [s.label for s in sections.BRIEF_SPEC] == [
+        "GOAL", "CONTEXT", "STEPS", "PITFALLS", "DONE WHEN", "DEPENDS ON", "EXTRA INFO"]
+    assert [s.optional for s in sections.BRIEF_SPEC] == [False] * 6 + [True]

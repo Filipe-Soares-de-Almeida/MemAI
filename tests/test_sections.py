@@ -581,3 +581,132 @@ def test_a_translated_name_does_not_change_what_is_stored():
     assert pt["sec.checkpoint.intent"] != "INTENT"
     body = sections.render("checkpoint", sections.read("checkpoint", CHECKPOINT).sections)
     assert body.startswith("INTENT:")
+
+
+# ------------------------------------------------------------- the item brief
+
+BRIEF = (
+    "GOAL: drain the queue before the nightly export\n"
+    "CONTEXT: the worker parks a row after three retries\n"
+    "STEPS: 1. add a cursor\n2. drain the parked rows\n"
+    "PITFALLS: none known\n"
+    "DONE WHEN: the parked count reads zero\n"
+    "DEPENDS ON: none"
+)
+
+
+def test_a_brief_reads_into_its_six_fields():
+    reading = sections.read_spec(sections.BRIEF_SPEC, BRIEF)
+    assert reading.conforms
+    assert reading.sections["steps"] == "1. add a cursor\n2. drain the parked rows"
+    assert "extra_info" not in reading.sections
+
+
+def test_extra_info_is_optional_and_reads_last():
+    reading = sections.read_spec(sections.BRIEF_SPEC, BRIEF + "\nEXTRA INFO: the export runs at 02:00")
+    assert reading.conforms
+    assert reading.sections["extra_info"] == "the export runs at 02:00"
+
+
+@pytest.mark.parametrize("body, complaint", [
+    (BRIEF.replace("PITFALLS: none known\n", ""), "no line opens with PITFALLS"),
+    (BRIEF + "\nEXTRA INFO: a\nEXTRA INFO: b", "more than one line opens with EXTRA INFO"),
+    (BRIEF.replace("DEPENDS ON: none", "EXTRA INFO: x\nDEPENDS ON: none"), "out of order"),
+    (BRIEF + "\nEXTRA INFO:", "nothing under EXTRA INFO"),
+    ("Some preamble\n" + BRIEF, "does not open with GOAL"),
+])
+def test_a_brief_that_does_not_conform_says_what_stops_it(body, complaint):
+    reading = sections.read_spec(sections.BRIEF_SPEC, body)
+    assert not reading.conforms
+    assert any(complaint in p for p in reading.problems)
+
+
+def test_a_label_inside_a_field_reads_as_doubled():
+    body = BRIEF.replace("STEPS: 1. add a cursor", "STEPS: 1. add a cursor\nGOAL: restated")
+    assert any("more than one line opens with GOAL" in p
+               for p in sections.read_spec(sections.BRIEF_SPEC, body).problems)
+
+
+def test_rendering_a_brief_leaves_out_an_empty_optional_field():
+    values = sections.read_spec(sections.BRIEF_SPEC, BRIEF).sections
+    assert sections.render_spec(sections.BRIEF_SPEC, {**values, "extra_info": "  "}) == BRIEF
+    assert sections.read_spec(sections.BRIEF_SPEC,
+                              sections.render_spec(sections.BRIEF_SPEC, values)).conforms
+
+
+def test_the_brief_is_no_memory_type():
+    assert sections.BRIEF_SPEC and not any(
+        spec == sections.BRIEF_SPEC for spec in sections.SECTION_SPEC.values())
+    assert "task_note" not in sections.SECTION_SPEC
+
+
+DEP = sections.DependsEntry
+
+
+@pytest.mark.parametrize("text, entries", [
+    ("none", []),
+    ("  NONE ", []),
+    ("i9", [DEP("i9", "", "")]),
+    ("I3", [DEP("i3", "", "")]),
+    ("i3 (needs the baseline), i9", [DEP("i3", "", "needs the baseline"), DEP("i9", "", "")]),
+    ("i3(tight)\ni4", [DEP("i3", "", "tight"), DEP("i4", "", "")]),
+    ("i1,\n i2 ,i3", [DEP("i1", "", ""), DEP("i2", "", ""), DEP("i3", "", "")]),
+    ("i2 (one, two; three)", [DEP("i2", "", "one, two; three")]),
+    ('deleted "Run the week-long battery test" (the shelf was cancelled)',
+     [DEP("", "Run the week-long battery test", "the shelf was cancelled")]),
+    ('deleted "Seal the case, then test (twice)", i2',
+     [DEP("", "Seal the case, then test (twice)", ""), DEP("i2", "", "")]),
+])
+def test_a_depends_field_parses(text, entries):
+    assert sections.parse_depends(text) == (entries, [])
+
+
+@pytest.mark.parametrize("text, complaint", [
+    ("Item 9", "Item 9"),
+    ("R01", "R01"),
+    ("i0", "i0"),
+    ("i3 needs the baseline", "outside parentheses"),
+    ("i3 (needs the baseline) and more", "outside parentheses"),
+    ("i3 (a (b))", "nested"),
+    ("i3 (a", "unbalanced"),
+    ("i3 a)", "unbalanced"),
+    ("i3 ()", "empty"),
+    ("i1,, i2", "empty entry"),
+    ("i1, i2,", "empty entry"),
+    ("i3, I3 (again)", "i3 listed twice"),
+    ('deleted ""', "empty"),
+    ("deleted Run it", "deleted"),
+    ("none, i2", "none"),
+    ("", "empty"),
+])
+def test_a_depends_field_that_breaks_the_grammar_says_which_piece(text, complaint):
+    entries, problems = sections.parse_depends(text)
+    assert problems and any(complaint in p for p in problems), problems
+
+
+def test_a_depends_problem_names_every_bad_piece():
+    _, problems = sections.parse_depends("i1, Item 9, R01")
+    assert len(problems) == 2
+
+
+@pytest.mark.parametrize("entries, text", [
+    ([], "none"),
+    ([DEP("i9", "", "")], "i9"),
+    ([DEP("i3", "", "why"), DEP("i9", "", "")], "i3 (why), i9"),
+    ([DEP("", "Run the test", "cancelled")], 'deleted "Run the test" (cancelled)'),
+])
+def test_depends_render_and_read_back(entries, text):
+    assert sections.render_depends(entries) == text
+    assert sections.parse_depends(text) == (entries, [])
+
+
+def test_a_quote_in_a_deleted_text_renders_as_an_apostrophe():
+    rendered = sections.render_depends([DEP("", 'Fix the "lens" mount', "")])
+    assert rendered == "deleted \"Fix the 'lens' mount\""
+    assert sections.parse_depends(rendered)[1] == []
+
+
+def test_a_newline_in_a_deleted_text_collapses_so_the_field_stays_one_line():
+    rendered = sections.render_depends([DEP("", "Fix the mount\nGOAL:  again", "")])
+    assert rendered == 'deleted "Fix the mount GOAL: again"'
+    assert sections.parse_depends(rendered)[1] == []

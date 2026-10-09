@@ -8,7 +8,7 @@ import re
 
 import pytest
 
-from memai import server
+from memai import sections, server
 
 WRITERS = ("note", "checkpoint", "anti_pattern", "reasoning", "task", "diagram")
 SHARED = ("title", "domain", "also", "tags", "review_after", "source_ref")
@@ -49,3 +49,30 @@ def test_an_entry_takes_the_indentation_of_its_marker():
 def test_an_unknown_marker_fails_at_import_time():
     with pytest.raises(KeyError):
         server._expand_params("    @param no_such_parameter\n")
+
+
+def test_task_note_documents_the_brief_it_takes():
+    params = inspect.signature(server.task_note).parameters
+    for s in sections.BRIEF_SPEC:
+        assert s.key in params and params[s.key].default == ""
+        assert f"{s.label}:" in server.task_note.__doc__
+
+
+def test_task_note_documents_the_depends_on_format():
+    doc = " ".join(server.task_note.__doc__.split())
+    assert "depends_on" in doc and "i3 (why), i9" in doc and "renumbered" in doc
+
+
+def test_every_tool_docstring_carries_no_indentation():
+    for name, fn in server._TOOLS.items():
+        assert fn.__doc__ == inspect.cleandoc(fn.__doc__), name
+
+
+def test_tool_strips_the_indentation_an_interpreter_leaves_in_a_docstring():
+    def probe():
+        pass
+
+    probe.__doc__ = "Summary.\n\n    Body line.\n        deeper\n    "
+    wrapped = server.tool("full")(probe)
+    assert wrapped.__doc__ == "Summary.\n\nBody line.\n    deeper"
+    server._GROUP_OF.pop("probe", None)

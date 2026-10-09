@@ -23,6 +23,7 @@ GOAL_MAX: int = _TASK["GOAL_MAX"]
 ITEM_MAX: int = _TASK["ITEM_MAX"]
 ITEMS_MAX: int = _TASK["ITEMS_MAX"]
 NOTE_MAX: int = _TASK["NOTE_MAX"]
+TASK_BRIEF: tuple[dict, ...] = tuple(_TASK["BRIEF"])
 
 BULK_MAX: int = _ADMIN["BULK_MAX"]
 ARCHIVE_LABEL_MAX: int = _ADMIN["ARCHIVE_LABEL_MAX"]

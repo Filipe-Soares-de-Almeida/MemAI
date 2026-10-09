@@ -166,6 +166,45 @@ describe('a task shown in its record', () => {
   });
 });
 
+describe('a task shown in its record, progress', () => {
+  it('shows the progress in the side panel and moves it with the checklist', async () => {
+    const uid = 'a1b2c3d4e5f60005';
+    const items = [{ key: 'i1', seq: 1, text: 'Solder the header', state: 'todo', updated_at: '', updated_session: '', links: [] },
+                   { key: 'i2', seq: 2, text: 'Flash the board', state: 'dropped', updated_at: '', updated_session: '', links: [] }];
+    const task = { goal: 'Ship the lantern firmware', state: 'open', completed_at: '', comments: [], notes: [], items };
+    const m = memory(uid, { type: 'task', task, content: 'GOAL: Ship the lantern firmware' });
+    serveApi((path: string, call: Call) => {
+      if (path === `/api/memories/${uid}` && call.method === 'GET') return m;
+      if (path === `/api/tasks/${uid}/item`) {
+        return { task: { ...task, state: 'completed', items: [{ ...items[0], state: 'done' }, items[1]] }, status: 'archived' };
+      }
+      return {};
+    });
+    const view = document.getElementById('view') as HTMLElement;
+    await mountView(RecordView, view, new URLSearchParams({ uid }), { stale: () => false });
+    await nextTick();
+    const pct = () => view.querySelector('.rec-side [data-progress-pct]')?.textContent;
+    expect(pct()).toBe('0%');
+    const bar = () => view.querySelector('.rec-side [role="progressbar"]') as HTMLElement;
+    expect(bar().getAttribute('aria-label')).toBe(en['task.progress.label']);
+    expect(bar().getAttribute('aria-valuetext')).toBe('0%, 0 of 1 done');
+    expect(view.querySelector('.rec-side .tk-prog .chip')).toBeNull();
+    expect(view.querySelector('.rec-side .tk-bar-drop')).toBeNull();
+    expect(view.querySelector('.rec-side .tk-prog-n')?.textContent).toBe('0 of 1 done');
+    expect(view.querySelector('.rec-main .tk-prog')).toBeNull();
+    const line = view.querySelector('.rec-side .tk-prog-line') as HTMLElement;
+    expect([...line.children].map(c => c.className))
+      .toEqual(['tk-prog-pct', 'tk-prog-n']);
+    expect(line.parentElement?.className).toBe('tk-prog');
+    expect(line.nextElementSibling).toBe(bar());
+    expect(view.querySelector('.rec-side [data-progress-pct]')?.closest('.tk-prog-line')).toBe(line);
+    (view.querySelector('[data-step="i1"]') as HTMLElement).click();
+    await until(() => pct() === '100%');
+    expect(bar().getAttribute('aria-valuetext')).toBe('100%, 1 of 1 done');
+    expect(view.querySelector('.tk-item.is-new')).toBeNull();
+  });
+});
+
 describe('the edit history', () => {
   it('opens a version\'s line diff on demand', async () => {
     const view = await show(memory('a1b2c3d4e5f60005', { edit_history: [

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-/* A task row's mark: how it ended once closed, and how far it is, done out of all its items. */
+/* A task row's mark: how it ended once closed, and how far it is, done out of its items not dropped. */
 import { t } from '../../i18n.ts';
 import type { MemoryRow } from '../../api/types.ts';
 import StatusTag from '../../components/StatusTag.vue';

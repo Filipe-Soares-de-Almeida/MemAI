@@ -34,6 +34,7 @@ carry a per-process `session` stamp unless one is passed.
 from __future__ import annotations
 
 import functools
+import inspect
 import json
 import logging
 import os
@@ -298,11 +299,13 @@ def tool(group: str):
 
     Always returns the function, wrapped so a result over the output
     ceiling becomes an error, so the module-level name stays callable from
-    the admin surface and the tests whether or not the schema was published. Shared parameter text is expanded into `__doc__` first,
-    so FastMCP publishes the full description.
+    the admin surface and the tests whether or not the schema was published.
+    The published description is the docstring with its shared parameter text
+    expanded and its indentation removed.
     """
     def wrap(fn):
-        fn.__doc__ = _expand_params(fn.__doc__)
+        doc = _expand_params(fn.__doc__)
+        fn.__doc__ = inspect.cleandoc(doc) if doc else doc
 
         @functools.wraps(fn)
         def bounded(*args, **kwargs):
@@ -730,7 +733,7 @@ def task_item(uid: str, item: str, state: str = "", comment: str = "",
               related: str = "") -> dict:
     """Update one item of a task: its state, a comment on it, memories linked to it.
 
-    item: the key task() returned, such as i3 or 3.
+    item: the item's number, such as 3 or i3; an item's key is its position in the checklist.
 
     state: todo, doing, done or dropped. The write that closes the last open
     item archives the task (`archived` in the result); one that reopens an
@@ -817,15 +820,27 @@ def task_read(uid: str, part: str, item: str = "", offset: int = 0) -> dict:
 
 @tool("core")
 def task_note(uid: str, title: str = "", body: str = "", items: str = "", note_id: int = 0,
-              delete: bool = False) -> dict:
-    """Write a note owned by a task: an item's brief, a rule its items share.
+              delete: bool = False, goal: str = "", context: str = "", steps: str = "",
+              pitfalls: str = "", done_when: str = "", depends_on: str = "",
+              extra_info: str = "") -> dict:
+    """A note a task owns: an item's brief, a rule its items share.
 
-    Not a memory: only task_read() returns it. note_id=0 creates; a
-    note_id edits in place (empty fields keep theirs) or, with delete,
-    removes it. items: keys such as "i3,i7"; empty or "-" means the whole
-    task. Title up to 120 characters, body up to 4000.
+    Not a memory: only task_read() returns it. note_id=0 creates, else
+    edits (empty fields keep theirs) or, with delete, removes. items: keys
+    "i3,i7"; empty or "-" is the whole task. Title up to 120 chars, body
+    4000.
+
+    A note on items is a brief: goal, context, steps, pitfalls, done_when,
+    depends_on ("none" is an answer) are required, extra_info is optional.
+    depends_on is none, or item keys with an optional reason in
+    parentheses ("i3 (why), i9"); the keys are renumbered with the items.
+    Labels: GOAL: / CONTEXT: / STEPS: / PITFALLS: / DONE WHEN: /
+    DEPENDS ON: / EXTRA INFO:; an edit replaces only fields given. `body`
+    is for a note on the whole task; with a field it errors.
     """
     keys = [k.strip() for k in items.split(",") if k.strip() and k.strip() != "-"]
+    brief = {"goal": goal, "context": context, "steps": steps, "pitfalls": pitfalls,
+             "done_when": done_when, "depends_on": depends_on, "extra_info": extra_info}
     try:
         with connection.connect() as conn:
             if delete:
@@ -833,10 +848,10 @@ def task_note(uid: str, title: str = "", body: str = "", items: str = "", note_i
                 return {"uid": uid, "note_id": note_id, "deleted": True}
             if note_id:
                 tasks.edit_note(conn, uid, note_id, title=title, body=body,
-                                items=keys if items.strip() else None)
+                                items=keys if items.strip() else None, brief=brief)
             else:
                 note_id = tasks.add_note(conn, uid, title=title, body=body, items=keys,
-                                         session=SESSION)
+                                         brief=brief, session=SESSION)
             on = tasks.note(conn, uid, note_id)["items"]
     except ValueError as exc:
         return _errors([str(exc)])

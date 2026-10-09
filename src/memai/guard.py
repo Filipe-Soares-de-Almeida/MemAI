@@ -74,6 +74,8 @@ OPTIONAL: dict[str, tuple[str, ...]] = {
     "task_item": ("state", "comment", "related"),
     "task_add": (),
     "task_comment": ("item",),
+    "task_note": ("title", "body", "items", "note_id", "delete", "goal", "context", "steps",
+                  "pitfalls", "done_when", "depends_on", "extra_info"),
 }
 
 # The frame of a tool call. A closing tag naming one of these, inside the text
