@@ -12,7 +12,7 @@ import sys
 
 import pytest
 
-from conftest import brief
+from conftest import brief, item_of
 from memai import budget, hook, sections, server, tasks
 from memai.store import connection, memories, relations, search
 
@@ -97,8 +97,9 @@ def _walk(call) -> list:
 
 
 def _parts(w):
-    calls = [("items", ""), ("notes", ""), ("notes", "i1"), ("comments", ""),
-             ("comments", "i2"), ("links", "i3")]
+    first, second, third = (item_of(w["task"], n) for n in (1, 2, 3))
+    calls = [("items", 0), ("notes", 0), ("notes", first), ("comments", 0),
+             ("comments", second), ("links", third)]
     return [p for part, item in calls
             for p in _walk(lambda o, part=part, item=item: server.task_read(w["task"], part, item, o))]
 
@@ -167,7 +168,7 @@ SCENARIOS = {
     "task_add": lambda w: [server.task_add(server.task("t", "g", "a")["uid"],
                                            "\n".join(_text(tasks.ITEM_MAX) for _ in range(49)))],
     "task_comment": lambda w: [server.task_comment(w["task"], _text(tasks.COMMENT_MAX))],
-    "task_item": lambda w: [server.task_item(w["task"], "i4", state="doing",
+    "task_item": lambda w: [server.task_item(w["task"], item_of(w["task"], 4), state="doing",
                                              comment=_text(tasks.COMMENT_MAX))],
     "task_note": lambda w: [server.task_note(w["task"], title=_text(120), goal=_text(3800),
                                              context="c", steps="s", pitfalls="p", done_when="d",
@@ -249,7 +250,7 @@ WALKS = {
                    "pairs", None),
     "optimize_status": (lambda w, o: server.optimize_status(w["run"], offset=o), "suggestions", "id"),
     "optimize_runs": (lambda w, o: server.optimize_runs(offset=o), "runs", "id"),
-    "task_read": (lambda w, o: server.task_read(w["task"], "notes", "i2", o), "records", "id"),
+    "task_read": (lambda w, o: server.task_read(w["task"], "notes", item_of(w["task"], 2), o), "records", "id"),
 }
 
 

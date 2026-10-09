@@ -169,6 +169,6 @@ def test_task_says_the_title_and_the_items_are_short():
 
 
 @pytest.mark.parametrize("name", ["task", "task_add", "task_note", "task_item", "task_comment"])
-def test_a_task_tool_says_items_are_cited_by_key_only_in_depends_on(name):
+def test_a_task_tool_says_items_are_cited_as_a_mention_token(name):
     text = _published(name)
-    assert "DEPENDS ON" in text and "what it does" in text
+    assert "[[#id]]" in text and "never carries one" in text

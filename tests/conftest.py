@@ -83,3 +83,11 @@ def item_at(conn, uid: str, n: int) -> int:
     from memai import tasks
 
     return tasks.item_ids(conn, uid)[n - 1]
+
+
+def item_of(uid: str, n: int) -> int:
+    """item_at() through a connection of its own to the active store, for a test that drives the tools."""
+    from memai.store import connection
+
+    with connection.connect() as conn:
+        return item_at(conn, uid, n)

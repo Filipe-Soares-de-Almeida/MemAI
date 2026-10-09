@@ -155,8 +155,11 @@ def create_task(
     Raises ValueError on an empty or over-limit input, before anything is written.
     """
     title, goal, items = _validated(title, goal, items)
+    # the items have no ids until they are inserted, so the first content numbers them by
+    # position; it is what insert_memory's leak check reads
+    drafted = [{"id": n, "state": "todo", "text": text} for n, text in enumerate(items, start=1)]
     uid = memories.insert_memory(
-        conn, type=memories.TASK_TYPE, content=task_items.render(goal, []), title=title,
+        conn, type=memories.TASK_TYPE, content=task_items.render(goal, drafted), title=title,
         domain=domain, also=also, session=session, tags=tags,
     )
     conn.execute("INSERT INTO tasks (memory_uid, goal) VALUES (?, ?)", (uid, goal))

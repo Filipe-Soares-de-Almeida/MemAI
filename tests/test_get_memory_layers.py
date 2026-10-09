@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pytest
 
+from conftest import item_of
 from memai import budget, guard, server
 from memai.store import connection, memories
 
@@ -28,7 +29,7 @@ def _note(content: str = "v0") -> str:
 
 def test_get_memory_on_a_task_is_a_head_without_items(store):
     uid = _task()
-    server.task_item(uid, "i1", state="done")
+    server.task_item(uid, item_of(uid, 1), state="done")
     record = server.get_memory(uid)
     assert "content" not in record
     task = record["task"]
@@ -93,12 +94,12 @@ BRIEF_ARGS = dict(goal="lex the config", context="ASCII input", steps="write the
 
 def test_task_read_and_task_note_round_trip(store):
     uid = _task()
-    made = server.task_note(uid, title="Lexer rules", items="i2", **BRIEF_ARGS)
-    assert made["note_id"] and made["items"] == ["i2"]
-    body = server.task_read(uid, "notes", item="i2")["records"][0]["body"]
+    made = server.task_note(uid, title="Lexer rules", items=str(item_of(uid, 2)), **BRIEF_ARGS)
+    assert made["note_id"] and made["items"] == [item_of(uid, 2)]
+    body = server.task_read(uid, "notes", item=item_of(uid, 2))["records"][0]["body"]
     assert body.startswith("GOAL: lex the config\nCONTEXT: ASCII input")
     assert server.task_note(uid, note_id=made["note_id"], pitfalls="tabs and CRLF").get("ok") is not False
-    assert "PITFALLS: tabs and CRLF" in server.task_read(uid, "notes", item="i2")["records"][0]["body"]
+    assert "PITFALLS: tabs and CRLF" in server.task_read(uid, "notes", item=item_of(uid, 2))["records"][0]["body"]
     assert server.task_note(uid, note_id=made["note_id"], items="-")["items"] == []
     assert server.task_read(uid, "notes")["total"] == 1
     assert server.task_note(uid, note_id=made["note_id"], delete=True)["deleted"] is True
@@ -114,13 +115,13 @@ def test_task_read_refusals_are_error_results(store, kwargs):
 def test_task_note_refusals_are_error_results(store):
     uid = _task()
     assert server.task_note(uid, title="T", body="")["ok"] is False
-    assert server.task_note(uid, title="T", body="b", items="i9")["ok"] is False
+    assert server.task_note(uid, title="T", body="b", items="999999")["ok"] is False
     assert server.task_note(uid, note_id=999, delete=True)["ok"] is False
     assert server.task_note(_note(), title="T", body="b")["ok"] is False
-    assert server.task_note(uid, title="T", body="free text", items="i1")["ok"] is False
+    assert server.task_note(uid, title="T", body="free text", items=",".join(str(item_of(uid, n)) for n in (1,)))["ok"] is False
     assert server.task_note(uid, title="T", body="b", goal="g")["ok"] is False
-    assert server.task_note(uid, title="T", items="i1", goal="only a goal")["ok"] is False
-    assert server.task_note(uid, title="T", items="i1", **{**BRIEF_ARGS, "depends_on": "i9"})["ok"] is False
+    assert server.task_note(uid, title="T", items=",".join(str(item_of(uid, n)) for n in (1,)), goal="only a goal")["ok"] is False
+    assert server.task_note(uid, title="T", items=",".join(str(item_of(uid, n)) for n in (1,)), **{**BRIEF_ARGS, "depends_on": "i9"})["ok"] is False
 
 
 def test_new_task_tools_are_guarded():
