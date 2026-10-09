@@ -2478,7 +2478,7 @@ textarea.tk-box {
 .tk-brief-err { margin: var(--sp-1) 0 0; }
 /* DEPENDS ON as references: a chip per item that scrolls to it, the reason beside it in muted text */
 .tk-deps { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--sp-1); }
-.tk-dep, .tk-dep-none { display: flex; align-items: baseline; flex-wrap: wrap; column-gap: var(--sp-3); font: 400 var(--fs-md) var(--font-ui); }
+.tk-dep, .tk-dep-none { display: flex; align-items: center; flex-wrap: wrap; column-gap: var(--sp-3); font: 400 var(--fs-md) var(--font-ui); }
 .tk-dep-chip {
   display: inline-flex; align-items: center; max-width: 100%; min-height: var(--tap);
   padding: 0 var(--sp-3); text-align: left; cursor: pointer;

@@ -21,6 +21,8 @@ const itemOf = (key: string) => {
   return { n: at + 1, text, state, stateName: t(`task.state.${state}` as I18nKey) };
 };
 
+const resolved = (depends: TaskNote['depends']) => (depends ?? []).map(d => ({ d, it: d.item ? itemOf(d.item) : null }));
+
 const writing = computed(() => ui.noteEdit === `new:${props.scope}`);
 </script>
 
@@ -52,13 +54,13 @@ const writing = computed(() => ui.noteEdit === `new:${props.scope}`);
               <h4 class="tk-brief-h rf-sub" :title="f.raw">{{ f.label }}</h4>
               <ul v-if="f.key === 'depends_on' && n.depends" class="tk-deps">
                 <li v-if="!n.depends.length" class="tk-dep-none">{{ t('task.depends.none') }}</li>
-                <li v-for="(d, at) in n.depends" :key="at" class="tk-dep">
+                <li v-for="({ d, it }, at) in resolved(n.depends)" :key="at" class="tk-dep">
                   <template v-if="d.item">
-                    <button v-if="itemOf(d.item)" type="button" class="tk-dep-chip" :data-dep="d.item"
-                            :aria-label="t('task.depends.open', { n: itemOf(d.item)!.n, text: itemOf(d.item)!.text, state: itemOf(d.item)!.stateName })"
-                            @click="c.flashItem(d.item)"><span class="tk-dep-mark" :data-s="itemOf(d.item)!.state"
-                            aria-hidden="true"><span class="tk-ring"><AppIcon v-if="MARK[itemOf(d.item)!.state]"
-                            :name="MARK[itemOf(d.item)!.state]" /></span></span>{{ itemOf(d.item)!.n }} · {{ itemOf(d.item)!.text }}</button>
+                    <button v-if="it" type="button" class="tk-dep-chip" :data-dep="d.item"
+                            :aria-label="t('task.depends.open', { n: it.n, text: it.text, state: it.stateName })"
+                            @click="c.flashItem(d.item)"><span class="tk-dep-mark" :data-s="it.state"
+                            aria-hidden="true"><span class="tk-ring"><AppIcon v-if="MARK[it.state]"
+                            :name="MARK[it.state]" /></span></span>{{ it.n }} · {{ it.text }}</button>
                     <span v-else class="tk-dep-key">{{ d.item }}</span>
                   </template>
                   <span v-else class="tk-dep-gone"><s>{{ d.deleted }}</s><span class="sr-only"> ({{

@@ -139,3 +139,7 @@ def test_a_view_that_clips_instead_of_scrolling_reserves_no_strip():
 
 def test_the_graph_view_reserves_no_strip_because_its_canvas_never_scrolls_the_page(css):
     assert ".view:has(> .anim > .graph-wrap) { scrollbar-gutter: auto; }" in css
+
+
+def test_a_dependency_reason_is_centred_on_its_chip_whatever_the_mark(css):
+    assert re.search(r"\.tk-dep, \.tk-dep-none \{[^}]*align-items: center;", css)
