@@ -97,10 +97,15 @@ task_note(uid, title="Refund replay", items="i2",
           depends_on="i1")
 ```
 
+An item is a short label, at most 80 characters; its detail goes in a brief.
 What only makes sense inside the task — an item's brief, a rule several items
 share — is a task note, not a memory. A note on items is a brief: GOAL, CONTEXT,
 STEPS, PITFALLS, DONE WHEN and DEPENDS ON, with EXTRA INFO for anything else.
-Search, recall and the session brief never return it. `get_memory(uid)` on a
+DEPENDS ON is the one place an item is cited by its key: keys are positions,
+and free text is not rewritten when they move. `task_item` also renames an
+item or deletes one, and `edit_memory(uid, goal=...)` rewrites the goal, so a
+task is corrected in place. Search, recall and the session brief never return
+a note. `get_memory(uid)` on a
 task returns its head (goal, progress, counts), and `task_read(uid, part)`
 reads its items, notes, comments and links one page at a time. Every tool
 result stays under the size Claude Code shows inline: what can grow comes back
