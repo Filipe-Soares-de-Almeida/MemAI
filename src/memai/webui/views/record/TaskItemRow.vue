@@ -1,7 +1,8 @@
 <script setup lang="ts">
 /* One checklist item: its state mark, its text and counts, its menu, and the panel it opens. */
-import { computed } from 'vue';
+import { computed, ref, watch } from 'vue';
 import type { Directive } from 'vue';
+import { TASK } from '../../contract.ts';
 import { openDropMenu } from '../../core/ui.js';
 import { openRecord } from '../../core/nav.ts';
 import { t } from '../../i18n.ts';
@@ -19,6 +20,15 @@ const props = defineProps<{ c: Checklist; item: TaskItem; n: number }>();
 const { current, ui, enter } = props.c;
 
 const open = computed(() => ui.open === props.item.key);
+const renaming = computed(() => ui.renaming === props.item.key);
+const draft = ref('');
+watch(renaming, on => { if (on) draft.value = props.item.text; }, { immediate: true });
+const over = computed(() => draft.value.trim().length > TASK.ITEM_MAX);
+const ready = computed(() => Boolean(draft.value.trim()) && !over.value);
+function save(e?: KeyboardEvent) {
+  if (e?.isComposing || !ready.value) return;
+  void props.c.saveRename(props.item.key, draft.value);
+}
 const notes = computed(() => current.value.notes.filter(n => n.items.includes(props.item.key)));
 const thread = computed(() => current.value.comments.filter(cm => cm.item === props.item.key));
 const action = computed(() => t(`task.mark.${NEXT[props.item.state]}` as I18nKey));
@@ -41,6 +51,7 @@ function menu(e: MouseEvent) {
       run: () => { props.c.setItem(item.key, s); },
     })),
     { sep: true },
+    { label: t('task.item.rename'), run: () => props.c.renameItem(item.key) },
     { label: t('task.item.delete'), danger: true, run: () => props.c.deleteItem(item.key),
       note: current.value.items.length < 2 ? t('task.item.deleteLast') : '' },
   ], { align: 'right' });
@@ -60,7 +71,19 @@ function menu(e: MouseEvent) {
         <span :key="item.state" v-spin="item.state === 'doing'" class="tk-ring"><AppIcon v-if="MARK[item.state]"
               :name="MARK[item.state]" /></span>
       </button>
-      <button type="button" class="tk-main" :data-toggle="item.key" :aria-expanded="open"
+      <div v-if="renaming" class="tk-rename">
+        <input v-model="draft" type="text" class="tk-rename-box" :data-rename="item.key"
+               :aria-label="t('task.item.renameAria', { n })"
+               @keydown.enter.prevent="save" @keydown.esc.prevent="c.leaveRename()">
+        <div class="tk-rename-foot">
+          <button type="button" class="btn btn-sm btn-solid" data-rename-save :disabled="!ready" @click="save()">{{
+            t('common.save') }}</button>
+          <button type="button" class="btn btn-sm btn-ghost" @click="c.leaveRename()">{{ t('common.cancel') }}</button>
+          <span class="rf-count" :class="{ over }" data-rename-count>{{
+            t('dr.sections.count', { n: draft.trim().length, max: TASK.ITEM_MAX }) }}</span>
+        </div>
+      </div>
+      <button v-else type="button" class="tk-main" :data-toggle="item.key" :aria-expanded="open"
               :aria-controls="open ? `tkp-${item.key}` : undefined" @click="c.toggle(item.key)">
         <span class="tk-text">{{ item.text }}</span>
         <span class="tk-counts"><span v-for="x in counts" :key="x.icon" class="tk-count" :title="t(x.key, { n: x.n })"><span

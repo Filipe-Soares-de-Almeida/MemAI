@@ -40,6 +40,7 @@ export const tasks = {
   create: (body: Body) => post<T.TaskCreated>('/api/tasks', body),
   item: (uid: string, body: Body) => post<T.TaskAnswer>(`/api/tasks/${seg(uid)}/item`, body),
   deleteItem: (uid: string, body: Body) => remove<T.TaskAnswer>(`/api/tasks/${seg(uid)}/item`, body),
+  itemText: (uid: string, body: Body) => post<T.TaskAnswer>(`/api/tasks/${seg(uid)}/item/text`, body),
   items: (uid: string, body: Body) => post<T.TaskAnswer>(`/api/tasks/${seg(uid)}/items`, body),
   goal: (uid: string, body: Body) => post<T.TaskAnswer>(`/api/tasks/${seg(uid)}/goal`, body),
   comment: (uid: string, body: Body) => post<T.TaskAnswer>(`/api/tasks/${seg(uid)}/comment`, body),

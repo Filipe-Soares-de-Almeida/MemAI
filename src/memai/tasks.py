@@ -15,6 +15,59 @@ from .store import sections as store_sections
 COMMENT_MAX = 2000
 
 _KEY_RE = re.compile(r"^i?([1-9][0-9]*)$")
+_CITED_KEY_RE = re.compile(r"\bi([1-9][0-9]*)\b", re.I)
+
+CITE_RULE = ("an item is cited by its key only in DEPENDS ON: keys renumber when an item is "
+             "deleted, and free text is never rewritten. Name the item by what it does, or "
+             "put the dependency in DEPENDS ON")
+
+
+def _item_length_error(text: str) -> str | None:
+    if len(text) <= ITEM_MAX:
+        return None
+    return (f"an item is {len(text)} characters; the limit is {ITEM_MAX}. An item is a short "
+            "label of a few words; its detail goes in a brief (task_note)")
+
+
+def cited_key_error(fields: dict[str, str], count: int) -> str | None:
+    """Why `fields` (free text by field name) may not be written, or None.
+
+    A field fails when it names one of the task's `count` item keys; a
+    number past the last item is not a key.
+    """
+    problems = []
+    for name, text in fields.items():
+        cited = dict.fromkeys(f"i{int(m[1])}" for m in _CITED_KEY_RE.finditer(str(text))
+                              if int(m[1]) <= count)
+        if cited:
+            problems.append(f"{name} cites {', '.join(cited)}")
+    return f"{'; '.join(problems)}: {CITE_RULE}" if problems else None
+
+
+def _require_no_cited_key(fields: dict[str, str], count: int) -> None:
+    error = cited_key_error(fields, count)
+    if error:
+        raise ValueError(error)
+
+
+_BRIEF_LABELS = {s.key: s.label for s in sections.BRIEF_SPEC}
+
+
+def free_text(body: str) -> dict[str, str]:
+    """A note body's free text by field: a brief's fields but DEPENDS ON, or the whole body."""
+    fields = brief_fields(body)
+    if fields is None:
+        return {"body": body}
+    return {_BRIEF_LABELS[k]: v for k, v in fields.items() if k != "depends_on"}
+
+
+def _given_free_text(title: str, body: str, brief: dict[str, str] | None) -> dict[str, str]:
+    """The free text a note edit writes: only the title, body or brief fields it gives."""
+    given = {"title": str(title)} if str(title).strip() else {}
+    if _has_fields(brief):
+        return {**given, **{_BRIEF_LABELS.get(k, k): str(v) for k, v in (brief or {}).items()
+                            if str(v).strip() and k != "depends_on"}}
+    return {**given, **free_text(str(body))} if str(body).strip() else given
 
 
 def split_items(text: str) -> list[str]:
@@ -45,8 +98,10 @@ def _validated(title: str, goal: str, items: list[str]) -> tuple[str, str, list[
     if len(items) > ITEMS_MAX:
         raise ValueError(f"{len(items)} items; a task holds at most {ITEMS_MAX}")
     for text in items:
-        if len(text) > ITEM_MAX:
-            raise ValueError(f"an item is {len(text)} characters; the limit is {ITEM_MAX}")
+        if error := _item_length_error(text):
+            raise ValueError(error)
+    _require_no_cited_key({"title": title, "goal": goal,
+                           **{f"item {n}": t for n, t in enumerate(items, start=1)}}, len(items))
     return title, goal, items
 
 
@@ -248,18 +303,54 @@ def set_item_state(
     return {"uid": uid, "item": key, "state": state, "changed": changed, **_outcome(conn, uid)}
 
 
+def rename_item(
+    conn: sqlite3.Connection, uid: str, item: str, text: str, *,
+    expect: str | None = None, session: str = "",
+) -> dict:
+    """Give one item a new text; its key, state, notes, comments and links stay.
+
+    The previous text stays in the edit history. Raises ValueError for an
+    empty, over-long or key-citing text, an unknown item, or an item whose
+    text differs from `expect` (the text the caller saw), before anything is
+    written. The same text again writes nothing and reports changed=False.
+    """
+    text = str(text).strip()
+    if not text:
+        raise ValueError("an item's text may not be empty")
+    if error := _item_length_error(text):
+        raise ValueError(error)
+    _lock(conn, uid)
+    key = _require_item(conn, uid, item)
+    rows = _items(conn, uid)
+    old = next(r["text"] for r in rows if r["key"] == key)
+    if expect is not None and old != expect:
+        raise ValueError(f"item {key} is no longer {expect!r}; reload the task before renaming")
+    _require_no_cited_key({f"item {key[1:]}": text}, len(rows))
+    changed = old != text
+    if changed:
+        conn.execute(
+            """UPDATE task_items SET text = ?, updated_at = ?, updated_session = ?
+               WHERE memory_uid = ? AND item_key = ?""",
+            (text, lite.now_iso(), session, uid, key),
+        )
+        _regenerate(conn, uid, f"item {key} renamed: {old} -> {text}", record_edit=True)
+    return {"uid": uid, "item": key, "text": text, "changed": changed, **_outcome(conn, uid)}
+
+
 def add_items(conn: sqlite3.Connection, uid: str, items: list[str], *, session: str = "") -> dict:
     """Append items under the next positions; a closed task reopens."""
     items = [str(i).strip() for i in items]
     if not items or not all(items):
         raise ValueError("add at least one item, and no item may be empty")
     for text in items:
-        if len(text) > ITEM_MAX:
-            raise ValueError(f"an item is {len(text)} characters; the limit is {ITEM_MAX}")
+        if error := _item_length_error(text):
+            raise ValueError(error)
     _lock(conn, uid)
     last = len(_items(conn, uid))
     if last + len(items) > ITEMS_MAX:
         raise ValueError(f"a task holds at most {ITEMS_MAX} items; it has {last}")
+    _require_no_cited_key({f"item {last + n}": t for n, t in enumerate(items, start=1)},
+                          last + len(items))
     stamp = lite.now_iso()
     keys = [f"i{n}" for n in range(last + 1, last + len(items) + 1)]
     conn.executemany(
@@ -320,16 +411,17 @@ def _span(keys: list[str]) -> str:
     return keys[0] if len(keys) == 1 else f"{keys[0]}..{keys[-1]}"
 
 
-def set_goal(conn: sqlite3.Connection, uid: str, goal: str) -> None:
-    """Replace the goal; the content is regenerated when the goal changed."""
+def set_goal(conn: sqlite3.Connection, uid: str, goal: str, *, note: str = "") -> None:
+    """Replace the goal; the content is regenerated, and `note` names the edit in the history."""
     goal = str(goal).strip()
     if not goal:
         raise ValueError("a task needs a goal")
     if len(goal) > GOAL_MAX:
         raise ValueError(f"goal is {len(goal)} characters; the limit is {GOAL_MAX}")
     _lock(conn, uid)
+    _require_no_cited_key({"goal": goal}, len(_items(conn, uid)))
     conn.execute("UPDATE tasks SET goal = ? WHERE memory_uid = ?", (goal, uid))
-    _regenerate(conn, uid, "goal edited", record_edit=True)
+    _regenerate(conn, uid, note or "goal edited", record_edit=True)
 
 
 def add_comment(
@@ -350,6 +442,7 @@ def add_comment(
         raise ValueError(f"{author!r} is not a comment author; use agent or person")
     _lock(conn, uid)
     key = _require_item(conn, uid, item) if str(item).strip() else ""
+    _require_no_cited_key({"comment": body}, len(_items(conn, uid)))
     cur = conn.execute(
         """INSERT INTO task_comments (memory_uid, item_key, body, author, session, created_at)
            VALUES (?, ?, ?, ?, ?, ?)""",
@@ -542,6 +635,7 @@ def add_note(conn: sqlite3.Connection, uid: str, *, title: str, body: str = "",
     on_items = any(str(i).strip() for i in items)
     title, body = _note_fields(title, _compose(body, brief, "", on_items=on_items))
     _lock(conn, uid)
+    _require_no_cited_key({"title": title, **free_text(body)}, len(_items(conn, uid)))
     keys = _note_keys(conn, uid, items)
     if keys:
         _require_brief(body)
@@ -568,6 +662,7 @@ def edit_note(conn: sqlite3.Connection, uid: str, note_id: int, *, title: str = 
     """
     _lock(conn, uid)
     note_id = _require_note(conn, uid, note_id)
+    _require_no_cited_key(_given_free_text(title, body, brief), len(_items(conn, uid)))
     row = conn.execute("SELECT title, body FROM task_notes WHERE id = ?", (note_id,)).fetchone()
     had = conn.execute("SELECT 1 FROM task_note_items WHERE note_id = ?", (note_id,)).fetchone() is not None
     keys = None if items is None else _note_keys(conn, uid, items)
