@@ -9,7 +9,7 @@ import type { I18nKey } from '../../i18n.ts';
 import * as client from '../../api/client.ts';
 import type { Health } from '../../api/types.ts';
 
-export const TABS = ['backups', 'storage', 'sections', 'dupes', 'log', 'warden', 'interface'] as const;
+export const TABS = ['backups', 'storage', 'sections', 'dupes', 'log', 'warden'] as const;
 export type Tab = typeof TABS[number];
 
 export const isTab = (id: string | null): id is Tab => TABS.includes(id as Tab);

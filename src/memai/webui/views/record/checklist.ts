@@ -9,7 +9,6 @@ import { pickMemories } from '../../core/link-picker.js';
 import { parseHash, refreshBehind } from '../../core/router.ts';
 import { I18N, t } from '../../i18n.ts';
 import type { I18nKey } from '../../i18n.ts';
-import { motionOn } from '../../core/motion.ts';
 import { ITEM_MARK } from '../../core/vocab.js';
 import { TASK } from '../../contract.ts';
 import * as client from '../../api/client.ts';
@@ -268,7 +267,7 @@ export function useChecklist(uid: string, task: TaskRecord, status: string, hook
     const key = String(id);
     const row = host.value?.querySelector<HTMLElement>(`.tk-item${attr('data-key', key)}`);
     if (!row) return;
-    row.scrollIntoView?.({ block: 'center', behavior: motionOn() ? 'smooth' : 'auto' });
+    row.scrollIntoView?.({ block: 'center', behavior: 'smooth' });
     host.value?.querySelector<HTMLElement>(attr('data-toggle', key))?.focus({ preventScroll: true });
     clearTimeout(flashTimer);
     if (enter.flash === key) {

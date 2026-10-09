@@ -9,10 +9,15 @@ const item = (id: number, n: number, text: string, state = 'todo') =>
 const ITEMS = [item(41, 1, 'Solder the header'), item(42, 2, 'Flash the board', 'done')];
 
 describe('the mention trigger', () => {
-  it('opens on # or @ at the start of a word', () => {
+  it('opens on # at the start of a word', () => {
     expect(findTrigger('after #fla', 10)).toEqual({ start: 6, query: 'fla' });
-    expect(findTrigger('@', 1)).toEqual({ start: 0, query: '' });
-    expect(findTrigger('mail a@b', 8)).toBeNull();
+    expect(findTrigger('#', 1)).toEqual({ start: 0, query: '' });
+    expect(findTrigger('PR#2', 4)).toBeNull();
+  });
+
+  it('leaves @ as text', () => {
+    expect(findTrigger('@', 1)).toBeNull();
+    expect(findTrigger('ask @fla', 8)).toBeNull();
   });
 
   it('closes once a space follows the query', () => {
@@ -102,7 +107,7 @@ describe('the menu', () => {
 
   it('chooses with Enter once an arrow key has picked the item', async () => {
     const { box, text } = await mount();
-    await type(box, '@fla');
+    await type(box, '#fla');
     await key(box, 'ArrowDown');
     await key(box, 'ArrowUp');
     await key(box, 'Enter');
@@ -158,6 +163,13 @@ describe('the menu', () => {
     expect(escaped).toBe(0);
     await key(box, 'Escape');
     expect(escaped).toBe(1);
+  });
+
+  it('opens no menu on @', async () => {
+    const { box } = await mount();
+    await type(box, 'ask @');
+    expect(options()).toHaveLength(0);
+    expect(box.getAttribute('aria-expanded')).not.toBe('true');
   });
 
   it('leaves #90 as typed when no item matches', async () => {

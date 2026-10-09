@@ -33,11 +33,9 @@ def test_every_type_has_its_colour_tokens_and_class(css):
 
 # ------------------------------------------------------------ the checklist
 
-def test_the_doing_mark_turns_and_reduced_motion_stops_it(css):
+def test_the_doing_mark_turns(css):
     assert re.search(r'\.tk-state\[data-s="doing"\] \.ico \{ animation: spin var\(--spin\) linear infinite var\(--spin-at, 0s\); \}', css)
     assert re.search(r"--spin: ([\d.]+)s", css)
-    assert ':root[data-motion="reduce"] .tk-state[data-s="doing"] .ico { animation: none; }' in css
-    assert ':root[data-motion="reduce"] .tk { --pop-from: 1; --leave-x: 0px; --tk-in-y: 0px; }' in css
 
 
 def test_the_checklist_animates_only_compositor_properties_and_never_layout(css):
@@ -62,17 +60,17 @@ def test_a_comment_mark_is_round_for_a_person_and_square_for_an_agent(css):
     assert not re.search(r"\.tk-c \{[^}]*background", css)
 
 
-# ------------------------------------------------------------ reduced motion
+# -------------------------------------------------------------------- motion
 
-def test_no_stylesheet_rule_reads_the_media_query_directly():
-    assert "prefers-reduced-motion" not in _css()
-    assert ':root[data-motion="reduce"]' in _css()
-
-
-def test_the_reduced_spinner_outranks_the_spinner_declared_after_it():
-    css = _css()
-    assert ':root[data-motion="reduce"] .spin { animation: breathe' in css
-    assert re.search(r"^\.spin \{[^}]*animation: spin", css, re.M | re.S)
+def test_the_dashboard_always_animates_and_nothing_reads_a_motion_preference():
+    webui = CSS.parent
+    sources = [p for p in webui.rglob("*") if p.suffix in {".css", ".html", ".js", ".ts", ".vue"}
+               and not {"node_modules", "dist"} & set(p.relative_to(webui).parts)]
+    readers = [p.name for p in sources
+               if re.search(r"prefers-reduced-motion|data-motion|dataset\.motion|memai\.motion",
+                            p.read_text(encoding="utf-8"))]
+    assert not readers
+    assert re.search(r"^\.spin \{[^}]*animation: spin", _css(), re.M | re.S)
 
 
 # ----------------------------------------------------------- the item panel

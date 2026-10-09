@@ -1,8 +1,6 @@
 /* Dashboard boot: the view table, registered with the router here so no view imports the
    router's importer, and the global keyboard shortcuts. */
 
-/* first, so the root carries data-motion before anything is drawn */
-import './core/motion.ts';
 import { $ } from './core/dom.ts';
 import { paintIcons } from './core/icons.js';
 import { modalOpen, closeModal, toast } from './core/ui.js';

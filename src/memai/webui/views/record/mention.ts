@@ -1,12 +1,12 @@
 /* Where a mention starts under the caret, which items it can name, and how its token goes in. */
 import type { TaskItem } from '../../api/types.ts';
 
-const TRIGGER = /(^|\s)([#@])([^\s#@]*)$/;
+const TRIGGER = /(^|\s)#([^\s#]*)$/;
 
 export function findTrigger(text: string, caret: number): { start: number; query: string } | null {
   const found = TRIGGER.exec(text.slice(0, caret));
   if (!found) return null;
-  return { start: caret - found[3].length - 1, query: found[3] };
+  return { start: caret - found[2].length - 1, query: found[2] };
 }
 
 /* a number matches the shown numbers it starts, anything else the labels it appears in */

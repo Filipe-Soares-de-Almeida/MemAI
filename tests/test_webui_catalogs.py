@@ -79,9 +79,8 @@ def test_the_task_keys_built_from_a_state_name_exist(code):
 @pytest.mark.parametrize("code", LOCALES)
 def test_the_runtime_keys_of_the_maintenance_tabs_exist(code):
     strings = _catalog(code)
-    tabs = ["backups", "storage", "sections", "dupes", "log", "warden", "interface"]
-    wanted = [f"mn.tab.{tab}" for tab in tabs] + [f"mn.ui.{m}" for m in ("system", "always", "never")]
-    assert not [k for k in wanted if k not in strings]
+    tabs = ["backups", "storage", "sections", "dupes", "log", "warden"]
+    assert not [k for k in (f"mn.tab.{tab}" for tab in tabs) if k not in strings]
 
 
 def test_the_portuguese_task_strings_are_not_the_english_ones():

@@ -346,23 +346,11 @@ describe('the warden tab', () => {
   });
 });
 
-describe('the interface tab', () => {
-  it('sets the motion mode, which the root and the next visit both read', async () => {
+describe('the tab strip', () => {
+  it('offers no interface tab, and an address naming one opens the first tab', async () => {
     const view = await show('interface', () => { throw new Error('offline'); });
-    const tab = view.querySelector('#mntTab-interface') as HTMLElement;
-    expect(tab.textContent?.trim()).toBe(en['mn.tab.interface']);
-    expect(tab.getAttribute('aria-selected')).toBe('true');
-
-    await press(view.querySelector('#uiMotion'));
-    const offered = [...document.querySelectorAll('.pick-pop [role="option"]')].map(o => o.textContent?.trim());
-    expect(offered).toEqual(['mn.ui.system', 'mn.ui.always', 'mn.ui.never'].map(k => en[k]));
-    await press(document.querySelector('.pick-pop [role="option"][data-v="never"]'));
-    expect(document.documentElement.dataset.motion).toBe('reduce');
-    expect(localStorage.getItem('memai.motion')).toBe('never');
-
-    await press(view.querySelector('#uiMotion'));
-    await press(document.querySelector('.pick-pop [role="option"][data-v="always"]'));
-    expect(document.documentElement.dataset.motion).toBe('full');
-    localStorage.removeItem('memai.motion');
+    expect(view.querySelector('#mntTab-interface')).toBeNull();
+    expect(view.querySelector('#mntTab-backups')?.getAttribute('aria-selected')).toBe('true');
+    expect(Object.keys(en).filter(k => k.startsWith('mn.ui.') || k === 'mn.tab.interface')).toEqual([]);
   });
 });
