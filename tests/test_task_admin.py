@@ -502,3 +502,51 @@ def test_a_free_body_on_items_is_a_400_and_writes_nothing(client):
     res = client.post(f"/api/tasks/{uid}/note", json={"title": "T", "body": "free", "items": ["i1"]})
     assert res.status_code == 400 and "a note on items is a brief" in res.text
     assert client.get(f"/api/memories/{uid}").json()["task"]["notes"] == []
+
+
+def _notes(client, uid):
+    return client.get(f"/api/memories/{uid}").json()["task"]["notes"]
+
+
+def test_a_note_carries_its_parsed_depends_or_null(client):
+    uid = _task(client)
+    client.post(f"/api/tasks/{uid}/note", json={"title": "Top", "body": "free", "items": []})
+    client.post(f"/api/tasks/{uid}/note",
+                json={"title": "On i1", "body": brief("solder it"), "items": ["i1"]})
+    res = client.post(f"/api/tasks/{uid}/note",
+                      json={"title": "On i2", "body": brief("ship it", depends_on="i1 (the plan)"),
+                            "items": ["i2"]})
+    assert res.status_code == 200, res.text
+    notes = _notes(client, uid)
+    assert notes[0]["depends"] is None
+    assert notes[1]["depends"] == []
+    assert notes[2]["depends"] == [{"item": "i1", "deleted": "", "reason": "the plan"}]
+
+
+def test_a_note_whose_depends_on_is_free_text_carries_null(client):
+    uid = _task(client)
+    client.post(f"/api/tasks/{uid}/note",
+                json={"title": "On i1", "body": brief("solder it"), "items": ["i1"]})
+    with connection.connect() as conn:
+        conn.execute("UPDATE task_notes SET body = REPLACE(body, 'DEPENDS ON: none', "
+                     "'DEPENDS ON: Item 7')")
+    note = _notes(client, uid)[0]
+    assert note["depends"] is None and note["brief"]["depends_on"] == "Item 7"
+
+
+def test_a_dependency_on_an_unknown_item_is_a_400_and_writes_nothing(client):
+    uid = _task(client)
+    res = client.post(f"/api/tasks/{uid}/note",
+                      json={"title": "T", "body": brief("b", depends_on="i9"), "items": ["i1"]})
+    assert res.status_code == 400 and "DEPENDS ON is none" in res.text
+    assert _notes(client, uid) == []
+
+
+def test_deleting_an_item_marks_the_dependency_the_view_reads(client):
+    uid = _task(client)
+    client.post(f"/api/tasks/{uid}/note",
+                json={"title": "On i2", "body": brief("ship it", depends_on="i1"), "items": ["i2"]})
+    with connection.connect() as conn:
+        tasks.delete_item(conn, uid, "i1")
+    assert _notes(client, uid)[0]["depends"] == [
+        {"item": "", "deleted": "draft the plan", "reason": ""}]

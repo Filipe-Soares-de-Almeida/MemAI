@@ -451,7 +451,10 @@ Work it with:
   are required (`none` is an answer) and `extra_info` holds anything else. The
   body reads `GOAL:` / `CONTEXT:` / `STEPS:` / `PITFALLS:` / `DONE WHEN:` /
   `DEPENDS ON:` / `EXTRA INFO:`, and an edit that gives one field replaces only
-  that field. `items` puts the note on those items, empty puts it on the whole
+  that field. `depends_on` is `none`, or item keys with an optional reason in
+  parentheses (`i3 (why), i9`); a key the task lacks, or the note's own item, is
+  refused. The keys are renumbered with the items, and deleting an item marks
+  a dependency on it `deleted "<text>"`. `items` puts the note on those items, empty puts it on the whole
   task. `body` is for a note on the whole task — a recipe or a rule every item
   shares. It is not a memory, so search, recall, pulse and must_read never
   return it; write with `note()` only what stands on its own outside the task.

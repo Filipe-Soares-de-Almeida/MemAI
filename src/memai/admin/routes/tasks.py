@@ -23,11 +23,13 @@ def _lines(value) -> list[str]:
 
 
 def _task_view(conn: sqlite3.Connection, uid: str) -> dict | None:
-    """The task, each note carrying what its [[uid]] links point at and its brief fields, if it is one."""
+    """The task, each note carrying what its [[uid]] links point at, and its brief fields and dependencies, if it is one."""
     task = tasks.get_task(conn, uid)
     for note in (task or {}).get("notes", []):
         note["body_links"] = sections.body_links(conn, uid, note["body"])
         note["brief"] = tasks.brief_fields(note["body"])
+        depends = tasks.brief_depends(note["body"])
+        note["depends"] = None if depends is None else [dict(e._asdict()) for e in depends]
     return task
 
 

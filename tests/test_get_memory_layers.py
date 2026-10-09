@@ -120,6 +120,7 @@ def test_task_note_refusals_are_error_results(store):
     assert server.task_note(uid, title="T", body="free text", items="i1")["ok"] is False
     assert server.task_note(uid, title="T", body="b", goal="g")["ok"] is False
     assert server.task_note(uid, title="T", items="i1", goal="only a goal")["ok"] is False
+    assert server.task_note(uid, title="T", items="i1", **{**BRIEF_ARGS, "depends_on": "i9"})["ok"] is False
 
 
 def test_new_task_tools_are_guarded():

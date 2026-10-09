@@ -58,6 +58,11 @@ def test_task_note_documents_the_brief_it_takes():
         assert f"{s.label}:" in server.task_note.__doc__
 
 
+def test_task_note_documents_the_depends_on_format():
+    doc = " ".join(server.task_note.__doc__.split())
+    assert "depends_on" in doc and "i3 (why), i9" in doc and "renumbered" in doc
+
+
 def test_every_tool_docstring_carries_no_indentation():
     for name, fn in server._TOOLS.items():
         assert fn.__doc__ == inspect.cleandoc(fn.__doc__), name

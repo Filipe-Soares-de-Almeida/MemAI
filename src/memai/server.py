@@ -832,6 +832,8 @@ def task_note(uid: str, title: str = "", body: str = "", items: str = "", note_i
 
     A note on items is a brief: goal, context, steps, pitfalls, done_when,
     depends_on ("none" is an answer) are required, extra_info is optional.
+    depends_on is none, or item keys with an optional reason in
+    parentheses ("i3 (why), i9"); the keys are renumbered with the items.
     Labels: GOAL: / CONTEXT: / STEPS: / PITFALLS: / DONE WHEN: /
     DEPENDS ON: / EXTRA INFO:; an edit replaces only fields given. `body`
     is for a note on the whole task; with a field it errors.

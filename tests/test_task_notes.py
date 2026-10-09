@@ -237,3 +237,73 @@ def test_moving_a_free_task_note_onto_items_is_refused(conn, uid):
 def test_brief_fields_is_none_for_free_text(conn, uid):
     assert tasks.brief_fields("Claim it first.") is None
     assert tasks.brief_fields(brief("g"))["goal"] == "g"
+
+
+def _depends_note(conn, uid, depends, items=("i2",), **kw):
+    return tasks.add_note(conn, uid, title="Lexer", items=list(items),
+                          body=brief("tokenize", depends_on=depends), **kw)
+
+
+def test_a_dependency_on_an_item_the_task_lacks_is_refused_naming_the_format(conn, uid):
+    with pytest.raises(ValueError, match=r"DEPENDS ON is none, or item keys with an optional "
+                                         r"reason in parentheses: i3 \(why\), i9 — i9 is not an item"):
+        _depends_note(conn, uid, "i9")
+    assert tasks.notes(conn, uid, "i2") == []
+
+
+def test_a_note_may_not_depend_on_its_own_item(conn, uid):
+    with pytest.raises(ValueError, match="i2 is an item this note applies to"):
+        _depends_note(conn, uid, "i1, i2")
+    with pytest.raises(ValueError, match="i3 is an item this note applies to"):
+        _depends_note(conn, uid, "i3", items=("i2", "i3"))
+
+
+def test_free_text_in_depends_on_is_refused_on_items(conn, uid):
+    with pytest.raises(ValueError, match="DEPENDS ON is none"):
+        _depends_note(conn, uid, "Item 1")
+    with pytest.raises(ValueError, match="DEPENDS ON is none"):
+        _depends_note(conn, uid, "nothing to add")
+
+
+def test_item_references_with_reasons_and_none_are_accepted(conn, uid):
+    _depends_note(conn, uid, "i1 (the spec decides the tokens), i3")
+    _depends_note(conn, uid, "none")
+    _depends_note(conn, uid, 'deleted "Draft the grammar" (it was dropped)')
+
+
+def test_fields_over_a_stored_brief_recheck_depends_on(conn, uid):
+    nid = _depends_note(conn, uid, "i1")
+    tasks.edit_note(conn, uid, nid, brief={"pitfalls": "tabs"})
+    with pytest.raises(ValueError, match="DEPENDS ON is none"):
+        tasks.edit_note(conn, uid, nid, brief={"depends_on": "i9"})
+    with pytest.raises(ValueError, match="i2 is an item this note applies to"):
+        tasks.edit_note(conn, uid, nid, brief={"depends_on": "i2"})
+    assert tasks.brief_fields(tasks.note(conn, uid, nid)["body"])["depends_on"] == "i1"
+
+
+def test_fields_over_a_stored_brief_with_free_depends_on_must_restate_it(conn, uid):
+    nid = tasks.add_note(conn, uid, title="Lexer", items=["i2"], body=brief("tokenize"))
+    conn.execute("UPDATE task_notes SET body = REPLACE(body, 'DEPENDS ON: none', 'DEPENDS ON: Item 1') "
+                 "WHERE id = ?", (nid,))
+    assert tasks.brief_fields(tasks.note(conn, uid, nid)["body"])["depends_on"] == "Item 1"
+    tasks.edit_note(conn, uid, nid, title="Renamed")
+    with pytest.raises(ValueError, match="DEPENDS ON is none"):
+        tasks.edit_note(conn, uid, nid, brief={"pitfalls": "tabs"})
+    tasks.edit_note(conn, uid, nid, brief={"pitfalls": "tabs", "depends_on": "none"})
+
+
+def test_moving_a_brief_onto_its_dependency_is_refused(conn, uid):
+    nid = _depends_note(conn, uid, "i1")
+    with pytest.raises(ValueError, match="i1 is an item this note applies to"):
+        tasks.edit_note(conn, uid, nid, body=brief("tokenize", depends_on="i1"), items=["i1"])
+
+
+def test_a_task_level_brief_built_from_fields_is_held_to_known_items(conn, uid):
+    fields = {"goal": "g", "context": "c", "steps": "s", "pitfalls": "p", "done_when": "d"}
+    with pytest.raises(ValueError, match="i9 is not an item"):
+        tasks.add_note(conn, uid, title="Rule", items=[], brief={**fields, "depends_on": "i9"})
+    tasks.add_note(conn, uid, title="Rule", items=[], brief={**fields, "depends_on": "i1, i3"})
+
+
+def test_a_free_task_note_is_not_read_for_depends(conn, uid):
+    tasks.add_note(conn, uid, title="Pick-up", body="DEPENDS ON: Item 9", items=[])

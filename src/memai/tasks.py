@@ -305,7 +305,7 @@ def delete_item(
     for table in ("task_comments", "task_item_links"):
         conn.execute(f"DELETE FROM {table} WHERE memory_uid = ? AND item_key = ?", (uid, key))
     conn.execute("DELETE FROM task_items WHERE memory_uid = ? AND item_key = ?", (uid, key))
-    moved = task_items.compact(conn, uid)
+    moved = task_items.compact(conn, uid, gone=(key, gone["text"]))
     note = f"item {key} deleted: {gone['text']}"
     if moved:
         note += f"; {_span(list(moved))} renumbered to {_span(list(moved.values()))}"
@@ -435,9 +435,38 @@ def _require_brief(body: str, *, on_items: bool = True) -> None:
         raise ValueError(error)
 
 
+DEPENDS_FORMAT = "DEPENDS ON is none, or item keys with an optional reason in parentheses: i3 (why), i9"
+
+
+def _require_depends(conn: sqlite3.Connection, uid: str, body: str, applies_to: list[str]) -> None:
+    """Refuse a brief whose DEPENDS ON does not read, names an item the task lacks, or names the note's own item."""
+    entries, problems = sections.parse_depends((brief_fields(body) or {}).get("depends_on", "none"))
+    known = {i["key"] for i in _items(conn, uid)}
+    for e in entries:
+        if e.item and e.item not in known:
+            problems.append(f"{e.item} is not an item of this task")
+        elif e.item in applies_to:
+            problems.append(f"{e.item} is an item this note applies to")
+    if problems:
+        raise ValueError(f"{DEPENDS_FORMAT} — {'; '.join(problems)}")
+
+
+def brief_depends(body: str) -> list[sections.DependsEntry] | None:
+    """The entries of a brief's DEPENDS ON, or None when `body` is no brief or the field does not read."""
+    fields = brief_fields(body)
+    if fields is None:
+        return None
+    entries, problems = sections.parse_depends(fields["depends_on"])
+    return None if problems else entries
+
+
+def _has_fields(brief: dict[str, str] | None) -> bool:
+    return any(str(v).strip() for v in (brief or {}).values())
+
+
 def _compose(body: str, brief: dict[str, str] | None, stored: str, *, on_items: bool) -> str:
     """The body a write supplies: `body` as given, or one built from brief fields."""
-    if not any(str(v).strip() for v in (brief or {}).values()):
+    if not _has_fields(brief):
         return str(body)
     if str(body).strip():
         raise ValueError("give a note's body or its brief fields, not both")
@@ -504,6 +533,8 @@ def add_note(conn: sqlite3.Connection, uid: str, *, title: str, body: str = "",
     keys = _note_keys(conn, uid, items)
     if keys:
         _require_brief(body)
+    if keys or _has_fields(brief):
+        _require_depends(conn, uid, body, keys)
     stamp = lite.now_iso()
     cur = conn.execute(
         """INSERT INTO task_notes (memory_uid, title, body, session, created_at, updated_at)
@@ -533,6 +564,10 @@ def edit_note(conn: sqlite3.Connection, uid: str, note_id: int, *, title: str = 
     title, body = _note_fields(title or row["title"], given or row["body"])
     if on_items and (given or not had):
         _require_brief(body)
+    if (on_items and (given or not had)) or _has_fields(brief):
+        applies_to = keys if keys is not None else [r["item_key"] for r in conn.execute(
+            "SELECT item_key FROM task_note_items WHERE note_id = ?", (note_id,))]
+        _require_depends(conn, uid, body, applies_to)
     conn.execute("UPDATE task_notes SET title = ?, body = ?, updated_at = ? WHERE id = ?",
                  (title, body, lite.now_iso(), note_id))
     if keys is not None:

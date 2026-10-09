@@ -41,9 +41,10 @@ def shaped(type_: str, text: str) -> str:
 
 
 def brief(goal: str = "drain the queue", **fields: str) -> str:
-    """A task note body that reads as a brief: `goal` and any field given, filler in the rest."""
+    """A task note body that reads as a brief: `goal` and any field given, filler in the rest, no dependencies."""
     values = {s.key: "nothing to add" for s in sections.BRIEF_SPEC if not s.optional}
-    return sections.render_spec(sections.BRIEF_SPEC, {**values, "goal": goal, **fields})
+    return sections.render_spec(
+        sections.BRIEF_SPEC, {**values, "depends_on": "none", "goal": goal, **fields})
 
 
 def unmigrated(conn) -> None:

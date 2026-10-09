@@ -199,3 +199,98 @@ def test_the_task_item_docstring_says_a_key_is_a_position():
     from memai import server
 
     assert "an item's key is its position in the checklist" in server.task_item.__doc__
+
+
+def _five(conn):
+    return tasks.create_task(conn, title="Ship the lantern", goal="Light the lantern",
+                             items=["solder the header", "flash the board", "seal the case",
+                                    "test the beam", "pack the box"], domain="acme/lantern")
+
+
+def _depends(conn, uid, nid):
+    return tasks.brief_fields(tasks.note(conn, uid, nid)["body"])["depends_on"]
+
+
+def test_deleting_an_item_rewrites_the_references_to_it_and_to_the_items_that_move(conn):
+    uid = _five(conn)
+    nid = tasks.add_note(conn, uid, title="Pack", items=["i5"],
+                         body=brief("pack it", depends_on="i2 (setup), i4"))
+    tasks.delete_item(conn, uid, "i2")
+    assert _depends(conn, uid, nid) == 'deleted "flash the board" (setup), i3'
+    assert tasks.note(conn, uid, nid)["items"] == ["i4"]
+
+
+def test_the_deleted_key_and_the_key_that_takes_its_place_do_not_mix(conn):
+    uid = _five(conn)
+    nid = tasks.add_note(conn, uid, title="Pack", items=["i5"],
+                         body=brief("pack it", depends_on="i1, i2, i3"))
+    tasks.delete_item(conn, uid, "i1")
+    assert _depends(conn, uid, nid) == 'deleted "solder the header", i1, i2'
+
+
+def test_deleting_the_last_item_marks_its_references_without_renumbering(conn):
+    uid = _five(conn)
+    nid = tasks.add_note(conn, uid, title="Seal", items=["i3"],
+                         body=brief("seal it", depends_on="i5 (the box), i1"))
+    tasks.delete_item(conn, uid, "i5")
+    assert _depends(conn, uid, nid) == 'deleted "pack the box" (the box), i1'
+
+
+def test_a_deleted_text_with_a_quote_is_written_with_an_apostrophe(conn):
+    uid = tasks.create_task(conn, title="Ship it", goal="Ship it",
+                            items=['fix the "lens" mount', "pack the box"], domain="acme/lantern")
+    nid = tasks.add_note(conn, uid, title="Pack", items=["i2"], body=brief("pack", depends_on="i1"))
+    tasks.delete_item(conn, uid, "i1")
+    assert _depends(conn, uid, nid) == "deleted \"fix the 'lens' mount\""
+
+
+def test_a_free_text_depends_on_is_left_as_written_by_a_deletion(conn):
+    uid = _five(conn)
+    nid = tasks.add_note(conn, uid, title="Pack", items=["i5"], body=brief("pack it"))
+    conn.execute("UPDATE task_notes SET body = REPLACE(body, 'DEPENDS ON: none', "
+                 "'DEPENDS ON: Item 2 and the flash') WHERE id = ?", (nid,))
+    before = tasks.note(conn, uid, nid)["body"]
+    tasks.delete_item(conn, uid, "i2")
+    assert tasks.note(conn, uid, nid)["body"] == before
+
+
+def test_a_note_that_is_not_a_brief_is_left_alone_by_a_deletion(conn):
+    uid = _five(conn)
+    nid = tasks.add_note(conn, uid, title="Rule", body="DEPENDS ON: i2", items=[])
+    tasks.delete_item(conn, uid, "i2")
+    assert tasks.note(conn, uid, nid)["body"] == "DEPENDS ON: i2"
+
+
+def test_the_rewrite_leaves_the_note_updated_stamp(conn):
+    uid = _five(conn)
+    nid = tasks.add_note(conn, uid, title="Pack", items=["i5"], body=brief("pack", depends_on="i3"))
+    conn.execute("UPDATE task_notes SET updated_at = '2026-01-02T03:04:05' WHERE id = ?", (nid,))
+    tasks.delete_item(conn, uid, "i1")
+    assert _depends(conn, uid, nid) == "i2"
+    assert tasks.note(conn, uid, nid)["updated_at"] == "2026-01-02T03:04:05"
+
+
+def test_a_brief_with_none_is_not_rewritten(conn):
+    uid = _five(conn)
+    nid = tasks.add_note(conn, uid, title="Pack", items=["i5"], body=brief("pack"))
+    before = tasks.note(conn, uid, nid)["body"]
+    tasks.delete_item(conn, uid, "i1")
+    assert tasks.note(conn, uid, nid)["body"] == before
+
+
+def test_the_references_in_a_store_with_gaps_follow_the_compaction_when_it_opens(tmp_path):
+    path = tmp_path / "gaps.db"
+    with connection.connect(path) as c:
+        uid = _five(c)
+        nid = tasks.add_note(c, uid, title="Pack", items=["i5"],
+                             body=brief("pack", depends_on="i4 (the beam), i3"))
+        c.execute("UPDATE task_items SET item_key = 'i7', seq = 7 WHERE memory_uid = ? AND item_key = 'i4'",
+                  (uid,))
+        c.execute("UPDATE task_items SET item_key = 'i8', seq = 8 WHERE memory_uid = ? AND item_key = 'i5'",
+                  (uid,))
+        c.execute("UPDATE task_note_items SET item_key = 'i8' WHERE note_id = ?", (nid,))
+        c.execute("UPDATE task_notes SET body = REPLACE(body, 'i4 (the beam)', 'i7 (the beam)') "
+                  "WHERE id = ?", (nid,))
+    with connection.connect(path) as c:
+        assert _keys(c, uid) == ["i1", "i2", "i3", "i4", "i5"]
+        assert _depends(c, uid, nid) == "i4 (the beam), i3"

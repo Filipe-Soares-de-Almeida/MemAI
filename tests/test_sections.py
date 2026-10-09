@@ -638,3 +638,69 @@ def test_the_brief_is_no_memory_type():
     assert sections.BRIEF_SPEC and not any(
         spec == sections.BRIEF_SPEC for spec in sections.SECTION_SPEC.values())
     assert "task_note" not in sections.SECTION_SPEC
+
+
+DEP = sections.DependsEntry
+
+
+@pytest.mark.parametrize("text, entries", [
+    ("none", []),
+    ("  NONE ", []),
+    ("i9", [DEP("i9", "", "")]),
+    ("I3", [DEP("i3", "", "")]),
+    ("i3 (needs the baseline), i9", [DEP("i3", "", "needs the baseline"), DEP("i9", "", "")]),
+    ("i3(tight)\ni4", [DEP("i3", "", "tight"), DEP("i4", "", "")]),
+    ("i1,\n i2 ,i3", [DEP("i1", "", ""), DEP("i2", "", ""), DEP("i3", "", "")]),
+    ("i2 (one, two; three)", [DEP("i2", "", "one, two; three")]),
+    ('deleted "Run the week-long battery test" (the shelf was cancelled)',
+     [DEP("", "Run the week-long battery test", "the shelf was cancelled")]),
+    ('deleted "Seal the case, then test (twice)", i2',
+     [DEP("", "Seal the case, then test (twice)", ""), DEP("i2", "", "")]),
+])
+def test_a_depends_field_parses(text, entries):
+    assert sections.parse_depends(text) == (entries, [])
+
+
+@pytest.mark.parametrize("text, complaint", [
+    ("Item 9", "Item 9"),
+    ("R01", "R01"),
+    ("i0", "i0"),
+    ("i3 needs the baseline", "outside parentheses"),
+    ("i3 (needs the baseline) and more", "outside parentheses"),
+    ("i3 (a (b))", "nested"),
+    ("i3 (a", "unbalanced"),
+    ("i3 a)", "unbalanced"),
+    ("i3 ()", "empty"),
+    ("i1,, i2", "empty entry"),
+    ("i1, i2,", "empty entry"),
+    ("i3, I3 (again)", "i3 listed twice"),
+    ('deleted ""', "empty"),
+    ("deleted Run it", "deleted"),
+    ("none, i2", "none"),
+    ("", "empty"),
+])
+def test_a_depends_field_that_breaks_the_grammar_says_which_piece(text, complaint):
+    entries, problems = sections.parse_depends(text)
+    assert problems and any(complaint in p for p in problems), problems
+
+
+def test_a_depends_problem_names_every_bad_piece():
+    _, problems = sections.parse_depends("i1, Item 9, R01")
+    assert len(problems) == 2
+
+
+@pytest.mark.parametrize("entries, text", [
+    ([], "none"),
+    ([DEP("i9", "", "")], "i9"),
+    ([DEP("i3", "", "why"), DEP("i9", "", "")], "i3 (why), i9"),
+    ([DEP("", "Run the test", "cancelled")], 'deleted "Run the test" (cancelled)'),
+])
+def test_depends_render_and_read_back(entries, text):
+    assert sections.render_depends(entries) == text
+    assert sections.parse_depends(text) == (entries, [])
+
+
+def test_a_quote_in_a_deleted_text_renders_as_an_apostrophe():
+    rendered = sections.render_depends([DEP("", 'Fix the "lens" mount', "")])
+    assert rendered == "deleted \"Fix the 'lens' mount\""
+    assert sections.parse_depends(rendered)[1] == []

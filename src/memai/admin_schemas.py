@@ -202,6 +202,12 @@ class TaskComment(TypedDict):
     created_at: str
 
 
+class TaskDepend(TypedDict):
+    item: str
+    deleted: str
+    reason: str
+
+
 class TaskNote(TypedDict):
     id: int
     title: str
@@ -210,6 +216,7 @@ class TaskNote(TypedDict):
     updated_at: str
     body_links: dict[str, BodyLink]
     brief: dict[str, str] | None
+    depends: list[TaskDepend] | None
 
 
 class TaskRecord(TypedDict):
