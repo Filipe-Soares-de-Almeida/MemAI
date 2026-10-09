@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 
 from conftest import brief
@@ -195,10 +197,12 @@ def test_a_delete_whose_expectation_matches_goes_through(conn):
     assert _keys(conn, uid) == ["i1", "i2"]
 
 
-def test_the_task_item_docstring_says_a_key_is_a_position():
+def test_the_task_item_schema_says_a_key_is_a_position():
     from memai import server
 
-    assert "an item's key is its position in the checklist" in server.task_item.__doc__
+    [tool] = [t for t in asyncio.run(server.mcp.list_tools()) if t.name == "task_item"]
+    assert "an item's key is its position in the checklist" in (
+        tool.input_schema["properties"]["item"]["description"])
 
 
 def _five(conn):

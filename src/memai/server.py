@@ -41,6 +41,7 @@ import os
 import re
 
 from mcp.server.mcpserver import MCPServer
+from mcp.types import Tool as McpTool
 from mcp.types import ToolAnnotations
 
 from memai import (
@@ -197,8 +198,25 @@ def _instructions() -> str:
     return "\n\n".join([INSTRUCTIONS, *(note for note in notes if note)])
 
 
+class _Server(MCPServer):
+    """An MCPServer whose input schemas carry each parameter's text and no generated titles."""
+
+    async def list_tools(self) -> list[McpTool]:
+        return [t.model_copy(update={"input_schema": _published_schema(
+                    t.input_schema, _PARAM_TEXT.get(t.name, {}))})
+                for t in await super().list_tools()]
+
+
+def _published_schema(schema: dict, text: dict[str, str]) -> dict:
+    """`schema` with `text` as its properties' descriptions and pydantic's titles left out."""
+    props = {name: {**{k: v for k, v in prop.items() if k != "title"},
+                    **({"description": text[name]} if name in text else {})}
+             for name, prop in schema.get("properties", {}).items()}
+    return {**{k: v for k, v in schema.items() if k != "title"}, "properties": props}
+
+
 log = logging.getLogger(__name__)
-mcp = MCPServer("memai", instructions=_instructions())
+mcp = _Server("memai", instructions=_instructions())
 
 
 def _new_session_id() -> str:
@@ -228,49 +246,38 @@ _ACTIVE_SETS = frozenset(
 
 
 _GROUP_OF: dict[str, str] = {}
+_PARAM_TEXT: dict[str, dict[str, str]] = {}
 
 # Parameter text several writer tools share. A docstring line holding only
 # `@param <key>` is replaced by the entry, at that line's indentation.
 PARAM_DOCS: dict[str, str] = {
-    "offset_page": """\
+    "offset": """\
 offset: where the page starts; `next_offset`, when present, starts the next.""",
     "title": """\
 title: one line naming what this memory is about, in the words someone
-would look for it by. It is what a list shows instead of the opening of
-the body, and it outweighs every other field in search, so a title that
+would look for it by. A list shows it instead of the opening of the
+body, and it outweighs every other field in search, so a title that
 repeats the type ("note about the parser") names nothing. At most 120
-characters, and a name that needs more than that is summarizing the
-body instead of naming it.""",
+characters; a name that needs more is summarizing the body.""",
     "domain": """\
 domain: the subject this belongs to, as a path from the outermost
 scope in ('acme/x100/p200'). File it as deep as the fact is specific
 -- a note about one routine goes on the routine, and still comes back
 when someone asks about the module or the product above it.""",
-    "domain_brief": """\
-domain: the subject path this is filed under, outermost scope first
-('acme/x100/p200'). See note().""",
     "also": """\
-also: other domain paths this belongs to, comma-separated. `domain` is
-where the memory LIVES -- one path, one parent chain. `also` is for the
-subjects that cut ACROSS that tree: the same routine belongs to the
-module it runs in and to the end-to-end flow it is one step of, and
-neither of those is the other's ancestor. Every read scoped to any of
-those paths returns it. A path that `domain` already sits under is
-dropped as redundant -- the result echoes what was stored.""",
-    "also_brief": """\
-also: other domain paths this belongs to, comma-separated -- the
-cross-cutting subjects beside the one it is filed under. See note().""",
+also: other domain paths this belongs to, comma-separated: the subjects
+that cut across the tree `domain` sits in, such as the end-to-end flow
+a routine is one step of. Every read scoped to one of them returns it.
+A path `domain` already sits under is dropped as redundant.""",
     "tags": """\
 tags: comma-separated keywords and synonyms. Retrieval is BM25 over
 content, tags and domain paths, and tags weigh second only to the body,
-so they are where a memory becomes findable by words its own text never
-uses -- the identifier, the symbol, the error string, the plain-language
-phrasing someone will actually type. A memory with none is reachable
-only by quoting itself.""",
-    "tags_brief": """\
-`tags` carries the synonyms the body never uses: retrieval is BM25 over
-content and tags, so a memory with none is reachable only by quoting
-itself. See note() for what belongs there.""",
+so they make a memory findable by words its own text never uses: the
+identifier, the error string, the plain phrasing someone will type. A
+memory with none is reachable only by quoting itself.""",
+    "session": """\
+session: groups what one conversation writes. Leave it empty to use
+this server process's own stamp.""",
     "review_after": """\
 review_after: when this stops being safe to trust unchecked, as a date
 ('2026-11-01') or a span from today ('90d'). pulse() counts what is
@@ -295,6 +302,26 @@ def _expand_params(doc: str | None) -> str | None:
                             for line in PARAM_DOCS[m[2]].splitlines()), doc)
 
 
+_PARAM_PARAGRAPH = re.compile(r"(\w+): (.+)", re.S)
+
+
+def _split_params(doc: str, params) -> tuple[str, dict[str, str]]:
+    """`doc` without its parameter paragraphs, and each one's text by parameter.
+
+    A parameter paragraph opens with `<name>: ` for a name in `params`; its
+    text is published as that parameter's schema description, on one line.
+    """
+    kept: list[str] = []
+    text: dict[str, str] = {}
+    for paragraph in doc.split("\n\n"):
+        m = _PARAM_PARAGRAPH.fullmatch(paragraph)
+        if m and m[1] in params:
+            text[m[1]] = " ".join(m[2].split())
+        else:
+            kept.append(paragraph)
+    return "\n\n".join(kept), text
+
+
 def _hints(*, read_only: bool, destructive: bool, idempotent: bool) -> ToolAnnotations:
     return ToolAnnotations(read_only_hint=read_only, destructive_hint=destructive,
                            idempotent_hint=idempotent, open_world_hint=False)
@@ -315,12 +342,16 @@ def tool(group: str, hints: ToolAnnotations):
     ceiling becomes an error, so the module-level name stays callable from
     the admin surface and the tests whether or not the schema was published.
     The published description is the docstring with its shared parameter text
-    expanded and its indentation removed; `hints`, what a call does to the
-    store, is published as the tool's annotations.
+    expanded, its indentation removed and its parameter paragraphs moved into
+    the input schema; `hints`, what a call does to the store, is published as
+    the tool's annotations.
     """
     def wrap(fn):
         doc = _expand_params(fn.__doc__)
-        fn.__doc__ = inspect.cleandoc(doc) if doc else doc
+        if doc:
+            doc, _PARAM_TEXT[fn.__name__] = _split_params(
+                inspect.cleandoc(doc), inspect.signature(fn).parameters)
+        fn.__doc__ = doc
 
         @functools.wraps(fn)
         def bounded(*args, **kwargs):
@@ -553,6 +584,8 @@ def note(title: str, content: str, domain: str = "", also: str = "", tags: str =
 
     @param tags
 
+    @param session
+
     @param review_after
 
     @param source_ref
@@ -591,11 +624,22 @@ def checkpoint(
 
     @param title
 
-    @param domain_brief
+    intent: what the work is for, in a sentence or two.
 
-    @param also_brief
+    established: what is done and what was decided, with the [[uid]] of
+    each note that holds the detail.
 
-    @param tags_brief
+    pursuing: what comes next, specific enough to start on.
+
+    open_questions: what is still undecided or unverified.
+
+    @param session
+
+    @param domain
+
+    @param also
+
+    @param tags
     """
     content = sections.render(TYPE_CHECKPOINT, {
         "intent": intent, "established": established,
@@ -619,18 +663,31 @@ def anti_pattern(
 
     Stored as type='anti_pattern'; pulse() counts the open ones for a domain
     and must_read(type='anti_pattern') lists them.
-    `also` cross-lists it into further domain paths, `review_after` dates
-    when to recheck it and `source_ref` says what it came from -- see note().
 
     ONE pitfall per memory: a second temptation from the same session is
-    its own anti_pattern(), connected with link_memories(). See note() on
-    what a body holds and when it is two memories.
+    its own anti_pattern(), connected with link_memories().
 
     @param title
 
-    @param domain_brief
+    pattern: the temptation, as the next agent will meet it: the move that
+    looks right at the time.
 
-    @param tags_brief
+    why_wrong: the mechanism that makes it fail, specific enough to
+    recognise the next time.
+
+    instead: what to do, concrete enough to act on.
+
+    @param domain
+
+    @param also
+
+    @param tags
+
+    @param session
+
+    @param review_after
+
+    @param source_ref
     """
     content = sections.render(TYPE_ANTI_PATTERN, {
         "pattern": pattern, "why_wrong": why_wrong, "instead": instead})
@@ -664,23 +721,32 @@ def reasoning(
     For the PROCESS, not the fact it produced -- note() takes the fact.
     Stored as type='reasoning'; filter search/list_* with type='reasoning'
     to get these back. ONE analysis per memory: a second hypothesis tested
-    in the same session is its own reasoning(). See note() on what a body
-    holds and when it is two memories.
+    in the same session is its own reasoning().
 
     @param title
 
-    @param domain_brief
-
     hypothesis: what you believed going in, as a claim that could be wrong.
+
     reasoning: how you tested it -- what you read, ran or compared.
+
     result: what came back. The measurement, not the interpretation.
+
     revised_belief: what you believe now, and where it differs from the
     hypothesis. Say plainly when the hypothesis survived unchanged.
+
     next_time: what someone hitting this again should do differently.
 
-    `also`, `review_after` and `source_ref` behave as in note().
+    @param domain
 
-    @param tags_brief
+    @param also
+
+    @param tags
+
+    @param session
+
+    @param review_after
+
+    @param source_ref
     """
     content = sections.render(TYPE_REASONING, {
         "hypothesis": hypothesis, "reasoning": reasoning, "result": result,
@@ -710,7 +776,7 @@ def task(title: str, goal: str, items: str, domain: str = "", also: str = "",
     title: one line naming what this task delivers, in the words someone
     would look for it by. At most 120 characters.
 
-    @param domain_brief
+    @param domain
 
     goal: the brief an agent with none of this session's context works from:
     what the work is and why, where it lives, the decisions and constraints
@@ -723,11 +789,13 @@ def task(title: str, goal: str, items: str, domain: str = "", also: str = "",
     items of 300 characters each. Each gets a key (i1, i2, ...) that
     task_item() takes back.
 
-    @param also_brief
+    @param also
 
-    `tags` carries the synonyms the body never uses. The type name is not
-    added for you: a word every task carries ranks no task above another.
-    See note() for what belongs there.
+    tags: comma-separated synonyms the goal and items never use; retrieval
+    is BM25 over content and tags. The type name is not added for you: a
+    word every task carries ranks no task above another.
+
+    @param session
     """
     try:
         with connection.connect() as conn:
@@ -747,6 +815,8 @@ def task(title: str, goal: str, items: str, domain: str = "", also: str = "",
 def task_item(uid: str, item: str, state: str = "", comment: str = "",
               related: str = "") -> dict:
     """Update one item of a task: its state, a comment on it, memories linked to it.
+
+    uid: the task.
 
     item: the item's number, such as 3 or i3; an item's key is its position in the checklist.
 
@@ -793,6 +863,10 @@ def task_add(uid: str, items: str) -> dict:
     """Append items to a task, one per line; a closed task reopens.
 
     Returns the keys the new items got, and the progress.
+
+    uid: the task.
+
+    items: one item per line, blank lines ignored, as task() takes them.
     """
     try:
         with connection.connect() as conn:
@@ -809,6 +883,12 @@ def task_comment(uid: str, body: str, item: str = "") -> dict:
 
     A comment never edits the task's content, so it carries what the
     checklist cannot: why an item is blocked, what a review said.
+
+    uid: the task.
+
+    body: the comment.
+
+    item: the item's number, such as 3 or i3; empty comments on the task itself.
     """
     try:
         with connection.connect() as conn:
@@ -822,9 +902,18 @@ def task_comment(uid: str, body: str, item: str = "") -> dict:
 def task_read(uid: str, part: str, item: str = "", offset: int = 0) -> dict:
     """Read one collection of a task, one page at a time.
 
+    Follow `next_offset` until it is absent.
+
+    uid: the task.
+
     part: `items` (each with its state and counts), `notes` and `comments`
     (the task's own; with `item`, that item's) or `links` (the memories
-    linked to `item`). Follow `next_offset` until it is absent.
+    linked to `item`).
+
+    item: the item's number, such as 3 or i3, for an item's notes,
+    comments or links.
+
+    @param offset
     """
     try:
         with connection.connect() as conn:
@@ -840,18 +929,42 @@ def task_note(uid: str, title: str = "", body: str = "", items: str = "", note_i
               extra_info: str = "") -> dict:
     """A note a task owns: an item's brief, a rule its items share.
 
-    Not a memory: only task_read() returns it. note_id=0 creates, else
-    edits (empty fields keep theirs) or, with delete, removes. items: keys
-    "i3,i7"; empty or "-" is the whole task. Title up to 120 chars, body
-    4000.
+    Not a memory: only task_read() returns it. A note on items is a brief:
+    goal, context, steps, pitfalls, done_when and depends_on are required,
+    extra_info is optional, and they read back under the labels GOAL: /
+    CONTEXT: / STEPS: / PITFALLS: / DONE WHEN: / DEPENDS ON: / EXTRA INFO:.
+    A note on the whole task is free text in `body`.
 
-    A note on items is a brief: goal, context, steps, pitfalls, done_when,
-    depends_on ("none" is an answer) are required, extra_info is optional.
-    depends_on is none, or item keys with an optional reason in
-    parentheses ("i3 (why), i9"); the keys are renumbered with the items.
-    Labels: GOAL: / CONTEXT: / STEPS: / PITFALLS: / DONE WHEN: /
-    DEPENDS ON: / EXTRA INFO:; an edit replaces only fields given. `body`
-    is for a note on the whole task; with a field it errors.
+    uid: the task.
+
+    note_id: 0 creates a note; another id edits that note, where an empty
+    field keeps its text and a field given replaces only its own.
+
+    delete: with note_id, removes that note.
+
+    title: up to 120 characters.
+
+    body: a note on the whole task, up to 4000 characters; it errors
+    beside a brief field.
+
+    items: the keys of the items the note is on, such as "i3,i7"; empty
+    or "-" is the whole task.
+
+    goal: what the item must achieve.
+
+    context: what the work needs to know: where it lives, what binds it.
+
+    steps: how to do it, in order.
+
+    pitfalls: what goes wrong, and how to avoid it.
+
+    done_when: how to tell the item is finished.
+
+    depends_on: none, or the keys of the items this one waits for, each
+    with an optional reason in parentheses ("i3 (why), i9"); the keys are
+    renumbered with the items.
+
+    extra_info: anything else worth knowing; optional.
     """
     keys = [k.strip() for k in items.split(",") if k.strip() and k.strip() != "-"]
     brief = {"goal": goal, "context": context, "steps": steps, "pitfalls": pitfalls,
@@ -899,16 +1012,31 @@ def diagram(
     more. The reasoning, caveats and history belong in that node's
     `note`, where they explain without cluttering the flow.
 
+    review_after and source_ref matter most for a flow: it describes code,
+    and the code moves.
+
+    Returns {"uid": ...}, or {"ok": False, "errors": [...]} with nothing
+    written at all. Node positions are computed and stored server-side,
+    so the flow renders identically for every reader -- see get_diagram().
+
     @param title
 
-    nodes: [{"key": "load", "label": "Read the export window",
-             "shape": "step", "note": "optional long explanation"}]
-    edges: [{"from": "load", "to": "check", "label": "optional branch"}]
+    nodes: the steps, as [{"key": "load", "label": "Read the export window",
+    "shape": "step", "note": "optional long explanation"}]. key is a stable
+    id the edges refer to (letters, digits, '_' or '-'); shape is
+    start|step|decision|io|end. Exactly one 'start' is required and every
+    node must be reachable from it. Cycles are allowed -- a retry loop is
+    a real flow, not a mistake.
 
-    key: stable id the edges refer to; letters, digits, '_' or '-'.
-    shape: start|step|decision|io|end. Exactly one 'start' is required
-    and every node must be reachable from it. Cycles are allowed -- a
-    retry loop is a real flow, not a mistake.
+    edges: the wires between steps, as [{"from": "load", "to": "check",
+    "label": "optional branch"}].
+
+    summary: a few sentences on what the routine is for, indexed with the
+    flow.
+
+    kind: 'flowchart', the only kind.
+
+    @param domain
 
     also: other domain paths this flow belongs to, comma-separated. `domain`
     is the routine's own place in the tree; `also` is for the flows that run
@@ -917,15 +1045,13 @@ def diagram(
     each into that process's path and asking about it returns all of them,
     instead of hoping one search phrasing reaches every one.
 
-    @param tags_brief
+    @param tags
 
-    `review_after` and `source_ref` behave as in note(), and a flow is
-    exactly the kind of memory they are for: it describes code, and the
-    code moves.
+    @param session
 
-    Returns {"uid": ...}, or {"ok": False, "errors": [...]} with nothing
-    written at all. Node positions are computed and stored server-side,
-    so the flow renders identically for every reader -- see get_diagram().
+    @param review_after
+
+    @param source_ref
     """
     with connection.connect() as conn:
         domain, warning = _coerce_domain(conn, domain)
@@ -951,12 +1077,23 @@ def diagram_node(
     """Add, patch or remove one step of a diagram.
 
     Only the arguments you pass are touched, so patching a note leaves
-    the label alone; pass note="" to clear one. delete=True removes the
-    step together with its edges and its memory links.
+    the label alone; pass note="" to clear one.
 
     The whole-graph rules are relaxed here on purpose: a step may sit
     unattached until you add its edges, which is what lets a flow be
     built up across several calls. diagram() enforces them.
+
+    uid: the diagram.
+
+    key: the step's id; a new key adds a step.
+
+    label: what happens at the step, objectively.
+
+    shape: start|step|decision|io|end.
+
+    note: the step's explanation: reasoning, caveats, history.
+
+    delete: removes the step together with its edges and its memory links.
     """
     with connection.connect() as conn:
         if delete:
@@ -972,9 +1109,19 @@ def diagram_edge(
 ) -> dict:
     """Wire two steps of a diagram together, relabel that wire, or remove it.
 
-    label carries the condition on a branch out of a decision node
-    ('yes', 'no', 'on timeout'). Calling again with the same endpoints
-    updates the label instead of adding a second edge between them.
+    Calling again with the same endpoints updates the label instead of
+    adding a second edge between them.
+
+    uid: the diagram.
+
+    from_key: the step the edge leaves.
+
+    to_key: the step it reaches.
+
+    label: the condition on a branch out of a decision node ('yes', 'no',
+    'on timeout').
+
+    delete: removes the edge between from_key and to_key.
     """
     with connection.connect() as conn:
         if delete:
@@ -998,6 +1145,17 @@ def diagram_link(
 
     get_memory() on the linked memory reports the diagrams that reference
     it, so the connection is visible from both ends.
+
+    uid: the diagram.
+
+    node_key: the step the memory explains.
+
+    target_uid: the memory to attach.
+
+    relation_type: how the memory relates to the step; 'explains' unless
+    given. Linking the same step and memory again replaces it.
+
+    delete: removes the link between node_key and target_uid.
     """
     with connection.connect() as conn:
         if delete:
@@ -1020,11 +1178,22 @@ def diagram_jump(
     it where a routine hands off -- a sub-process, an error path owned by
     another flow, a variant of the same job.
 
-    Leave `peer_node` empty to arrive at the target diagram as a whole.
     Stored once and read from both ends, so the return trip already exists
-    and get_diagram(format='json') reports it on both diagrams. `uid` and
-    `node_key` are this diagram's side either way, which is also how a jump
-    is deleted from the receiving end.
+    and get_diagram(format='json') reports it on both diagrams.
+
+    uid: this diagram; on a delete, either end's diagram.
+
+    node_key: this diagram's step the branch leaves from; on a delete from
+    the receiving end, that end's step.
+
+    peer_uid: the diagram the branch continues in.
+
+    peer_node: the step it arrives at there; empty arrives at the diagram
+    as a whole.
+
+    label: what the hand-off is, shown on the jump.
+
+    delete: removes the jump.
     """
     with connection.connect() as conn:
         if delete:
@@ -1044,6 +1213,8 @@ def diagram_relayout(uid: str) -> dict:
     the same picture and positions hand-adjusted in the admin dashboard
     persist. This discards those adjustments and rebuilds the layered
     arrangement -- the fix for a diagram dragged into a mess.
+
+    uid: the diagram.
     """
     with connection.connect() as conn:
         moved = diagram_persist.relayout_diagram(conn, uid)
@@ -1070,7 +1241,12 @@ def get_diagram(uid: str, format: str = "mermaid", offset: int = 0) -> dict:
     point where it matters: when the user asked to SEE the flow, reading the
     file and emitting it inline is the work, not a cost to avoid.
 
-    A long `body`, and the SVG step index, page through `offset`.
+    uid: the diagram.
+
+    format: one of the formats above.
+
+    offset: where a long `body`, or the SVG step index, starts;
+    `next_offset`, when present, starts the next page.
     """
     if format not in _DIAGRAM_FORMATS:
         return _errors([f"unknown format {format!r}; use "
@@ -1171,13 +1347,6 @@ def search(query: str, domain: str = "", type: str = "", limit: int = 10, offset
     search only widens the candidate set -- judge the returned candidates
     yourself.
 
-    SPEND TERMS FREELY. Every space-separated term is asked for separately
-    and a row matching more of them ranks higher, so piling on synonyms,
-    the identifier, the routine name and the plain-language phrasing into
-    one query costs one call and finds strictly more. Twenty terms beat
-    ten. Write a sentence if that is what you have -- common words score
-    near zero and cost nothing, so there is nothing to strip.
-
     Only active memories by default.
 
     Returns {"results": [...], "est_tokens": N}. Content is
@@ -1200,20 +1369,32 @@ def search(query: str, domain: str = "", type: str = "", limit: int = 10, offset
     when one does show up it is worth opening first, because it states a
     whole routine the surrounding notes only annotate.
 
-    type filters: 'note', 'reasoning', 'checkpoint', 'anti_pattern', 'diagram',
-    'task' (one writer each) and 'handoff' (rows already stored; task() carries
-    unfinished work to the next session); any other type is an error.
-    Ask for type='diagram' to sweep the documented flows on purpose. To recall
-    note()'d knowledge specifically, recall() is the sugar for search(type='note')
-    -- which also means recall() never surfaces a diagram; use search() for that.
+    To recall note()'d knowledge specifically, recall() is the sugar for
+    search(type='note') -- which also means recall() never surfaces a
+    diagram; use search() for that.
 
-    domain scopes to a path AND everything under it: domain='acme/x100'
+    query: the words to look for. SPEND TERMS FREELY. Every space-separated
+    term is asked for separately and a row matching more of them ranks
+    higher, so piling on synonyms, the identifier, the routine name and the
+    plain-language phrasing into one query costs one call and finds
+    strictly more. Twenty terms beat ten. Write a sentence if that is what
+    you have -- common words score near zero and cost nothing, so there is
+    nothing to strip.
+
+    domain: scopes to a path AND everything under it: domain='acme/x100'
     searches the module and each of its routines. Give more of the path to
     narrow it. A domain naming only the deep end of a path ('p200') is
     resolved to the branches it sits in -- every result carries its real
     `domain`, which is where to read what the filter actually covered.
 
-    @param offset_page
+    type: 'note', 'reasoning', 'checkpoint', 'anti_pattern', 'diagram',
+    'task' (one writer each) or 'handoff' (rows already stored; task()
+    carries unfinished work to the next session); any other type is an
+    error. Ask for type='diagram' to sweep the documented flows on purpose.
+
+    limit: the most results to return.
+
+    @param offset
     """
     if error := memories.type_error(type) or _offset_error(offset):
         return _errors([error])
@@ -1236,11 +1417,17 @@ def recall(query: str, domain: str = "", limit: int = 10, offset: int = 0) -> di
     result's `est_tokens` estimates what that full record costs, and the
     top-level `est_tokens` is the sum over the results.
 
-    domain scopes to a path and everything nested under it, and resolves a
-    bare deep segment the same way search() does. Results carry the same
-    `succeeded_by` / `collapsed` annotations search() explains.
+    Results carry the same `succeeded_by` / `collapsed` annotations
+    search() explains.
 
-    @param offset_page
+    query: the words to look for; as in search(), more terms find more.
+
+    domain: scopes to a path and everything nested under it, and resolves
+    a bare deep segment the same way search() does.
+
+    limit: the most results to return.
+
+    @param offset
     """
     if error := _offset_error(offset):
         return _errors([error])
@@ -1256,30 +1443,35 @@ def list_by_domain(
 ) -> dict:
     """List memories for a domain and its subdomains, most recent first.
 
-    Fallback when search misses. domain is a path, matched from the
-    outermost segment in: 'acme/x100' lists the module's own memories plus
-    every routine under it. Pass subtree=False for what is filed at
-    exactly that path and nowhere deeper.
-
-    A domain that matches no path is retried as a run of segments INSIDE
-    one, so list_by_domain('p200') still finds the routine once it lives
-    at 'acme/x100/p200'. The literal reading wins whenever it has rows,
-    and an ambiguous name (the same code under two modules) covers both
-    branches rather than picking one -- each row's `domain` says which
-    branch it came from. list_domains() is the way to see the paths first.
-
-    status is 'active' (the default), 'archived' or 'all'. Closing a task
-    archives its memory, so list_by_domain(domain, type='task',
-    status='archived') returns the completed and cancelled tasks. A task
-    row carries `state` (open, completed or cancelled) and `progress`
-    {done, total}.
+    Fallback when search misses. A task row carries `state` (open,
+    completed or cancelled) and `progress` {done, total}.
 
     Returns {"results": [...], "est_tokens": N}. Content is
     snippet-truncated per result -- call get_memory(uid) for the full
     record; a result's `est_tokens` estimates what that full record costs,
     and the top-level `est_tokens` is the sum over the results.
 
-    @param offset_page
+    domain: a path, matched from the outermost segment in: 'acme/x100'
+    lists the module's own memories plus every routine under it. A domain
+    that matches no path is retried as a run of segments INSIDE one, so
+    list_by_domain('p200') still finds the routine once it lives at
+    'acme/x100/p200'. The literal reading wins whenever it has rows, and an
+    ambiguous name (the same code under two modules) covers both branches
+    rather than picking one -- each row's `domain` says which branch it
+    came from. list_domains() is the way to see the paths first.
+
+    type: one memory type, as search() takes it; empty is every type.
+
+    limit: the most results to return.
+
+    subtree: False lists what is filed at exactly that path and nowhere
+    deeper.
+
+    status: 'active', 'archived' or 'all'. Closing a task archives its
+    memory, so list_by_domain(domain, type='task', status='archived')
+    returns the completed and cancelled tasks.
+
+    @param offset
     """
     if error := memories.type_error(type):
         return _errors([error])
@@ -1305,16 +1497,21 @@ def list_recent(
 ) -> dict:
     """List the most recent active memories, optionally filtered by type/domain.
 
-    A domain covers its subdomains, and a bare deep segment resolves to the
-    branches holding it (see list_by_domain); subtree=False narrows to that
-    exact path.
-
     Returns {"results": [...], "est_tokens": N}. Content is
     snippet-truncated per result -- call get_memory(uid) for the full
     record; a result's `est_tokens` estimates what that full record costs,
     and the top-level `est_tokens` is the sum over the results.
 
-    @param offset_page
+    type: one memory type, as search() takes it; empty is every type.
+
+    domain: covers its subdomains, and a bare deep segment resolves to the
+    branches holding it (see list_by_domain).
+
+    limit: the most results to return.
+
+    subtree: False narrows to the exact domain path.
+
+    @param offset
     """
     if error := memories.type_error(type):
         return _errors([error])
@@ -1337,27 +1534,33 @@ def timeline(
     anchor -- around a checkpoint, that is the notes and pitfalls of the
     same stretch of work.
 
-    One of uid or query is required. uid names the anchor outright; query
-    searches for it and takes the top hit (the same search search() runs,
-    scoped by domain/type). Give both and uid wins. The response
+    One of uid or query is required; give both and uid wins. The response
     reports `anchored_by` ('uid' or 'query') and the whole anchor record,
     so which record the timeline is built around is never a guess.
 
     Returns {"anchored_by": ..., "anchor": {...}, "before": [...],
-    "after": [...]}: `before` is the `before` records created immediately
-    before the anchor and `after` the `after` records created immediately
-    after it, both oldest first, so before + [anchor] + after reads
-    straight down the clock. Neither list contains the anchor.
-
-    domain and type narrow the NEIGHBOURHOOD, not the anchor: a memory
-    named by uid comes back as named, and the records around it are the ones
-    matching the filters. domain covers a path and everything under it, plus
-    what is cross-listed into it, and resolves a bare deep segment the way
-    the other scoped reads do. Archived records are left out of the
-    neighbourhood, as everywhere else by default.
+    "after": [...]}, both lists oldest first, so before + [anchor] + after
+    reads straight down the clock. Neither list contains the anchor.
+    domain and type narrow the NEIGHBOURHOOD, not the anchor, and archived
+    records are left out of it, as everywhere else by default.
 
     Each record is snippet-truncated with `est_tokens` for its full content
     -- call get_memory(uid) to open one.
+
+    uid: the anchor, named outright.
+
+    query: searches for the anchor and takes the top hit (the same search
+    search() runs, scoped by domain/type).
+
+    before: how many records created immediately before the anchor.
+
+    after: how many records created immediately after it.
+
+    domain: covers a path and everything under it, plus what is
+    cross-listed into it, and resolves a bare deep segment the way the
+    other scoped reads do.
+
+    type: one memory type, as search() takes it; empty is every type.
     """
     if not uid and not query:
         return _errors(["timeline needs uid or query: one names the anchor, "
@@ -1440,7 +1643,7 @@ def list_domains(offset: int = 0) -> dict:
     Casing may be enforced store-wide -- call get_domain_case() to see
     the active policy before coining a new domain.
 
-    @param offset_page
+    @param offset
     """
     if error := _offset_error(offset):
         return _errors([error])
@@ -1460,6 +1663,10 @@ def also_domain(uid: str, domain: str) -> dict:
     Returns {"uid": ..., "also": [...]} with the whole resulting set. A path
     the memory's own domain already sits under is dropped as redundant, so
     the echo is what actually holds.
+
+    uid: the memory.
+
+    domain: the path to cross-list it into.
     """
     with connection.connect() as conn:
         if memories.get_memory(conn, uid) is None:
@@ -1474,9 +1681,13 @@ def also_domain(uid: str, domain: str) -> dict:
 def unfile_domain(uid: str, domain: str) -> dict:
     """Drop one of a memory's cross-listings. Does not touch where it is filed.
 
-    Matched on the exact path: dropping 'acme' leaves a separate membership
-    in 'acme/x100' alone, because that is a different scope. Returns
-    {"uid": ..., "also": [...]} with what remains.
+    Returns {"uid": ..., "also": [...]} with what remains.
+
+    uid: the memory.
+
+    domain: the cross-listed path to drop, matched exactly: dropping 'acme'
+    leaves a separate membership in 'acme/x100' alone, because that is a
+    different scope.
     """
     with connection.connect() as conn:
         if memories.get_memory(conn, uid) is None:
@@ -1500,14 +1711,15 @@ def get_domain_case() -> dict:
 
 @tool("curation", SET)
 def set_domain_case(mode: str) -> dict:
-    """Set the store's domain-casing policy. mode: 'preserve' | 'lower' | 'upper'.
+    """Set the store's domain-casing policy for every domain written from now on.
 
-    'preserve' keeps free-text casing; 'lower'/'upper' coerce every
-    domain written from now on to that case. This only governs new
-    writes -- to bring already-stored domains into line, run the
-    "Normalize domains" action in the admin dashboard (it previews
-    collisions before merging variant spellings). Returns the stored
-    {"mode": ...}.
+    This only governs new writes -- to bring already-stored domains into
+    line, run the "Normalize domains" action in the admin dashboard (it
+    previews collisions before merging variant spellings). Returns the
+    stored {"mode": ...}.
+
+    mode: 'preserve' keeps free-text casing; 'lower' or 'upper' coerces
+    every domain written to that case.
     """
     with connection.connect() as conn:
         return {"mode": domains.set_domain_case(conn, mode)}
@@ -1529,18 +1741,26 @@ def must_read(domain: str = "", type: str = "", limit: int = 10, offset: int = 0
     Open a header with get_memory(uid). `next_offset` is absent on the last
     page.
 
-    pinned=true narrows the page to the pins of that type, and also accepts
-    checkpoint and reasoning. Every pin listed is read with get_memory(uid)
-    before acting, none skipped.
+    Every pin listed is read with get_memory(uid) before acting, none
+    skipped.
 
     Pending means: a task that is open; an active anti_pattern, handoff or
     note that is not contradicted; an active diagram.
 
-    domain covers its subdomains and what is cross-listed there; empty is the
-    whole project. A pin is in scope when it is global, or when the memory's
-    domain or one of its also paths is the asked domain or above it; the
-    whole project counts global pins only. limit is 1 to 50. Any other type
-    is an error.
+    domain: covers its subdomains and what is cross-listed there; empty is
+    the whole project. A pin is in scope when it is global, or when the
+    memory's domain or one of its also paths is the asked domain or above
+    it; the whole project counts global pins only.
+
+    type: task, anti_pattern, handoff, note or diagram; any other type is
+    an error. Empty returns the counts.
+
+    limit: headers per page, 1 to 50.
+
+    offset: where the page of headers starts.
+
+    pinned: true narrows the page to the pins of that type, and also
+    accepts checkpoint and reasoning.
     """
     allowed = pending_lists.PINNED_TYPES if pinned else pending_lists.CATEGORIES
     if error := memories.type_error(type, allowed=allowed):
@@ -1617,12 +1837,6 @@ def pulse(domain: str = "", offset: int = 0) -> dict:
     `pinned` counts the pins in scope the same way (see must_read()); when it
     is non-empty `read_next` asks for them before anything else.
 
-    domain warms up a path and everything under it, so pulse('acme/x100')
-    is the module-wide brief and pulse('acme/x100/p200') the routine's.
-    A domain that names only the deep end of a path ('p200') is resolved
-    to the branches it sits in -- `scope.paths` reports which, and an
-    ambiguous name resolves to ALL of them.
-
     `scope` is the rest of the brief: what the scope HOLDS. `scope.by_type`
     counts every memory per type and `scope.subdomains` says which level it
     is sitting in (`own` = filed there, `subtree` = with its descendants).
@@ -1643,8 +1857,15 @@ def pulse(domain: str = "", offset: int = 0) -> dict:
     present only when non-zero, so a store that never cross-lists never
     sees the field.
 
-    A long checkpoint is cut (`next` names the rest); `offset` pages
-    `scope.subdomains`.
+    A long checkpoint is cut (`next` names the rest).
+
+    domain: warms up a path and everything under it, so pulse('acme/x100')
+    is the module-wide brief and pulse('acme/x100/p200') the routine's.
+    A domain that names only the deep end of a path ('p200') is resolved
+    to the branches it sits in -- `scope.paths` reports which, and an
+    ambiguous name resolves to ALL of them.
+
+    offset: where the page of `scope.subdomains` starts.
     """
     if error := _offset_error(offset):
         return _errors([error])
@@ -1743,8 +1964,16 @@ def get_memory(uid: str, edits_offset: int = -1, content_offset: int = -1) -> di
     `next` names the call that pages each part: get_relations() for
     relations and diagrams, get_diagram() for a diagram's graph,
     task_read() for a task's items, notes and comments, edits_offset for
-    the edit history (bodies cut to 4000 characters) and content_offset
-    for a body too long for one response.
+    the edit history and content_offset for a body too long for one
+    response.
+
+    uid: the memory.
+
+    edits_offset: from -1 to a page start, reads the edit history instead
+    of the record, bodies cut to 4000 characters.
+
+    content_offset: from -1 to a character offset, reads that stretch of
+    the body instead of the record.
     """
     try:
         with connection.connect() as conn:
@@ -1814,36 +2043,9 @@ def edit_memory(uid: str, new_content: str = "", note: str = "", mode: str = "re
 
     Corrections are common in append-only memory stores that only
     support delete, not edit; this preserves the old content instead
-    of losing it.
-
-    mode='append' adds `new_content` as a new line at the end instead of
-    replacing the body. Use it when a memory gains a fact rather than
-    turning out to be wrong: the alternative is reading the whole thing,
-    restating it and sending it back, which pays for the body twice and
-    stakes the existing text on it being copied faithfully. Append what
-    THIS memory gained. A fact about a further subject is a new memory plus
-    an edge, not a line at the bottom -- appended text is ranked as part of
-    the body it lands in and comes back with it.
-
-    source_ref points the memory at what its claim came from -- the field
-    note() takes at write time, and the one a later pass checks the claim
-    against. It is settable on its own, with no `new_content`, for the
-    common case of a body that is right and a reference that is missing or
-    has moved; an empty source_ref leaves the stored one alone, and
-    clearing one is a dashboard edit. Passing neither is an error rather
-    than a silent no-op.
-
-    title renames the memory: the one line a list shows it by, and the
-    field weighing most in search, at most 120 characters. Settable on its
-    own, like source_ref. A diagram is renamed through its graph instead --
-    its title is part of what generates the body, so a rename here would be
-    overwritten by the next structural change.
-
-    tags REPLACES the tag set, comma-separated: pass the whole set that
-    should survive, not the one being added. Settable on its own, and
-    indexed, so this is how an untagged memory becomes findable by the words
-    its body never uses. An empty string leaves the stored tags alone --
-    clearing them, like clearing a source_ref, is a dashboard edit.
+    of losing it. Each field is settable on its own; passing none of
+    new_content, source_ref, title and tags is an error rather than a
+    silent no-op.
 
     Refuses to rewrite a diagram's content: that is generated from the
     graph, so a hand-written replacement would be silently overwritten by
@@ -1851,6 +2053,40 @@ def edit_memory(uid: str, new_content: str = "", note: str = "", mode: str = "re
     diagram_node/diagram_edge. Its source_ref is ordinary metadata and is
     editable here like any other memory's. A task's content is generated
     from its goal and items the same way, and is refused the same way.
+
+    uid: the memory.
+
+    new_content: the corrected body, or with mode='append' the line to add.
+
+    note: why it changed, kept with the previous version in the edit
+    history.
+
+    mode: 'replace' or 'append'. 'append' adds `new_content` as a new line
+    at the end instead of replacing the body. Use it when a memory gains a
+    fact rather than turning out to be wrong: the alternative is reading
+    the whole thing, restating it and sending it back, which pays for the
+    body twice and stakes the existing text on it being copied faithfully.
+    Append what THIS memory gained. A fact about a further subject is a new
+    memory plus an edge, not a line at the bottom -- appended text is
+    ranked as part of the body it lands in and comes back with it.
+
+    source_ref: points the memory at what its claim came from -- the field
+    note() takes at write time, and the one a later pass checks the claim
+    against. Settable with no `new_content`, for the common case of a body
+    that is right and a reference that is missing or has moved; empty
+    leaves the stored one alone, and clearing one is a dashboard edit.
+
+    title: renames the memory: the one line a list shows it by, and the
+    field weighing most in search, at most 120 characters. A diagram is
+    renamed through its graph instead -- its title is part of what
+    generates the body, so a rename here would be overwritten by the next
+    structural change.
+
+    tags: REPLACES the tag set, comma-separated: pass the whole set that
+    should survive, not the one being added. Indexed, so this is how an
+    untagged memory becomes findable by the words its body never uses.
+    Empty leaves the stored tags alone -- clearing them, like clearing a
+    source_ref, is a dashboard edit.
     """
     if mode not in ("replace", "append"):
         return _errors([f"mode must be 'replace' or 'append'; got {mode!r}"])
@@ -1906,9 +2142,6 @@ def edit_memory(uid: str, new_content: str = "", note: str = "", mode: str = "re
 def link_memories(from_uid: str, to_uid: str, relation_type: str, note: str = "") -> dict:
     """Create a queryable edge between two memories.
 
-    relation_type is free text but keep it consistent, e.g.
-    'supersedes', 'relates_to', 'contradicts', 'links_to'.
-
     This is what splitting a body into several memories costs: a [[uid]]
     written inside prose is a reference a reader follows, and only an edge
     created here is visible to get_relations() and to the graph.
@@ -1917,6 +2150,15 @@ def link_memories(from_uid: str, to_uid: str, relation_type: str, note: str = ""
     already exists with that same type -- each as
     {"ok": False, "errors": [...]}, so a typo comes back as something to
     fix instead of a dangling edge or a raw database error.
+
+    from_uid: the memory the edge starts at.
+
+    to_uid: the memory it points to.
+
+    relation_type: free text, but keep it consistent, e.g. 'supersedes',
+    'relates_to', 'contradicts', 'links_to'.
+
+    note: why the two are related, kept on the edge.
     """
     with connection.connect() as conn:
         try:
@@ -1928,10 +2170,14 @@ def link_memories(from_uid: str, to_uid: str, relation_type: str, note: str = ""
 
 @tool("core", READ)
 def get_relations(uid: str, part: str = "relations", offset: int = 0) -> dict:
-    """List a memory's links, one page at a time.
+    """List a memory's links, one page at a time; follow `next_offset`.
+
+    uid: the memory.
 
     part: 'relations' (edges, both ways) or 'diagrams' (flows pointing at
-    it); follow `next_offset`.
+    it).
+
+    @param offset
     """
     if part not in ("relations", "diagrams"):
         return _errors([f"{part!r} is not a part; use 'relations' or 'diagrams'"])
@@ -1945,7 +2191,12 @@ def get_relations(uid: str, part: str = "relations", offset: int = 0) -> dict:
 
 @tool("core", SET)
 def set_confidence(uid: str, confidence: str) -> dict:
-    """Set a memory's confidence: unverified | confirmed | contradicted."""
+    """Set a memory's confidence: unverified | confirmed | contradicted.
+
+    uid: the memory.
+
+    confidence: unverified, confirmed or contradicted.
+    """
     if confidence not in optimizer.CONFIDENCE_VALUES:
         return {"ok": False, "error": f"confidence must be {'|'.join(optimizer.CONFIDENCE_VALUES)}"}
     with connection.connect() as conn:
@@ -1957,8 +2208,14 @@ def set_confidence(uid: str, confidence: str) -> dict:
 def forget(uid: str, reason: str = "", superseded_by: str = "") -> dict:
     """Archive a memory (soft delete -- content is kept, just excluded from default search/list).
 
-    A `reason` is recorded as a status-change audit entry, without touching
-    the content. Archiving an open task cancels it; its items keep their states.
+    Archiving an open task cancels it; its items keep their states.
+
+    uid: the memory.
+
+    reason: why it is archived, recorded as a status-change audit entry
+    without touching the content.
+
+    superseded_by: the uid of the memory that replaces this one.
     """
     with connection.connect() as conn:
         ok = memories.set_status(
@@ -1975,10 +2232,14 @@ def purge_memory(uid: str, confirm_phrase: str) -> dict:
 
     Use forget() instead unless the user explicitly asked to permanently
     remove data -- forget() is reversible (archived, content kept),
-    this is not. Guardrail: confirm_phrase must exactly equal
-    "DELETE <uid>", typed by the user in their own message. Do not
-    construct this string yourself from an inferred "yes"/"confirm" --
-    it must come from the user actually stating the uid back.
+    this is not.
+
+    uid: the memory.
+
+    confirm_phrase: must exactly equal "DELETE <uid>", typed by the user in
+    their own message. Do not construct this string yourself from an
+    inferred "yes"/"confirm" -- it must come from the user actually
+    stating the uid back.
     """
     expected = f"DELETE {uid}"
     if confirm_phrase != expected:
@@ -1993,20 +2254,27 @@ def move_to_project(target: str, uids: str = "", domain: str = "", dry_run: bool
                   create: bool = False) -> dict:
     """Carry memories from the active project into another one, and remove them here.
 
-    `uids` is comma-separated, `domain` a path (its subdomains and archived
-    rows go too); give either or both. Each memory travels whole -- body,
-    cross-listings, usage counts, edit history, the relations and diagram
-    graph inside the slice -- into `target`, is checked there, and only
-    then purged from the active project, after a backup of it is written.
+    Each memory travels whole -- body, cross-listings, usage counts, edit
+    history, the relations and diagram graph inside the slice -- into
+    `target`, is checked there, and only then purged from the active
+    project, after a backup of it is written.
 
-    `dry_run` is the default and moves nothing: it reports what would move,
+    target: the project to move into; list_projects() names the projects
+    there are.
+
+    uids: comma-separated memories to move; give uids, domain or both.
+
+    domain: a path to move, its subdomains and archived rows included.
+
+    dry_run: the default, and moves nothing: it reports what would move,
     `conflicts` (uids `target` already holds, which stay here) and
     `outside` -- the relations, diagram links and jumps, `superseded_by`
     marks and [[uid]] references that cross the edge of the slice, all of
     which the move drops. Read that report with the user, then widen the
     slice or accept the loss BEFORE calling again with dry_run=False: the
-    purge is irreversible short of the backup. `create` makes a `target`
-    that does not exist yet. list_projects() names the projects there are.
+    purge is irreversible short of the backup.
+
+    create: makes a `target` that does not exist yet.
     """
     wanted = [u.strip() for u in uids.split(",") if u.strip()]
     return portable.move(paths.active_project(), target, uids=wanted, domain=domain,
@@ -2027,11 +2295,17 @@ def dedup_scan(domain: str = "", type: str = "", threshold: float = 0.6, limit: 
     review and decide (link_memories / edit_memory / forget as
     appropriate).
 
-    domain scans a path and everything nested under it, which is usually
+    domain: scans a path and everything nested under it, which is usually
     what you want: near-duplicates collect between a module and its own
     routines.
 
-    @param offset_page
+    type: one memory type, as search() takes it; empty is every type.
+
+    threshold: the similarity, 0 to 1, a pair must reach to be listed.
+
+    limit: the most pairs to return.
+
+    @param offset
     """
     if error := _offset_error(offset):
         return _errors([error])
@@ -2073,13 +2347,28 @@ def optimize_scan(
 
     The listing is slim so a big store fits one response, and a page ends
     early at an internal size budget -- `truncated` means page onward with
-    offset + count. `since` limits the scan to a delta for recurring passes;
-    full=True keeps whole bodies.
+    offset + count.
 
     BEFORE PROPOSING ANY CHANGE, CHECK IT AGAINST LIVE FACTS, and record what
     you checked in each suggestion's `verified`. Destructive kinds are
     rejected without it: cross-check newer memories in the corpus, verify
     code anchors against the live repo, web-check world facts.
+
+    domain: scans a path and everything nested under it; empty is the
+    whole project.
+
+    type: one memory type, as search() takes it; empty is every type.
+
+    since: limits the scan to what changed after this date, for recurring
+    passes.
+
+    include_archived: true lists archived memories as well.
+
+    limit: the most memories per page.
+
+    offset: where the page starts; after a `truncated` page, offset + count.
+
+    full: true keeps whole bodies instead of the slim listing.
     """
     with connection.connect() as conn:
         corpus = store_corpus.optimization_corpus(
@@ -2102,7 +2391,10 @@ def optimize_stage(suggestions: list[dict], note: str = "") -> dict:
     user reviews and applies or rejects each one in the admin dashboard,
     which backs up before the first apply and can undo any of them.
 
-    Each suggestion is {"kind", "target_uid", "payload", "rationale",
+    Invalid suggestions are skipped and reported in `errors`; the rest are
+    staged. Returns {run_id, staged, errors}.
+
+    suggestions: each one {"kind", "target_uid", "payload", "rationale",
     "verified"}. Kinds: compact/reword {"new_content"}, retag {"tags"},
     retitle {"title"}, redomain {"domain"}, crosslist {"also": [...]}
     (replaces the whole set), set_confidence {"confidence"}, review
@@ -2111,17 +2403,13 @@ def optimize_stage(suggestions: list[dict], note: str = "") -> dict:
     {"keep_uid","drop_uid"}, distill {"source_uids","new_type","new_content",
     "title"}, unleak {"field": "content|tags|source_ref"} (the repair is
     computed at staging). link/merge derive target_uid from the payload and
-    distill creates its target -- omit it for those.
+    distill creates its target -- omit it for those. Destructive kinds
+    (archive, set_confidence=contradicted, merge, distill) require a
+    non-empty `verified` describing the live-facts check behind them.
 
-    Destructive kinds (archive, set_confidence=contradicted, merge,
-    distill) require a non-empty `verified` describing the live-facts
-    check behind them. Invalid suggestions are skipped and reported in
-    `errors`; the rest are staged. Returns {run_id, staged, errors}.
-
-    `note` is one short summary of the pass, at most 250 characters; a
-    longer one raises and stages nothing. What a single suggestion needs
-    said belongs in its own `rationale` and `verified`, which are not
-    capped.
+    note: one short summary of the pass, at most 250 characters; a longer
+    one raises and stages nothing. What a single suggestion needs said
+    belongs in its own `rationale` and `verified`, which are not capped.
     """
     with connection.connect() as conn:
         result = optimizer.stage_optimization(conn, note, suggestions)
@@ -2139,7 +2427,7 @@ def optimize_runs(offset: int = 0) -> dict:
     Applying/rejecting stays in the dashboard by design -- the agent
     proposes, the human disposes.
 
-    @param offset_page
+    @param offset
     """
     if error := _offset_error(offset):
         return _errors([error])
@@ -2158,7 +2446,9 @@ def optimize_status(run_id: int, offset: int = 0) -> dict:
     proposals landed, follow up on rejected ones, or build on applied
     ones in a later pass.
 
-    @param offset_page
+    run_id: the run optimize_stage returned, or one optimize_runs lists.
+
+    @param offset
     """
     if error := _offset_error(offset):
         return _errors([error])
