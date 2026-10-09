@@ -43,7 +43,7 @@ async function show(params: Record<string, string> = {}) {
 }
 
 describe('the graph canvas', () => {
-  it('glides to fit and to a memory even when the system and an old stored choice ask for less motion', async () => {
+  it('glides to fit and to a memory even when the system and a stored choice ask for less motion', async () => {
     const asked = window.matchMedia;
     window.matchMedia = (() => ({ matches: true, addEventListener() {} })) as never;
     localStorage.setItem('memai.motion', 'never');
