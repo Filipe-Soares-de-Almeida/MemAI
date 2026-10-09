@@ -265,6 +265,21 @@ def test_list_rows_carry_progress(client):
     assert task_row["progress"] == {"done": 1, "total": 3}
 
 
+def test_list_progress_leaves_dropped_items_out_of_the_total(client):
+    uid = _task(client, items="a\nb\nc")
+    client.post(f"/api/tasks/{uid}/item", json={"item": "i1", "state": "done"})
+    client.post(f"/api/tasks/{uid}/item", json={"item": "i2", "state": "dropped"})
+    rows = {r["uid"]: r for r in client.get("/api/memories").json()["items"]}
+    assert rows[uid]["progress"] == {"done": 1, "total": 2}
+
+
+def test_list_progress_of_an_all_dropped_task_is_zero_of_zero(client):
+    uid = _task(client, items="a")
+    client.post(f"/api/tasks/{uid}/item", json={"item": "i1", "state": "dropped"})
+    rows = {r["uid"]: r for r in client.get("/api/memories").json()["items"]}
+    assert rows[uid]["progress"] == {"done": 0, "total": 0}
+
+
 def test_list_filters_by_task_state(client):
     open_uid = _task(client, items="a\nb")
     done_uid = _task(client, items="only")
