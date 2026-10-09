@@ -73,6 +73,6 @@ def test_tool_strips_the_indentation_an_interpreter_leaves_in_a_docstring():
         pass
 
     probe.__doc__ = "Summary.\n\n    Body line.\n        deeper\n    "
-    wrapped = server.tool("full")(probe)
+    wrapped = server.tool("full", server.READ)(probe)
     assert wrapped.__doc__ == "Summary.\n\nBody line.\n    deeper"
     server._GROUP_OF.pop("probe", None)

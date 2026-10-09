@@ -41,6 +41,7 @@ import os
 import re
 
 from mcp.server.mcpserver import MCPServer
+from mcp.types import ToolAnnotations
 
 from memai import (
     autostart,
@@ -294,14 +295,28 @@ def _expand_params(doc: str | None) -> str | None:
                             for line in PARAM_DOCS[m[2]].splitlines()), doc)
 
 
-def tool(group: str):
+def _hints(*, read_only: bool, destructive: bool, idempotent: bool) -> ToolAnnotations:
+    return ToolAnnotations(read_only_hint=read_only, destructive_hint=destructive,
+                           idempotent_hint=idempotent, open_world_hint=False)
+
+
+# A READ tool may still count the read in memory_usage; no memory changes.
+READ = _hints(read_only=True, destructive=False, idempotent=True)
+ADD = _hints(read_only=False, destructive=False, idempotent=False)
+SET = _hints(read_only=False, destructive=False, idempotent=True)
+REWRITE = _hints(read_only=False, destructive=True, idempotent=False)
+DISCARD = _hints(read_only=False, destructive=True, idempotent=True)
+
+
+def tool(group: str, hints: ToolAnnotations):
     """Register a tool with the MCP server when its group is active.
 
     Always returns the function, wrapped so a result over the output
     ceiling becomes an error, so the module-level name stays callable from
     the admin surface and the tests whether or not the schema was published.
     The published description is the docstring with its shared parameter text
-    expanded and its indentation removed.
+    expanded and its indentation removed; `hints`, what a call does to the
+    store, is published as the tool's annotations.
     """
     def wrap(fn):
         doc = _expand_params(fn.__doc__)
@@ -320,7 +335,7 @@ def tool(group: str):
 
         _GROUP_OF[fn.__name__] = group
         if group in _ACTIVE_SETS:
-            mcp.tool()(bounded)
+            mcp.tool(annotations=hints)(bounded)
         return bounded
     return wrap
 
@@ -512,7 +527,7 @@ def _write_result(conn, uid: str, warning: dict | None, also: str,
     return result
 
 
-@tool("core")
+@tool("core", ADD)
 def note(title: str, content: str, domain: str = "", also: str = "", tags: str = "",
          session: str = "", review_after: str = "", source_ref: str = "") -> dict:
     """Save a general long-term memory (fact, decision, finding). Stored as type='note'.
@@ -551,7 +566,7 @@ def note(title: str, content: str, domain: str = "", also: str = "", tags: str =
         return _write_result(conn, uid, warning, also, tags)
 
 
-@tool("core")
+@tool("core", ADD)
 def checkpoint(
     title: str,
     intent: str,
@@ -594,7 +609,7 @@ def checkpoint(
         return _write_result(conn, uid, warning, also, tags)
 
 
-@tool("core")
+@tool("core", ADD)
 def anti_pattern(
     title: str, pattern: str, why_wrong: str, instead: str, domain: str = "",
     also: str = "", tags: str = "", session: str = "", review_after: str = "",
@@ -629,7 +644,7 @@ def anti_pattern(
         return _write_result(conn, uid, warning, also, tags)
 
 
-@tool("core")
+@tool("core", ADD)
 def reasoning(
     title: str,
     hypothesis: str,
@@ -683,7 +698,7 @@ def _errors(errors: list[str]) -> dict:
     return {"ok": False, "errors": errors}
 
 
-@tool("core")
+@tool("core", ADD)
 def task(title: str, goal: str, items: str, domain: str = "", also: str = "",
          tags: str = "", session: str = "") -> dict:
     """Open a task: a goal and a checklist, kept until its items are closed.
@@ -728,7 +743,7 @@ def task(title: str, goal: str, items: str, domain: str = "", also: str = "",
     return result
 
 
-@tool("core")
+@tool("core", ADD)
 def task_item(uid: str, item: str, state: str = "", comment: str = "",
               related: str = "") -> dict:
     """Update one item of a task: its state, a comment on it, memories linked to it.
@@ -773,7 +788,7 @@ def task_item(uid: str, item: str, state: str = "", comment: str = "",
     return result
 
 
-@tool("core")
+@tool("core", ADD)
 def task_add(uid: str, items: str) -> dict:
     """Append items to a task, one per line; a closed task reopens.
 
@@ -788,7 +803,7 @@ def task_add(uid: str, items: str) -> dict:
             "task_state": added["task_state"], "archived": added["archived"]}
 
 
-@tool("core")
+@tool("core", ADD)
 def task_comment(uid: str, body: str, item: str = "") -> dict:
     """Comment on a task, or on one of its items when `item` names a key.
 
@@ -803,7 +818,7 @@ def task_comment(uid: str, body: str, item: str = "") -> dict:
     return {"uid": uid, "comment_id": comment_id}
 
 
-@tool("core")
+@tool("core", READ)
 def task_read(uid: str, part: str, item: str = "", offset: int = 0) -> dict:
     """Read one collection of a task, one page at a time.
 
@@ -818,7 +833,7 @@ def task_read(uid: str, part: str, item: str = "", offset: int = 0) -> dict:
         return _errors([str(exc)])
 
 
-@tool("core")
+@tool("core", REWRITE)
 def task_note(uid: str, title: str = "", body: str = "", items: str = "", note_id: int = 0,
               delete: bool = False, goal: str = "", context: str = "", steps: str = "",
               pitfalls: str = "", done_when: str = "", depends_on: str = "",
@@ -858,7 +873,7 @@ def task_note(uid: str, title: str = "", body: str = "", items: str = "", note_i
     return {"uid": uid, "note_id": note_id, "items": on}
 
 
-@tool("diagrams")
+@tool("diagrams", ADD)
 def diagram(
     title: str,
     nodes: list[dict],
@@ -924,7 +939,7 @@ def diagram(
         return _write_result(conn, uid, warning, also, tags)
 
 
-@tool("diagrams")
+@tool("diagrams", DISCARD)
 def diagram_node(
     uid: str,
     key: str,
@@ -951,7 +966,7 @@ def diagram_node(
     return {"ok": True, "node_key": key} if ok else _errors(errors)
 
 
-@tool("diagrams")
+@tool("diagrams", DISCARD)
 def diagram_edge(
     uid: str, from_key: str, to_key: str, label: str = "", delete: bool = False
 ) -> dict:
@@ -969,7 +984,7 @@ def diagram_edge(
     return {"ok": True} if ok else _errors(errors)
 
 
-@tool("diagrams")
+@tool("diagrams", DISCARD)
 def diagram_link(
     uid: str, node_key: str, target_uid: str,
     relation_type: str = "explains", delete: bool = False,
@@ -993,7 +1008,7 @@ def diagram_link(
     return {"ok": True} if ok else _errors(errors)
 
 
-@tool("diagrams")
+@tool("diagrams", DISCARD)
 def diagram_jump(
     uid: str, node_key: str, peer_uid: str, peer_node: str = "",
     label: str = "", delete: bool = False,
@@ -1021,7 +1036,7 @@ def diagram_jump(
     return {"ok": True} if ok else _errors(errors)
 
 
-@tool("diagrams")
+@tool("diagrams", DISCARD)
 def diagram_relayout(uid: str) -> dict:
     """Recompute a diagram's stored node positions from scratch.
 
@@ -1038,7 +1053,7 @@ def diagram_relayout(uid: str) -> dict:
 _DIAGRAM_FORMATS = ("mermaid", "text", "json", "svg", "svg-interactive")
 
 
-@tool("core")
+@tool("core", READ)
 def get_diagram(uid: str, format: str = "mermaid", offset: int = 0) -> dict:
     """Read a diagram back: format='svg-interactive' to show it, 'json' to reason about it.
 
@@ -1147,7 +1162,7 @@ def _write_render(conn, uid: str, data: dict, format: str, offset: int = 0) -> d
     ], offset, key="nodes")
 
 
-@tool("core")
+@tool("core", READ)
 def search(query: str, domain: str = "", type: str = "", limit: int = 10, offset: int = 0) -> dict:
     """Keyword search over memory content+tags+domain: FTS5 BM25.
 
@@ -1207,7 +1222,7 @@ def search(query: str, domain: str = "", type: str = "", limit: int = 10, offset
                                                limit=limit, collapse=True), offset)
 
 
-@tool("core")
+@tool("core", READ)
 def recall(query: str, domain: str = "", limit: int = 10, offset: int = 0) -> dict:
     """Recall long-term knowledge saved with note() (type='note').
 
@@ -1234,7 +1249,7 @@ def recall(query: str, domain: str = "", limit: int = 10, offset: int = 0) -> di
                                                limit=limit, collapse=True), offset)
 
 
-@tool("core")
+@tool("core", READ)
 def list_by_domain(
     domain: str, type: str = "", limit: int = 50, subtree: bool = True,
     status: str = "active", offset: int = 0,
@@ -1284,7 +1299,7 @@ def list_by_domain(
     return listing
 
 
-@tool("core")
+@tool("core", READ)
 def list_recent(
     type: str = "", domain: str = "", limit: int = 20, subtree: bool = True, offset: int = 0
 ) -> dict:
@@ -1309,7 +1324,7 @@ def list_recent(
         return _listing(conn, rows, offset)
 
 
-@tool("core")
+@tool("core", READ)
 def timeline(
     uid: str = "", query: str = "", before: int = 3, after: int = 3,
     domain: str = "", type: str = "",
@@ -1382,7 +1397,7 @@ def timeline(
     return out
 
 
-@tool("core")
+@tool("core", READ)
 def list_projects() -> dict:
     """The projects in this home, and which one every call here reads and writes.
 
@@ -1400,7 +1415,7 @@ def list_projects() -> dict:
     }
 
 
-@tool("core")
+@tool("core", READ)
 def list_domains(offset: int = 0) -> dict:
     """List the domain tree: every path with its counts and latest activity.
 
@@ -1433,7 +1448,7 @@ def list_domains(offset: int = 0) -> dict:
         return _page(domains.list_domains(conn), offset, key="domains")
 
 
-@tool("core")
+@tool("core", SET)
 def also_domain(uid: str, domain: str) -> dict:
     """Cross-list an existing memory into one more domain path.
 
@@ -1455,7 +1470,7 @@ def also_domain(uid: str, domain: str) -> dict:
             return _errors([str(exc)])
 
 
-@tool("core")
+@tool("core", DISCARD)
 def unfile_domain(uid: str, domain: str) -> dict:
     """Drop one of a memory's cross-listings. Does not touch where it is filed.
 
@@ -1469,7 +1484,7 @@ def unfile_domain(uid: str, domain: str) -> dict:
         return {"uid": uid, "also": memories.remove_domain_link(conn, uid, domain)}
 
 
-@tool("curation")
+@tool("curation", READ)
 def get_domain_case() -> dict:
     """Report the store's domain-casing policy.
 
@@ -1483,7 +1498,7 @@ def get_domain_case() -> dict:
         return {"mode": domains.get_domain_case(conn)}
 
 
-@tool("curation")
+@tool("curation", SET)
 def set_domain_case(mode: str) -> dict:
     """Set the store's domain-casing policy. mode: 'preserve' | 'lower' | 'upper'.
 
@@ -1498,7 +1513,7 @@ def set_domain_case(mode: str) -> dict:
         return {"mode": domains.set_domain_case(conn, mode)}
 
 
-@tool("core")
+@tool("core", READ)
 def must_read(domain: str = "", type: str = "", limit: int = 10, offset: int = 0,
               pinned: bool = False) -> dict:
     """What is still open in a scope: counts per category, or one category's headers.
@@ -1576,7 +1591,7 @@ def _read_next(domain: str, categories: list[dict], pinned: list[dict]) -> str:
         f"{n}. {s}" for n, s in enumerate(steps, 1))
 
 
-@tool("core")
+@tool("core", READ)
 def pulse(domain: str = "", offset: int = 0) -> dict:
     """Session warm-up: the latest checkpoint, what is pending, and what to read next.
 
@@ -1721,7 +1736,7 @@ def _paged(uid: str, part: str, records: list, offset: int) -> dict:
     return out
 
 
-@tool("core")
+@tool("core", READ)
 def get_memory(uid: str, edits_offset: int = -1, content_offset: int = -1) -> dict:
     """Fetch one memory: its fields, and counts of what is linked to it.
 
@@ -1792,7 +1807,7 @@ def get_memory(uid: str, edits_offset: int = -1, content_offset: int = -1) -> di
     return result
 
 
-@tool("core")
+@tool("core", REWRITE)
 def edit_memory(uid: str, new_content: str = "", note: str = "", mode: str = "replace",
                 source_ref: str = "", title: str = "", tags: str = "") -> dict:
     """Correct a memory's content or its source reference, keeping the previous version.
@@ -1887,7 +1902,7 @@ def edit_memory(uid: str, new_content: str = "", note: str = "", mode: str = "re
     return {"ok": True, "changed": changed}
 
 
-@tool("core")
+@tool("core", SET)
 def link_memories(from_uid: str, to_uid: str, relation_type: str, note: str = "") -> dict:
     """Create a queryable edge between two memories.
 
@@ -1911,7 +1926,7 @@ def link_memories(from_uid: str, to_uid: str, relation_type: str, note: str = ""
     return {"relation_id": rel_id}
 
 
-@tool("core")
+@tool("core", READ)
 def get_relations(uid: str, part: str = "relations", offset: int = 0) -> dict:
     """List a memory's links, one page at a time.
 
@@ -1928,7 +1943,7 @@ def get_relations(uid: str, part: str = "relations", offset: int = 0) -> dict:
     return _page([_row_to_dict(r) for r in rows], offset, uid=uid, part=part)
 
 
-@tool("core")
+@tool("core", SET)
 def set_confidence(uid: str, confidence: str) -> dict:
     """Set a memory's confidence: unverified | confirmed | contradicted."""
     if confidence not in optimizer.CONFIDENCE_VALUES:
@@ -1938,7 +1953,7 @@ def set_confidence(uid: str, confidence: str) -> dict:
     return {"ok": ok}
 
 
-@tool("core")
+@tool("core", SET)
 def forget(uid: str, reason: str = "", superseded_by: str = "") -> dict:
     """Archive a memory (soft delete -- content is kept, just excluded from default search/list).
 
@@ -1954,7 +1969,7 @@ def forget(uid: str, reason: str = "", superseded_by: str = "") -> dict:
     return {"ok": ok}
 
 
-@tool("curation")
+@tool("curation", DISCARD)
 def purge_memory(uid: str, confirm_phrase: str) -> dict:
     """PERMANENTLY delete a memory + its edit history + relations. Irreversible.
 
@@ -1973,7 +1988,7 @@ def purge_memory(uid: str, confirm_phrase: str) -> dict:
     return {"ok": ok}
 
 
-@tool("curation")
+@tool("curation", REWRITE)
 def move_to_project(target: str, uids: str = "", domain: str = "", dry_run: bool = True,
                   create: bool = False) -> dict:
     """Carry memories from the active project into another one, and remove them here.
@@ -1998,7 +2013,7 @@ def move_to_project(target: str, uids: str = "", domain: str = "", dry_run: bool
                          dry_run=dry_run, create=create)
 
 
-@tool("curation")
+@tool("curation", READ)
 def dedup_scan(domain: str = "", type: str = "", threshold: float = 0.6, limit: int = 20,
                offset: int = 0) -> dict:
     """Surface likely-duplicate/contradictory memory pairs.
@@ -2031,7 +2046,7 @@ def dedup_scan(domain: str = "", type: str = "", threshold: float = 0.6, limit: 
     return _page(records, offset, key="pairs")
 
 
-@tool("curation")
+@tool("curation", READ)
 def optimize_scan(
     domain: str = "", type: str = "", since: str = "",
     include_archived: bool = False, limit: int = 500, offset: int = 0,
@@ -2079,7 +2094,7 @@ def optimize_scan(
     return corpus
 
 
-@tool("curation")
+@tool("curation", ADD)
 def optimize_stage(suggestions: list[dict], note: str = "") -> dict:
     """Stage a batch of curation suggestions for human review in the dashboard.
 
@@ -2113,7 +2128,7 @@ def optimize_stage(suggestions: list[dict], note: str = "") -> dict:
     return result
 
 
-@tool("curation")
+@tool("curation", READ)
 def optimize_runs(offset: int = 0) -> dict:
     """List optimization runs with their review progress.
 
@@ -2133,7 +2148,7 @@ def optimize_runs(offset: int = 0) -> dict:
     return _page([dict(r) for r in rows], offset, key="runs")
 
 
-@tool("curation")
+@tool("curation", READ)
 def optimize_status(run_id: int, offset: int = 0) -> dict:
     """Inspect one optimization run: every suggestion and its decision.
 
