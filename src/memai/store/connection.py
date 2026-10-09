@@ -8,6 +8,7 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from memai.store.item_ids import INDEXES as ITEM_INDEXES
+from memai.store.item_ids import migrate as migrate_item_ids
 from memai.store.item_ids import schema as item_schema
 from memai.store.paths import default_db_path, project_path
 from memai.store.settings import _get_meta, _set_meta
@@ -498,6 +499,7 @@ def connect(db_path: Path | None = None, *, project: str | None = None):
     _ensure_fts(conn)
     _ensure_diagram_titles(conn)
     _repair_task_states(conn)
+    migrate_item_ids(conn, path)
     conn.executescript(ITEM_INDEXES)
     try:
         yield conn

@@ -735,7 +735,9 @@ def restore_task(conn: sqlite3.Connection, record: dict) -> None:
     """Write a task's rows from an export record, under an already-restored memory.
 
     Items get this store's ids, and every row naming one follows the map
-    from the record's ids. Skips a link whose target is not in the store and
+    from the record's ids, or from its position keys in a record that has
+    no ids, whose briefs then carry DEPENDS ON in their body. Skips a link
+    whose target is not in the store and
     writes no edit. A state outside TASK_STATES or ITEM_STATES is a
     ValueError before any row is written.
     """
@@ -758,33 +760,40 @@ def restore_task(conn: sqlite3.Connection, record: dict) -> None:
                VALUES (?, ?, ?, ?, ?, ?)""",
             (uid, i["seq"], i["text"], i.get("state", "todo"),
              i.get("updated_at") or lite.now_iso(), i.get("updated_session", "")))
-        ids[i["id"]] = cur.lastrowid
+        ids[i["id"] if "id" in i else i["key"]] = cur.lastrowid
+    links = [(link.get("item_id", link.get("item_key")), link) for link in record.get("links") or []]
     conn.executemany(
         """INSERT OR IGNORE INTO task_item_links (memory_uid, item_id, target_uid, created_at)
            VALUES (?, ?, ?, ?)""",
         [
-            (uid, ids[link["item_id"]], link["target_uid"], link.get("created_at") or lite.now_iso())
-            for link in record.get("links") or []
-            if link.get("item_id") in ids and memories.get_memory(conn, link["target_uid"]) is not None
+            (uid, ids[handle], link["target_uid"], link.get("created_at") or lite.now_iso())
+            for handle, link in links
+            if handle in ids and memories.get_memory(conn, link["target_uid"]) is not None
         ],
     )
+    comments = [(c.get("item_id", c.get("item_key") or None), c) for c in record.get("comments") or []]
     conn.executemany(
         """INSERT INTO task_comments (memory_uid, item_id, body, author, session, created_at)
            VALUES (?, ?, ?, ?, ?, ?)""",
         [
-            (uid, ids.get(c.get("item_id")), c["body"], c.get("author", "agent"),
+            (uid, ids.get(handle), c["body"], c.get("author", "agent"),
              c.get("session", ""), c.get("created_at") or lite.now_iso())
-            for c in record.get("comments") or []
-            if c.get("item_id") is None or c.get("item_id") in ids
+            for handle, c in comments
+            if handle is None or handle in ids
         ],
     )
+    by_key = {k: v for k, v in ids.items() if isinstance(k, str)}
     for n in record.get("notes") or []:
-        depends = n.get("depends")
-        entries = None if depends is None else _restored_dependencies(depends, ids)
+        body, depends = n["body"], n.get("depends")
+        if "depends" in n:
+            entries = None if depends is None else _restored_dependencies(depends, ids)
+        else:
+            split = store_item_ids.split_legacy(body, by_key)
+            body, entries = split if split is not None else (body, None)
         cur = conn.execute(
             """INSERT INTO task_notes (memory_uid, title, body, split_depends, session, created_at, updated_at)
                VALUES (?, ?, ?, ?, ?, ?, ?)""",
-            (uid, n["title"], n["body"], int(entries is not None), n.get("session", ""),
+            (uid, n["title"], body, int(entries is not None), n.get("session", ""),
              n.get("created_at") or lite.now_iso(), n.get("updated_at") or lite.now_iso()))
         note_id = cur.lastrowid or 0
         _set_note_items(conn, note_id, [ids[k] for k in n.get("items") or [] if k in ids])

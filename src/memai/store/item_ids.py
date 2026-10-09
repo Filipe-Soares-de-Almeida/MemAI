@@ -1,10 +1,14 @@
-"""The task tables keyed by item id, and the rows that hold a brief's dependencies."""
+"""The task tables keyed by item id, the rows that hold a brief's dependencies, and the move of a store keyed by position onto them."""
 
 from __future__ import annotations
 
 import sqlite3
+from pathlib import Path
 
+from memai import sections
+from memai.lite import home
 from memai.sections import Dependency
+from memai.store import backups, paths
 
 # Each task table with {table} for its name: SCHEMA creates it under its own name, and the
 # migration builds it under a temporary one beside the table it replaces.
@@ -91,3 +95,157 @@ def set_dependencies(conn: sqlite3.Connection, note_id: int, entries: list[Depen
         "INSERT INTO task_note_depends (note_id, ord, item_id, text, reason) VALUES (?, ?, ?, ?, ?)",
         [(note_id, n, e.item, "" if e.item is not None else e.text, e.reason)
          for n, e in enumerate(entries, start=1)])
+
+
+KIND = "item-ids"
+
+
+def needs_migration(conn: sqlite3.Connection) -> bool:
+    """True while the task tables still name items by position key."""
+    return "item_key" in {r[1] for r in conn.execute("PRAGMA table_info(task_items)")}
+
+
+def backup_path(db_path: Path) -> Path:
+    """Where the copy taken before the migration goes: the project's backup shelf for a store
+    file in the store home, beside the file for any other."""
+    db_path = Path(db_path).resolve()
+    root = home().resolve()
+    if db_path == root / paths.GENERAL_FILE:
+        project = paths.GENERAL_PROJECT
+        folder = backups.backups_dir(project)
+    elif db_path.parent == root / paths.PROJECTS_DIRNAME:
+        project = db_path.stem
+        folder = backups.backups_dir(project)
+    else:
+        project, folder = db_path.stem, db_path.parent
+    name = Path(backups.backup_name(project, KIND))
+    dest, n = folder / name, 1
+    while dest.exists():
+        n += 1
+        dest = folder / f"{name.stem}-{n}{name.suffix}"
+    return dest
+
+
+def split_legacy(body: str, ids_by_key: dict[str, int]) -> tuple[str, list[Dependency]] | None:
+    """A brief written with position keys: its body without DEPENDS ON, and its entries with each
+    key turned into the id it named. None when the body is no brief, its DEPENDS ON does not
+    read, or a key names no item."""
+    reading = sections.read_spec(sections.BRIEF_SPEC, body)
+    if not reading.conforms:
+        return None
+    entries, problems = sections.read_depends(reading.sections["depends_on"])
+    if problems:
+        return None
+    out = []
+    for e in entries:
+        if e.item is not None or (e.key and e.key not in ids_by_key):
+            return None
+        out.append(Dependency(ids_by_key[e.key], "", "", e.reason) if e.key else e)
+    return sections.without_depends(body) or body, out
+
+
+_COPY = {
+    "task_items": """
+        INSERT INTO task_items_new (id, memory_uid, seq, text, state, updated_at, updated_session)
+        SELECT i.id, i.memory_uid, i.seq, i.text, i.state, i.updated_at, i.updated_session
+        FROM task_items i
+        WHERE i.memory_uid IN (SELECT t.memory_uid FROM tasks t JOIN memories m ON m.uid = t.memory_uid)""",
+    "task_item_links": """
+        INSERT OR IGNORE INTO task_item_links_new (memory_uid, item_id, target_uid, created_at)
+        SELECT l.memory_uid, i.id, l.target_uid, l.created_at
+        FROM task_item_links l JOIN task_items i ON i.memory_uid = l.memory_uid AND i.item_key = l.item_key
+        WHERE i.id IN (SELECT id FROM task_items_new) AND l.target_uid IN (SELECT uid FROM memories)""",
+    "task_comments": """
+        INSERT INTO task_comments_new (id, memory_uid, item_id, body, author, session, created_at)
+        SELECT c.id, c.memory_uid, i.id, c.body, c.author, c.session, c.created_at
+        FROM task_comments c
+        LEFT JOIN task_items i ON i.memory_uid = c.memory_uid AND i.item_key = c.item_key
+        WHERE c.memory_uid IN (SELECT memory_uid FROM tasks)
+          AND (c.item_key = '' OR i.id IN (SELECT id FROM task_items_new))""",
+    "task_note_items": """
+        INSERT OR IGNORE INTO task_note_items_new (note_id, item_id)
+        SELECT ni.note_id, i.id
+        FROM task_note_items ni JOIN task_notes n ON n.id = ni.note_id
+        JOIN task_items i ON i.memory_uid = n.memory_uid AND i.item_key = ni.item_key
+        WHERE i.id IN (SELECT id FROM task_items_new)""",
+}
+
+
+def _sequence(conn: sqlite3.Connection, table: str) -> int:
+    row = conn.execute("SELECT seq FROM sqlite_sequence WHERE name = ?", (table,)).fetchone()
+    return row[0] if row else 0
+
+
+def _keep_sequence(conn: sqlite3.Connection, table: str, seq: int) -> None:
+    conn.execute("UPDATE sqlite_sequence SET seq = MAX(seq, ?) WHERE name = ?", (seq, table))
+    conn.execute("INSERT INTO sqlite_sequence (name, seq) SELECT ?, ? "
+                 "WHERE NOT EXISTS (SELECT 1 FROM sqlite_sequence WHERE name = ?)", (table, seq, table))
+
+
+def _split_briefs(conn: sqlite3.Connection) -> None:
+    """Move every brief's DEPENDS ON into rows, reading keys through the tables not yet dropped."""
+    keys: dict[str, dict[str, int]] = {}
+    for r in conn.execute("SELECT memory_uid, item_key, id FROM task_items"):
+        keys.setdefault(r["memory_uid"], {})[r["item_key"]] = r["id"]
+    for n in conn.execute("SELECT id, memory_uid, body FROM task_notes WHERE split_depends = 0").fetchall():
+        split = split_legacy(n["body"], keys.get(n["memory_uid"], {}))
+        if split is None:
+            continue
+        body, entries = split
+        conn.execute("UPDATE task_notes SET body = ?, split_depends = 1 WHERE id = ?", (body, n["id"]))
+        set_dependencies(conn, n["id"], entries)
+
+
+def migrate(conn: sqlite3.Connection, db_path: Path) -> Path | None:
+    """Move a store whose task rows name items by position key onto item ids.
+
+    Returns the backup taken first, or None when the store needed nothing.
+    The rebuild is one transaction under the write lock and checks again
+    inside it, so a process that lost the race finds nothing to do; any
+    failure rolls it all back.
+    """
+    # imported here: task_items reaches store.memories, which imports store.connection, which imports this module
+    from memai.store import task_items
+
+    if not needs_migration(conn):
+        return None
+    conn.commit()
+    dest = backup_path(db_path)
+    conn.execute("VACUUM INTO ?", (str(dest),))
+    # a no-op inside a transaction, so it is switched before BEGIN and back after COMMIT
+    conn.execute("PRAGMA foreign_keys = OFF")
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        if not needs_migration(conn):
+            conn.rollback()
+            return dest
+        sequences = {t: _sequence(conn, t) for t in ("task_items", "task_comments")}
+        for name, ddl in TABLES.items():
+            conn.execute(ddl.format(table=f"{name}_new"))
+        for name in TABLES:
+            conn.execute(_COPY[name])
+        _split_briefs(conn)
+        for name in TABLES:
+            conn.execute(f"DROP TABLE {name}")
+        for name in TABLES:
+            conn.execute(f"ALTER TABLE {name}_new RENAME TO {name}")
+        for table, seq in sequences.items():
+            _keep_sequence(conn, table, seq)
+        if "item_seq" in {r[1] for r in conn.execute("PRAGMA table_info(tasks)")}:
+            conn.execute("ALTER TABLE tasks DROP COLUMN item_seq")
+        # executescript would commit first, so these run one by one inside the transaction
+        for statement in _DEPENDS.split(";"):
+            if statement.strip():
+                conn.execute(statement)
+        for table in (*TABLES, "task_note_depends"):
+            if conn.execute(f"PRAGMA foreign_key_check({table})").fetchone():
+                raise sqlite3.IntegrityError(f"the item-id migration left a dangling reference in {table}")
+        for (uid,) in conn.execute("SELECT memory_uid FROM tasks").fetchall():
+            task_items.regenerate(conn, uid, touch=False)
+        conn.commit()
+    except BaseException:
+        conn.rollback()
+        raise
+    finally:
+        conn.execute("PRAGMA foreign_keys = ON")
+    return dest
