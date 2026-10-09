@@ -82,27 +82,32 @@ A task is how work reaches the next session. The agent files it with a goal and
 one item per line, and works it as it goes:
 
 ```python
-task(
+made = task(
     title="Move billing webhooks to the idempotent handler",
     goal="Every billing webhook is deduplicated by event id.",
     items="Key charge.succeeded by event id\nCover refunds and disputes\n"
           "Remove the charge-id lookup",
     domain="acme/checkout/billing",
 )
-task_item(uid, "i1", state="done", comment="Handler keys off the event id.")
-task_note(uid, title="Refund replay", items="i2",
+uid = made["uid"]
+charge, refunds, lookup = made["items"]          # the items' ids
+task_item(uid, charge, state="done", comment="Handler keys off the event id.")
+task_note(uid, title="Refund replay", items=str(refunds),
           goal="Replay a refund once, however often it arrives.",
-          context="Refunds arrive twice on retry.", steps="Key refunds by event id.",
+          context=f"Refunds arrive twice on retry; [[#{charge}]] shows the key.",
+          steps="Key refunds by event id.",
           pitfalls="A dispute reuses the refund's event id.", done_when="The replay test passes.",
-          depends_on="i1")
+          depends_on=str(charge))
 ```
 
 An item is a short label, at most 80 characters; its detail goes in a brief.
 What only makes sense inside the task — an item's brief, a rule several items
 share — is a task note, not a memory. A note on items is a brief: GOAL, CONTEXT,
 STEPS, PITFALLS, DONE WHEN and DEPENDS ON, with EXTRA INFO for anything else.
-DEPENDS ON is the one place an item is cited by its key: keys are positions,
-and free text is not rewritten when they move. `task_item` also renames an
+Every tool names an item by its id; the number a list shows is only its place.
+Free text cites an item as `[[#id]]`, which reads back as the item's current
+number and label, and the dashboard inserts one when `#` or `@` is typed in a
+task's text. `task_item` also renames an
 item or deletes one, and `edit_memory(uid, goal=...)` rewrites the goal, so a
 task is corrected in place. Search, recall and the session brief never return
 a note. `get_memory(uid)` on a
