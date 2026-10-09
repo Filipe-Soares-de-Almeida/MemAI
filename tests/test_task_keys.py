@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 
 from conftest import brief
@@ -195,10 +197,12 @@ def test_a_delete_whose_expectation_matches_goes_through(conn):
     assert _keys(conn, uid) == ["i1", "i2"]
 
 
-def test_the_task_item_docstring_says_a_key_is_a_position():
+def test_the_task_item_schema_says_a_key_is_a_position():
     from memai import server
 
-    assert "an item's key is its position in the checklist" in server.task_item.__doc__
+    [tool] = [t for t in asyncio.run(server.mcp.list_tools()) if t.name == "task_item"]
+    assert "an item's key is its position in the checklist" in (
+        tool.input_schema["properties"]["item"]["description"])
 
 
 def _five(conn):
@@ -256,7 +260,8 @@ def test_a_free_text_depends_on_is_left_as_written_by_a_deletion(conn):
 
 def test_a_note_that_is_not_a_brief_is_left_alone_by_a_deletion(conn):
     uid = _five(conn)
-    nid = tasks.add_note(conn, uid, title="Rule", body="DEPENDS ON: i2", items=[])
+    nid = tasks.add_note(conn, uid, title="Rule", body="placeholder", items=[])
+    conn.execute("UPDATE task_notes SET body = 'DEPENDS ON: i2' WHERE id = ?", (nid,))
     tasks.delete_item(conn, uid, "i2")
     assert tasks.note(conn, uid, nid)["body"] == "DEPENDS ON: i2"
 
@@ -297,12 +302,13 @@ def test_the_references_in_a_store_with_gaps_follow_the_compaction_when_it_opens
 
 
 def test_deleting_an_item_a_brief_near_the_note_limit_depends_on_is_not_refused(conn):
-    text = "x" * 290
+    text = "x" * tasks.ITEM_MAX
     uid = tasks.create_task(conn, title="Ship it", goal="Ship it", items=[text, "pack the box"],
                             domain="acme/lantern")
+    rest = len(brief("pack", depends_on="i1", context=""))
     nid = tasks.add_note(conn, uid, title="Pack", items=["i2"],
-                         body=brief("pack", depends_on="i1", context="c" * (tasks.NOTE_MAX - 150)))
-    assert len(tasks.note(conn, uid, nid)["body"]) > tasks.NOTE_MAX - 160
+                         body=brief("pack", depends_on="i1", context="c" * (tasks.NOTE_MAX - rest - 5)))
+    assert len(tasks.note(conn, uid, nid)["body"]) > tasks.NOTE_MAX - 10
     tasks.delete_item(conn, uid, "i1")
     body = tasks.note(conn, uid, nid)["body"]
     assert len(body) > tasks.NOTE_MAX and _depends(conn, uid, nid) == f'deleted "{text}"'

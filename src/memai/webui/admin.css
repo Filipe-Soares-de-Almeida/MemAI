@@ -2390,6 +2390,12 @@ button.rs-mono:hover { color: var(--accent); }
 .tk-main:hover .tk-counts, .tk-main:hover .tk-chev { color: var(--ink); }
 .tk-main[aria-expanded="true"] .tk-chev { transform: rotate(90deg); }
 
+/* an item's text edited in place, in the column the text reads in */
+.tk-rename { display: flex; flex-direction: column; gap: var(--sp-2); min-width: 0; }
+.tk-rename-box { width: 100%; font: 400 var(--fs-body)/1.5 var(--font-ui); }
+.tk-rename-foot { display: flex; align-items: center; gap: var(--sp-2); }
+.tk-rename-foot .rf-count { margin-left: auto; }
+
 /* One item's links and comments, open under its row: a flush --inset well, between the
    page and the list rows. A rule drops from the state mark; content aligns with the text. */
 .tk-panel {

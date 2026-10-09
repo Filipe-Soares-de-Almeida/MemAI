@@ -171,6 +171,8 @@ export function useChecklist(uid: string, task: TaskRecord, status: string, hook
   let currentStatus = status;
   const ui = reactive({
     open: '', goalEditing: false, adding: false, allComments: false,
+    /* the key of the item whose text is being edited */
+    renaming: '',
     /* the note being edited by id, or `new:<item key>` */
     noteEdit: '', noteDraft: null as NoteDraft | null,
     /* notes opened or shut by hand; a list of one note starts open */
@@ -270,6 +272,7 @@ export function useChecklist(uid: string, task: TaskRecord, status: string, hook
     const moved = new Map(items.slice(at + 1).map((i, n) => [i.key, items[at + n].key]));
     const follow = (k: string) => moved.get(k) ?? k;
     ui.open = follow(ui.open);
+    ui.renaming = ui.renaming === gone ? '' : follow(ui.renaming);
     enter.opened = follow(enter.opened);
     const drafts = [...ui.drafts];
     ui.drafts.clear();
@@ -472,6 +475,29 @@ export function useChecklist(uid: string, task: TaskRecord, status: string, hook
     await write(client.tasks.goal, { goal }, { onOk: () => { ui.goalEditing = false; focusAfter('#tkGoalEdit'); } });
   }
 
+  /* ── an item's text ── */
+
+  function renameItem(key: string) { ui.renaming = key; focusAfter(attr('data-rename', key)); land(); }
+  function leaveRename() {
+    const key = ui.renaming;
+    ui.renaming = '';
+    focusAfter(attr('data-toggle', key));
+    land();
+  }
+
+  /* Sends the text the row showed as well, so a view that went stale is refused instead of renaming
+     whichever item holds the key now. */
+  async function saveRename(key: string, text: string) {
+    const item = current.value.items.find(i => i.key === key);
+    const next = text.trim();
+    if (!item || !next || next.length > TASK.ITEM_MAX) return;
+    if (next === item.text) { leaveRename(); return; }
+    await write(client.tasks.itemText, { item: key, text: next, expect: item.text }, {
+      errKey: 'task.err.rename',
+      onOk: () => { ui.renaming = ''; focusAfter(attr('data-toggle', key)); },
+    });
+  }
+
   function openAdd() { ui.adding = true; focusAfter('#tkAddBox'); land(); }
   function closeAdd() { ui.adding = false; focusAfter('#tkAddOpen'); land(); }
 
@@ -485,7 +511,7 @@ export function useChecklist(uid: string, task: TaskRecord, status: string, hook
 
   return { current, ui, enter, host, sync, setItem, deleteItem, flashItem, toggle, link, unlink, post,
            noteOpen, toggleNote, editNote, leaveNote, scopeNote, noteReady, noteLength, dependsIssue, submitNote, deleteNote,
-           editGoal, leaveGoal, saveGoal, openAdd, closeAdd, sendAdd };
+           editGoal, leaveGoal, saveGoal, renameItem, leaveRename, saveRename, openAdd, closeAdd, sendAdd };
 }
 
 export type Checklist = ReturnType<typeof useChecklist>;

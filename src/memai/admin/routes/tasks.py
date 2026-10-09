@@ -62,6 +62,14 @@ def task_item_state(request, payload) -> schema.TaskAnswer:
         return _task_answer(conn, uid)
 
 
+def task_item_text(request, payload) -> schema.TaskAnswer:
+    uid = request.path_params["uid"]
+    with connection.connect() as conn:
+        tasks.rename_item(conn, uid, payload.get("item") or "", payload.get("text") or "",
+                          expect=payload.get("expect"))
+        return _task_answer(conn, uid)
+
+
 def task_delete_item(request, payload) -> schema.TaskAnswer:
     uid = request.path_params["uid"]
     with connection.connect() as conn:
@@ -136,6 +144,7 @@ ROUTES = [
     Route("/api/tasks", api(create_task), methods=["POST"]),
     Route("/api/tasks/{uid}/item", api(task_item_state), methods=["POST"]),
     Route("/api/tasks/{uid}/item", api(task_delete_item), methods=["DELETE"]),
+    Route("/api/tasks/{uid}/item/text", api(task_item_text), methods=["POST"]),
     Route("/api/tasks/{uid}/items", api(task_add_items), methods=["POST"]),
     Route("/api/tasks/{uid}/goal", api(task_goal), methods=["POST"]),
     Route("/api/tasks/{uid}/comment", api(task_comment), methods=["POST"]),

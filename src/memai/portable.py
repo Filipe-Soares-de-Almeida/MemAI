@@ -519,6 +519,10 @@ def adopt(task_uid: str, uids: list[str], *, dry_run: bool = True) -> dict:
             if not whole and (error := tasks.depends_error(conn, task_uid, row["content"], keys)):
                 refused.append({"uid": uid, "reason": f"DEPENDS ON does not read: {error}"})
                 continue
+            cited = {"title": row["title"], **tasks.free_text(row["content"])}
+            if error := tasks.cited_key_error(cited, len(all_keys)):
+                refused.append({"uid": uid, "reason": error})
+                continue
             plan.append({"uid": uid, "title": row["title"], "body": row["content"],
                          "items": [] if whole else keys, "level": "task" if whole else "item"})
         edits = store_memories.edit_count(conn, task_uid)

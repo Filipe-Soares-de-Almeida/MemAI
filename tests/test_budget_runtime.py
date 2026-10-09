@@ -14,7 +14,7 @@ def test_an_oversized_tool_result_becomes_an_error():
         return {"body": "x" * (budget.MCP_RESULT_MAX_CHARS + n)}
 
     try:
-        probe = server.tool("_probe")(_huge_probe)
+        probe = server.tool("_probe", server.READ)(_huge_probe)
         out = probe()
     finally:
         server._GROUP_OF.pop("_huge_probe", None)
@@ -28,7 +28,7 @@ def test_a_result_within_the_ceiling_passes_through_untouched():
         return {"body": "fine"}
 
     try:
-        out = server.tool("_probe")(_small_probe)()
+        out = server.tool("_probe", server.READ)(_small_probe)()
     finally:
         server._GROUP_OF.pop("_small_probe", None)
     assert out == {"body": "fine"}

@@ -10,7 +10,7 @@
     "STATES": ["open", "completed", "cancelled"],
     "ITEM_STATES": ["todo", "doing", "done", "dropped"],
     "GOAL_MAX": 2000,
-    "ITEM_MAX": 300,
+    "ITEM_MAX": 80,
     "ITEMS_MAX": 50,
     "NOTE_MAX": 4000,
     "BRIEF": [

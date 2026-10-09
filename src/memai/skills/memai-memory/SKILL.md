@@ -384,18 +384,21 @@ both if they are genuinely different facts.
 
 **Curation, one record at a time:**
 
-- `edit_memory(uid, new_content, note, mode, source_ref, title)` corrects while keeping
-  the previous version; `mode='append'` adds a line instead of replacing the body,
-  for a memory that **gains** a fact rather than turning out wrong. It
-  **refuses a diagram's or a task's body** — that content is generated from
-  the graph or from the goal and the items.
+- `edit_memory(uid, new_content, note, mode, source_ref, title, tags, goal)` corrects
+  while keeping the previous version; `mode='append'` adds a line instead of
+  replacing the body, for a memory that **gains** a fact rather than turning out
+  wrong. It **refuses a diagram's or a task's body** — that content is generated
+  from the graph or from the goal and the items. A task's goal is rewritten with
+  `goal`, its items through `task_item()`.
   `source_ref` repoints the memory at its source and takes no `new_content`,
   so a missing or moved reference is a one-argument fix
   ([§2.4](#24-decay--review_after-and-source_ref)); a diagram accepts that one.
   `title` renames the memory, also on its own, and is **refused for a
   diagram** — its title generates part of its body, so the dashboard renames
   that one.
-- `set_confidence(uid, unverified|confirmed|contradicted)`.
+- `set_confidence(uid, unverified|confirmed|contradicted)` once evidence settles a
+  claim. A `contradicted` memory sorts last in search and drops out of the notes,
+  pitfalls and handoffs `must_read` lists and of the checkpoint `pulse` returns.
 - `link_memories(from_uid, to_uid, relation_type, note)` creates a typed edge
   (`supersedes`, `relates_to`, `contradicts`, `links_to`); `get_relations(uid)`
   lists them.
@@ -406,6 +409,9 @@ both if they are genuinely different facts.
   **plus its subtree**.
 - `forget(uid, reason, superseded_by)` archives: reversible, content kept, out
   of default search and list output. On an open task it cancels the task.
+  `superseded_by` is kept on the archived record; to mark a memory that stays
+  active as replaced, draw `link_memories(new, old, 'supersedes')`, and search
+  flags the old one `succeeded_by`.
 - `purge_memory(uid, "DELETE <uid>")` deletes permanently, with the edit
   history and relations. Only when the user explicitly asks and **states the
   uid in their own message** — do not build that phrase from an inferred
@@ -418,7 +424,7 @@ task(title, goal, items, domain, also, tags, session)
   items: one checklist item per line; blank lines are ignored
 ```
 
-A task is a `goal` and up to 50 items of up to 300 characters. The `goal` is
+A task is a `goal` and up to 50 items of up to 80 characters. The `goal` is
 the **brief** an agent with none of the writing session's context works from:
 what the work is and why, where it lives, the decisions and constraints that
 bind it, and what done looks like. Keep it short but complete enough to act on
@@ -428,20 +434,48 @@ next agent guessing. The goal is **plain prose**, never `GOAL:` / `WHY:` /
 and copying their `LABEL: text` shape only makes it look like one. The labelled
 shape belongs to an item's brief (`task_note`). Each item's key is its position
 — `i1`, `i2`, … — and a tool takes `i3` or `3` for the third item. An item that
-stops applying is `dropped`; deleting one (only the dashboard does) renumbers
-every item after it. The task's content is
+stops applying is `dropped`; deleting one renumbers every item after it. The
+task's content is
 generated from the goal and the items (`[ ]` todo, `[~]` doing, `[x]` done,
 `[-]` dropped); a goal edit and an item deletion enter the edit history.
 
+**Write it so it reads back.** The server refuses a write that breaks these:
+
+- **The title names what the task delivers, in a few words.** Every list
+  shows it.
+- **An item is a short label, verb first, at most 80 characters.** Lists,
+  progress and every `DEPENDS ON` in another item's brief show it whole, so a
+  long one floods each brief that depends on it. The step's detail goes in
+  that item's brief (`task_note`).
+- **An item is cited by its key only in a brief's `DEPENDS ON`.** Deleting an
+  item renumbers the rest and `DEPENDS ON` follows, but free text — the goal,
+  an item's text, a note's title or other fields, a comment — is never
+  rewritten, so an `i3` there silently comes to mean another item. Order and
+  prerequisites go in `DEPENDS ON`; anywhere else, name the item by what it
+  does.
+
+```
+Refused:  item   "Write the CSV exporter with the column mapping, once i2 is merged"
+          steps  "Reuse the mapping i2 built"
+Accepted: item   "Write the CSV exporter"
+          steps  "Reuse the column mapping the schema item built"
+          depends_on  "i2 (the column mapping)"
+```
+
 Work it with:
 
-- **`task_item(uid, item, state, comment, related)`** — set an item's `state`
-  (`todo`, `doing`, `done`, `dropped`), comment on it, and link the memories it
-  produced or depends on (`related`: comma-separated uids; an unknown uid
-  refuses the whole call). Give at least one of the three; they apply together
-  or not at all. The result carries `progress` (`{done, dropped, total}`),
-  `task_state` and `archived`.
-- **`task_add(uid, items)`** — append items, one per line.
+- **`task_item(uid, item, state, comment, related, text, expect, delete)`** — set
+  an item's `state` (`todo`, `doing`, `done`, `dropped`), comment on it, link the
+  memories it produced or depends on (`related`: comma-separated uids; an
+  unknown uid refuses the whole call), and rename it with `text`: the item keeps
+  its key, state, brief, comments and links. Give at least one; they apply
+  together or not at all. The result carries `progress`
+  (`{done, dropped, total}`), `task_state` and `archived`.
+  `delete=True` removes the item, alone in its call and given `expect`, the
+  item's current text as last read — a key names whichever item holds that
+  position now. The result's `renumbered` maps the keys that moved. Delete a
+  mistake or a duplicate; mark work decided against `dropped`, which keeps it.
+- **`task_add(uid, items)`** — append items, one per line, each a short label.
 - **`task_comment(uid, body, item)`** — a comment on the task, or on one item
   when `item` names a key. A comment never edits the content, so it carries
   what a checklist cannot: why an item is blocked, what a review said.
@@ -669,7 +703,7 @@ always published, `diagrams` and `curation` only when named (or under the
 | `anti_pattern(title, pattern, why_wrong, instead, domain, also, tags, session, review_after, source_ref)` | A pitfall → `type='anti_pattern'` (counted by `pulse`, listed by `must_read`) | core |
 | `checkpoint(title, intent, established, pursuing, open_questions, session, domain, also, tags)` | Where the work stands → `type='checkpoint'` (summary, not an archive) | core |
 | `task(title, goal, items, domain, also, tags, session)` | A goal and a checklist, one item per line → `type='task'` | core |
-| `task_item(uid, item, state, comment, related)` | One item's state (`todo` \| `doing` \| `done` \| `dropped`), a comment on it, memories linked to it; the last close archives the task | core |
+| `task_item(uid, item, state, comment, related, text, expect, delete)` | One item's state (`todo` \| `doing` \| `done` \| `dropped`), a comment on it, memories linked to it, its text; or its deletion, given its current text; the last close archives the task | core |
 | `task_add(uid, items)` | Append items to a task, one per line; a closed task reopens | core |
 | `task_comment(uid, body, item)` | A comment on a task, or on one item | core |
 | `task_note(uid, title, body, items, note_id, delete, goal, context, steps, pitfalls, done_when, depends_on, extra_info)` | A note owned by the task: a brief on items, free text on the whole task; never a memory | core |
@@ -679,9 +713,9 @@ always published, `diagrams` and `curation` only when named (or under the
 
 | Editing and domains | | group |
 |---|---|---|
-| `edit_memory(uid, new_content, note, mode, source_ref, title)` | Correct (or `mode='append'` add to) a memory, keeping the previous version; **refuses a diagram's or a task's body**. `source_ref` repoints it at its source and `title` renames it, either alone or with the edit | core |
+| `edit_memory(uid, new_content, note, mode, source_ref, title, tags, goal)` | Correct (or `mode='append'` add to) a memory, keeping the previous version; **refuses a diagram's or a task's body**. `source_ref` repoints it at its source, `title` renames it, `tags` replaces the tag set, `goal` rewrites a task's goal; each alone or with the edit | core |
 | `link_memories(from_uid, to_uid, relation_type, note)` | A typed edge between two memories | core |
-| `set_confidence(uid, confidence)` | `unverified` \| `confirmed` \| `contradicted` | core |
+| `set_confidence(uid, confidence)` | `unverified` \| `confirmed` \| `contradicted`; a contradicted memory sorts last and drops out of `must_read` and `pulse` | core |
 | `also_domain(uid, domain)` / `unfile_domain(uid, domain)` | Cross-list / drop one cross-listing — **never** moves the `domain` | core |
 | `get_domain_case()` / `set_domain_case(mode)` | The store's casing policy: `preserve` \| `lower` \| `upper` | curation |
 | `forget(uid, reason, superseded_by)` | Archive: reversible, content kept | core |

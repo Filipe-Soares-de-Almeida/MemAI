@@ -487,9 +487,9 @@ def test_a_bad_task_note_is_refused(client):
 def test_the_record_carries_every_task_note(client):
     uid = _task(client)
     client.post(f"/api/tasks/{uid}/note", json={"title": "Top", "body": "b", "items": []})
-    client.post(f"/api/tasks/{uid}/note", json={"title": "On i1", "body": brief("b"), "items": ["i1"]})
+    client.post(f"/api/tasks/{uid}/note", json={"title": "Solder brief", "body": brief("b"), "items": ["i1"]})
     record = client.get(f"/api/memories/{uid}").json()
-    assert [n["title"] for n in record["task"]["notes"]] == ["Top", "On i1"]
+    assert [n["title"] for n in record["task"]["notes"]] == ["Top", "Solder brief"]
 
 
 def test_task_notes_carry_what_their_wikilinks_point_at(client):
@@ -506,7 +506,7 @@ def test_a_note_carries_its_brief_fields_or_null(client):
     uid = _task(client)
     client.post(f"/api/tasks/{uid}/note", json={"title": "Top", "body": "free", "items": []})
     client.post(f"/api/tasks/{uid}/note",
-                json={"title": "On i1", "body": brief("solder it", extra_info="flux first"), "items": ["i1"]})
+                json={"title": "Solder brief", "body": brief("solder it", extra_info="flux first"), "items": ["i1"]})
     notes = client.get(f"/api/memories/{uid}").json()["task"]["notes"]
     assert notes[0]["brief"] is None
     assert notes[1]["brief"]["goal"] == "solder it" and notes[1]["brief"]["extra_info"] == "flux first"
@@ -527,9 +527,9 @@ def test_a_note_carries_its_parsed_depends_or_null(client):
     uid = _task(client)
     client.post(f"/api/tasks/{uid}/note", json={"title": "Top", "body": "free", "items": []})
     client.post(f"/api/tasks/{uid}/note",
-                json={"title": "On i1", "body": brief("solder it"), "items": ["i1"]})
+                json={"title": "Solder brief", "body": brief("solder it"), "items": ["i1"]})
     res = client.post(f"/api/tasks/{uid}/note",
-                      json={"title": "On i2", "body": brief("ship it", depends_on="i1 (the plan)"),
+                      json={"title": "Ship brief", "body": brief("ship it", depends_on="i1 (the plan)"),
                             "items": ["i2"]})
     assert res.status_code == 200, res.text
     notes = _notes(client, uid)
@@ -541,7 +541,7 @@ def test_a_note_carries_its_parsed_depends_or_null(client):
 def test_a_note_whose_depends_on_is_free_text_carries_null(client):
     uid = _task(client)
     client.post(f"/api/tasks/{uid}/note",
-                json={"title": "On i1", "body": brief("solder it"), "items": ["i1"]})
+                json={"title": "Solder brief", "body": brief("solder it"), "items": ["i1"]})
     with connection.connect() as conn:
         conn.execute("UPDATE task_notes SET body = REPLACE(body, 'DEPENDS ON: none', "
                      "'DEPENDS ON: Item 7')")
@@ -560,7 +560,7 @@ def test_a_dependency_on_an_unknown_item_is_a_400_and_writes_nothing(client):
 def test_deleting_an_item_marks_the_dependency_the_view_reads(client):
     uid = _task(client)
     client.post(f"/api/tasks/{uid}/note",
-                json={"title": "On i2", "body": brief("ship it", depends_on="i1"), "items": ["i2"]})
+                json={"title": "Ship brief", "body": brief("ship it", depends_on="i1"), "items": ["i2"]})
     with connection.connect() as conn:
         tasks.delete_item(conn, uid, "i1")
     assert _notes(client, uid)[0]["depends"] == [
