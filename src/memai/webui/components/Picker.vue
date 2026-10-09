@@ -21,7 +21,8 @@ const props = withDefaults(defineProps<{
   ariaLabel?: string;
   cls?: string;
   disabled?: boolean;
-  search?: 'auto' | boolean;
+  /* boolean before 'auto': Vue casts a bare `search` attribute to true only when Boolean leads String */
+  search?: boolean | 'auto';
   minWidth?: number;
   panelCls?: string;
   /* an action picker keeps its verb on the button instead of showing what was picked */
