@@ -659,18 +659,26 @@ def anti_pattern(
     also: str = "", tags: str = "", session: str = "", review_after: str = "",
     source_ref: str = "",
 ) -> dict:
-    """Record a mistake/temptation to avoid repeating, and the correct approach.
+    """Record a pitfall: a move that looks right, why it fails, and what to do instead.
 
-    Stored as type='anti_pattern'; pulse() counts the open ones for a domain
-    and must_read(type='anti_pattern') lists them.
+    For a mistake worth not repeating. A fact that simply holds is a
+    note(); how an analysis ran and what it settled is a reasoning().
+    Stored as type='anti_pattern' and read back under TEMPTATION / WHY WRONG /
+    INSTEAD; pulse() counts the open ones for a domain and
+    must_read(type='anti_pattern') lists them.
 
     ONE pitfall per memory: a second temptation from the same session is
     its own anti_pattern(), connected with link_memories().
 
+    Returns the new `uid` and the project it landed in, plus `similar` when
+    the store already holds something close: correct, drop or link it as
+    `similar_hint` says. A field over its ceiling is refused and nothing is
+    written.
+
     @param title
 
     pattern: the temptation, as the next agent will meet it: the move that
-    looks right at the time.
+    looks right at the time. At most 800 characters.
 
     why_wrong: the mechanism that makes it fail, specific enough to
     recognise the next time.

@@ -122,3 +122,26 @@ def test_tool_strips_the_indentation_an_interpreter_leaves_in_a_docstring():
     wrapped = server.tool("full", server.READ)(probe)
     assert wrapped.__doc__ == "Summary.\n\nBody line.\n    deeper"
     server._GROUP_OF.pop("probe", None)
+
+
+def test_anti_pattern_says_when_a_note_or_a_reasoning_fits_instead():
+    doc = _flat(_descriptions()["anti_pattern"])
+    assert "note()" in doc and "reasoning()" in doc
+    assert "See note()" not in doc
+
+
+def test_anti_pattern_names_the_labels_its_body_reads_back_under():
+    doc = _flat(_descriptions()["anti_pattern"])
+    labels = [s.label for s in sections.SECTION_SPEC["anti_pattern"]]
+    assert " / ".join(labels) in doc
+
+
+def test_anti_pattern_says_what_it_returns():
+    doc = _flat(_descriptions()["anti_pattern"])
+    assert "Returns" in doc and "uid" in doc and "similar" in doc
+
+
+def test_anti_pattern_states_the_pattern_ceiling():
+    [pattern] = [s for s in sections.SECTION_SPEC["anti_pattern"] if s.key == "pattern"]
+    text = _schemas()["anti_pattern"]["properties"]["pattern"]["description"]
+    assert f"{pattern.max_len} characters" in text
