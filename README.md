@@ -106,8 +106,8 @@ share — is a task note, not a memory. A note on items is a brief: GOAL, CONTEX
 STEPS, PITFALLS, DONE WHEN and DEPENDS ON, with EXTRA INFO for anything else.
 Every tool names an item by its id; the number a list shows is only its place.
 Free text cites an item as `[[#id]]`, which reads back as the item's current
-number and label, and the dashboard inserts one when `#` or `@` is typed in a
-task's text. `task_item` also renames an
+number and label, and the dashboard inserts one when `#` is typed in a task's
+text. `task_item` also renames an
 item or deletes one, and `edit_memory(uid, goal=...)` rewrites the goal, so a
 task is corrected in place. Search, recall and the session brief never return
 a note. `get_memory(uid)` on a
