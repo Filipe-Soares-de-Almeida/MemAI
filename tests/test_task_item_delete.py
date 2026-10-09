@@ -6,7 +6,7 @@ import asyncio
 
 import pytest
 
-from conftest import brief
+from conftest import brief, item_at
 from memai import server, tasks
 from memai.store import connection
 
@@ -57,7 +57,7 @@ def test_the_only_item_is_not_deleted(tmp_path, monkeypatch):
 
 def test_a_brief_depending_on_a_moved_item_follows_it(uid):
     with connection.connect() as c:
-        nid = tasks.add_note(c, uid, title="Release", items=["i4"],
+        nid = tasks.add_note(c, uid, title="Release", items=[item_at(c, uid, 4)],
                              body=brief("publish it", depends_on="i3 (the CLI)"))
     server.task_item(uid, "1", delete=True, expect="Draft the grammar")
     with connection.connect() as c:

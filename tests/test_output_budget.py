@@ -52,13 +52,13 @@ def worst(tmp_path_factory):
         task = tasks.create_task(conn, title=_text(120), goal=_text(tasks.GOAL_MAX),
                                  items=[_text(tasks.ITEM_MAX, f"{n} ") for n in range(tasks.ITEMS_MAX)],
                                  domain="acme/m000")
-        keys = [f"i{n}" for n in range(1, tasks.ITEMS_MAX + 1)]
+        keys = tasks.item_ids(conn, task)
         for n in range(300):
             tasks.add_note(conn, task, title=_text(120, f"n{n} "), body=_text(tasks.NOTE_MAX) if n % 5 == 0
                            else brief(_text(tasks.NOTE_MAX - len(brief("")))),
                            items=[] if n % 5 == 0 else [keys[n % 50], keys[(n + 1) % 50]])
             tasks.add_comment(conn, task, _text(tasks.COMMENT_MAX, f"c{n} "),
-                              item="" if n % 2 else keys[n % 50])
+                              item=0 if n % 2 else keys[n % 50])
         for key in keys[:5]:
             tasks.link_item(conn, task, key, uids[3:203])
         ids["task"] = task

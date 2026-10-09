@@ -69,17 +69,6 @@ BRIEF_SPEC: tuple[Section, ...] = tuple(
     Section(f["key"], f["label"], optional=bool(f.get("optional"))) for f in contract.TASK_BRIEF)
 
 
-class DependsEntry(NamedTuple):
-    item: str      # an `iN` key, or "" for a dependency on a deleted item
-    deleted: str   # the deleted item's text, or "" for a key
-    reason: str
-
-
-_DEPENDS_ENTRY = re.compile(
-    r'(?:(?P<key>[iI][1-9][0-9]*)|(?i:deleted)\s+"(?P<text>[^"]*)")\s*(?:\((?P<reason>[^()]*)\))?')
-_DEPENDS_KEY_HEAD = re.compile(r"[iI][1-9][0-9]*")
-
-
 def _depends_pieces(text: str) -> tuple[list[tuple[str, str, str]], list[str]]:
     """The text split at commas and newlines outside parentheses and quotes.
 
@@ -108,70 +97,6 @@ def _depends_pieces(text: str) -> tuple[list[tuple[str, str, str]], list[str]]:
         return [], ["unbalanced parentheses"]
     pieces.append((text[start:], before, ""))
     return pieces, []
-
-
-def _depends_complaint(piece: str) -> str:
-    shown = piece if len(piece) <= 40 else piece[:37] + "..."
-    if piece.count("(") > 1:
-        return f"nested or repeated parentheses in {shown!r}"
-    head = _DEPENDS_KEY_HEAD.match(piece)
-    if head and piece[head.end():].strip():
-        return f"text outside parentheses after {head.group().lower()} in {shown!r}"
-    if re.match(r"(?i)deleted\b", piece):
-        return f'{shown!r} is not deleted "<item text>" with an optional (reason)'
-    return f"{shown!r} is not an item key"
-
-
-def parse_depends(text: str) -> tuple[list[DependsEntry], list[str]]:
-    """The entries of a DEPENDS ON field and what stops it reading.
-
-    The field is `none`, or entries separated by commas or newlines: an item
-    key `iN`, or `deleted "<item text>"`, each with an optional `(reason)`.
-    """
-    text = str(text).strip()
-    if text.lower() == "none":
-        return [], []
-    if not text:
-        return [], ["the field is empty"]
-    pieces, problems = _depends_pieces(text)
-    entries: list[DependsEntry] = []
-    for piece, before, after in pieces:
-        piece = piece.strip()
-        if not piece:
-            if "\n" not in (before, after) and (before or after):
-                problems.append("an empty entry")
-            continue
-        found = _DEPENDS_ENTRY.fullmatch(piece)
-        if found is None:
-            problems.append(_depends_complaint(piece))
-            continue
-        reason = (found.group("reason") or "").strip()
-        if found.group("reason") is not None and not reason:
-            problems.append(f"an empty reason in {piece!r}")
-            continue
-        if found.group("key"):
-            key = found.group("key").lower()
-            if any(e.item == key for e in entries):
-                problems.append(f"{key} listed twice")
-                continue
-            entries.append(DependsEntry(key, "", reason))
-        elif found.group("text"):
-            entries.append(DependsEntry("", found.group("text"), reason))
-        else:
-            problems.append("a deleted entry with an empty item text")
-    return entries, problems
-
-
-def render_depends(entries: list[DependsEntry]) -> str:
-    """The field text for `entries`: `none` for an empty list; parse_depends reads it back."""
-    if not entries:
-        return "none"
-    parts = []
-    for e in entries:
-        text = " ".join(e.deleted.replace('"', "'").split())
-        head = e.item or f'deleted "{text}"'
-        parts.append(f"{head} ({e.reason})" if e.reason else head)
-    return ", ".join(parts)
 
 
 class Dependency(NamedTuple):

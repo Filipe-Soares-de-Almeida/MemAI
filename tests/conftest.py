@@ -76,3 +76,10 @@ def webui_constants() -> dict:
                          capture_output=True, text=True, encoding="utf-8", timeout=60)
     assert out.returncode == 0, out.stderr
     return json.loads(out.stdout)
+
+
+def item_at(conn, uid: str, n: int) -> int:
+    """The id of the task's item at position `n` (from 1), as the list stands now."""
+    from memai import tasks
+
+    return tasks.item_ids(conn, uid)[n - 1]
