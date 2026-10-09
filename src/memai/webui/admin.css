@@ -2310,14 +2310,6 @@ button.rs-mono:hover { color: var(--accent); }
 .tk-prog-n b { font: 500 var(--fs-md) var(--font-ui); color: var(--ink); }
 .tk-bar { height: 8px; border-radius: var(--r-pill); }
 .tk-bar .bar-fill { --c: var(--f-go); }
-/* What was dropped follows what was done, hatched: part of the whole, not progress. The hatch
-   fills the track and a clip leaves its span, so it eases like the fill. */
-.tk-bar-drop {
-  position: absolute; inset: 0;
-  background: repeating-linear-gradient(135deg, rgba(255, 255, 255, .3) 0 2px, transparent 2px 5px);
-  clip-path: inset(0 calc((1 - var(--v0) - var(--v)) * 100%) 0 calc(var(--v0) * 100%));
-  transition: clip-path .6s cubic-bezier(.25, .9, .3, 1);
-}
 
 /* the items */
 .tk-items { list-style: none; margin: 0; padding: 0; }
@@ -2325,6 +2317,9 @@ button.rs-mono:hover { color: var(--accent); }
 .tk-item { border-bottom: 1px solid var(--line-soft); }
 .tk-item.is-new { animation: rise .28s cubic-bezier(.2, .7, .3, 1) both; }
 .tk-item.is-leaving { animation: tk-leave .16s cubic-bezier(.4, 0, 1, 1) both; pointer-events: none; }
+/* the row a DEPENDS ON chip points at: the accent wash, fading out over the time the class stays */
+.tk-item.is-flash > .tk-row { animation: tk-flash 1.2s cubic-bezier(.3, 0, .6, 1) both; }
+@keyframes tk-flash { from { background: var(--accent-dim); } 60% { background: var(--accent-dim); } to { background: transparent; } }
 @keyframes tk-leave { to { opacity: 0; transform: translateX(var(--leave-x, -10px)); } }
 
 .tk-item[data-s="doing"] > .tk-row { background: color-mix(in srgb, var(--f-live) 7%, transparent); }
@@ -2480,6 +2475,20 @@ textarea.tk-box {
 .tk-brief-in + .tk-brief-in { margin-top: var(--sp-2); }
 .tk-note .tk-brief-in textarea { min-height: 5.5rem; field-sizing: content; }
 .tk-opt { color: var(--ink-3); font-weight: 400; }
+.tk-brief-err { margin: var(--sp-1) 0 0; }
+/* DEPENDS ON as references: a chip per item that scrolls to it, the reason beside it in muted text */
+.tk-deps { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--sp-1); }
+.tk-dep, .tk-dep-none { display: flex; align-items: baseline; flex-wrap: wrap; column-gap: var(--sp-3); font: 400 var(--fs-md) var(--font-ui); }
+.tk-dep-chip {
+  display: inline-flex; align-items: center; max-width: 100%; min-height: var(--tap);
+  padding: 0 var(--sp-3); text-align: left; cursor: pointer;
+  font: 500 var(--fs-sm) var(--font-ui); color: var(--accent); font-variant-numeric: tabular-nums;
+  background: var(--chip-fill); border: 1px solid var(--line-soft); border-radius: var(--r-pill);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.tk-dep-chip:hover { color: var(--accent-hi); border-color: rgba(187, 134, 252, .4); }
+.tk-dep-gone s, .tk-dep-key { color: var(--ink-3); }
+.tk-dep-why, .tk-dep-none { color: var(--ink-2); }
 /* under the box: how to save on the left, how much room is left on the right */
 .tk-note-foot { display: flex; align-items: center; gap: var(--sp-3); }
 .tk-note-foot .rf-count { margin-left: auto; }
@@ -2587,7 +2596,7 @@ textarea.tk-box {
 :root[data-motion="reduce"] .tk { --pop-from: 1; --leave-x: 0px; --tk-in-y: 0px; }
 :root[data-motion="reduce"] .tk-state[data-s="doing"] .ico { animation: none; }
 :root[data-motion="reduce"] .tk-state.is-pulse[data-s="done"] .ico path { animation: none; }
-:root[data-motion="reduce"] .tk-bar-drop { transition: none; }
+:root[data-motion="reduce"] .tk-item.is-flash > .tk-row { animation: none; background: var(--accent-dim); }
 :root[data-motion="reduce"] :is(.tk-ring, .tk-chev, .tk-row, .tk-reply) { transition: none; }
 
 /* a task in the memories list: how far it has got, as a short bar and the

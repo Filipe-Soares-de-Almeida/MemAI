@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createApp, nextTick } from 'vue';
 import type { App } from 'vue';
 import TaskChecklist from '../../src/memai/webui/views/record/TaskChecklist.vue';
-import { notePeek, progressOf } from '../../src/memai/webui/views/record/checklist.ts';
+import { dependsProblem, notePeek, parseDepends, progressOf } from '../../src/memai/webui/views/record/checklist.ts';
 import { calls, catalog, serveApi } from './support.js';
 
 const en = catalog('en');
@@ -48,9 +48,9 @@ const entry = (label: string) => [...document.querySelectorAll<HTMLElement>('.ct
   .find(b => b.textContent?.includes(label)) as HTMLElement;
 
 describe('the checklist arithmetic', () => {
-  it('counts done and dropped against every item, and the percentage leaves dropped out', () => {
+  it('counts done against the items not dropped, and the percentage agrees with the count', () => {
     expect(progressOf(taskOf([item('i1', 'a', 'done'), item('i2', 'b', 'dropped'), item('i3', 'c')])))
-      .toEqual({ total: 3, done: 1, dropped: 1, pct: 50 });
+      .toEqual({ total: 2, done: 1, pct: 50 });
   });
 
   it('pct is 100 when every live item is done, and 0 with nothing live', () => {
@@ -75,7 +75,7 @@ describe('the checklist arithmetic', () => {
 
 describe('the checklist layout', () => {
   it('reads goal, items, task notes, then the thread, with no progress bar of its own', async () => {
-    const notes = [{ id: 1, title: 'Bench rules', body: 'Flux first.', items: [], updated_at: '', body_links: {}, brief: null }];
+    const notes = [{ id: 1, title: 'Bench rules', body: 'Flux first.', items: [], updated_at: '', body_links: {}, brief: null, depends: null }];
     const { host } = await mount(taskOf([item('i1', 'Solder the header')], { notes }));
     const order = [...host.querySelectorAll('.tk > *')].map(el => el.className.split(' ').find(c => c.startsWith('tk-')));
     expect(order).toEqual(['tk-head', 'tk-list', 'tk-tnotes', 'tk-thread']);
@@ -199,6 +199,38 @@ describe('deleting an item', () => {
     serveApi(() => { throw new Error('unexpected write'); });
     const { host } = await mount(taskOf([item('i1', 'a'), item('i2', 'b')]));
     expect((await ask(host, 'i2')).textContent).not.toContain('become');
+    cancel();
+  });
+
+  const dependent = (id: number, applies: string[], on: string[]) => ({
+    id, title: `Plan ${id}`, body: 'x', items: applies, updated_at: '', body_links: {}, brief: {},
+    depends: on.map(key => ({ item: key, deleted: '', reason: '' })),
+  });
+
+  it('names the one item that depends on the item being deleted', async () => {
+    serveApi(() => { throw new Error('unexpected write'); });
+    const items = [item('i1', 'a'), item('i2', 'b'), item('i3', 'c')];
+    const { host } = await mount(taskOf(items, { notes: [dependent(1, ['i3'], ['i2'])] }));
+    expect((await ask(host, 'i2')).textContent)
+      .toContain('Item 3 depends on this one; its reference will be marked as deleted.');
+    cancel();
+  });
+
+  it('names every item that depends on it, by the numbers they have now', async () => {
+    serveApi(() => { throw new Error('unexpected write'); });
+    const items = [item('i1', 'a'), item('i2', 'b'), item('i3', 'c'), item('i4', 'd')];
+    const notes = [dependent(1, ['i3'], ['i2']), dependent(2, ['i4', 'i3'], ['i2', 'i1']), dependent(3, ['i1'], ['i4'])];
+    const { host } = await mount(taskOf(items, { notes }));
+    expect((await ask(host, 'i2')).textContent)
+      .toContain('Items 3 and 4 depend on this one; their references will be marked as deleted.');
+    cancel();
+  });
+
+  it('says nothing about dependents when no note depends on the item', async () => {
+    serveApi(() => { throw new Error('unexpected write'); });
+    const items = [item('i1', 'a'), item('i2', 'b')];
+    const { host } = await mount(taskOf(items, { notes: [dependent(1, ['i2'], ['i1'])] }));
+    expect((await ask(host, 'i2')).textContent).not.toContain('depend');
     cancel();
   });
 
@@ -352,8 +384,8 @@ describe('the in-progress arc', () => {
 
 describe('task notes', () => {
   const note = (id: number, title: string, items: string[] = [], body = `${title} body`,
-                brief: Record<string, string> | null = null) =>
-    ({ id, title, body, items, updated_at: '', body_links: {}, brief });
+                brief: Record<string, string> | null = null, depends: unknown[] | null = null) =>
+    ({ id, title, body, items, updated_at: '', body_links: {}, brief, depends });
   const FIELDS = { goal: 'Seat the header', context: 'Pin 1 is square', steps: 'Tack two corners',
                    pitfalls: 'Cold joints', done_when: 'Every pin is wet', depends_on: 'none' };
   const BRIEF_BODY = 'GOAL: Seat the header\nCONTEXT: Pin 1 is square\nSTEPS: Tack two corners\n'
@@ -581,6 +613,155 @@ A late thought.`);
     expect(count.classList.contains('over')).toBe(true);
   });
 
+  describe('DEPENDS ON', () => {
+    const items = [item('i1', 'Solder the header'), item('i2', 'Flash the board'), item('i3', 'Run the week-long battery test')];
+    const withDepends = (depends: unknown[] | null, text = 'i1 (needs the header), deleted "Old step"') =>
+      taskOf(items, { notes: [note(1, 'Flash plan', ['i2'], BRIEF_BODY, { ...FIELDS, depends_on: text }, depends)] });
+    const OPENS = [{ item: 'i1', deleted: '', reason: 'needs the header' }, { item: '', deleted: 'Old step', reason: '' }];
+    const field = (host: HTMLElement) => host.querySelector('.tk-panel [data-brief="depends_on"]') as HTMLElement;
+    const openPanel = async (host: HTMLElement, key = 'i2') => press(host.querySelector(`[data-toggle="${key}"]`));
+
+    it('draws an item as a chip with its number and text, then the reason', async () => {
+      const { host } = await mount(withDepends(OPENS));
+      await openPanel(host);
+      const chip = field(host).querySelector('button') as HTMLElement;
+      expect(chip.textContent).toBe('1 · Solder the header');
+      expect(chip.getAttribute('aria-label')).toBe('Go to item 1: Solder the header');
+      expect(chip.closest('li')?.querySelector('.tk-dep-why')?.textContent).toBe('needs the header');
+    });
+
+    it('draws a deleted entry struck through, named for assistive tech, with no button', async () => {
+      const { host } = await mount(withDepends(OPENS));
+      await openPanel(host);
+      expect(field(host).querySelectorAll('button')).toHaveLength(1);
+      const gone = field(host).querySelector('s') as HTMLElement;
+      expect(gone.textContent).toBe('Old step');
+      expect(gone.closest('li')?.querySelector('.sr-only')?.textContent).toContain(en['task.depends.deleted']);
+    });
+
+    it('draws a key that is not an item plainly', async () => {
+      const { host } = await mount(withDepends([{ item: 'i9', deleted: '', reason: '' }]));
+      await openPanel(host);
+      expect(field(host).querySelector('button')).toBeNull();
+      expect(field(host).textContent).toContain('i9');
+    });
+
+    it('reads none as the translated word', async () => {
+      const { host } = await mount(withDepends([], 'none'));
+      await openPanel(host);
+      expect(field(host).querySelector('button')).toBeNull();
+      expect(field(host).textContent).toContain(en['task.depends.none']);
+    });
+
+    it('draws the text of a field that predates the grammar', async () => {
+      const { host } = await mount(withDepends(null, 'Item 9 and the bench'));
+      await openPanel(host);
+      expect(field(host).querySelector('button')).toBeNull();
+      expect(field(host).textContent).toContain('Item 9 and the bench');
+    });
+
+    describe('a chip', () => {
+      afterEach(() => { vi.useRealTimers(); });
+
+      it('focuses the item, flashes its row for a moment, and opens nothing', async () => {
+        const { host } = await mount(withDepends(OPENS));
+        await openPanel(host);
+        vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+        await press(field(host).querySelector('button'));
+        const row = host.querySelector('.tk-item[data-key="i1"]') as HTMLElement;
+        expect(document.activeElement).toBe(host.querySelector('[data-toggle="i1"]'));
+        expect(row.classList.contains('is-flash')).toBe(true);
+        expect(host.querySelector('[data-toggle="i1"]')?.getAttribute('aria-expanded')).toBe('false');
+        expect(host.querySelector('#tkp-i1')).toBeNull();
+        vi.advanceTimersByTime(1300);
+        await nextTick();
+        expect(row.classList.contains('is-flash')).toBe(false);
+      });
+
+      it('restarts the flash on a second click', async () => {
+        const { host } = await mount(withDepends(OPENS));
+        await openPanel(host);
+        vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+        const chip = field(host).querySelector('button');
+        const row = host.querySelector('.tk-item[data-key="i1"]') as HTMLElement;
+        await press(chip);
+        vi.advanceTimersByTime(800);
+        await press(chip);
+        await nextTick();
+        await nextTick();
+        vi.advanceTimersByTime(800);
+        await nextTick();
+        expect(row.classList.contains('is-flash')).toBe(true);
+        vi.advanceTimersByTime(500);
+        await nextTick();
+        expect(row.classList.contains('is-flash')).toBe(false);
+      });
+    });
+
+    describe('in the editor', () => {
+      const edit = async (host: HTMLElement) => {
+        await openPanel(host, 'i2');
+        await press(host.querySelector('[data-note-edit="1"]'));
+      };
+      const save = (host: HTMLElement) => host.querySelector('[data-note-save]') as HTMLButtonElement;
+      const problem = (host: HTMLElement) => host.querySelector('[data-depends-error]')?.textContent;
+
+      it('shows the format as the placeholder', async () => {
+        const { host } = await mount(withDepends(OPENS));
+        await edit(host);
+        expect(fieldOf(host, 'depends_on').placeholder).toBe(en['task.depends.placeholder']);
+      });
+
+      it('opens a stored field that predates the grammar as it is, with the problem showing and Save off', async () => {
+        const { host } = await mount(withDepends(null, 'Item 9'));
+        await edit(host);
+        expect(fieldOf(host, 'depends_on').value).toBe('Item 9');
+        expect(problem(host)).toBeTruthy();
+        expect(save(host).disabled).toBe(true);
+        expect(fieldOf(host, 'depends_on').getAttribute('aria-invalid')).toBe('true');
+      });
+
+      it('refuses prose, a key that is no item, and a key the note applies to', async () => {
+        const { host } = await mount(withDepends(OPENS, 'none'));
+        await edit(host);
+        expect(save(host).disabled).toBe(false);
+        expect(problem(host)).toBeUndefined();
+        for (const [text, kind, shown] of [['Item 9', 'key', 'Item 9'], ['i9', 'unknown', 'i9'], ['i2 (why)', 'self', 'i2']]) {
+          await type(host, 'depends_on', text);
+          expect(save(host).disabled).toBe(true);
+          expect(problem(host)).toBe(en[`task.depends.error.${kind}`].replace('{text}', shown));
+        }
+      });
+
+      it('accepts none and an item with a reason', async () => {
+        const { host } = await mount(withDepends(OPENS, 'i9'));
+        await edit(host);
+        await type(host, 'depends_on', 'i1 (why)');
+        expect(save(host).disabled).toBe(false);
+        expect(problem(host)).toBeUndefined();
+        await type(host, 'depends_on', 'none');
+        expect(save(host).disabled).toBe(false);
+      });
+
+      it('leaves an empty field to the required mark, without a message', async () => {
+        const { host } = await mount(withDepends(OPENS, 'none'));
+        await edit(host);
+        await type(host, 'depends_on', '');
+        expect(save(host).disabled).toBe(true);
+        expect(problem(host)).toBeUndefined();
+      });
+
+      it('checks the field against the items picked as they change', async () => {
+        const { host } = await mount(withDepends(OPENS, 'i3'));
+        await edit(host);
+        expect(save(host).disabled).toBe(false);
+        await press(host.querySelector('[data-note-scope="i3"]'));
+        expect(problem(host)).toContain('i3');
+        expect(save(host).disabled).toBe(true);
+      });
+    });
+  });
+
   it('keeps a draft through other changes and drops it on Escape', async () => {
     const { host } = await mount(taskOf([item('i1', 'Solder the header')]));
     await press(host.querySelector('[data-note-add=""]'));
@@ -591,6 +772,52 @@ A late thought.`);
       ?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
     await nextTick();
     expect(host.querySelector('[data-note-form]')).toBeNull();
+  });
+});
+
+describe('the DEPENDS ON grammar', () => {
+  const read = (text: string) => parseDepends(text);
+  const kinds = (text: string) => read(text).problems.map(p => p.kind);
+
+  it('reads none in any case, and entries split at commas and newlines', () => {
+    expect(read(' None ')).toEqual({ entries: [], problems: [] });
+    expect(read('i1 (needs the header), I3\ndeleted "Old step" (gone)').entries).toEqual([
+      { item: 'i1', deleted: '', reason: 'needs the header' },
+      { item: 'i3', deleted: '', reason: '' },
+      { item: '', deleted: 'Old step', reason: 'gone' },
+    ]);
+  });
+
+  it('keeps a comma inside a reason or a deleted text', () => {
+    expect(read('i2 (a, b), deleted "x, y"').entries.map(e => e.reason || e.deleted)).toEqual(['a, b', 'x, y']);
+  });
+
+  it('tolerates a blank line or a trailing newline, but not an empty comma entry', () => {
+    expect(kinds('i1\n\ni2\n')).toEqual([]);
+    expect(kinds('i1,,i2')).toEqual(['blank']);
+    expect(kinds('i1,')).toEqual(['blank']);
+  });
+
+  it('names each fault', () => {
+    expect(kinds('')).toEqual(['empty']);
+    expect(kinds('Item 9')).toEqual(['key']);
+    expect(kinds('i1 because')).toEqual(['outside']);
+    expect(kinds('deleted Old')).toEqual(['deleted']);
+    expect(kinds('deleted ""')).toEqual(['deleted']);
+    expect(kinds('i1 ()')).toEqual(['reason']);
+    expect(kinds('i1, I1')).toEqual(['twice']);
+    expect(kinds('i1 (a) (b)')).toEqual(['parens']);
+    expect(kinds('i1 (a')).toEqual(['parens']);
+    expect(kinds('i1 a)')).toEqual(['parens']);
+  });
+
+  it('adds the two checks the server makes, naming the key', () => {
+    const keys = ['i1', 'i2', 'i3'];
+    expect(dependsProblem('i1, i2', keys, ['i3'])).toBeNull();
+    expect(dependsProblem('i9', keys, ['i3'])).toEqual({ kind: 'unknown', text: 'i9' });
+    expect(dependsProblem('i2 (x)', keys, ['i2'])).toEqual({ kind: 'self', text: 'i2' });
+    expect(dependsProblem('deleted "Old"', keys, ['i2'])).toBeNull();
+    expect(dependsProblem('', keys, [])).toEqual({ kind: 'empty', text: '' });
   });
 });
 

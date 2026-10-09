@@ -11,7 +11,12 @@ import { briefOf, notePeek } from './checklist.ts';
 import type { Checklist } from './checklist.ts';
 
 const props = defineProps<{ c: Checklist; scope: string; notes: TaskNote[] }>();
-const { ui } = props.c;
+const { current, ui } = props.c;
+
+const itemOf = (key: string) => {
+  const at = current.value.items.findIndex(i => i.key === key);
+  return at < 0 ? null : { n: at + 1, text: current.value.items[at].text };
+};
 
 const writing = computed(() => ui.noteEdit === `new:${props.scope}`);
 </script>
@@ -42,7 +47,21 @@ const writing = computed(() => ui.noteEdit === `new:${props.scope}`);
           <template v-if="n.brief">
             <section v-for="f in briefOf(n.brief)" :key="f.key" class="tk-brief-f" :data-brief="f.key">
               <h4 class="tk-brief-h rf-sub" :title="f.raw">{{ f.label }}</h4>
-              <RichText :text="f.text" :links="n.body_links" />
+              <ul v-if="f.key === 'depends_on' && n.depends" class="tk-deps">
+                <li v-if="!n.depends.length" class="tk-dep-none">{{ t('task.depends.none') }}</li>
+                <li v-for="(d, at) in n.depends" :key="at" class="tk-dep">
+                  <template v-if="d.item">
+                    <button v-if="itemOf(d.item)" type="button" class="tk-dep-chip" :data-dep="d.item"
+                            :aria-label="t('task.depends.open', { n: itemOf(d.item)!.n, text: itemOf(d.item)!.text })"
+                            @click="c.flashItem(d.item)">{{ itemOf(d.item)!.n }} · {{ itemOf(d.item)!.text }}</button>
+                    <span v-else class="tk-dep-key">{{ d.item }}</span>
+                  </template>
+                  <span v-else class="tk-dep-gone"><s>{{ d.deleted }}</s><span class="sr-only"> ({{
+                    t('task.depends.deleted') }})</span></span>
+                  <span v-if="d.reason" class="tk-dep-why">{{ d.reason }}</span>
+                </li>
+              </ul>
+              <RichText v-else :text="f.text" :links="n.body_links" />
             </section>
           </template>
           <RichText v-else :text="n.body" :links="n.body_links" />

@@ -46,9 +46,7 @@ def test_the_checklist_animates_only_compositor_properties_and_never_layout(css)
     tk = css[start:end]
     for keyframes in re.findall(r"@keyframes tk-[\w-]+ \{[^}]*\}", tk):
         assert not re.search(r"\b(width|height|top|left|margin|padding)\s*:", keyframes), keyframes
-    # the dropped hatch is clipped, not resized
-    assert re.search(r"\.tk-bar-drop \{[^}]*clip-path: inset", tk, re.S)
-    assert "transition: clip-path" in tk
+    assert "tk-bar-drop" not in css
 
 
 def test_the_item_row_column_comes_from_a_token_not_a_literal(css):

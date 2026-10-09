@@ -18,6 +18,7 @@ const { NOTE_MAX } = TASK;
 
 const id = computed(() => (props.note ? String(props.note.id) : `new:${props.scope}`));
 const d = computed(() => ui.noteDraft ?? { title: '', body: '', items: [], brief: {} });
+const issue = computed(() => props.c.dependsIssue());
 const sum = computed(() => (d.value.items.length ? t('task.note.scope.n', { n: d.value.items.length })
   : t('task.note.scope.all')));
 
@@ -36,12 +37,19 @@ function key(e: KeyboardEvent) {
     <div class="rf-split rf-solo">
       <div class="rf-pane">
         <template v-if="d.items.length">
-          <label v-for="f in BRIEF" :key="f.key" class="tk-brief-in">
-            <span class="rf-sub">{{ sectionLabel('task_note', f) }}<span v-if="f.optional" class="tk-opt"> · {{
-              t('task.note.optional') }}</span></span>
-            <textarea v-model="d.brief[f.key]" :data-note-field="f.key" rows="3" spellcheck="false"
-                      :aria-required="f.optional ? undefined : 'true'"></textarea>
-          </label>
+          <template v-for="f in BRIEF" :key="f.key">
+            <label class="tk-brief-in">
+              <span class="rf-sub">{{ sectionLabel('task_note', f) }}<span v-if="f.optional" class="tk-opt"> · {{
+                t('task.note.optional') }}</span></span>
+              <textarea v-model="d.brief[f.key]" :data-note-field="f.key" rows="3" spellcheck="false"
+                        :aria-required="f.optional ? undefined : 'true'"
+                        :placeholder="f.key === 'depends_on' ? t('task.depends.placeholder') : undefined"
+                        :aria-invalid="f.key === 'depends_on' && issue ? 'true' : undefined"
+                        :aria-describedby="f.key === 'depends_on' && issue ? `${id}-dep` : undefined"></textarea>
+            </label>
+            <p v-if="f.key === 'depends_on' && issue" :id="`${id}-dep`" class="field-error tk-brief-err"
+               data-depends-error>{{ issue }}</p>
+          </template>
         </template>
         <textarea v-else v-model="d.body" data-note-field="body" rows="12" spellcheck="false" :maxlength="NOTE_MAX"
                   :aria-label="t('task.note.body')" :placeholder="t('task.note.body')"></textarea>

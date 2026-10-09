@@ -7,8 +7,9 @@ import { sectionLabel } from '../../core/shared.js';
 import { confirmModal, failed, toast } from '../../core/ui.js';
 import { pickMemories } from '../../core/link-picker.js';
 import { parseHash, refreshBehind } from '../../core/router.ts';
-import { t } from '../../i18n.ts';
+import { I18N, t } from '../../i18n.ts';
 import type { I18nKey } from '../../i18n.ts';
+import { motionOn } from '../../core/motion.ts';
 import { TASK } from '../../contract.ts';
 import * as client from '../../api/client.ts';
 import type { TaskAnswer, TaskItem, TaskRecord } from '../../api/types.ts';
@@ -19,6 +20,8 @@ export const STATES: readonly string[] = TASK.ITEM_STATES;
 export const OLDER_SHOWN = 3;
 /* how long a deleted item takes to leave before the list drops it */
 const LEAVE_MS = 160;
+/* how long a row stays highlighted after a reference to it is followed */
+const FLASH_MS = 1200;
 /* one lap of the in-progress arc, as --spin in admin.css */
 const SPIN_S = 3.2;
 
@@ -30,13 +33,12 @@ export const notePeek = (text: string): string => text
   .replace(/```[^\n]*|={2,}|\|?\s*:?-{2,}:?\s*(?=\||$)|[|`*]/gm, ' ')
   .replace(/\s+/g, ' ').trim().slice(0, 180);
 
-export function progressOf(task: TaskRecord): { total: number; done: number; dropped: number; pct: number } {
+/* total is the items not dropped, so the count, the percentage and the bar read the same */
+export function progressOf(task: TaskRecord): { total: number; done: number; pct: number } {
   const count = (s: string) => task.items.filter(i => i.state === s).length;
-  const total = task.items.length;
   const done = count('done');
-  const dropped = count('dropped');
-  const live = total - dropped;
-  return { total, done, dropped, pct: live > 0 ? Math.floor((done * 100) / live) : 0 };
+  const total = task.items.length - count('dropped');
+  return { total, done, pct: total > 0 ? Math.floor((done * 100) / total) : 0 };
 }
 
 export const attr = (name: string, value: string | number): string => `[${name}="${CSS.escape(String(value))}"]`;
@@ -61,6 +63,89 @@ const bodyOf = (brief: Record<string, string>): string => {
   if (have.length === 1 && have[0].key === 'extra_info') return brief.extra_info.trim();
   return have.map(f => `${f.label}: ${brief[f.key].trim()}`).join('\n');
 };
+
+export interface DependsEntry { item: string; deleted: string; reason: string }
+export type DependsKind = 'empty' | 'parens' | 'blank' | 'key' | 'outside' | 'deleted' | 'reason' | 'twice'
+  | 'unknown' | 'self';
+export interface DependsProblem { kind: DependsKind; text: string }
+
+const DEPENDS_ENTRY = /^(?:(?<key>i[1-9][0-9]*)|deleted\s+"(?<text>[^"]*)")\s*(?:\((?<reason>[^()]*)\))?$/i;
+const DEPENDS_KEY_HEAD = /^i[1-9][0-9]*/i;
+
+/* the text split at commas and newlines outside parentheses and quotes, each piece with the separators around it */
+function dependsPieces(text: string): [string, string, string][] | null {
+  const pieces: [string, string, string][] = [];
+  let depth = 0;
+  let quoted = false;
+  let start = 0;
+  let before = '';
+  for (let at = 0; at < text.length; at++) {
+    const ch = text[at];
+    if (quoted) quoted = ch !== '"';
+    else if (depth === 0 && ch === '"') quoted = true;
+    else if (ch === '(') depth++;
+    else if (ch === ')') { if (--depth < 0) return null; }
+    else if (depth === 0 && (ch === ',' || ch === '\n')) {
+      pieces.push([text.slice(start, at), before, ch]);
+      start = at + 1;
+      before = ch;
+    }
+  }
+  if (depth) return null;
+  pieces.push([text.slice(start), before, '']);
+  return pieces;
+}
+
+function dependsComplaint(piece: string): DependsProblem {
+  const text = piece.length <= 40 ? piece : `${piece.slice(0, 37)}...`;
+  if (piece.split('(').length > 2) return { kind: 'parens', text };
+  const head = piece.match(DEPENDS_KEY_HEAD);
+  if (head && piece.slice(head[0].length).trim()) return { kind: 'outside', text };
+  if (/^deleted\b/i.test(piece)) return { kind: 'deleted', text };
+  return { kind: 'key', text };
+}
+
+/* mirrors memai.sections.parse_depends */
+export function parseDepends(source: string): { entries: DependsEntry[]; problems: DependsProblem[] } {
+  const text = source.trim();
+  if (text.toLowerCase() === 'none') return { entries: [], problems: [] };
+  if (!text) return { entries: [], problems: [{ kind: 'empty', text: '' }] };
+  const pieces = dependsPieces(text);
+  if (!pieces) return { entries: [], problems: [{ kind: 'parens', text: '' }] };
+  const entries: DependsEntry[] = [];
+  const problems: DependsProblem[] = [];
+  for (const [raw, before, after] of pieces) {
+    const piece = raw.trim();
+    if (!piece) {
+      if (before !== '\n' && after !== '\n' && (before || after)) problems.push({ kind: 'blank', text: '' });
+      continue;
+    }
+    const found = DEPENDS_ENTRY.exec(piece);
+    if (!found?.groups) { problems.push(dependsComplaint(piece)); continue; }
+    const { key, text: gone, reason: why } = found.groups;
+    const reason = (why ?? '').trim();
+    if (why !== undefined && !reason) { problems.push({ kind: 'reason', text: piece }); continue; }
+    if (key) {
+      const item = key.toLowerCase();
+      if (entries.some(e => e.item === item)) { problems.push({ kind: 'twice', text: item }); continue; }
+      entries.push({ item, deleted: '', reason });
+    } else if (gone) entries.push({ item: '', deleted: gone, reason });
+    else problems.push({ kind: 'deleted', text: piece });
+  }
+  return { entries, problems };
+}
+
+/* The first thing wrong with a DEPENDS ON field: its grammar, then the two checks the server makes
+   (a key must be an item of the task, and not one the note applies to). */
+export function dependsProblem(text: string, keys: string[], appliesTo: string[]): DependsProblem | null {
+  const { entries, problems } = parseDepends(text);
+  if (problems.length) return problems[0];
+  for (const e of entries) {
+    if (e.item && !keys.includes(e.item)) return { kind: 'unknown', text: e.item };
+    if (appliesTo.includes(e.item)) return { kind: 'self', text: e.item };
+  }
+  return null;
+}
 
 export interface NoteDraft { title: string; body: string; items: string[]; brief: Record<string, string> }
 
@@ -92,13 +177,14 @@ export function useChecklist(uid: string, task: TaskRecord, status: string, hook
   });
   /* what the last write brought in, so only that animates */
   const enter = reactive({ items: new Set<string>(), comments: new Set<number>(), pulse: '', opened: '',
-                           closed: false });
+                           closed: false, flash: '' });
   const host = ref<HTMLElement | null>(null);
   let alive = true;
   let busy = false;
   /* where focus goes once the next change is drawn, first match wins */
   let want: string[] = [];
-  onBeforeUnmount(() => { alive = false; });
+  let flashTimer: ReturnType<typeof setTimeout> | undefined;
+  onBeforeUnmount(() => { alive = false; clearTimeout(flashTimer); });
 
   const focusAfter = (...selectors: string[]) => { want = selectors; };
   function land() {
@@ -200,11 +286,19 @@ export function useChecklist(uid: string, task: TaskRecord, status: string, hook
     const at = items.findIndex(i => i.key === key);
     if (at < 0) return;
     const after = items.length - at - 1;
+    const dependents = items.map((i, n) => ({ n: n + 1, key: i.key }))
+      .filter(x => x.key !== key && current.value.notes.some(note => note.items.includes(x.key)
+        && note.depends?.some(d => d.item === key)));
+    const needs = !dependents.length ? ''
+      : ` ${dependents.length === 1
+        ? t('task.delete.dependents.one', { n: dependents[0].n })
+        : t('task.delete.dependents.many', {
+          list: new Intl.ListFormat(I18N.locale).format(dependents.map(x => String(x.n))) })}`;
     const moves = after === 0 ? ''
       : after === 1 ? ` ${t('task.delete.renumber.one', { from: at + 2, to: at + 1 })} ${t('task.delete.cites')}`
       : ` ${t('task.delete.renumber.many', { from: at + 2, last: items.length, to: at + 1, toLast: items.length - 1 })} ${t('task.delete.cites')}`;
     const ok = await confirmModal({
-      title: t('task.delete.title'), body: t('task.delete.body', { text: esc(item.text) }) + moves,
+      title: t('task.delete.title'), body: t('task.delete.body', { text: esc(item.text) }) + moves + needs,
       okLabel: t('task.item.delete'), danger: true });
     if (!ok) return;
     const wasOpen = current.value.state === 'open';
@@ -223,6 +317,23 @@ export function useChecklist(uid: string, task: TaskRecord, status: string, hook
     followRenumber(items, at);
     toast(t(wasOpen && res.task.state !== 'open' ? `task.toast.${res.task.state}` as I18nKey
             : after > 0 ? 'task.toast.renumbered' : 'task.toast.deleted'), 'ok');
+  }
+
+  /* Brings an item a reference points at into view: scrolled to, its toggle focused without opening
+     its panel, its row highlighted for a moment. */
+  async function flashItem(key: string) {
+    const row = host.value?.querySelector<HTMLElement>(`.tk-item${attr('data-key', key)}`);
+    if (!row) return;
+    row.scrollIntoView?.({ block: 'center', behavior: motionOn() ? 'smooth' : 'auto' });
+    host.value?.querySelector<HTMLElement>(attr('data-toggle', key))?.focus({ preventScroll: true });
+    clearTimeout(flashTimer);
+    if (enter.flash === key) {
+      enter.flash = '';
+      await nextTick();
+      void row.offsetWidth;
+    }
+    enter.flash = key;
+    flashTimer = setTimeout(() => { enter.flash = ''; }, FLASH_MS);
   }
 
   function toggle(key: string) {
@@ -303,9 +414,19 @@ export function useChecklist(uid: string, task: TaskRecord, status: string, hook
     return d.items.length ? renderBrief(d.brief).length : d.body.length;
   };
 
+  /* What is wrong with the DEPENDS ON field of a brief being written, in words; an empty field is the
+     required mark's to report. */
+  const dependsIssue = (): string => {
+    const d = ui.noteDraft;
+    if (!d?.items.length) return '';
+    const problem = dependsProblem(d.brief.depends_on ?? '', current.value.items.map(i => i.key), d.items);
+    return problem && problem.kind !== 'empty'
+      ? t(`task.depends.error.${problem.kind}` as I18nKey, { text: problem.text }) : '';
+  };
+
   const noteReady = () => {
     const d = ui.noteDraft;
-    if (!d?.title.trim() || noteLength() > TASK.NOTE_MAX) return false;
+    if (!d?.title.trim() || noteLength() > TASK.NOTE_MAX || dependsIssue()) return false;
     return d.items.length ? BRIEF.every(f => f.optional || (d.brief[f.key] || '').trim()) : Boolean(d.body.trim());
   };
 
@@ -360,8 +481,8 @@ export function useChecklist(uid: string, task: TaskRecord, status: string, hook
     });
   }
 
-  return { current, ui, enter, host, sync, setItem, deleteItem, toggle, link, unlink, post,
-           noteOpen, toggleNote, editNote, leaveNote, scopeNote, noteReady, noteLength, submitNote, deleteNote,
+  return { current, ui, enter, host, sync, setItem, deleteItem, flashItem, toggle, link, unlink, post,
+           noteOpen, toggleNote, editNote, leaveNote, scopeNote, noteReady, noteLength, dependsIssue, submitNote, deleteNote,
            editGoal, leaveGoal, saveGoal, openAdd, closeAdd, sendAdd };
 }
 

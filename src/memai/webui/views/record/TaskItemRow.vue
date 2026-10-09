@@ -50,7 +50,8 @@ function menu(e: MouseEvent) {
 </script>
 
 <template>
-  <li class="tk-item" :class="{ 'is-open': open, 'is-new': enter.items.has(item.key), 'is-leaving': ui.leaving === item.key }"
+  <li class="tk-item" :class="{ 'is-open': open, 'is-new': enter.items.has(item.key), 'is-leaving': ui.leaving === item.key,
+             'is-flash': enter.flash === item.key }"
       :data-s="item.state" :data-key="item.key">
     <div class="tk-row">
       <span class="tk-num" aria-hidden="true">{{ n }}</span>
