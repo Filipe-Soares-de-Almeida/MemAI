@@ -828,8 +828,8 @@ def task(title: str, goal: str, items: str, domain: str = "", also: str = "",
 
 @tool("core", REWRITE)
 def task_item(uid: str, item: str, state: str = "", comment: str = "",
-              related: str = "", text: str = "") -> dict:
-    """Update one item of a task: its text, its state, a comment on it, memories linked to it.
+              related: str = "", text: str = "", expect: str = "", delete: bool = False) -> dict:
+    """Update one item of a task -- its text, its state, a comment on it, memories linked to it -- or delete it.
 
     uid: the task.
 
@@ -848,18 +848,40 @@ def task_item(uid: str, item: str, state: str = "", comment: str = "",
     related: comma-separated uids of memories this item produced or depends
     on. An unknown uid refuses the whole call, and nothing is written.
 
-    Give at least one of text, state, comment and related. They apply
-    together, or not at all.
+    expect: the item's current text, as last read. Required to delete,
+    optional to rename; a mismatch refuses the call, since a key names
+    whichever item holds that position now.
+
+    delete: removes the item with its comments, links and note attachments,
+    alone in its call and given `expect`. Each later item moves up one key,
+    DEPENDS ON follows, and `renumbered` maps old keys to new; a brief on
+    only that item stays, on the whole task. Delete a mistake or a
+    duplicate; mark work decided against as dropped, which keeps it.
+
+    Give at least one of text, state, comment and related, or delete. They
+    apply together, or not at all.
 
     @param cite_rule
     """
-    if not any(str(v).strip() for v in (text, state, comment, related)):
-        return _errors(["give at least one of text, state, comment and related"])
+    edits = any(str(v).strip() for v in (text, state, comment, related))
+    if delete:
+        if edits:
+            return _errors(["a delete stands alone: give no text, state, comment or related with it"])
+        if not expect.strip():
+            return _errors(["a delete needs the item's current text in expect"])
+        try:
+            with connection.connect() as conn:
+                out = tasks.delete_item(conn, uid, item, expect=expect, session=SESSION)
+        except ValueError as exc:
+            return _errors([str(exc)])
+        return {**out, "deleted": True}
+    if not edits:
+        return _errors(["give at least one of text, state, comment and related, or delete"])
     try:
         with connection.connect() as conn:
             key = tasks.item_key(item)
             if text.strip():
-                tasks.rename_item(conn, uid, key, text, session=SESSION)
+                tasks.rename_item(conn, uid, key, text, expect=expect or None, session=SESSION)
             targets = [t.strip() for t in related.split(",") if t.strip()]
             if targets:
                 tasks.link_item(conn, uid, key, targets)

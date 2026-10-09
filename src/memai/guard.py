@@ -71,7 +71,7 @@ OPTIONAL: dict[str, tuple[str, ...]] = {
     "checkpoint": ("session", "domain", "also", "tags"),
     "anti_pattern": ("domain", "also", "tags", "session", "review_after", "source_ref"),
     "task": ("domain", "also", "tags", "session"),
-    "task_item": ("state", "comment", "related", "text"),
+    "task_item": ("state", "comment", "related", "text", "expect", "delete"),
     "task_add": (),
     "task_comment": ("item",),
     "task_note": ("title", "body", "items", "note_id", "delete", "goal", "context", "steps",
