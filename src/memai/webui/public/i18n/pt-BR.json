@@ -1149,7 +1149,7 @@
     "task.delete.title": "Excluir este item?",
     "task.depends.none": "nenhuma",
     "task.depends.deleted": "item excluído",
-    "task.depends.open": "Ir para o item {n}: {text}",
+    "task.depends.open": "Ir para o item {n}: {text}, {state}",
     "task.depends.placeholder": "none — ou i3 (motivo), i9",
     "task.depends.error.empty": "Escreva none, ou os itens dos quais este depende.",
     "task.depends.error.parens": "Os parênteses estão desbalanceados ou repetidos: um par depois da entrada guarda o motivo.",

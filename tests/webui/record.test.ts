@@ -192,6 +192,12 @@ describe('a task shown in its record, progress', () => {
     expect(view.querySelector('.rec-side .tk-bar-drop')).toBeNull();
     expect(view.querySelector('.rec-side .tk-prog-n')?.textContent).toBe('0 of 1 done');
     expect(view.querySelector('.rec-main .tk-prog')).toBeNull();
+    const line = view.querySelector('.rec-side .tk-prog-line') as HTMLElement;
+    expect([...line.children].map(c => c.className))
+      .toEqual(['tk-prog-pct', 'tk-prog-n']);
+    expect(line.parentElement?.className).toBe('tk-prog');
+    expect(line.nextElementSibling).toBe(bar());
+    expect(view.querySelector('.rec-side [data-progress-pct]')?.closest('.tk-prog-line')).toBe(line);
     (view.querySelector('[data-step="i1"]') as HTMLElement).click();
     await until(() => pct() === '100%');
     expect(bar().getAttribute('aria-valuetext')).toBe('100%, 1 of 1 done');

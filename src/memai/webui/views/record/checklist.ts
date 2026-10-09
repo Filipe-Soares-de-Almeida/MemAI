@@ -17,6 +17,8 @@ import type { TaskAnswer, TaskItem, TaskRecord } from '../../api/types.ts';
 /* One click on an item's mark moves it along todo, doing, done; done or dropped go back to todo. */
 export const NEXT: Record<string, string> = { todo: 'doing', doing: 'done', done: 'todo', dropped: 'todo' };
 export const STATES: readonly string[] = TASK.ITEM_STATES;
+/* the icon inside a state's ring; todo is the bare ring */
+export const MARK: Record<string, string> = { doing: 'ongoing', done: 'check', dropped: 'minus' };
 export const OLDER_SHOWN = 3;
 /* how long a deleted item takes to leave before the list drops it */
 const LEAVE_MS = 160;

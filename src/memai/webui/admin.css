@@ -2304,7 +2304,7 @@ button.rs-mono:hover { color: var(--accent); }
 .tk-goal > .icon-btn { margin-left: auto; flex: none; }
 
 .tk-prog { display: flex; flex-direction: column; gap: var(--sp-2); }
-.tk-prog-line { display: flex; align-items: center; gap: var(--sp-3); flex-wrap: wrap; }
+.tk-prog-line { display: flex; align-items: baseline; justify-content: space-between; gap: var(--sp-3); flex-wrap: wrap; }
 .tk-prog-n { font: 400 var(--fs-md) var(--font-ui); color: var(--ink-2); font-variant-numeric: tabular-nums; }
 .tk-prog-pct { font: 500 var(--fs-xl)/1 var(--font-ui); color: var(--ink); font-variant-numeric: tabular-nums; }
 .tk-prog-n b { font: 500 var(--fs-md) var(--font-ui); color: var(--ink); }
@@ -2353,12 +2353,12 @@ button.rs-mono:hover { color: var(--accent); }
 .tk-state:hover .tk-ring { box-shadow: 0 0 0 4px var(--hover-3); }
 /* in progress: the ring opens into an arc with an arrowhead, so it is not todo's ring;
    the arc turns slowly, one lap in three seconds, so the item reads as live */
-.tk-state[data-s="doing"]   { --sc: var(--f-live); }
-.tk-state[data-s="doing"] .tk-ring { border: 0; background: none; color: var(--f-live); --ico: 20px; }
+.tk-state[data-s="doing"], .tk-dep-mark[data-s="doing"] { --sc: var(--f-live); }
+.tk-state[data-s="doing"] .tk-ring, .tk-dep-mark[data-s="doing"] .tk-ring { border: 0; background: none; color: var(--f-live); --ico: 20px; }
 .tk-state[data-s="doing"] .ico { animation: spin var(--spin) linear infinite var(--spin-at, 0s); }
-.tk-state[data-s="done"]    { --sc: var(--f-go); }
-.tk-state[data-s="done"] .tk-ring { background: var(--f-go); color: var(--accent-ink); }
-.tk-state[data-s="dropped"] .tk-ring { border-style: dashed; color: var(--ink-3); }
+.tk-state[data-s="done"], .tk-dep-mark[data-s="done"] { --sc: var(--f-go); }
+.tk-state[data-s="done"] .tk-ring, .tk-dep-mark[data-s="done"] .tk-ring { background: var(--f-go); color: var(--accent-ink); }
+.tk-state[data-s="dropped"] .tk-ring, .tk-dep-mark[data-s="dropped"] .tk-ring { border-style: dashed; color: var(--ink-3); }
 /* the mark that was just changed arrives: the ring scales in, and a done tick draws itself */
 .tk-state.is-pulse .tk-ring { animation: tk-pop .26s cubic-bezier(.2, .8, .2, 1) both; }
 .tk-state.is-pulse[data-s="done"] .ico path {
@@ -2486,6 +2486,10 @@ textarea.tk-box {
   background: var(--chip-fill); border: 1px solid var(--line-soft); border-radius: var(--r-pill);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
+/* the row's mark, scaled to the chip's line and held still */
+.tk-dep-mark { --sc: var(--ink-3); display: inline-grid; flex: none; margin-right: var(--sp-2); }
+.tk-dep-mark .tk-ring { width: 14px; height: 14px; border-width: 1.5px; --ico: 9px; }
+.tk-dep-mark[data-s="doing"] .tk-ring { --ico: 14px; }
 .tk-dep-chip:hover { color: var(--accent-hi); border-color: rgba(187, 134, 252, .4); }
 .tk-dep-gone s, .tk-dep-key { color: var(--ink-3); }
 .tk-dep-why, .tk-dep-none { color: var(--ink-2); }

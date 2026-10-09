@@ -1149,7 +1149,7 @@
     "task.delete.title": "Delete this item?",
     "task.depends.none": "none",
     "task.depends.deleted": "deleted item",
-    "task.depends.open": "Go to item {n}: {text}",
+    "task.depends.open": "Go to item {n}: {text}, {state}",
     "task.depends.placeholder": "none — or i3 (why), i9",
     "task.depends.error.empty": "Write none, or the items this one waits for.",
     "task.depends.error.parens": "Parentheses are unbalanced or doubled: one pair after an entry holds its reason.",

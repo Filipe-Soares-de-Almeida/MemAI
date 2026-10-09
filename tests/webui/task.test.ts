@@ -626,7 +626,7 @@ A late thought.`);
       await openPanel(host);
       const chip = field(host).querySelector('button') as HTMLElement;
       expect(chip.textContent).toBe('1 · Solder the header');
-      expect(chip.getAttribute('aria-label')).toBe('Go to item 1: Solder the header');
+      expect(chip.getAttribute('aria-label')).toBe(`Go to item 1: Solder the header, ${en['task.state.todo']}`);
       expect(chip.closest('li')?.querySelector('.tk-dep-why')?.textContent).toBe('needs the header');
     });
 
@@ -644,6 +644,67 @@ A late thought.`);
       await openPanel(host);
       expect(field(host).querySelector('button')).toBeNull();
       expect(field(host).textContent).toContain('i9');
+    });
+
+    describe('the state mark on a chip', () => {
+      const STATES = ['todo', 'doing', 'done', 'dropped'];
+      const states = STATES.map((s, at) => item(`i${at + 1}`, `Step ${s}`, s));
+      const target = item('i5', 'Close the lid');
+      const asks = STATES.map((_, at) => ({ item: `i${at + 1}`, deleted: '', reason: '' }));
+      const withStates = () => taskOf([...states, target],
+        { notes: [note(1, 'Lid plan', ['i5'], BRIEF_BODY, { ...FIELDS, depends_on: 'i1, i2, i3, i4' }, asks)] });
+      const chips = (host: HTMLElement) => [...field(host).querySelectorAll<HTMLElement>('.tk-dep-chip')];
+      const markOf = (chip: HTMLElement) => chip.querySelector<HTMLElement>('.tk-dep-mark');
+
+      it('opens each chip with the mark its row uses, and ends its name with the state', async () => {
+        const { host } = await mount(withStates());
+        await openPanel(host, 'i5');
+        expect(chips(host)).toHaveLength(4);
+        chips(host).forEach((chip, at) => {
+          const state = STATES[at];
+          expect(markOf(chip)?.dataset.s).toBe(state);
+          expect(chip.firstElementChild).toBe(markOf(chip));
+          const row = host.querySelector(`.tk-state[data-step="i${at + 1}"] .tk-ring`) as HTMLElement;
+          expect(markOf(chip)?.querySelector('.tk-ring')?.innerHTML).toBe(row.innerHTML);
+          expect(chip.getAttribute('aria-label')).toBe(`Go to item ${at + 1}: Step ${state}, ${en[`task.state.${state}`]}`);
+          expect(chip.textContent?.trim()).toBe(`${at + 1} · Step ${state}`);
+        });
+        expect(markOf(chips(host)[0])?.querySelector('svg')).toBeNull();
+        expect(markOf(chips(host)[1])?.querySelector('svg')).not.toBeNull();
+      });
+
+      it('follows the item when its state changes, without redrawing the chip', async () => {
+        serveApi((path: string, { body }: { body: { item: string; state: string } }) =>
+          ({ task: { ...withStates(), items: states.map(s => (s.key === body.item ? { ...s, state: body.state } : s)).concat(target) },
+             status: 'active' }));
+        const { host } = await mount(withStates());
+        await openPanel(host, 'i5');
+        const chip = chips(host)[0];
+        const mark = markOf(chip) as HTMLElement;
+        expect(mark.dataset.s).toBe('todo');
+        await press(host.querySelector('[data-step="i1"]'));
+        await until(() => mark.dataset.s === 'doing');
+        expect(chips(host)[0]).toBe(chip);
+        expect(markOf(chip)).toBe(mark);
+        expect(chip.getAttribute('aria-label')).toContain(en['task.state.doing']);
+      });
+
+      it('holds the doing mark still', async () => {
+        const { host } = await mount(withStates());
+        await openPanel(host, 'i5');
+        const doing = markOf(chips(host)[1]) as HTMLElement;
+        expect(doing.dataset.s).toBe('doing');
+        expect(doing.outerHTML).not.toContain('spin');
+        expect(doing.style.getPropertyValue('--spin-at')).toBe('');
+        expect(doing.querySelector('.tk-ring')?.getAttribute('style')).toBeNull();
+        expect(doing.querySelector('svg')?.getAttribute('style')).toBeNull();
+      });
+
+      it('leaves a deleted entry and an unknown key without a mark', async () => {
+        const { host } = await mount(withDepends([{ item: 'i9', deleted: '', reason: '' }, { item: '', deleted: 'Old step', reason: '' }]));
+        await openPanel(host);
+        expect(field(host).querySelector('.tk-dep-mark')).toBeNull();
+      });
     });
 
     it('reads none as the translated word', async () => {

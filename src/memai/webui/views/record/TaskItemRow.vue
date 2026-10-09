@@ -12,13 +12,11 @@ import TypeTag from '../../components/TypeTag.vue';
 import TaskComment from './TaskComment.vue';
 import TaskComposer from './TaskComposer.vue';
 import TaskNotes from './TaskNotes.vue';
-import { NEXT, STATES, spinAt } from './checklist.ts';
+import { MARK, NEXT, STATES, spinAt } from './checklist.ts';
 import type { Checklist } from './checklist.ts';
 
 const props = defineProps<{ c: Checklist; item: TaskItem; n: number }>();
 const { current, ui, enter } = props.c;
-
-const MARK: Record<string, string> = { doing: 'ongoing', done: 'check', dropped: 'minus' };
 
 const open = computed(() => ui.open === props.item.key);
 const notes = computed(() => current.value.notes.filter(n => n.items.includes(props.item.key)));

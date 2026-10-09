@@ -3,11 +3,12 @@
    place of the note it edits. */
 import { computed } from 'vue';
 import { t } from '../../i18n.ts';
+import type { I18nKey } from '../../i18n.ts';
 import type { TaskNote } from '../../api/types.ts';
 import AppIcon from '../../components/AppIcon.vue';
 import RichText from '../../components/RichText.vue';
 import TaskNoteForm from './TaskNoteForm.vue';
-import { briefOf, notePeek } from './checklist.ts';
+import { MARK, briefOf, notePeek } from './checklist.ts';
 import type { Checklist } from './checklist.ts';
 
 const props = defineProps<{ c: Checklist; scope: string; notes: TaskNote[] }>();
@@ -15,7 +16,9 @@ const { current, ui } = props.c;
 
 const itemOf = (key: string) => {
   const at = current.value.items.findIndex(i => i.key === key);
-  return at < 0 ? null : { n: at + 1, text: current.value.items[at].text };
+  if (at < 0) return null;
+  const { text, state } = current.value.items[at];
+  return { n: at + 1, text, state, stateName: t(`task.state.${state}` as I18nKey) };
 };
 
 const writing = computed(() => ui.noteEdit === `new:${props.scope}`);
@@ -52,8 +55,10 @@ const writing = computed(() => ui.noteEdit === `new:${props.scope}`);
                 <li v-for="(d, at) in n.depends" :key="at" class="tk-dep">
                   <template v-if="d.item">
                     <button v-if="itemOf(d.item)" type="button" class="tk-dep-chip" :data-dep="d.item"
-                            :aria-label="t('task.depends.open', { n: itemOf(d.item)!.n, text: itemOf(d.item)!.text })"
-                            @click="c.flashItem(d.item)">{{ itemOf(d.item)!.n }} · {{ itemOf(d.item)!.text }}</button>
+                            :aria-label="t('task.depends.open', { n: itemOf(d.item)!.n, text: itemOf(d.item)!.text, state: itemOf(d.item)!.stateName })"
+                            @click="c.flashItem(d.item)"><span class="tk-dep-mark" :data-s="itemOf(d.item)!.state"
+                            aria-hidden="true"><span class="tk-ring"><AppIcon v-if="MARK[itemOf(d.item)!.state]"
+                            :name="MARK[itemOf(d.item)!.state]" /></span></span>{{ itemOf(d.item)!.n }} · {{ itemOf(d.item)!.text }}</button>
                     <span v-else class="tk-dep-key">{{ d.item }}</span>
                   </template>
                   <span v-else class="tk-dep-gone"><s>{{ d.deleted }}</s><span class="sr-only"> ({{
