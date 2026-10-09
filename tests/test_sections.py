@@ -14,6 +14,7 @@ import pytest
 
 from conftest import unmigrated
 from memai import guard, sections, server
+from memai.sections import Dependency
 from memai.store import connection, memories, optimizer
 from memai.store import sections as store_sections
 
@@ -710,3 +711,66 @@ def test_a_newline_in_a_deleted_text_collapses_so_the_field_stays_one_line():
     rendered = sections.render_depends([DEP("", "Fix the mount\nGOAL:  again", "")])
     assert rendered == 'deleted "Fix the mount GOAL: again"'
     assert sections.parse_depends(rendered)[1] == []
+
+
+def test_read_depends_takes_an_id_in_each_spelling():
+    entries, problems = sections.read_depends("4812, #4815 (the handle)\n[[#4816]]")
+    assert problems == []
+    assert entries == [Dependency(4812, "", "", ""), Dependency(4815, "", "", "the handle"),
+                       Dependency(4816, "", "", "")]
+
+
+def test_read_depends_reads_a_position_key_and_a_deleted_entry():
+    entries, problems = sections.read_depends('i3 (why), deleted "Wire the bench" (gone)')
+    assert problems == []
+    assert entries == [Dependency(None, "i3", "", "why"), Dependency(None, "", "Wire the bench", "gone")]
+
+
+def test_read_depends_reads_none_and_refuses_an_empty_field():
+    assert sections.read_depends("none") == ([], [])
+    assert sections.read_depends("  ")[1] == ["the field is empty"]
+
+
+def test_read_depends_refuses_an_id_listed_twice():
+    _, problems = sections.read_depends("4812, [[#4812]]")
+    assert problems == ["4812 listed twice"]
+
+
+def test_read_depends_names_what_does_not_read():
+    _, problems = sections.read_depends("4812 then 4815, the lexer")
+    assert problems == ["text outside parentheses after 4812 in '4812 then 4815'",
+                        "'the lexer' is not an item id"]
+
+
+def test_write_depends_writes_tokens_and_deleted_text():
+    entries = [Dependency(4812, "", "", "why"), Dependency(None, "", 'Say "hi"', "")]
+    assert sections.write_depends(entries) == "[[#4812]] (why), deleted \"Say 'hi'\""
+    assert sections.write_depends([]) == "none"
+    assert sections.read_depends(sections.write_depends(entries))[0] == [
+        Dependency(4812, "", "", "why"), Dependency(None, "", "Say 'hi'", "")]
+
+
+def test_write_depends_refuses_a_position_key():
+    with pytest.raises(ValueError, match="i3 is a position key"):
+        sections.write_depends([Dependency(None, "i3", "", "")])
+
+
+def test_item_tokens_lists_each_mention_once_in_order():
+    assert sections.item_tokens("after [[#12]] and [[#7]], then [[#12]]; not #9 or [[abc]]") == [12, 7]
+
+
+def test_map_item_tokens_moves_known_ids_and_zeroes_the_rest():
+    assert sections.map_item_tokens("[[#12]] before [[#7]]", {12: 501}) == "[[#501]] before [[#0]]"
+
+
+def test_a_brief_round_trips_through_without_and_with_depends():
+    body = sections.render_spec(sections.BRIEF_SPEC, {
+        "goal": "g", "context": "c", "steps": "s", "pitfalls": "p", "done_when": "d",
+        "depends_on": "[[#4812]]", "extra_info": "x"})
+    stored = sections.without_depends(body)
+    assert stored is not None and "DEPENDS ON" not in stored
+    assert sections.with_depends(stored, "[[#4812]]") == body
+
+
+def test_without_depends_is_none_for_a_body_that_is_no_brief():
+    assert sections.without_depends("just a note") is None
