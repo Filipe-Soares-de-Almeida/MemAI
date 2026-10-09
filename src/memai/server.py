@@ -797,6 +797,7 @@ def task(title: str, goal: str, items: str, domain: str = "", also: str = "",
     on -- a few compact paragraphs, at most 2000 characters. Plain prose: a
     task is not a sectioned type, so no `INTENT:` / `GOAL:` / `WHY:` labels --
     those are how checkpoint, anti_pattern and reasoning bodies are read back.
+    edit_memory(goal=...) rewrites it when the scope changes.
 
     items: one checklist item per line, blank lines ignored, at most 50.
     Each is a short label, verb first, at most 80 characters: lists and
@@ -2104,21 +2105,22 @@ def get_memory(uid: str, edits_offset: int = -1, content_offset: int = -1) -> di
 
 @tool("core", REWRITE)
 def edit_memory(uid: str, new_content: str = "", note: str = "", mode: str = "replace",
-                source_ref: str = "", title: str = "", tags: str = "") -> dict:
+                source_ref: str = "", title: str = "", tags: str = "", goal: str = "") -> dict:
     """Correct a memory's content or its source reference, keeping the previous version.
 
     Corrections are common in append-only memory stores that only
     support delete, not edit; this preserves the old content instead
     of losing it. Each field is settable on its own; passing none of
-    new_content, source_ref, title and tags is an error rather than a
-    silent no-op.
+    new_content, source_ref, title, tags and goal is an error rather than
+    a silent no-op.
 
     Refuses to rewrite a diagram's content: that is generated from the
     graph, so a hand-written replacement would be silently overwritten by
     the next structural change -- edit the flow through
     diagram_node/diagram_edge. Its source_ref is ordinary metadata and is
     editable here like any other memory's. A task's content is generated
-    from its goal and items the same way, and is refused the same way.
+    from its goal and items the same way: rewrite its goal with `goal`,
+    and its items through task_item().
 
     uid: the memory.
 
@@ -2153,13 +2155,25 @@ def edit_memory(uid: str, new_content: str = "", note: str = "", mode: str = "re
     untagged memory becomes findable by the words its body never uses.
     Empty leaves the stored tags alone -- clearing them, like clearing a
     source_ref, is a dashboard edit.
+
+    goal: a task's new goal, held to the rules task() states; the previous
+    goal stays in the edit history. Refused on any other type.
     """
     if mode not in ("replace", "append"):
         return _errors([f"mode must be 'replace' or 'append'; got {mode!r}"])
-    if not (new_content.strip() or source_ref.strip() or title.strip() or tags.strip()):
-        return _errors(["nothing to change: pass new_content, source_ref, title or tags"])
+    if not (new_content.strip() or source_ref.strip() or title.strip() or tags.strip()
+            or goal.strip()):
+        return _errors(["nothing to change: pass new_content, source_ref, title, tags or goal"])
     changed = []
     with connection.connect() as conn:
+        if goal.strip():
+            if not tasks.is_task(conn, uid):
+                return _errors([f"{uid} is not a task: only a task has a goal"])
+            try:
+                tasks.set_goal(conn, uid, goal, note=note)
+            except ValueError as exc:
+                return _errors([str(exc)])
+            changed.append("goal")
         if new_content.strip():
             if diagram_persist.is_diagram(conn, uid):
                 return _errors([
@@ -2169,7 +2183,8 @@ def edit_memory(uid: str, new_content: str = "", note: str = "", mode: str = "re
             if tasks.is_task(conn, uid):
                 return _errors([
                     f"{uid} is a task: its content is generated from the goal and "
-                    "items. Change them through the task tools."
+                    "items. Rewrite the goal with edit_memory(goal=...) and the items "
+                    "with task_item()."
                 ])
             try:
                 if not memories.update_memory_content(conn, uid, new_content, note=note,

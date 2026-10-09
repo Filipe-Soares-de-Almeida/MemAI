@@ -411,8 +411,8 @@ def _span(keys: list[str]) -> str:
     return keys[0] if len(keys) == 1 else f"{keys[0]}..{keys[-1]}"
 
 
-def set_goal(conn: sqlite3.Connection, uid: str, goal: str) -> None:
-    """Replace the goal; the content is regenerated when the goal changed."""
+def set_goal(conn: sqlite3.Connection, uid: str, goal: str, *, note: str = "") -> None:
+    """Replace the goal; the content is regenerated, and `note` names the edit in the history."""
     goal = str(goal).strip()
     if not goal:
         raise ValueError("a task needs a goal")
@@ -421,7 +421,7 @@ def set_goal(conn: sqlite3.Connection, uid: str, goal: str) -> None:
     _lock(conn, uid)
     _require_no_cited_key({"goal": goal}, len(_items(conn, uid)))
     conn.execute("UPDATE tasks SET goal = ? WHERE memory_uid = ?", (goal, uid))
-    _regenerate(conn, uid, "goal edited", record_edit=True)
+    _regenerate(conn, uid, note or "goal edited", record_edit=True)
 
 
 def add_comment(
