@@ -7,7 +7,7 @@ import { go, refreshBehind } from '../../core/router.ts';
 import { openRecord } from '../../core/nav.ts';
 import { t } from '../../i18n.ts';
 import * as client from '../../api/client.ts';
-import type { MemoryRecord } from '../../api/types.ts';
+import type { MemoryRecord, TaskAnswer } from '../../api/types.ts';
 import type { ViewProps } from '../../core/vue.ts';
 import BlockIndex from './BlockIndex.vue';
 import DiagramPreview from './DiagramPreview.vue';
@@ -103,7 +103,8 @@ function more(e: MouseEvent) {
 }
 
 /* A task's write changed the record's Updated time, its size and its history. */
-async function retrail() {
+async function retrail(answer?: TaskAnswer) {
+  if (m.value && answer?.task) m.value = { ...m.value, task: answer.task };
   try {
     const now = await client.memories.get(uid);
     if (!alive || !m.value) return;

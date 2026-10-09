@@ -2275,7 +2275,7 @@ button.rs-mono:hover { color: var(--accent); }
 .tk-card { background: var(--surface); border-radius: var(--r-lg); min-width: 0; }
 .tk-h { font: 500 var(--fs-md)/1.3 var(--font-ui); color: var(--ink); display: flex; align-items: baseline; gap: var(--sp-2); }
 
-/* the head: what the task is for, and how far it has got */
+/* the head: what the task is for */
 .tk-head { padding: var(--sp-4) var(--sp-5); display: flex; flex-direction: column; gap: var(--sp-4); }
 .tk-head.is-closed { background: color-mix(in srgb, var(--f-go) 6%, var(--surface)); }
 .tk-head.is-closed:has(.is-cancelled) { background: var(--surface); }
@@ -2304,19 +2304,12 @@ button.rs-mono:hover { color: var(--accent); }
 .tk-goal > .icon-btn { margin-left: auto; flex: none; }
 
 .tk-prog { display: flex; flex-direction: column; gap: var(--sp-2); }
-.tk-prog-line { display: flex; align-items: center; gap: var(--sp-3); flex-wrap: wrap; }
+.tk-prog-line { display: flex; align-items: baseline; justify-content: space-between; gap: var(--sp-3); flex-wrap: wrap; }
 .tk-prog-n { font: 400 var(--fs-md) var(--font-ui); color: var(--ink-2); font-variant-numeric: tabular-nums; }
-.tk-prog-n b { font: 500 var(--fs-lg) var(--font-ui); color: var(--ink); }
+.tk-prog-pct { font: 500 var(--fs-xl)/1 var(--font-ui); color: var(--ink); font-variant-numeric: tabular-nums; }
+.tk-prog-n b { font: 500 var(--fs-md) var(--font-ui); color: var(--ink); }
 .tk-bar { height: 8px; border-radius: var(--r-pill); }
 .tk-bar .bar-fill { --c: var(--f-go); }
-/* What was dropped follows what was done, hatched: part of the whole, not progress. The hatch
-   fills the track and a clip leaves its span, so it eases like the fill. */
-.tk-bar-drop {
-  position: absolute; inset: 0;
-  background: repeating-linear-gradient(135deg, rgba(255, 255, 255, .3) 0 2px, transparent 2px 5px);
-  clip-path: inset(0 calc((1 - var(--v0) - var(--v)) * 100%) 0 calc(var(--v0) * 100%));
-  transition: clip-path .6s cubic-bezier(.25, .9, .3, 1);
-}
 
 /* the items */
 .tk-items { list-style: none; margin: 0; padding: 0; }
@@ -2324,6 +2317,9 @@ button.rs-mono:hover { color: var(--accent); }
 .tk-item { border-bottom: 1px solid var(--line-soft); }
 .tk-item.is-new { animation: rise .28s cubic-bezier(.2, .7, .3, 1) both; }
 .tk-item.is-leaving { animation: tk-leave .16s cubic-bezier(.4, 0, 1, 1) both; pointer-events: none; }
+/* the row a DEPENDS ON chip points at: the accent wash, fading out over the time the class stays */
+.tk-item.is-flash > .tk-row { animation: tk-flash 1.2s cubic-bezier(.3, 0, .6, 1) both; }
+@keyframes tk-flash { from { background: var(--accent-dim); } 60% { background: var(--accent-dim); } to { background: transparent; } }
 @keyframes tk-leave { to { opacity: 0; transform: translateX(var(--leave-x, -10px)); } }
 
 .tk-item[data-s="doing"] > .tk-row { background: color-mix(in srgb, var(--f-live) 7%, transparent); }
@@ -2331,12 +2327,17 @@ button.rs-mono:hover { color: var(--accent); }
 .tk-item[data-s="doing"].is-open > .tk-row { background: color-mix(in srgb, var(--f-live) 7%, var(--hover-2)); }
 .tk-item:last-child { border-bottom: 0; }
 .tk-row {
-  display: grid; grid-template-columns: var(--ctl-h-sm) minmax(0, 1fr) var(--ctl-h-sm);
+  display: grid; grid-template-columns: 2.5ch var(--ctl-h-sm) minmax(0, 1fr) var(--ctl-h-sm);
   align-items: start; gap: var(--sp-2);
   padding: var(--sp-2) var(--sp-3);
   transition: background .15s;
 }
 
+/* the position sits level with the state mark, however many lines the text takes */
+.tk-num {
+  display: grid; align-items: center; justify-items: end; align-self: start; height: var(--ctl-h-sm);
+  font: 500 var(--fs-sm) var(--font-ui); color: var(--ink-3); font-variant-numeric: tabular-nums;
+}
 .tk-state {
   --sc: var(--ink-3);
   width: var(--ctl-h-sm); height: var(--ctl-h-sm); padding: 0;
@@ -2352,12 +2353,12 @@ button.rs-mono:hover { color: var(--accent); }
 .tk-state:hover .tk-ring { box-shadow: 0 0 0 4px var(--hover-3); }
 /* in progress: the ring opens into an arc with an arrowhead, so it is not todo's ring;
    the arc turns slowly, one lap in three seconds, so the item reads as live */
-.tk-state[data-s="doing"]   { --sc: var(--f-live); }
-.tk-state[data-s="doing"] .tk-ring { border: 0; background: none; color: var(--f-live); --ico: 20px; }
+.tk-state[data-s="doing"], .tk-dep-mark[data-s="doing"] { --sc: var(--f-live); }
+.tk-state[data-s="doing"] .tk-ring, .tk-dep-mark[data-s="doing"] .tk-ring { border: 0; background: none; color: var(--f-live); --ico: 20px; }
 .tk-state[data-s="doing"] .ico { animation: spin var(--spin) linear infinite var(--spin-at, 0s); }
-.tk-state[data-s="done"]    { --sc: var(--f-go); }
-.tk-state[data-s="done"] .tk-ring { background: var(--f-go); color: var(--accent-ink); }
-.tk-state[data-s="dropped"] .tk-ring { border-style: dashed; color: var(--ink-3); }
+.tk-state[data-s="done"], .tk-dep-mark[data-s="done"] { --sc: var(--f-go); }
+.tk-state[data-s="done"] .tk-ring, .tk-dep-mark[data-s="done"] .tk-ring { background: var(--f-go); color: var(--accent-ink); }
+.tk-state[data-s="dropped"] .tk-ring, .tk-dep-mark[data-s="dropped"] .tk-ring { border-style: dashed; color: var(--ink-3); }
 /* the mark that was just changed arrives: the ring scales in, and a done tick draws itself */
 .tk-state.is-pulse .tk-ring { animation: tk-pop .26s cubic-bezier(.2, .8, .2, 1) both; }
 .tk-state.is-pulse[data-s="done"] .ico path {
@@ -2392,10 +2393,10 @@ button.rs-mono:hover { color: var(--accent); }
 /* One item's links and comments, open under its row: a flush --inset well, between the
    page and the list rows. A rule drops from the state mark; content aligns with the text. */
 .tk-panel {
-  --mark: calc(var(--sp-3) + var(--ctl-h-sm) / 2);
+  --mark: calc(var(--sp-3) + 2.5ch + var(--sp-2) + var(--ctl-h-sm) / 2);
   position: relative;
   display: flex; flex-direction: column; gap: var(--sp-3);
-  padding: var(--sp-3) var(--sp-3) var(--sp-4) calc(var(--sp-3) + var(--ctl-h-sm) + var(--sp-2));
+  padding: var(--sp-3) var(--sp-3) var(--sp-4) calc(var(--sp-3) + 2.5ch + var(--sp-2) + var(--ctl-h-sm) + var(--sp-2));
   background: var(--inset);
   box-shadow: inset 0 5px 6px -5px rgba(0, 0, 0, .55);
 }
@@ -2466,6 +2467,32 @@ textarea.tk-box {
   background: var(--inset); border-color: rgba(187, 134, 252, .45);
 }
 .tk-note .rf-pane textarea { min-height: 260px; }
+/* A brief reads as fields, each a label tight over its text with more air between fields than inside one;
+   the editor gives each field a short box that grows with what is typed. */
+.tk-brief-f + .tk-brief-f { margin-top: var(--sp-3); }
+.tk-brief-h { margin: 0 0 var(--sp-1); }
+.tk-brief-in { display: flex; flex-direction: column; gap: var(--sp-1); }
+.tk-brief-in + .tk-brief-in { margin-top: var(--sp-2); }
+.tk-note .tk-brief-in textarea { min-height: 5.5rem; field-sizing: content; }
+.tk-opt { color: var(--ink-3); font-weight: 400; }
+.tk-brief-err { margin: var(--sp-1) 0 0; }
+/* DEPENDS ON as references: a chip per item that scrolls to it, the reason beside it in muted text */
+.tk-deps { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--sp-1); }
+.tk-dep, .tk-dep-none { display: flex; align-items: center; flex-wrap: wrap; column-gap: var(--sp-3); font: 400 var(--fs-md) var(--font-ui); }
+.tk-dep-chip {
+  display: inline-flex; align-items: center; max-width: 100%; min-height: var(--tap);
+  padding: 0 var(--sp-3); text-align: left; cursor: pointer;
+  font: 500 var(--fs-sm) var(--font-ui); color: var(--accent); font-variant-numeric: tabular-nums;
+  background: var(--chip-fill); border: 1px solid var(--line-soft); border-radius: var(--r-pill);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+/* the row's mark, scaled to the chip's line and held still */
+.tk-dep-mark { --sc: var(--ink-3); display: inline-grid; flex: none; margin-right: var(--sp-2); }
+.tk-dep-mark .tk-ring { width: 14px; height: 14px; border-width: 1.5px; --ico: 9px; }
+.tk-dep-mark[data-s="doing"] .tk-ring { --ico: 14px; }
+.tk-dep-chip:hover { color: var(--accent-hi); border-color: rgba(187, 134, 252, .4); }
+.tk-dep-gone s, .tk-dep-key { color: var(--ink-3); }
+.tk-dep-why, .tk-dep-none { color: var(--ink-2); }
 /* under the box: how to save on the left, how much room is left on the right */
 .tk-note-foot { display: flex; align-items: center; gap: var(--sp-3); }
 .tk-note-foot .rf-count { margin-left: auto; }
@@ -2492,6 +2519,10 @@ textarea.tk-box {
 .tk-scope-row:hover { background: var(--hover-2); color: var(--ink); }
 .tk-scope-row input[type="checkbox"] { margin: 0; }
 .tk-scope-text { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tk-scope-n {
+  display: inline-block; min-width: 2.5ch; text-align: right; margin-right: var(--sp-2);
+  color: var(--ink-3); font-variant-numeric: tabular-nums;
+}
 .tk-scope-row:has(input:checked) { background: var(--accent-dim); color: var(--ink); }
 .tk-older { margin-left: 0; align-self: flex-start; }
 .tk-cs { display: flex; flex-direction: column; }
@@ -2569,7 +2600,7 @@ textarea.tk-box {
 :root[data-motion="reduce"] .tk { --pop-from: 1; --leave-x: 0px; --tk-in-y: 0px; }
 :root[data-motion="reduce"] .tk-state[data-s="doing"] .ico { animation: none; }
 :root[data-motion="reduce"] .tk-state.is-pulse[data-s="done"] .ico path { animation: none; }
-:root[data-motion="reduce"] .tk-bar-drop { transition: none; }
+:root[data-motion="reduce"] .tk-item.is-flash > .tk-row { animation: none; background: var(--accent-dim); }
 :root[data-motion="reduce"] :is(.tk-ring, .tk-chev, .tk-row, .tk-reply) { transition: none; }
 
 /* a task in the memories list: how far it has got, as a short bar and the

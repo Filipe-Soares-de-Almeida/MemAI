@@ -210,6 +210,12 @@ export interface TaskComment {
   created_at: string;
 }
 
+export interface TaskDepend {
+  item: string;
+  deleted: string;
+  reason: string;
+}
+
 export interface TaskNote {
   id: number;
   title: string;
@@ -217,6 +223,8 @@ export interface TaskNote {
   items: string[];
   updated_at: string;
   body_links: Record<string, BodyLink>;
+  brief: Record<string, string> | null;
+  depends: TaskDepend[] | null;
 }
 
 export interface TaskRecord {

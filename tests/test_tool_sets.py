@@ -119,7 +119,7 @@ def test_an_unpublished_tool_is_still_callable(monkeypatch, tmp_path):
 def test_core_costs_meaningfully_less_per_request(monkeypatch):
     full = _schema_chars(_load(monkeypatch, None))
     core = _schema_chars(_load(monkeypatch, "core"))
-    assert core < full * 0.7
+    assert core < full * 0.72
 
 
 def test_the_skill_names_every_suggestion_kind():

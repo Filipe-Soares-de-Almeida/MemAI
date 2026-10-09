@@ -87,11 +87,18 @@ def test_bad_offsets_are_error_results(store):
     assert server.get_memory(uid, content_offset=-2)["ok"] is False
 
 
+BRIEF_ARGS = dict(goal="lex the config", context="ASCII input", steps="write the scanner",
+                  pitfalls="tabs", done_when="every fixture lexes", depends_on="none")
+
+
 def test_task_read_and_task_note_round_trip(store):
     uid = _task()
-    made = server.task_note(uid, title="Lexer rules", body="ASCII only.", items="i2")
+    made = server.task_note(uid, title="Lexer rules", items="i2", **BRIEF_ARGS)
     assert made["note_id"] and made["items"] == ["i2"]
-    assert server.task_read(uid, "notes", item="i2")["records"][0]["body"] == "ASCII only."
+    body = server.task_read(uid, "notes", item="i2")["records"][0]["body"]
+    assert body.startswith("GOAL: lex the config\nCONTEXT: ASCII input")
+    assert server.task_note(uid, note_id=made["note_id"], pitfalls="tabs and CRLF").get("ok") is not False
+    assert "PITFALLS: tabs and CRLF" in server.task_read(uid, "notes", item="i2")["records"][0]["body"]
     assert server.task_note(uid, note_id=made["note_id"], items="-")["items"] == []
     assert server.task_read(uid, "notes")["total"] == 1
     assert server.task_note(uid, note_id=made["note_id"], delete=True)["deleted"] is True
@@ -110,6 +117,10 @@ def test_task_note_refusals_are_error_results(store):
     assert server.task_note(uid, title="T", body="b", items="i9")["ok"] is False
     assert server.task_note(uid, note_id=999, delete=True)["ok"] is False
     assert server.task_note(_note(), title="T", body="b")["ok"] is False
+    assert server.task_note(uid, title="T", body="free text", items="i1")["ok"] is False
+    assert server.task_note(uid, title="T", body="b", goal="g")["ok"] is False
+    assert server.task_note(uid, title="T", items="i1", goal="only a goal")["ok"] is False
+    assert server.task_note(uid, title="T", items="i1", **{**BRIEF_ARGS, "depends_on": "i9"})["ok"] is False
 
 
 def test_new_task_tools_are_guarded():

@@ -1,7 +1,7 @@
 import pytest
 
 from memai import pending, tasks
-from memai.store import connection, dedup, memories, optimizer, search
+from memai.store import connection, dedup, memories, optimizer, search, task_items
 
 
 @pytest.fixture
@@ -51,7 +51,7 @@ def test_render_uses_one_mark_per_state():
         {"key": "i3", "text": "c", "state": "done"},
         {"key": "i4", "text": "d", "state": "dropped"},
     ]
-    assert tasks.render("g", items) == "GOAL: g\n[ ] i1 a\n[~] i2 b\n[x] i3 c\n[-] i4 d"
+    assert task_items.render("g", items) == "GOAL: g\n[ ] i1 a\n[~] i2 b\n[x] i3 c\n[-] i4 d"
 
 
 def test_the_content_is_searchable(conn):
@@ -216,7 +216,7 @@ def test_adding_an_item_reopens_a_completed_task(conn):
     assert "item i3 added" not in notes and notes[-1] == "reopened"
 
 
-def test_keys_are_never_reused(conn):
+def test_consecutive_adds_take_consecutive_positions(conn):
     uid = _make(conn)
     assert tasks.add_items(conn, uid, ["third"])["keys"] == ["i3"]
     assert tasks.add_items(conn, uid, ["fourth"])["keys"] == ["i4"]
@@ -491,17 +491,16 @@ def test_a_task_round_trips_through_export_and_import(tmp_path):
         assert _task_rows(b, uid) == [1, 2, 1, 2]
 
 
-def test_a_retired_key_stays_retired_across_export_and_import(tmp_path):
+def test_an_export_after_a_delete_restores_the_positions(tmp_path):
     from memai import portable
 
     with connection.connect(tmp_path / "a.db") as a:
         uid = _three(a)
         tasks.delete_item(a, uid, "i3")
         records = list(portable.export_records(a, include_archived=True, include_edits=True))
-    assert [r for r in records if r["record"] == "task"][0]["item_seq"] == 3
     with connection.connect(tmp_path / "b.db") as b:
         assert portable.import_records(b, records)["errors"] == []
-        assert tasks.add_items(b, uid, ["a new step"])["keys"] == ["i4"]
+        assert tasks.add_items(b, uid, ["a new step"])["keys"] == ["i3"]
 
 
 def _bare_task_record(**extra):
@@ -521,14 +520,16 @@ def _restore_bare(conn, **extra):
     tasks.restore_task(conn, _bare_task_record(**extra))
 
 
-def test_a_record_without_item_seq_restores_with_the_highest_item_seq(conn):
+def test_a_record_with_gaps_restores_its_items_by_position(conn):
     _restore_bare(conn)
-    assert tasks.add_items(conn, "aaaaaaaaaaaaaaaa", ["next"])["keys"] == ["i6"]
+    uid = "aaaaaaaaaaaaaaaa"
+    assert [i["key"] for i in tasks.get_task(conn, uid)["items"]] == ["i1", "i2", "i3"]
+    assert tasks.add_items(conn, uid, ["next"])["keys"] == ["i4"]
 
 
-def test_a_record_item_seq_past_its_items_is_kept(conn):
+def test_a_record_item_seq_numbers_nothing(conn):
     _restore_bare(conn, item_seq=9)
-    assert tasks.add_items(conn, "aaaaaaaaaaaaaaaa", ["next"])["keys"] == ["i10"]
+    assert tasks.add_items(conn, "aaaaaaaaaaaaaaaa", ["next"])["keys"] == ["i4"]
 
 
 @pytest.mark.parametrize("bad", [-1, "3", 2.5, True, None], ids=repr)
@@ -734,12 +735,13 @@ def test_delete_item_removes_the_item_its_comments_and_its_links(conn):
     assert result["progress"] == {"done": 0, "dropped": 0, "total": 2}
     assert result["task_state"] == "open" and result["archived"] is False
     task = tasks.get_task(conn, uid)
-    assert [i["key"] for i in task["items"]] == ["i1", "i3"]
+    assert result["renumbered"] == {"i3": "i2"}
+    assert [i["key"] for i in task["items"]] == ["i1", "i2"]
     assert [link["uid"] for i in task["items"] for link in i["links"]] == [note]
     assert [c["body"] for c in task["comments"]] == ["about the parser", "about the whole task"]
     assert memories.get_memory(conn, uid)["content"] == (
-        "GOAL: Parse every config file\n[ ] i1 read the spec\n[ ] i3 write the parser")
-    assert _notes(conn, uid) == []
+        "GOAL: Parse every config file\n[ ] i1 read the spec\n[ ] i2 write the parser")
+    assert _notes(conn, uid) == ["item i2 deleted: write the lexer; i3 renumbered to i2"]
 
 
 def test_the_only_item_cannot_be_deleted(conn):
@@ -765,17 +767,17 @@ def test_delete_item_refuses_an_unknown_item_and_a_non_task(conn):
     assert len(tasks.get_task(conn, uid)["items"]) == 3
 
 
-def test_a_key_is_not_reused_after_the_highest_item_is_deleted(conn):
+def test_the_next_add_takes_the_position_a_deleted_last_item_left(conn):
     uid = _three(conn)
     tasks.delete_item(conn, uid, "i3")
-    assert tasks.add_items(conn, uid, ["a new step"])["keys"] == ["i4"]
-    tasks.delete_item(conn, uid, "i4")
+    assert tasks.add_items(conn, uid, ["a new step"])["keys"] == ["i3"]
+    tasks.delete_item(conn, uid, "i3")
     tasks.delete_item(conn, uid, "i2")
-    assert tasks.add_items(conn, uid, ["one", "two"])["keys"] == ["i5", "i6"]
-    assert [i["key"] for i in tasks.get_task(conn, uid)["items"]] == ["i1", "i5", "i6"]
+    assert tasks.add_items(conn, uid, ["one", "two"])["keys"] == ["i2", "i3"]
+    assert [i["key"] for i in tasks.get_task(conn, uid)["items"]] == ["i1", "i2", "i3"]
 
 
-def test_the_item_limit_counts_items_not_retired_keys(conn):
+def test_the_item_limit_counts_the_items_a_task_holds_after_adds_and_deletes(conn):
     uid = _three(conn)
     for _ in range(3):
         key = tasks.add_items(conn, uid, ["extra"])["keys"][0]
@@ -811,7 +813,7 @@ def test_deleting_the_last_open_item_completes_the_task(conn):
     assert result["task_state"] == "completed" and result["archived"] is True
     assert memories.get_memory(conn, uid)["status"] == "archived"
     assert tasks.get_task(conn, uid)["completed_at"] != ""
-    assert _notes(conn, uid) == ["completed"]
+    assert _notes(conn, uid) == ["item i3 deleted: write the parser", "completed"]
 
 
 def test_deleting_the_last_open_item_of_an_all_dropped_task_cancels_it(conn):
@@ -859,7 +861,7 @@ def test_a_refusal_after_the_rows_changed_rolls_them_back(tmp_path, monkeypatch)
         tasks.link_item(c, uid, "i3", [note])
         tasks.add_comment(c, uid, "about the parser", item="i3")
 
-    def refuse(conn, uid, note, *, record_edit):
+    def refuse(conn, uid, note, **_):
         raise ValueError("refused after the rows changed")
     monkeypatch.setattr(tasks, "_regenerate", refuse)
     with pytest.raises(ValueError), connection.connect(path) as c:

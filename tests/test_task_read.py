@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pytest
 
+from conftest import brief
 from memai import budget, tasks
 from memai.store import connection, memories
 
@@ -20,7 +21,7 @@ def uid(conn):
     u = tasks.create_task(conn, title="Ship the parser", goal="Parse every config file",
                           items=["read the spec", "write the lexer"], domain="acme/parser")
     tasks.add_note(conn, u, title="Pick-up rules", body="Claim first.", items=[])
-    tasks.add_note(conn, u, title="Lexer rules", body="ASCII only.", items=["i2"])
+    tasks.add_note(conn, u, title="Lexer rules", body=brief("ASCII only."), items=["i2"])
     tasks.add_comment(conn, u, "on the task")
     tasks.add_comment(conn, u, "on the lexer", item="i2")
     other = memories.insert_memory(conn, type="note", content="Lexers are fun.", title="Lexers",

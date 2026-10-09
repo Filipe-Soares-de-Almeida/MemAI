@@ -492,7 +492,8 @@ def adopt(task_uid: str, uids: list[str], *, dry_run: bool = True) -> dict:
 
     A memory with relations, diagram references, a body over the note limit,
     or no link to the task is refused, so nothing that stands on its own is
-    lost. One linked to every item becomes a task-level note. The real run
+    lost. One that would land on some items must already read as a brief.
+    One linked to every item becomes a task-level note. The real run
     backs the store up first and drops the task's edit history.
     """
     project = paths.active_project()
@@ -512,6 +513,12 @@ def adopt(task_uid: str, uids: list[str], *, dry_run: bool = True) -> dict:
                 refused.append({"uid": uid, "reason": reason if row else "not linked to this task"})
                 continue
             whole = set(keys) == set(all_keys)
+            if not whole and tasks.brief_error(row["content"]):
+                refused.append({"uid": uid, "reason": "not a brief"})
+                continue
+            if not whole and (error := tasks.depends_error(conn, task_uid, row["content"], keys)):
+                refused.append({"uid": uid, "reason": f"DEPENDS ON does not read: {error}"})
+                continue
             plan.append({"uid": uid, "title": row["title"], "body": row["content"],
                          "items": [] if whole else keys, "level": "task" if whole else "item"})
         edits = store_memories.edit_count(conn, task_uid)

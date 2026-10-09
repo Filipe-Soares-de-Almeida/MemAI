@@ -8,14 +8,14 @@ of values into a body, and reads a body back into values.
 The body is the record. Sections are read out of it on every write, so no
 caller keeps the two in step by hand.
 
-A body CONFORMS when it opens with the first label, every label in the spec
-opens exactly one line, the labels appear in spec order, no field is empty,
-and no field runs past the ceiling its spec gives it. A label that opens two
-lines is not conforming: the second one reads as the start of a field and
-nothing tells it apart from the one that is.
+A body CONFORMS when it opens with the first label, every required label
+opens exactly one line, an optional label opens at most one, the labels appear
+in spec order, no field is empty, and no field runs past the ceiling its spec
+gives it. A label that opens two lines is not conforming: the second one reads
+as the start of a field and nothing tells it apart from the one that is.
 
-`read` reports what stops a body conforming instead of raising, so a caller
-can index a body it is not ready to refuse.
+`read` and `read_spec` report what stops a body conforming instead of raising,
+so a caller can index a body it is not ready to refuse.
 """
 
 from __future__ import annotations
@@ -24,11 +24,14 @@ import functools
 import re
 from typing import NamedTuple
 
+from memai import contract
+
 
 class Section(NamedTuple):
     key: str          # the parameter the writing tool takes it as
     label: str        # how it is spelled at the head of its line
     max_len: int = 0  # characters this field holds; 0 for a field with no ceiling
+    optional: bool = False
 
 
 # Body order, and the writing tool's parameter order: tests/test_guard.py holds `key` to its signature.
@@ -59,6 +62,116 @@ SECTION_SPEC: dict[str, tuple[Section, ...]] = {
 LEGACY_LABELS: dict[str, tuple[str, ...]] = {
     "reasoning": ("DOMAIN", "CONFIDENCE"),
 }
+
+
+# The fields a task note on items is written in; a task note, not a memory type, so not in SECTION_SPEC.
+BRIEF_SPEC: tuple[Section, ...] = tuple(
+    Section(f["key"], f["label"], optional=bool(f.get("optional"))) for f in contract.TASK_BRIEF)
+
+
+class DependsEntry(NamedTuple):
+    item: str      # an `iN` key, or "" for a dependency on a deleted item
+    deleted: str   # the deleted item's text, or "" for a key
+    reason: str
+
+
+_DEPENDS_ENTRY = re.compile(
+    r'(?:(?P<key>[iI][1-9][0-9]*)|(?i:deleted)\s+"(?P<text>[^"]*)")\s*(?:\((?P<reason>[^()]*)\))?')
+_DEPENDS_KEY_HEAD = re.compile(r"[iI][1-9][0-9]*")
+
+
+def _depends_pieces(text: str) -> tuple[list[tuple[str, str, str]], list[str]]:
+    """The text split at commas and newlines outside parentheses and quotes.
+
+    Each piece comes with the separator before and after it ("" at an end).
+    """
+    pieces: list[tuple[str, str, str]] = []
+    depth = 0
+    quoted = False
+    start = 0
+    before = ""
+    for at, ch in enumerate(text):
+        if quoted:
+            quoted = ch != '"'
+        elif depth == 0 and ch == '"':
+            quoted = True
+        elif ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+            if depth < 0:
+                return [], ["unbalanced parentheses"]
+        elif depth == 0 and ch in (",", "\n"):
+            pieces.append((text[start:at], before, ch))
+            start, before = at + 1, ch
+    if depth:
+        return [], ["unbalanced parentheses"]
+    pieces.append((text[start:], before, ""))
+    return pieces, []
+
+
+def _depends_complaint(piece: str) -> str:
+    shown = piece if len(piece) <= 40 else piece[:37] + "..."
+    if piece.count("(") > 1:
+        return f"nested or repeated parentheses in {shown!r}"
+    head = _DEPENDS_KEY_HEAD.match(piece)
+    if head and piece[head.end():].strip():
+        return f"text outside parentheses after {head.group().lower()} in {shown!r}"
+    if re.match(r"(?i)deleted\b", piece):
+        return f'{shown!r} is not deleted "<item text>" with an optional (reason)'
+    return f"{shown!r} is not an item key"
+
+
+def parse_depends(text: str) -> tuple[list[DependsEntry], list[str]]:
+    """The entries of a DEPENDS ON field and what stops it reading.
+
+    The field is `none`, or entries separated by commas or newlines: an item
+    key `iN`, or `deleted "<item text>"`, each with an optional `(reason)`.
+    """
+    text = str(text).strip()
+    if text.lower() == "none":
+        return [], []
+    if not text:
+        return [], ["the field is empty"]
+    pieces, problems = _depends_pieces(text)
+    entries: list[DependsEntry] = []
+    for piece, before, after in pieces:
+        piece = piece.strip()
+        if not piece:
+            if "\n" not in (before, after) and (before or after):
+                problems.append("an empty entry")
+            continue
+        found = _DEPENDS_ENTRY.fullmatch(piece)
+        if found is None:
+            problems.append(_depends_complaint(piece))
+            continue
+        reason = (found.group("reason") or "").strip()
+        if found.group("reason") is not None and not reason:
+            problems.append(f"an empty reason in {piece!r}")
+            continue
+        if found.group("key"):
+            key = found.group("key").lower()
+            if any(e.item == key for e in entries):
+                problems.append(f"{key} listed twice")
+                continue
+            entries.append(DependsEntry(key, "", reason))
+        elif found.group("text"):
+            entries.append(DependsEntry("", found.group("text"), reason))
+        else:
+            problems.append("a deleted entry with an empty item text")
+    return entries, problems
+
+
+def render_depends(entries: list[DependsEntry]) -> str:
+    """The field text for `entries`: `none` for an empty list; parse_depends reads it back."""
+    if not entries:
+        return "none"
+    parts = []
+    for e in entries:
+        text = " ".join(e.deleted.replace('"', "'").split())
+        head = e.item or f'deleted "{text}"'
+        parts.append(f"{head} ({e.reason})" if e.reason else head)
+    return ", ".join(parts)
 
 
 class Reading(NamedTuple):
@@ -96,16 +209,27 @@ def _opener(label: str) -> re.Pattern[str]:
 
 
 def render(type: str, values: dict[str, str]) -> str:
-    """A body built from field values, keyed by Section.key.
-
-    A key the spec does not name is ignored; one it names and `values`
-    does not carry is written empty, which `read` then reports as a
-    problem. Raises ValueError for a type with no spec.
-    """
+    """A body built from field values, keyed by Section.key; ValueError for a type with no spec."""
     spec = spec_for(type)
     if not spec:
         raise ValueError(f"type {type!r} has no sections")
-    return "\n".join(f"{s.label}: {str(values.get(s.key, '')).strip()}" for s in spec)
+    return render_spec(spec, values)
+
+
+def render_spec(spec: tuple[Section, ...], values: dict[str, str]) -> str:
+    """A body built from field values, keyed by Section.key.
+
+    A key the spec does not name is ignored. A required field `values` does
+    not carry is written empty, which `read_spec` then reports; an optional
+    one is left out.
+    """
+    lines = []
+    for s in spec:
+        text = str(values.get(s.key, "")).strip()
+        if s.optional and not text:
+            continue
+        lines.append(f"{s.label}: {text}")
+    return "\n".join(lines)
 
 
 def _drop_legacy(type: str, content: str) -> str:
@@ -151,12 +275,20 @@ def salvage(type: str, content: str) -> Reading:
 
 def read(type: str, content: str) -> Reading:
     """Read a body into its fields. A type with no spec reads as conforming."""
-    spec = spec_for(type)
+    return read_spec(spec_for(type), content)
+
+
+def read_spec(spec: tuple[Section, ...], content: str) -> Reading:
+    """Read a body into the fields of `spec`; an empty spec reads as conforming.
+
+    An optional label may be absent; when present it obeys the same rules as
+    a required one.
+    """
     if not spec:
         return Reading({}, [])
 
     found = {s.label: [m.span() for m in _opener(s.label).finditer(content)] for s in spec}
-    missing = [s.label for s in spec if not found[s.label]]
+    missing = [s.label for s in spec if not found[s.label] and not s.optional]
     doubled = [s.label for s in spec if len(found[s.label]) > 1]
 
     problems: list[str] = []
@@ -166,8 +298,9 @@ def read(type: str, content: str) -> Reading:
         problems.append(f"more than one line opens with {', '.join(doubled)}")
     if not missing and not content.startswith(f"{spec[0].label}:"):
         problems.append(f"the body does not open with {spec[0].label}:")
+    present = [s for s in spec if found[s.label]]
     if not missing and not doubled:
-        heads = [found[s.label][0][0] for s in spec]
+        heads = [found[s.label][0][0] for s in present]
         if heads != sorted(heads):
             problems.append(
                 "the sections are out of order; expected "
@@ -176,12 +309,12 @@ def read(type: str, content: str) -> Reading:
     if problems:
         return Reading({}, problems)
 
-    bounds = [found[s.label][0] for s in spec] + [(len(content), len(content))]
+    bounds = [found[s.label][0] for s in present] + [(len(content), len(content))]
     values = {
-        spec[i].key: content[bounds[i][1]:bounds[i + 1][0]].strip()
-        for i in range(len(spec))
+        present[i].key: content[bounds[i][1]:bounds[i + 1][0]].strip()
+        for i in range(len(present))
     }
-    faults = [f"nothing under {s.label}" for s in spec if not values[s.key]]
+    faults = [f"nothing under {s.label}" for s in present if not values[s.key]]
     faults += [f"{s.label} runs to {len(values[s.key])} characters and holds {s.max_len}"
-               for s in spec if s.max_len and len(values[s.key]) > s.max_len]
+               for s in present if s.max_len and len(values[s.key]) > s.max_len]
     return Reading(values, faults)

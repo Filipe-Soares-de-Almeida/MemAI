@@ -6,6 +6,7 @@ import json
 
 import pytest
 
+from conftest import brief
 from memai import lite, portable, tasks
 from memai.store import connection, memories, relations
 
@@ -16,8 +17,8 @@ def setup(tmp_path, monkeypatch):
     with connection.connect() as conn:
         uid = tasks.create_task(conn, title="Ship the parser", goal="g",
                                 items=["read the spec", "write the lexer"], domain="acme")
-        brief = memories.insert_memory(conn, type="note", content="Lexer brief.",
-                                 title="Parser P2: lexer", domain="acme")
+        lexer = memories.insert_memory(conn, type="note", content=brief("Lexer brief."),
+                                       title="Parser P2: lexer", domain="acme")
         playbook = memories.insert_memory(conn, type="note", content="Claim first.",
                                     title="Parser: pick-up rules", domain="acme")
         general = memories.insert_memory(conn, type="note", content="Regex is greedy.",
@@ -25,14 +26,17 @@ def setup(tmp_path, monkeypatch):
         other = memories.insert_memory(conn, type="note", content="x", title="x", domain="acme")
         big = memories.insert_memory(conn, type="note", content="y" * (tasks.NOTE_MAX + 1),
                                title="Too long", domain="acme")
+        free = memories.insert_memory(conn, type="note", content="Free lexer notes.",
+                                      title="Parser P2: notes", domain="acme")
         relations.add_relation(conn, general, other, "relates_to")
-        tasks.link_item(conn, uid, "i2", [brief, general, big])
+        tasks.link_item(conn, uid, "i2", [lexer, general, big])
+        tasks.link_item(conn, uid, "i2", [free])
         tasks.link_item(conn, uid, "i1", [playbook])
         tasks.link_item(conn, uid, "i2", [playbook])
         conn.execute(
             "INSERT INTO edits (memory_uid, edited_at, prev_content, new_content, note) "
             "VALUES (?, ?, 'a', 'b', 'item i1: todo -> doing')", (uid, lite.now_iso()))
-    return {"task": uid, "brief": brief, "playbook": playbook, "general": general,
+    return {"task": uid, "brief": lexer, "free": free, "playbook": playbook, "general": general,
             "other": other, "big": big}
 
 
@@ -85,3 +89,28 @@ def test_cli_prints_the_plan(setup, capsys):
     assert portable.main(["task-adopt", setup["task"], setup["brief"], "--dry-run"]) == 0
     out = json.loads(capsys.readouterr().out)
     assert out["plan"][0]["uid"] == setup["brief"]
+
+
+def test_a_memory_that_would_land_on_items_must_already_be_a_brief(setup):
+    out = portable.adopt(setup["task"], [setup["free"], setup["brief"]])
+    assert out["refused"] == [{"uid": setup["free"], "reason": "not a brief"}]
+    assert [p["uid"] for p in out["plan"]] == [setup["brief"]]
+
+
+def test_only_briefs_whose_depends_on_reads_are_planned_and_a_real_run_adopts_them(setup):
+    with connection.connect() as conn:
+        made = {depends: memories.insert_memory(conn, type="note", content=brief("Lexer.", depends_on=depends),
+                                                title=f"Lexer {n}", domain="acme")
+                for n, depends in enumerate(("none", "Item 1 first", "i9"))}
+        tasks.link_item(conn, setup["task"], "i2", list(made.values()))
+    ok, free, unknown = made["none"], made["Item 1 first"], made["i9"]
+    dry = portable.adopt(setup["task"], [ok, free, unknown])
+    assert [p["uid"] for p in dry["plan"]] == [ok]
+    reasons = {r["uid"]: r["reason"] for r in dry["refused"]}
+    assert reasons[free].startswith("DEPENDS ON does not read: ")
+    assert "i9 is not an item of this task" in reasons[unknown]
+    real = portable.adopt(setup["task"], [ok, free, unknown], dry_run=False)
+    assert [p["uid"] for p in real["plan"]] == [ok]
+    with connection.connect() as conn:
+        assert memories.get_memory(conn, ok) is None
+        assert memories.get_memory(conn, free) is not None and memories.get_memory(conn, unknown) is not None

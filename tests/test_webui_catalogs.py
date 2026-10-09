@@ -88,8 +88,8 @@ def test_the_portuguese_task_strings_are_not_the_english_ones():
     en, pt = _catalog("en"), _catalog("pt-BR")
 
     def words(s: str) -> str:
-        """a string made only of placeholders reads the same in every language"""
-        return re.sub(r"\{\w+\}|[:.\s]", "", s)
+        """a string made only of placeholders and punctuation reads the same in every language"""
+        return re.sub(r"\{\w+\}|[:.%\s]", "", s)
 
     own = ("task.", "nm.task.", "ov.tasks.", "mn.ta.", "mn.msg.task")
     same = [k for k in en if k.startswith(own) and en[k] == pt[k] and words(en[k])]
@@ -111,3 +111,11 @@ def test_the_reminder_copy_names_the_domains_a_session_worked_in():
     assert "similar domains" in en
     assert "names them" not in en
     assert "domínios em que uma sessão trabalhou" in _catalog("pt-BR")["mn.ta.body"]
+
+
+@pytest.mark.parametrize("code", LOCALES)
+def test_the_depends_error_keys_built_from_a_problem_kind_exist(code):
+    kinds = ["empty", "parens", "blank", "key", "outside", "deleted", "reason", "twice", "unknown", "self"]
+    strings = _catalog(code)
+    assert not [k for k in kinds if f"task.depends.error.{k}" not in strings]
+    assert "task.dropped" not in strings and "task.dropped.why" not in strings

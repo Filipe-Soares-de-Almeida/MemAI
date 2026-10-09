@@ -206,14 +206,14 @@ def list_memories(conn: sqlite3.Connection, f: MemoryFilter) -> tuple[int, list]
 
 
 def task_progress(conn: sqlite3.Connection, uids: list[str]) -> dict[str, tuple[str, int, int]]:
-    """For each of `uids` that is a task: its state, its items done, and its items in all."""
+    """For each of `uids` that is a task: its state, its items done, and its items not dropped."""
     if not uids:
         return {}
     marks = ",".join("?" * len(uids))
     states = dict(conn.execute(
         f"SELECT memory_uid, state FROM tasks WHERE memory_uid IN ({marks})", uids))
     counts = {r[0]: (r[1], r[2]) for r in conn.execute(
-        f"""SELECT memory_uid, SUM(state = 'done'), COUNT(*) FROM task_items
+        f"""SELECT memory_uid, SUM(state = 'done'), SUM(state != 'dropped') FROM task_items
             WHERE memory_uid IN ({marks}) GROUP BY memory_uid""", uids)}
     return {uid: (state, *counts.get(uid, (0, 0))) for uid, state in states.items()}
 
