@@ -1,5 +1,5 @@
 <script setup lang="ts">
-/* The items a task's text can mention, under the field typed in: # or @ in a [data-mention] field writes
+/* The items a task's text can mention, under the field typed in: # in a [data-mention] field writes
    [[#id]]; any text in a data-mention="bare" field offers them and hands the choice back. */
 import { computed, nextTick, onBeforeUnmount, reactive, watch } from 'vue';
 import { t } from '../../i18n.ts';

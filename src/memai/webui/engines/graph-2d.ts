@@ -2,7 +2,6 @@
    through callbacks. The arrangement settles a slice per frame and stops at SETTLE_MAX_MS. */
 
 import { cssVar } from '../core/dom.ts';
-import { motionOn } from '../core/motion.ts';
 import { clamp } from './graph-geom.ts';
 import { deriveStore, arrangement, DEFAULT_MODE } from './graph-arrange.ts';
 import type {
@@ -201,9 +200,6 @@ export class GraphCanvas {
 
   /* `nodes` and `edges` are the /api/graph payload; `colorOf(type)` gives a type's CSS colour.
      Callbacks: onSelect, onSelectDomain, onOpen, onHover, onLink, onSettle, obstacles(). */
-  /* read from the root's data-motion, so a change of setting applies at once */
-  get motion(): boolean { return motionOn(); }
-
   constructor(canvas: HTMLCanvasElement, {
     nodes, edges, colorOf,
     onSelect = () => {}, onSelectDomain = () => {}, onOpen = () => {},
@@ -395,7 +391,7 @@ export class GraphCanvas {
   }
 
   fit(): void {
-    this.cam.frame(this.arr.box(), this.motion ? FIT_MS : 0);
+    this.cam.frame(this.arr.box(), FIT_MS);
     this.dirty = true;
     this._wake();
   }
@@ -421,8 +417,8 @@ export class GraphCanvas {
       }
       if (!busy) {
         this.settled = true;
-        if (!this.cam.touched) this.cam.frame(this.arr.box(), this.motion ? FIT_MS : 0);
-      } else if (this.motion && !this.cam.touched && !this.drag && !this.pinch) {
+        if (!this.cam.touched) this.cam.frame(this.arr.box(), FIT_MS);
+      } else if (!this.cam.touched && !this.drag && !this.pinch) {
         /* the arrangement condensing and the frame pulling back are one
            movement: the only authored moment this view has */
         this.cam.chase(this.arr.box(), ms);
@@ -431,10 +427,7 @@ export class GraphCanvas {
     }
     const moving = this.cam.advance(ms);
 
-    /* Under reduced motion nothing is painted while the arrangement moves:
-       there is nothing to watch, and the frame arrives finished. */
-    const paint = this.motion || this.settled;
-    if (paint && (this.dirty || moving || busy)) {
+    if (this.dirty || moving || busy) {
       this.dirty = false;
       this.draw();
     }
@@ -652,7 +645,7 @@ export class GraphCanvas {
   travel(uid: string): void {
     const at = this.arr.locate?.(uid);
     if (!at) return;
-    this.cam.goTo(at.x, at.y, Math.max(this.cam.k, 1), this.motion ? FLY_MS : 0);
+    this.cam.goTo(at.x, at.y, Math.max(this.cam.k, 1), FLY_MS);
     this.dirty = true;
     this._wake();
   }

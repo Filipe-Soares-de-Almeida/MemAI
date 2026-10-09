@@ -7,18 +7,6 @@
 <meta name="color-scheme" content="dark">
 <title>MemAI · Admin</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect x='7' y='7' width='18' height='18' rx='2' transform='rotate(45 16 16)' fill='none' stroke='%23BB86FC' stroke-width='2'/><circle cx='16' cy='16' r='3' fill='%23BB86FC'/></svg>">
-<script>
-/* The root's data-motion, set before the first paint so the shell's spinner obeys the setting.
-   Same key and rule as core/motion.ts, which re-applies it and follows the system. */
-(function () {
-  var mode = '';
-  try { mode = localStorage.getItem('memai.motion') || ''; } catch (e) { /* storage blocked */ }
-  var reduces = false;
-  try { reduces = matchMedia('(prefers-reduced-motion: reduce)').matches; } catch (e) { /* no media queries */ }
-  document.documentElement.dataset.motion =
-    mode === 'never' || (mode !== 'always' && reduces) ? 'reduce' : 'full';
-})();
-</script>
 <!-- Generated (tools/fetch-fonts.py): names only fetched font files, installed copy first, then
      webui/fonts/, then the system stack. Nothing here reaches the network. -->
 <link rel="stylesheet" href="/fonts.css">

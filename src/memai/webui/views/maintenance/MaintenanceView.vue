@@ -12,7 +12,6 @@ import type { Health } from '../../api/types.ts';
 import LoadFailed from '../../components/LoadFailed.vue';
 import BackupsTab from './BackupsTab.vue';
 import DupesTab from './DupesTab.vue';
-import InterfaceTab from './InterfaceTab.vue';
 import LogTab from './LogTab.vue';
 import SectionsTab from './SectionsTab.vue';
 import StorageTab from './StorageTab.vue';
@@ -24,7 +23,7 @@ const props = defineProps<ViewProps>();
 
 const PANES: Record<Tab, Component> = {
   backups: BackupsTab, storage: StorageTab, sections: SectionsTab, dupes: DupesTab, log: LogTab,
-  warden: WardenTab, interface: InterfaceTab,
+  warden: WardenTab,
 };
 
 const asked = props.params.get('tab');
