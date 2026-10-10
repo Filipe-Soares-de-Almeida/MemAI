@@ -30,10 +30,38 @@ def test_page_fills_up_to_the_budget_and_points_at_the_rest():
     assert budget.result_chars({"records": first}) <= 450
 
 
-def test_page_always_returns_one_record_even_when_it_is_too_big():
-    records = [{"body": "x" * 1000}, {"body": "y"}]
-    first, nxt = budget.page(records, 0, max_chars=100)
-    assert first == [records[0]] and nxt == 1
+def test_page_cuts_a_record_too_big_for_a_page_until_it_fits():
+    records = [{"uid": "a", "body": "x" * 1000}, {"body": "y" * 200}]
+    first, nxt = budget.page(records, 0, max_chars=300)
+    assert nxt == 1 and len(first) == 1
+    assert budget.result_chars({"records": first}) <= 300
+    assert first[0]["uid"] == "a" and first[0]["body_chars"] == 1000
+    assert first[0]["body"].endswith("…") and first[0]["clipped"] is True
+    assert records[0]["body"] == "x" * 1000
+
+
+def test_fit_leaves_a_record_that_fits_as_it_is():
+    record = {"uid": "a", "body": "short"}
+    assert budget.fit(record, 1000) is record
+
+
+def test_fit_shortens_a_long_list_and_counts_it():
+    record = {"key": "n0", "links": [f"{n:016x}" for n in range(2000)]}
+    cut = budget.fit(record, 2000)
+    assert budget.item_chars(cut) <= 2000
+    assert cut["links_total"] == 2000 and cut["links"] == record["links"][:len(cut["links"])]
+
+
+def test_fit_reaches_a_long_value_nested_in_another():
+    record = {"id": 7, "payload": {"new_content": "x" * 5000}, "rationale": "shorter"}
+    cut = budget.fit(record, 1500)
+    assert budget.item_chars(cut) <= 1500
+    assert cut["payload"]["new_content_chars"] == 5000 and cut["rationale"] == "shorter"
+
+
+def test_fit_gives_up_on_a_record_made_only_of_short_values():
+    record = {f"k{n}": n for n in range(200)}
+    assert budget.fit(record, 100) == record
 
 
 def test_last_page_has_no_next_offset():

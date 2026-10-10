@@ -7,6 +7,7 @@ import sqlite3
 from memai.lite import DOMAIN_SEP, normalize_domain, now_iso
 from memai.store.domains import domain_clause, in_domain
 from memai.store.memories import get_domain_links, purge_memory, set_domain_links, set_status
+from memai.store.sections import refuse_long
 
 
 def move_domain(
@@ -74,6 +75,8 @@ def move_domain(
     def retarget(old: str) -> str:
         return dst if old in (src, src_given) else dst + DOMAIN_SEP + old[len(src) + 1:]
 
+    for old in {r["domain"] for r in rows} | {r["domain"] for r in link_rows}:
+        refuse_long(domain=retarget(old))
     now = now_iso()
     touched: set[str] = set()
     for r in rows:

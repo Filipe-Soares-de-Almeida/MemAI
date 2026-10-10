@@ -207,6 +207,7 @@ def edit_meta(request, payload) -> schema.MetaSaved:
         error = store_sections.title_error(updates["title"])
         if error:
             raise ValueError(error)
+    store_sections.refuse_long(**{k: updates[k] for k in ("tags", "source_ref") if k in updates})
     if "type" in updates and updates["type"] not in KNOWN_TYPES:
         raise ValueError(f"type must be one of {KNOWN_TYPES}")
     with connection.connect() as conn:

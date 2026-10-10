@@ -10,6 +10,11 @@ from memai.lite import now_iso
 
 # Characters a stripped title may hold: past this it restates the memory instead of naming it.
 TITLE_MAX = contract.TITLE_MAX
+# The same for the fields that point at a memory rather than state it, so one row always fits a
+# page of any listing.
+TAGS_MAX = contract.TAGS_MAX
+SOURCE_REF_MAX = contract.SOURCE_REF_MAX
+DOMAIN_MAX = contract.DOMAIN_MAX
 
 
 # Whether every body in this store has been read into memory_sections. Set
@@ -117,10 +122,24 @@ def title_error(value: str) -> str | None:
     error here: the callers that require one reject it themselves, and the
     ones that allow it pass ''.
     """
+    return length_error("title", value, TITLE_MAX)
+
+
+def length_error(field: str, value: str, limit: int) -> str | None:
+    """Say that `value`, stripped, is too long for `field`, or None when it fits `limit`."""
     value = value.strip()
-    if len(value) > TITLE_MAX:
-        return f"title is {len(value)} characters; the limit is {TITLE_MAX}"
+    if len(value) > limit:
+        return f"{field} is {len(value)} characters; the limit is {limit}"
     return None
+
+
+def refuse_long(**fields: str) -> None:
+    """Raise for the first of `fields` (tags, source_ref, domain) past its ceiling."""
+    limits = {"tags": TAGS_MAX, "source_ref": SOURCE_REF_MAX, "domain": DOMAIN_MAX}
+    for field, value in fields.items():
+        error = length_error(field, value, limits[field])
+        if error:
+            raise ValueError(error)
 
 
 def _write_sections(conn: sqlite3.Connection, uid: str, type: str, content: str) -> None:

@@ -278,7 +278,8 @@ def _corpus_page(
     """The listing, the relations touching it, and whether any of those were left out.
 
     `limit` rows from `offset`, ended before the row whose entry and new edges would take the two
-    past `room` characters as sent. The first row always goes in, its edges while they fit.
+    past `room` characters as sent. The first row always goes in, cut by budget.fit when it is
+    too big for `room` alone, and its edges while they fit.
     """
     rows = conn.execute(
         f"""SELECT uid, type, domain, also_domains, session, tags, content, status,
@@ -306,6 +307,8 @@ def _corpus_page(
         u = usage.get(m["uid"])
         if u:
             m["recalls"], m["last_recall"] = u["recalls"], u["last_recall"][:19]
+        if not mems:
+            m = budget.fit(m, room)
         new = {e["id"]: budget.item_chars(e) for e in touching.get(m["uid"], [])
                if e["id"] not in listed}
         cost = budget.item_chars(m)

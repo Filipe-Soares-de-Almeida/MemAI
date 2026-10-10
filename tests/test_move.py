@@ -263,6 +263,37 @@ def test_the_mcp_tool_moves_out_of_the_active_project(home):
         "General": 1, "acme": 2}
 
 
+def test_list_projects_pages_by_offset(home, monkeypatch):
+    many = [{"name": f"lantern-{n:04d}", "memories": n, "active": False} for n in range(600)]
+    monkeypatch.setattr(projects, "list_projects", lambda counts=False: many)
+    seen, offset = [], 0
+    while offset is not None:
+        page = server.list_projects(offset=offset)
+        assert page["total"] == 600 and page["active"] == "General"
+        seen += [p["name"] for p in page["projects"]]
+        offset = page.get("next_offset")
+    assert seen == [p["name"] for p in many]
+
+
+def test_the_mcp_tool_counts_the_conflicts_and_unknown_uids_and_lists_a_few(home):
+    """The dashboard and the CLI get the whole lists; a tool result has a ceiling to keep."""
+    with connection.connect() as conn:
+        ids = _seed(conn)
+    portable.move("General", "acme", domain="acme/x100", dry_run=False, create=True)
+    with connection.connect(project="acme") as dst:
+        records = list(portable.export_records(dst, domain="acme", include_archived=True,
+                                               include_edits=True))
+    with connection.connect() as src:
+        portable.import_records(src, records)
+    missing = [f"{n:016x}" for n in range(portable.BOUNDARY_LIMIT + 5)]
+    plan = server.move_to_project("acme", uids=",".join([ids["note"], *missing]))
+    assert plan["conflicts"] == {"count": 1, "items": [ids["note"]]}
+    assert plan["unknown"]["count"] == len(missing)
+    assert plan["unknown"]["items"] == sorted(missing)[:portable.BOUNDARY_LIMIT]
+    dry_run = " ".join(server._PARAM_TEXT["move_to_project"]["dry_run"].split())
+    assert f"up to {portable.BOUNDARY_LIMIT} `items`" in dry_run
+
+
 def test_the_cli_moves_too(home, capsys):
     with connection.connect() as conn:
         _seed(conn)

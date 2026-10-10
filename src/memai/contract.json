@@ -4,6 +4,9 @@
     "CONFIDENCES": ["unverified", "confirmed", "contradicted"],
     "PINS": ["global", "domain"],
     "TITLE_MAX": 120,
+    "TAGS_MAX": 1000,
+    "SOURCE_REF_MAX": 500,
+    "DOMAIN_MAX": 200,
     "DOMAIN_SEP": "/"
   },
   "task": {
