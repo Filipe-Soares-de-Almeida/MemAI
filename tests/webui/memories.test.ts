@@ -82,6 +82,20 @@ describe('the memory list filters', () => {
     teardownView();
   });
 
+  it('open the domain filter with a field that narrows the tree, whatever its length', async () => {
+    const view = await show();
+    (view.querySelector('#fDomain') as HTMLElement).click();
+    const field = document.querySelector('.pick-pop .pick-q') as HTMLInputElement;
+    expect(field).not.toBeNull();
+    expect(document.activeElement).toBe(field);
+
+    field.value = 'kiln';
+    field.dispatchEvent(new Event('input'));
+    const options = [...document.querySelectorAll<HTMLElement>('.pick-pop [role="option"]')].map(o => o.dataset.v);
+    expect(options).toEqual(['', 'kiln']);
+    teardownView();
+  });
+
   it('take a defect filter off with its own chip, and keep the rest', async () => {
     const view = await show({ untagged: '1', stale: '1' });
     expect(view.querySelector('#memMore')?.hasAttribute('hidden')).toBe(false);
