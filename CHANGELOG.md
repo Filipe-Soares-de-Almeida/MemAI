@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.12.0](https://github.com/Filipe-Soares-de-Almeida/MemAI/compare/v0.11.0...v0.12.0) (2026-10-10)
+
+
+### Features
+
+* count the field ceilings in the dashboard and show tags in must_read headers ([#102](https://github.com/Filipe-Soares-de-Almeida/MemAI/issues/102)) ([275fd88](https://github.com/Filipe-Soares-de-Almeida/MemAI/commit/275fd8879fbccb99af8e7a9798031af21d21905e))
+
+
+### Bug Fixes
+
+* **server:** keep every tool result inside the output ceiling ([#101](https://github.com/Filipe-Soares-de-Almeida/MemAI/issues/101)) ([5833347](https://github.com/Filipe-Soares-de-Almeida/MemAI/commit/5833347c255c1cadaa56147b3f64aeaea1f75751))
+* **server:** keep optimize_scan inside the result ceiling for any store ([#100](https://github.com/Filipe-Soares-de-Almeida/MemAI/issues/100)) ([819ed0b](https://github.com/Filipe-Soares-de-Almeida/MemAI/commit/819ed0b3cc202f76948479c5e01694b91f4647f5))
+* **webui:** the domain picker opens with its filter field ([#97](https://github.com/Filipe-Soares-de-Almeida/MemAI/issues/97)) ([ce8aee3](https://github.com/Filipe-Soares-de-Almeida/MemAI/commit/ce8aee3e521349785c4cde9da8439c8c5907ae04))
+
 ## [0.11.0](https://github.com/Filipe-Soares-de-Almeida/MemAI/compare/v0.10.0...v0.11.0) (2026-10-09)
 
 
