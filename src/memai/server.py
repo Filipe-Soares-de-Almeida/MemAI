@@ -1674,7 +1674,7 @@ def timeline(
 
 
 @tool("core", READ)
-def list_projects() -> dict:
+def list_projects(offset: int = 0) -> dict:
     """The projects in this home, and which one every call here reads and writes.
 
     A project is one SQLite file with its own memories, domains, relations
@@ -1683,12 +1683,14 @@ def list_projects() -> dict:
     the project it landed in, and pulse() names the one it read. Each entry
     carries `name`, `memories` (the active rows) and `active`. Names are
     matched without regard to case wherever a tool takes one.
+
+    @param offset
     """
-    return {
-        "active": paths.active_project(),
-        "projects": [{"name": s["name"], "memories": s["memories"], "active": s["active"]}
-                   for s in projects.list_projects(counts=True)],
-    }
+    if error := _offset_error(offset):
+        return _errors([error])
+    return _page([{"name": s["name"], "memories": s["memories"], "active": s["active"]}
+                  for s in projects.list_projects(counts=True)],
+                 offset, key="projects", active=paths.active_project())
 
 
 @tool("core", READ)
@@ -2379,18 +2381,23 @@ def move_to_project(target: str, uids: str = "", domain: str = "", dry_run: bool
     domain: a path to move, its subdomains and archived rows included.
 
     dry_run: the default, and moves nothing: it reports what would move,
-    `conflicts` (uids `target` already holds, which stay here) and
-    `outside` -- the relations, diagram links and jumps, `superseded_by`
-    marks and [[uid]] references that cross the edge of the slice, all of
-    which the move drops. Read that report with the user, then widen the
-    slice or accept the loss BEFORE calling again with dry_run=False: the
-    purge is irreversible short of the backup.
+    `conflicts` (uids `target` already holds, which stay here), `unknown`
+    (uids asked for that this project does not hold) and `outside` -- the
+    relations, diagram links and jumps, `superseded_by` marks and [[uid]]
+    references that cross the edge of the slice, all of which the move
+    drops. Each comes as `count`, the whole number, and up to 20 `items`.
+    Read that report with the user, then widen the slice or accept the loss
+    BEFORE calling again with dry_run=False: the purge is irreversible short
+    of the backup.
 
     create: makes a `target` that does not exist yet.
     """
     wanted = [u.strip() for u in uids.split(",") if u.strip()]
-    return portable.move(paths.active_project(), target, uids=wanted, domain=domain,
-                         dry_run=dry_run, create=create)
+    report = portable.move(paths.active_project(), target, uids=wanted, domain=domain,
+                           dry_run=dry_run, create=create)
+    for key in ("conflicts", "unknown"):
+        report[key] = {"count": len(report[key]), "items": report[key][:portable.BOUNDARY_LIMIT]}
+    return report
 
 
 @tool("curation", READ)
@@ -2502,8 +2509,9 @@ def optimize_stage(suggestions: list[dict], note: str = "") -> dict:
     user reviews and applies or rejects each one in the admin dashboard,
     which backs up before the first apply and can undo any of them.
 
-    Invalid suggestions are skipped and reported in `errors`; the rest are
-    staged. Returns {run_id, staged, errors}.
+    Invalid suggestions are skipped and reported in `errors`, as many as fit
+    one page, with `errors_total` counting them all when some are left out;
+    the rest are staged. Returns {run_id, staged, errors}.
 
     suggestions: each one {"kind", "target_uid", "payload", "rationale",
     "verified"}. Kinds: compact/reword {"new_content"}, retag {"tags"},
@@ -2524,6 +2532,10 @@ def optimize_stage(suggestions: list[dict], note: str = "") -> dict:
     """
     with connection.connect() as conn:
         result = optimizer.stage_optimization(conn, note, suggestions)
+    shown, _ = budget.page(result["errors"], 0)
+    if len(shown) < len(result["errors"]):
+        result["errors_total"] = len(result["errors"])
+        result["errors"] = shown
     return result
 
 

@@ -158,7 +158,9 @@ sub-skill. Read each source once; nothing below is read twice.
   Describe the **live** check that justifies it (file:line, a schema column, a
   commit, the task's own state).
 - An invalid suggestion is **skipped** and returned in `errors` — fix it and
-  re-stage what was dropped. The rest of the batch still lands.
+  re-stage what was dropped. The rest of the batch still lands. `errors` holds
+  as many as fit one page; `errors_total` counts them all when some are left
+  out. Tags past 1000 characters and domain paths past 200 are refused there too.
 - **`purge_memory` never enters a pass.** It is irreversible, and it takes a
   confirm phrase the user has to have stated themselves.
 
