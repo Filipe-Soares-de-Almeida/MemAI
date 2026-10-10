@@ -92,7 +92,7 @@ def test_a_subtree_move_that_would_pass_the_limit_moves_nothing(conn):
 
 
 def test_a_restore_writes_back_a_value_past_the_limit(conn):
-    """An export taken before the ceilings existed still imports whole."""
+    """An export holding a value past a ceiling imports whole."""
     uid = _note(conn)
     record = dict(memories.get_memory(conn, uid))
     memories.purge_memory(conn, uid)

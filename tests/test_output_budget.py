@@ -49,7 +49,7 @@ def worst(tmp_path_factory):
             memories.update_memory_content(conn, uids[1], _text(20_000, f"e{n} "), note=f"edit {n}")
         memories.update_memory_content(conn, uids[2], _text(120_000, "long "), note="long body")
         ids["edited"], ids["long"] = uids[1], uids[2]
-        # a row written before the field ceilings, which no writer accepts now
+        # values past the field ceilings, which only a restore or a direct write can store
         legacy = _memory(conn, MEMORIES, "acme/legacy")
         conn.execute("UPDATE memories SET tags = ?, source_ref = ?, domain = ? WHERE uid = ?",
                      (", ".join(f"kiln{k}" for k in range(8000)), _text(60_000, "ref "),
