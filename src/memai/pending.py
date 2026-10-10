@@ -6,7 +6,7 @@ pending for the price of a title each and open what it will touch.
 
 import sqlite3
 
-from . import lite, tasks
+from . import budget, lite, tasks
 from .store import connection, memories, search
 from .store import domains as store_domains
 
@@ -119,7 +119,7 @@ def task_state(conn: sqlite3.Connection, uid: str) -> str | None:
 
 
 def _header(conn: sqlite3.Connection, row: sqlite3.Row) -> dict:
-    item = {"uid": row["uid"], "title": row["title"], "domain": row["domain"],
+    item = {"uid": row["uid"], "title": row["title"], "domain": row["domain"], "tags": row["tags"],
             "est_tokens": connection.est_tokens(len(row["content"]))}
     if row["type"] == memories.TASK_TYPE:
         item["progress"] = task_progress(conn, row["uid"])
@@ -131,6 +131,7 @@ def headers(conn: sqlite3.Connection, domain: str, type_: str,
             limit: int = 10, offset: int = 0, *, pinned: bool = False) -> dict:
     """One page of pending headers of a category, newest first.
 
+    At most `limit` headers, fewer when they reach budget.PAGE_MAX_CHARS first;
     `next_offset` is present only when another page follows. A task sorts by
     its newest item update. `pinned` narrows the page to the pins in scope
     (see _pin_scope).
@@ -146,8 +147,8 @@ def headers(conn: sqlite3.Connection, domain: str, type_: str,
         order = "ORDER BY m.created_at DESC, m.rowid_pk DESC"
     rows = conn.execute(f"SELECT m.* {where} {order} LIMIT ? OFFSET ?",
                         [*params, limit, offset]).fetchall()
-    result = {"type": type_, "total": total,
-              "items": [_header(conn, r) for r in rows]}
-    if offset + limit < total:
-        result["next_offset"] = offset + limit
+    shown, _ = budget.page([_header(conn, r) for r in rows], 0)
+    result = {"type": type_, "total": total, "items": shown}
+    if offset + len(shown) < total:
+        result["next_offset"] = offset + len(shown)
     return result

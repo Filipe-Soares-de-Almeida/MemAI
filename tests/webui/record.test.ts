@@ -5,6 +5,9 @@ import { diffLines, fieldsOf, saveBody } from '../../src/memai/webui/views/recor
 import { backTarget, nameStop, resetWalk, stepPos, walk } from '../../src/memai/webui/views/record/walk.ts';
 import { mountView } from '../../src/memai/webui/core/vue.ts';
 import { teardownView } from '../../src/memai/webui/core/lifecycle.ts';
+import MetaDialog from '../../src/memai/webui/views/record/MetaDialog.vue';
+import { openDialog } from '../../src/memai/webui/core/ui.js';
+import { MEMORY } from '../../src/memai/webui/contract.ts';
 import { calls, catalog, serveApi } from './support.js';
 
 const en = catalog('en');
@@ -97,6 +100,22 @@ describe('a record field', () => {
     view.querySelector('[data-src=""]')?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', ctrlKey: true }));
     await until(() => calls.find(c => c.path.endsWith('/content')));
     expect(calls.find(c => c.path.endsWith('/content'))?.body).toEqual({ content: 'Pin 5 drives the LED.', note: '' });
+  });
+});
+
+describe('the metadata dialog', () => {
+  it('counts the domain and the tags against their ceilings', async () => {
+    const done = openDialog(MetaDialog, { m: { uid: 'feedc0de00000001', type: 'note', title: 'Kiln firing',
+                                               domain: 'acme/kiln', also: [], tags: 'kiln', session: '' } });
+    await nextTick();
+    expect(document.getElementById('mmDomainCount')?.textContent).toBe(`9/${MEMORY.DOMAIN_MAX}`);
+    const tags = document.getElementById('mmTags') as HTMLInputElement;
+    tags.value = 'k'.repeat(MEMORY.TAGS_MAX + 1);
+    tags.dispatchEvent(new Event('input'));
+    await nextTick();
+    expect(document.getElementById('mmTagsCount')?.classList.contains('over')).toBe(true);
+    (document.querySelector('.modal [data-x]') as HTMLElement).click();
+    expect(await done).toBe(false);
   });
 });
 

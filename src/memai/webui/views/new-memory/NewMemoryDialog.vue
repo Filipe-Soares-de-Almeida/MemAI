@@ -10,7 +10,7 @@ import { go, refreshBehind } from '../../core/router.ts';
 import { openRecord } from '../../core/nav.ts';
 import { newDiagramSkeleton } from '../../core/diagram-skeleton.ts';
 import { t } from '../../i18n.ts';
-import { TASK } from '../../contract.ts';
+import { MEMORY, TASK } from '../../contract.ts';
 import * as client from '../../api/client.ts';
 import type { DomainEntry, SectionSpec } from '../../api/types.ts';
 import { itemLines, itemsOver } from './task-items.ts';
@@ -93,13 +93,17 @@ async function create() {
       <input id="nmTitle" v-model="form.title" type="text" :placeholder="t('nm.titlePh')">
       <div id="nmDiagramHint" class="dg-empty" style="margin-top:7px" :hidden="!isDiagram">{{
         t('nm.diagramHint') }}</div></div>
-    <div class="field"><label for="nmDomain">{{ t('nm.domain') }}</label>
+    <div class="field"><label for="nmDomain">{{ t('nm.domain') }}
+        <span id="nmDomainCount" class="sec-count" :class="{ over: form.domain.trim().length > MEMORY.DOMAIN_MAX }">{{
+          count(form.domain.trim().length, MEMORY.DOMAIN_MAX) }}</span></label>
       <input id="nmDomain" v-model="form.domain" type="text" list="nmDomainsDL" :placeholder="t('nm.domainPh')">
       <datalist id="nmDomainsDL"><option v-for="path in domainPaths" :key="path" :value="path"></option></datalist></div>
     <div class="field"><label for="nmAlso">{{ t('nm.also') }}</label>
       <input id="nmAlso" v-model="form.also" type="text" list="nmDomainsDL" :placeholder="t('mm.also.placeholder')">
       <div class="hint-sm">{{ t('mm.also.hint') }}</div></div>
-    <div class="field"><label for="nmTags">{{ t('nm.tags') }}</label>
+    <div class="field"><label for="nmTags">{{ t('nm.tags') }}
+        <span id="nmTagsCount" class="sec-count" :class="{ over: form.tags.trim().length > MEMORY.TAGS_MAX }">{{
+          count(form.tags.trim().length, MEMORY.TAGS_MAX) }}</span></label>
       <input id="nmTags" v-model="form.tags" type="text" :placeholder="t('nm.tagsPh')"></div>
     <div id="nmContentField" class="field" :hidden="isDiagram || isTask || fields.length > 0">
       <label for="nmContent">{{ t('nm.content') }}</label>

@@ -1811,10 +1811,11 @@ def must_read(domain: str = "", type: str = "", limit: int = 10, offset: int = 0
     person pinned as mandatory reading -- when any pin is in scope. A pinned
     memory still counts in its category. With type: {"type", "total",
     "items", "next_offset"} -- one page of headers (uid, title, domain,
-    est_tokens; a task adds `progress` {done, total} and `doing`, the ids of
-    its items in progress), newest first, a task by its latest item update.
-    Open a header with get_memory(uid). `next_offset` is absent on the last
-    page.
+    tags, est_tokens; a task adds `progress` {done, total} and `doing`, the
+    ids of its items in progress), newest first, a task by its latest item
+    update. Open a header with get_memory(uid). A page holds at most `limit`
+    headers and ends early at the size budget; `next_offset` is absent on
+    the last page.
 
     Every pin listed is read with get_memory(uid) before acting, none
     skipped.

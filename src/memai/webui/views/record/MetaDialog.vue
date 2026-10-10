@@ -5,6 +5,7 @@ import { failed, toast } from '../../core/ui.js';
 import { cachedDomains, invalidateDomains, typeItems } from '../../core/shared.js';
 import { byDomainPath } from '../../core/domains.ts';
 import { t } from '../../i18n.ts';
+import { MEMORY } from '../../contract.ts';
 import * as client from '../../api/client.ts';
 import type { MemoryRecord } from '../../api/types.ts';
 import AppModal from '../../components/AppModal.vue';
@@ -24,6 +25,9 @@ const f = reactive({
   also: (props.m.also || []).join(', '), tags: props.m.tags, session: props.m.session,
 });
 
+/* Counts are shown, never enforced by `maxlength`, which truncates a paste without a word. */
+const count = (n: number, max: number) => t('dr.sections.count', { n, max });
+
 async function save() {
   try {
     const r = await client.memories.meta(props.m.uid, { ...f });
@@ -40,13 +44,17 @@ async function save() {
       <Picker id="mmType" v-model="f.type" :items="types" :aria-label="t('mm.type')" /></div>
     <div class="field"><label for="mmName">{{ t('mm.name.label') }}</label>
       <input id="mmName" v-model="f.title" type="text"></div>
-    <div class="field"><label for="mmDomain">{{ t('dr.meta.domain') }}</label>
+    <div class="field"><label for="mmDomain">{{ t('dr.meta.domain') }}
+        <span id="mmDomainCount" class="sec-count" :class="{ over: f.domain.trim().length > MEMORY.DOMAIN_MAX }">{{
+          count(f.domain.trim().length, MEMORY.DOMAIN_MAX) }}</span></label>
       <input id="mmDomain" v-model="f.domain" type="text" list="mmDomainsDL"><datalist id="mmDomainsDL"><option
              v-for="d in domains" :key="d.domain" :value="d.domain"></option></datalist></div>
     <div class="field"><label for="mmAlso">{{ t('dr.meta.also') }}</label>
       <input id="mmAlso" v-model="f.also" type="text" :placeholder="t('mm.also.placeholder')" list="mmDomainsDL">
       <div class="hint-sm">{{ t('mm.also.hint') }}</div></div>
-    <div class="field"><label for="mmTags">{{ t('mm.tags.label') }}</label>
+    <div class="field"><label for="mmTags">{{ t('mm.tags.label') }}
+        <span id="mmTagsCount" class="sec-count" :class="{ over: f.tags.trim().length > MEMORY.TAGS_MAX }">{{
+          count(f.tags.trim().length, MEMORY.TAGS_MAX) }}</span></label>
       <input id="mmTags" v-model="f.tags" type="text"></div>
     <div class="field"><label for="mmSession">{{ t('dr.meta.session') }}</label>
       <input id="mmSession" v-model="f.session" type="text"></div>
