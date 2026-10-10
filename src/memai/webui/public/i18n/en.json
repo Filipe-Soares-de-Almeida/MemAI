@@ -304,6 +304,7 @@
     "do.rn.result": "Becomes",
     "do.rn.root": "Top level",
     "do.rn.subtree": "{n} memories in the subdomains move with it, keeping their own levels",
+    "do.rn.tooLong": "A path the move would write passes {max} characters",
     "do.rn.warn": "The target already exists — memories will be <b>merged</b> into it",
     "do.storeMenu": "Store-wide domain settings",
     "do.sub.count": "{n} named domains",
