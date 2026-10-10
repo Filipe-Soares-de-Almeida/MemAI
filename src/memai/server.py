@@ -1664,7 +1664,7 @@ def timeline(
         _read(conn, [anchor, *older[len(older) - len(near_old):], *newer[:len(near_new)]])
     out = {
         "anchored_by": anchored_by,
-        "anchor": _snippet_dict(_row_to_dict(anchor)),
+        "anchor": budget.fit(_snippet_dict(_row_to_dict(anchor)), budget.PAGE_MAX_CHARS // 2),
         "before": list(reversed(near_old)),
         "after": near_new,
     }
@@ -1960,6 +1960,7 @@ def pulse(domain: str = "", offset: int = 0) -> dict:
                 checkpoint_dict["next"] = (f"get_memory(uid='{checkpoint_dict['uid']}', "
                                            f"content_offset={more})")
             checkpoint_dict["relation_count"] = len(relations.get_relations(conn, checkpoint_dict["uid"]))
+            checkpoint_dict = budget.fit(checkpoint_dict, budget.PAGE_MAX_CHARS)
             _read(conn, [latest_checkpoint])
     return {
         "project": paths.active_project(),
@@ -2106,7 +2107,7 @@ def get_memory(uid: str, edits_offset: int = -1, content_offset: int = -1) -> di
         nxt["relations"] = f"get_relations(uid='{uid}')"
     if nxt:
         result["next"] = nxt
-    return result
+    return budget.fit(result, budget.MCP_RESULT_MAX_CHARS)
 
 
 @tool("core", REWRITE)
