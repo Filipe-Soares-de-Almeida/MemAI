@@ -2449,7 +2449,9 @@ def optimize_scan(
 
     The listing is slim so a big store fits one response, and a page ends
     early at an internal size budget -- `truncated` means page onward with
-    offset + count.
+    offset + count. `relations_truncated` means the page's first memory has
+    more edges than fit: get_relations(uid) lists them all. stats.by_domain
+    names the largest domains; stats.domains counts every one.
 
     BEFORE PROPOSING ANY CHANGE, CHECK IT AGAINST LIVE FACTS, and record what
     you checked in each suggestion's `verified`. Destructive kinds are
@@ -2473,16 +2475,13 @@ def optimize_scan(
     full: true keeps whole bodies instead of the slim listing.
     """
     with connection.connect() as conn:
-        corpus = store_corpus.optimization_corpus(
+        pairs = dedup.dedup_candidates(conn, domain=domain, type=type, since=since, limit=20)
+        hints = [{"a": a["uid"], "b": b["uid"], "ratio": round(score, 3), "method": method}
+                 for a, b, score, method in pairs]
+        return store_corpus.optimization_corpus(
             conn, domain=domain, type=type, since=since,
             include_archived=include_archived,
-            limit=limit, offset=offset, full=full)
-        pairs = dedup.dedup_candidates(conn, domain=domain, type=type, since=since, limit=20)
-    corpus["dedup_hints"] = [
-        {"a": a["uid"], "b": b["uid"], "ratio": round(score, 3), "method": method}
-        for a, b, score, method in pairs
-    ]
-    return corpus
+            limit=limit, offset=offset, full=full, extra={"dedup_hints": hints})
 
 
 @tool("curation", ADD)
