@@ -1162,7 +1162,7 @@ button.type-tag { cursor: pointer; min-height: var(--tap); }
 .rn-target .pick { width: 100%; }
 .rn-result { font-size: var(--fs-sm); color: var(--ink-3); }
 .rn-result code {
-  font-family: var(--font-m); font-size: var(--fs-sm); color: var(--ink);
+  font-family: var(--font-m); font-size: var(--fs-sm); color: var(--ink); overflow-wrap: anywhere;
 }
 
 /* Below this the columns scroll sideways rather than wrap, and the pane goes under them. */

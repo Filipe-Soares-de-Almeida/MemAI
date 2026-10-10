@@ -304,6 +304,7 @@
     "do.rn.result": "Fica",
     "do.rn.root": "Nível raiz",
     "do.rn.subtree": "{n} memórias nos subdomínios vão junto, mantendo os próprios níveis",
+    "do.rn.tooLong": "Um caminho que a mudança gravaria passa de {max} caracteres",
     "do.rn.warn": "O destino já existe — as memórias serão <b>mescladas</b> nele",
     "do.storeMenu": "Ajustes de domínio do acervo",
     "do.sub.count": "{n} domínios nomeados",

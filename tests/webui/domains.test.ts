@@ -6,6 +6,7 @@ import { canMove, columnsFor, isArchived, isCrossing } from '../../src/memai/web
 import { enqueue, queue, showArchived } from '../../src/memai/webui/views/domains/store.ts';
 import { mountView } from '../../src/memai/webui/core/vue.ts';
 import { teardownView } from '../../src/memai/webui/core/lifecycle.ts';
+import { MEMORY } from '../../src/memai/webui/contract.ts';
 import { calls, serveApi } from './support.js';
 
 const dom = (domain: string, over = {}) => ({
@@ -155,6 +156,29 @@ describe('the domains view', () => {
     await settle();
     expect(calls.find(c => c.path === '/api/domains/delete')?.body).toEqual({ domain: 'acme/x100', confirm: 'DELETE acme/x100' });
     expect(location.hash).toBe('#/domains?path=acme');
+    teardownView();
+  });
+
+  it('counts the path a move makes, and will not move when a path under it would pass the ceiling', async () => {
+    const view = await show('acme/x100');
+    (view.querySelector('[data-move]') as HTMLElement).click();
+    await settle();
+    const ok = document.querySelector('.modal [data-ok]') as HTMLButtonElement;
+    const name = document.getElementById('rnName') as HTMLInputElement;
+    const count = document.getElementById('rnCount') as HTMLElement;
+    expect(count.textContent).toBe(`${'acme/x100'.length}/${MEMORY.DOMAIN_MAX}`);
+    name.value = 'x'.repeat(MEMORY.DOMAIN_MAX - 'acme/'.length - 2);
+    name.dispatchEvent(new Event('input'));
+    await settle();
+    expect(count.classList.contains('over')).toBe(false);
+    expect(document.getElementById('rnTooLong')?.hidden).toBe(false);
+    expect(ok.disabled).toBe(true);
+    name.value = 'x200';
+    name.dispatchEvent(new Event('input'));
+    await settle();
+    expect(document.getElementById('rnTooLong')?.hidden).toBe(true);
+    expect(ok.disabled).toBe(false);
+    (document.querySelector('.modal [data-x]') as HTMLElement).click();
     teardownView();
   });
 

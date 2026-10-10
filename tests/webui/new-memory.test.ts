@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { nextTick } from 'vue';
 import { openNewMemory } from '../../src/memai/webui/views/new-memory/index.ts';
 import { closeModal } from '../../src/memai/webui/core/modal-stack.ts';
+import { MEMORY } from '../../src/memai/webui/contract.ts';
 import { calls, catalog, serveApi } from './support.js';
 
 const en = catalog('en');
@@ -104,6 +105,16 @@ describe('the new memory dialog', () => {
     expect(sent.body).toMatchObject({ type: 'anti_pattern',
       sections: { pattern: 'Oiling a turning gear', why_wrong: 'The oil flings off.' } });
     expect(sent.body).not.toHaveProperty('content');
+  });
+
+  it('counts the domain and the tags against their ceilings', async () => {
+    await open();
+    await fill('nmDomain', '  kiln  ');
+    expect($('#nmDomainCount').textContent).toBe(`4/${MEMORY.DOMAIN_MAX}`);
+    expect($('#nmDomainCount').classList.contains('over')).toBe(false);
+    await fill('nmTags', 'k'.repeat(MEMORY.TAGS_MAX + 1));
+    expect($('#nmTagsCount').classList.contains('over')).toBe(true);
+    shut();
   });
 
   it('posts a task to its own endpoint, with its goal and items', async () => {

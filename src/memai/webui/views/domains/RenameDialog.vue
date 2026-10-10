@@ -8,6 +8,7 @@ import { failed, toast } from '../../core/toasts.ts';
 import { invalidateDomains } from '../../core/shared.js';
 import { go, refreshBehind } from '../../core/router.ts';
 import { t } from '../../i18n.ts';
+import { MEMORY } from '../../contract.ts';
 import * as client from '../../api/client.ts';
 import type { DomainEntry } from '../../api/types.ts';
 import AppModal from '../../components/AppModal.vue';
@@ -31,6 +32,11 @@ const same = computed(() => target.value === props.from);
 const cycle = computed(() => Boolean(target.value) && !same.value && inDomainPath(target.value, props.from));
 const merges = computed(() => !same.value && !cycle.value
   && props.domains.some(d => d.domain === target.value && !d.implicit));
+/* the server refuses the whole move when any path it would write passes the ceiling */
+const longest = computed(() => Math.max(target.value.length, ...props.domains
+  .filter(d => inDomainPath(d.domain, props.from))
+  .map(d => target.value.length + d.domain.length - props.from.length)));
+const tooLong = computed(() => longest.value > MEMORY.DOMAIN_MAX);
 
 onMounted(() => { nameField.value?.focus(); nameField.value?.select(); });
 
@@ -58,15 +64,18 @@ async function apply() {
       <div class="field"><label for="rnName">{{ t('do.rn.name') }}</label>
         <input id="rnName" ref="nameField" v-model="name" type="text" autocomplete="off" spellcheck="false"></div>
     </div>
-    <div class="rn-result">{{ t('do.rn.result') }} <code id="rnPath">{{ target || '—' }}</code></div>
+    <div class="rn-result"><span id="rnCount" class="sec-count" :class="{ over: target.length > MEMORY.DOMAIN_MAX }">{{
+        t('dr.sections.count', { n: target.length, max: MEMORY.DOMAIN_MAX }) }}</span>
+      {{ t('do.rn.result') }} <code id="rnPath">{{ target || '—' }}</code></div>
     <!-- the catalog marks the warning up; it carries no values -->
     <div id="rnWarn" class="hint warn" :hidden="!merges" v-html="t('do.rn.warn')"></div>
     <div id="rnCycle" class="hint warn" :hidden="!cycle">{{ t('do.rn.cycle') }}</div>
+    <div id="rnTooLong" class="hint warn" :hidden="!tooLong">{{ t('do.rn.tooLong', { max: MEMORY.DOMAIN_MAX }) }}</div>
     <div v-if="descendants" class="hint">{{ t('do.rn.subtree', { n: fmtInt(descendants) }) }}</div>
     <div class="hint-sm">{{ t('do.rn.hint') }}</div>
     <template #foot>
       <button class="btn" data-x @click="emit('done', false)">{{ t('common.cancel') }}</button>
-      <button class="btn btn-solid" data-ok :disabled="!target || same || cycle" @click="apply">{{
+      <button class="btn btn-solid" data-ok :disabled="!target || same || cycle || tooLong" @click="apply">{{
         t('common.apply') }}</button>
     </template>
   </AppModal>

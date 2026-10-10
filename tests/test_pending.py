@@ -9,7 +9,7 @@ from __future__ import annotations
 import pytest
 
 from conftest import item_at, item_of
-from memai import pending, server, tasks
+from memai import budget, pending, server, tasks
 from memai.store import connection, memories
 
 VOCABULARY = "note, checkpoint, anti_pattern, reasoning, handoff, diagram, task"
@@ -185,12 +185,41 @@ def test_headers_have_no_bodies(seeded):
         for type_ in pending.CATEGORIES:
             for item in pending.headers(conn, "", type_)["items"]:
                 assert "content" not in item
-                assert {"uid", "title", "domain", "est_tokens"} <= set(item)
+                assert {"uid", "title", "domain", "tags", "est_tokens"} <= set(item)
+
+
+def test_a_header_carries_the_tags_it_is_found_by(store):
+    server.note(title="Parser fact", content="The parser skips blank parts.", domain=DOMAIN,
+                tags="parser, blank part, skip")
+    server.note(title="Untagged fact", content="Nothing names this one.", domain=DOMAIN)
+    with connection.connect() as conn:
+        items = pending.headers(conn, "", "note")["items"]
+    assert [i["tags"] for i in items] == ["", "parser, blank part, skip"]
+
+
+def test_a_page_of_headers_ends_at_the_size_budget(store):
+    tags = ", ".join(f"kiln{k}" for k in range(150))[:1000]
+    for n in range(50):
+        server.note(title=f"Kiln fact {n}", content=f"Fact number {n}.", domain=DOMAIN, tags=tags)
+    seen, offset = [], 0
+    while offset is not None:
+        page = server.must_read(type="note", limit=50, offset=offset)
+        assert budget.result_chars(page) <= budget.MCP_RESULT_MAX_CHARS
+        assert len(page["items"]) < 50
+        seen += [i["uid"] for i in page["items"]]
+        offset = page.get("next_offset")
+    assert len(seen) == len(set(seen)) == 50
 
 
 def test_pending_tool_without_a_type_lists_the_counts(seeded):
     assert server.must_read() == {"categories": FULL}
     assert server.must_read(domain="acme/x100") == {"categories": FULL}
+
+
+def test_the_tool_names_the_tags_and_the_size_budget():
+    doc = " ".join(server.must_read.__doc__.split())
+    assert "(uid, title, domain, tags, est_tokens;" in doc
+    assert "ends early at the size budget" in doc
 
 
 def test_pending_tool_with_a_type_lists_headers(seeded):
