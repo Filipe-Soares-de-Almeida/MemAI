@@ -7,6 +7,7 @@ import sqlite3
 
 from memai.lite import DOMAIN_SEP, normalize_domain, split_domain
 from memai.store.health import _due_clause
+from memai.store.sections import refuse_long
 from memai.store.settings import _get_meta, _set_meta
 
 # A domain is a PATH: segments between DOMAIN_SEP nest outermost first, and a scope includes its
@@ -99,10 +100,14 @@ def coerce_domain(conn: sqlite3.Connection, domain: str) -> tuple[str, str]:
     """Coerce a domain to the store's policy. Returns (coerced_domain, active_mode).
 
     Two rules, one call: the casing policy, and the path shape every
-    reader assumes (see normalize_domain).
+    reader assumes (see normalize_domain). Raises for a path past
+    DOMAIN_MAX: every new path comes through here, and a path rewritten as
+    stored does not.
     """
     mode = get_domain_case(conn)
-    return normalize_domain(case_domain(mode, domain)), mode
+    path = normalize_domain(case_domain(mode, domain))
+    refuse_long(domain=path)
+    return path, mode
 
 
 def apply_domain_policy(conn: sqlite3.Connection, domain: str) -> str:

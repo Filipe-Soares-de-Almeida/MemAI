@@ -48,6 +48,7 @@ from memai import (
     autostart,
     brief,
     budget,
+    contract,
     diagram_svg,
     hook_install,
     lite,
@@ -267,18 +268,21 @@ characters; a name that needs more is summarizing the body.""",
 domain: the subject this belongs to, as a path from the outermost
 scope in ('acme/x100/p200'). File it as deep as the fact is specific
 -- a note about one routine goes on the routine, and still comes back
-when someone asks about the module or the product above it.""",
+when someone asks about the module or the product above it.""" + f"""
+At most {contract.DOMAIN_MAX} characters.""",
     "also": """\
 also: other domain paths this belongs to, comma-separated: the subjects
 that cut across the tree `domain` sits in, such as the end-to-end flow
 a routine is one step of. Every read scoped to one of them returns it.
-A path `domain` already sits under is dropped as redundant.""",
+A path `domain` already sits under is dropped as redundant.""" + f"""
+At most {contract.DOMAIN_MAX} characters each.""",
     "tags": """\
 tags: comma-separated keywords and synonyms. Retrieval is BM25 over
 content, tags and domain paths, and tags weigh second only to the body,
 so they make a memory findable by words its own text never uses: the
 identifier, the error string, the plain phrasing someone will type. A
-memory with none is reachable only by quoting itself.""",
+memory with none is reachable only by quoting itself.""" + f"""
+At most {contract.TAGS_MAX} characters.""",
     "session": """\
 session: groups what one conversation writes. Leave it empty to use
 this server process's own stamp.""",
@@ -291,7 +295,8 @@ a date nobody meant is worse than none.""",
     "source_ref": """\
 source_ref: what the fact came FROM -- a path, a URL, a table name --
 so a later pass can check the claim against the thing itself instead
-of inferring what to check from the wording.""",
+of inferring what to check from the wording.""" + f"""
+At most {contract.SOURCE_REF_MAX} characters.""",
 }
 
 _PARAM_LINE = re.compile(r"^([ \t]*)@param (\w+)[ \t]*$", re.M)
@@ -1659,7 +1664,7 @@ def timeline(
         _read(conn, [anchor, *older[len(older) - len(near_old):], *newer[:len(near_new)]])
     out = {
         "anchored_by": anchored_by,
-        "anchor": _snippet_dict(_row_to_dict(anchor)),
+        "anchor": budget.fit(_snippet_dict(_row_to_dict(anchor)), budget.PAGE_MAX_CHARS // 2),
         "before": list(reversed(near_old)),
         "after": near_new,
     }
@@ -1669,7 +1674,7 @@ def timeline(
 
 
 @tool("core", READ)
-def list_projects() -> dict:
+def list_projects(offset: int = 0) -> dict:
     """The projects in this home, and which one every call here reads and writes.
 
     A project is one SQLite file with its own memories, domains, relations
@@ -1678,12 +1683,14 @@ def list_projects() -> dict:
     the project it landed in, and pulse() names the one it read. Each entry
     carries `name`, `memories` (the active rows) and `active`. Names are
     matched without regard to case wherever a tool takes one.
+
+    @param offset
     """
-    return {
-        "active": paths.active_project(),
-        "projects": [{"name": s["name"], "memories": s["memories"], "active": s["active"]}
-                   for s in projects.list_projects(counts=True)],
-    }
+    if error := _offset_error(offset):
+        return _errors([error])
+    return _page([{"name": s["name"], "memories": s["memories"], "active": s["active"]}
+                  for s in projects.list_projects(counts=True)],
+                 offset, key="projects", active=paths.active_project())
 
 
 @tool("core", READ)
@@ -1955,6 +1962,7 @@ def pulse(domain: str = "", offset: int = 0) -> dict:
                 checkpoint_dict["next"] = (f"get_memory(uid='{checkpoint_dict['uid']}', "
                                            f"content_offset={more})")
             checkpoint_dict["relation_count"] = len(relations.get_relations(conn, checkpoint_dict["uid"]))
+            checkpoint_dict = budget.fit(checkpoint_dict, budget.PAGE_MAX_CHARS)
             _read(conn, [latest_checkpoint])
     return {
         "project": paths.active_project(),
@@ -2101,7 +2109,7 @@ def get_memory(uid: str, edits_offset: int = -1, content_offset: int = -1) -> di
         nxt["relations"] = f"get_relations(uid='{uid}')"
     if nxt:
         result["next"] = nxt
-    return result
+    return budget.fit(result, budget.MCP_RESULT_MAX_CHARS)
 
 
 @tool("core", REWRITE)
@@ -2165,6 +2173,10 @@ def edit_memory(uid: str, new_content: str = "", note: str = "", mode: str = "re
     if not (new_content.strip() or source_ref.strip() or title.strip() or tags.strip()
             or goal.strip()):
         return _errors(["nothing to change: pass new_content, source_ref, title, tags or goal"])
+    for field, value, limit in (("tags", tags, store_sections.TAGS_MAX),
+                                ("source_ref", source_ref, store_sections.SOURCE_REF_MAX)):
+        if error := store_sections.length_error(field, value, limit):
+            return _errors([error])
     changed = []
     with connection.connect() as conn:
         if goal.strip():
@@ -2369,18 +2381,23 @@ def move_to_project(target: str, uids: str = "", domain: str = "", dry_run: bool
     domain: a path to move, its subdomains and archived rows included.
 
     dry_run: the default, and moves nothing: it reports what would move,
-    `conflicts` (uids `target` already holds, which stay here) and
-    `outside` -- the relations, diagram links and jumps, `superseded_by`
-    marks and [[uid]] references that cross the edge of the slice, all of
-    which the move drops. Read that report with the user, then widen the
-    slice or accept the loss BEFORE calling again with dry_run=False: the
-    purge is irreversible short of the backup.
+    `conflicts` (uids `target` already holds, which stay here), `unknown`
+    (uids asked for that this project does not hold) and `outside` -- the
+    relations, diagram links and jumps, `superseded_by` marks and [[uid]]
+    references that cross the edge of the slice, all of which the move
+    drops. Each comes as `count`, the whole number, and up to 20 `items`.
+    Read that report with the user, then widen the slice or accept the loss
+    BEFORE calling again with dry_run=False: the purge is irreversible short
+    of the backup.
 
     create: makes a `target` that does not exist yet.
     """
     wanted = [u.strip() for u in uids.split(",") if u.strip()]
-    return portable.move(paths.active_project(), target, uids=wanted, domain=domain,
-                         dry_run=dry_run, create=create)
+    report = portable.move(paths.active_project(), target, uids=wanted, domain=domain,
+                           dry_run=dry_run, create=create)
+    for key in ("conflicts", "unknown"):
+        report[key] = {"count": len(report[key]), "items": report[key][:portable.BOUNDARY_LIMIT]}
+    return report
 
 
 @tool("curation", READ)
@@ -2492,8 +2509,9 @@ def optimize_stage(suggestions: list[dict], note: str = "") -> dict:
     user reviews and applies or rejects each one in the admin dashboard,
     which backs up before the first apply and can undo any of them.
 
-    Invalid suggestions are skipped and reported in `errors`; the rest are
-    staged. Returns {run_id, staged, errors}.
+    Invalid suggestions are skipped and reported in `errors`, as many as fit
+    one page, with `errors_total` counting them all when some are left out;
+    the rest are staged. Returns {run_id, staged, errors}.
 
     suggestions: each one {"kind", "target_uid", "payload", "rationale",
     "verified"}. Kinds: compact/reword {"new_content"}, retag {"tags"},
@@ -2514,6 +2532,10 @@ def optimize_stage(suggestions: list[dict], note: str = "") -> dict:
     """
     with connection.connect() as conn:
         result = optimizer.stage_optimization(conn, note, suggestions)
+    shown, _ = budget.page(result["errors"], 0)
+    if len(shown) < len(result["errors"]):
+        result["errors_total"] = len(result["errors"])
+        result["errors"] = shown
     return result
 
 

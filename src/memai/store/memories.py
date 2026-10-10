@@ -15,7 +15,13 @@ from memai.store.domains import (
     parse_domains,
 )
 from memai.store.health import normalize_review_after
-from memai.store.sections import _refuse_leak, _refuse_unreadable, _write_sections, title_error
+from memai.store.sections import (
+    _refuse_leak,
+    _refuse_unreadable,
+    _write_sections,
+    refuse_long,
+    title_error,
+)
 
 # Trust on its own axis beside `status`; retrieval reads it too: a contradicted memory sorts last
 # and a warm-up leaves it out (search_ranked, _sound_clause).
@@ -108,6 +114,7 @@ def insert_memory(
     error = title_error(title)
     if error:
         raise ValueError(error)
+    refuse_long(tags=tags, source_ref=source_ref)
     uid = new_uid()
     ts = created_at or now_iso()
     domain = apply_domain_policy(conn, domain)
@@ -441,6 +448,7 @@ def set_source_ref(conn: sqlite3.Connection, uid: str, value: str, note: str = "
     if value == row["source_ref"]:
         return True
     _refuse_leak(row["type"], value)
+    refuse_long(source_ref=value)
     conn.execute(
         "UPDATE memories SET source_ref = ?, updated_at = ? WHERE uid = ?",
         (value, now_iso(), uid))
@@ -468,6 +476,7 @@ def set_tags(conn: sqlite3.Connection, uid: str, value: str, note: str = "") -> 
     if value == row["tags"]:
         return True
     _refuse_leak(row["type"], value)
+    refuse_long(tags=value)
     conn.execute(
         "UPDATE memories SET tags = ?, updated_at = ? WHERE uid = ?",
         (value, now_iso(), uid))

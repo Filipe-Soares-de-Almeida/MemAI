@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import json
 
 # Claude Code moves a tool result over 50,000 characters, and a hook field over 10,000, to a file.
@@ -29,6 +30,54 @@ def item_chars(item) -> int:
     return len(text_of({"records": [item]})) - len(text_of({"records": []})) + 2
 
 
+# Strings this short name things (uids, keys, labels) and are never cut; a record made of them is
+# shortened through its lists instead.
+_CUT_FROM = 64
+
+
+def _longest(node, kind: type, floor: int):
+    """(container, key, value) of the longest `kind` value inside `node` at least `floor` long."""
+    best = None
+    pairs = node.items() if isinstance(node, dict) else enumerate(node)
+    for key, value in pairs:
+        if isinstance(value, kind) and len(value) >= floor and (best is None or len(value) > len(best[2])):
+            best = (node, key, value)
+        if isinstance(value, dict | list):
+            inner = _longest(value, kind, floor)
+            if inner and (best is None or len(inner[2]) > len(best[2])):
+                best = inner
+    return best
+
+
+def fit(item, max_chars: int):
+    """`item` as it fits `max_chars` as one list element; an item that already fits comes back as is.
+
+    The longest strings are halved first, each with `<key>_chars` beside it holding its full
+    length, then the longest lists, with `<key>_total`; a cut dict says `clipped: true`. An item
+    with nothing left to cut comes back as it stands.
+    """
+    if item_chars(item) <= max_chars:
+        return item
+    item = copy.deepcopy(item)
+    while item_chars(item) > max_chars:
+        found = _longest(item, str, _CUT_FROM)
+        if found:
+            parent, key, value = found
+            if isinstance(key, str):
+                parent.setdefault(f"{key}_chars", len(value))
+            parent[key] = value[: len(value) // 2] + "…"
+        elif found := _longest(item, list, 2):
+            parent, key, value = found
+            if isinstance(key, str):
+                parent.setdefault(f"{key}_total", len(value))
+            parent[key] = value[: len(value) // 2]
+        else:
+            break
+        if isinstance(item, dict):
+            item["clipped"] = True
+    return item
+
+
 def _offset(value) -> int:
     if isinstance(value, bool) or not isinstance(value, int) or value < 0:
         raise ValueError(f"offset must be a whole number of 0 or more, got {value!r}")
@@ -38,12 +87,15 @@ def _offset(value) -> int:
 def page(records: list, offset: int, max_chars: int = PAGE_MAX_CHARS) -> tuple[list, int | None]:
     """Records from `offset` that fit in `max_chars` (at least one), and the next offset or None.
 
-    Measured as the list sits inside a dict result, the only shape a page is returned in.
+    Measured as the list sits inside a dict result, the only shape a page is returned in. A first
+    record too big for the page on its own goes through fit().
     """
     start = _offset(offset)
     taken: list = []
     size = len(text_of({"records": []}))
     for record in records[start:]:
+        if not taken:
+            record = fit(record, max_chars - size)
         cost = item_chars(record)
         if taken and size + cost > max_chars:
             break

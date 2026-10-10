@@ -29,7 +29,13 @@ from memai.store.memories import (
     update_memory_content,
 )
 from memai.store.relations import add_relation
-from memai.store.sections import section_error, title_error
+from memai.store.sections import (
+    DOMAIN_MAX,
+    TAGS_MAX,
+    length_error,
+    section_error,
+    title_error,
+)
 
 CONFIDENCE_VALUES = contract.CONFIDENCES
 # distill targets must be durable knowledge types -- distilling INTO a
@@ -119,7 +125,9 @@ def _validate_unleak(conn: sqlite3.Connection, d: _Draft) -> str | None:
 
 
 def _validate_retag(conn: sqlite3.Connection, d: _Draft) -> str | None:
-    return None if "tags" in d.payload else "payload.tags required"
+    if "tags" not in d.payload:
+        return "payload.tags required"
+    return length_error("tags", str(d.payload["tags"]), TAGS_MAX)
 
 
 def _validate_retitle(conn: sqlite3.Connection, d: _Draft) -> str | None:
@@ -152,7 +160,7 @@ def _validate_redomain(conn: sqlite3.Connection, d: _Draft) -> str | None:
         return "payload.domain required"
     # normalized at staging too: the panel must show the path the memory will end up in
     d.payload = {**d.payload, "domain": normalize_domain(str(d.payload["domain"]))}
-    return None
+    return length_error("domain", d.payload["domain"], DOMAIN_MAX)
 
 
 def _validate_crosslist(conn: sqlite3.Connection, d: _Draft) -> str | None:
@@ -162,7 +170,10 @@ def _validate_crosslist(conn: sqlite3.Connection, d: _Draft) -> str | None:
     # a path the own domain covers) and the panel shows what will hold
     row = memory_row(conn, d.target_uid)
     given = parse_domains(d.payload["also"])
-    want = apply_link_policy(conn, given, row["domain"])
+    try:
+        want = apply_link_policy(conn, given, row["domain"])
+    except ValueError as exc:
+        return str(exc)
     # an empty list is a legitimate suggestion, but a non-empty one that empties would apply as
     # a clear, so say so instead
     if given and not want:

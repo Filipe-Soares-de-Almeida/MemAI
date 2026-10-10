@@ -49,6 +49,13 @@ def worst(tmp_path_factory):
             memories.update_memory_content(conn, uids[1], _text(20_000, f"e{n} "), note=f"edit {n}")
         memories.update_memory_content(conn, uids[2], _text(120_000, "long "), note="long body")
         ids["edited"], ids["long"] = uids[1], uids[2]
+        # values past the field ceilings, which only a restore or a direct write can store
+        legacy = _memory(conn, MEMORIES, "acme/legacy")
+        conn.execute("UPDATE memories SET tags = ?, source_ref = ?, domain = ? WHERE uid = ?",
+                     (", ".join(f"kiln{k}" for k in range(8000)), _text(60_000, "ref "),
+                      "acme/" + "w" * 2000, legacy))
+        relations.add_relation(conn, legacy, uids[3], "relates_to", note=_text(60_000, "why "))
+        ids["legacy"] = legacy
         task = tasks.create_task(conn, title=_text(120), goal=_text(tasks.GOAL_MAX),
                                  items=[_text(tasks.ITEM_MAX, f"{n} ") for n in range(tasks.ITEMS_MAX)],
                                  domain="acme/m000")
@@ -78,7 +85,9 @@ def worst(tmp_path_factory):
         server.diagram_link(made["uid"], f"n{k}", uids[10 + k])
     staged = server.optimize_stage([
         {"kind": "retag", "target_uid": u, "payload": {"tags": _text(200)}, "rationale": _text(250)}
-        for u in uids[300:500]], note="worst")
+        for u in uids[300:500]] + [
+        {"kind": "reword", "target_uid": uids[4], "payload": {"new_content": _text(60_000, "body ")},
+         "rationale": _text(60_000, "why ")}], note="worst")
     ids["run"] = staged.get("run_id", 0)
     for n in range(120):
         server.optimize_stage([{"kind": "retag", "target_uid": uids[500 + n % 50],
@@ -133,17 +142,19 @@ SCENARIOS = {
     "get_domain_case": lambda w: [server.get_domain_case()],
     "get_memory": lambda w: [server.get_memory(w["task"]), server.get_memory(w["note"]),
                              server.get_memory(w["diagram"]), server.get_memory(w["long"]),
-                             server.get_memory(w["edited"]),
+                             server.get_memory(w["edited"]), server.get_memory(w["legacy"]),
                              *_walk(lambda o: server.get_memory(w["edited"], edits_offset=o)),
                              *_walk(lambda o: server.get_memory(w["long"], content_offset=o))],
-    "get_relations": lambda w: [server.get_relations(w["note"])],
+    "get_relations": lambda w: [server.get_relations(w["note"]), server.get_relations(w["legacy"])],
     "link_memories": lambda w: [server.link_memories(w["spare"], w["note"], "relates_to")],
     "list_by_domain": lambda w: [server.list_by_domain("acme", limit=5000)],
     "list_domains": lambda w: [server.list_domains()],
     "list_projects": lambda w: [server.list_projects()],
     "list_recent": lambda w: [server.list_recent(limit=5000)],
     "move_to_project": lambda w: [server.move_to_project("other", domain="acme", dry_run=True,
-                                                         create=True)],
+                                                         create=True),
+                                  server.move_to_project("other", dry_run=True, create=True,
+                                                         uids=",".join(f"{n:016x}" for n in range(3000)))],
     "must_read": lambda w: [server.must_read(type=t, limit=50)
                             for t in ("task", "anti_pattern", "note", "diagram")],
     "note": lambda w: [server.note(_text(120), _text(1800), domain="acme/m006")],
@@ -152,7 +163,10 @@ SCENARIOS = {
                                 server.optimize_scan(domain="acme/m002", limit=5000, full=True)],
     "optimize_stage": lambda w: [server.optimize_stage(
         [{"kind": "retag", "target_uid": w["spare"], "payload": {"tags": _text(200)},
-          "rationale": _text(250)}], note=_text(200))],
+          "rationale": _text(250)}], note=_text(200)),
+                                 server.optimize_stage(
+        [{"kind": "retag", "target_uid": f"{n:016x}", "payload": {"tags": "x"}, "rationale": "r"}
+         for n in range(800)])],
     "optimize_status": lambda w: [server.optimize_status(w["run"])],
     "pulse": lambda w: [server.pulse("acme"), server.pulse("")],
     "purge_memory": lambda w: [server.purge_memory(w["spare"], "wrong phrase")],
@@ -176,6 +190,7 @@ SCENARIOS = {
                                              items=",".join(f"i{n}" for n in range(1, 51)))],
     "task_read": _parts,
     "timeline": lambda w: [server.timeline(w["note"], before=5000, after=5000),
+                           server.timeline(w["legacy"], before=5000, after=5000),
                            server.timeline(query=QUERY, before=5000, after=5000)],
     "unfile_domain": lambda w: [server.unfile_domain(w["spare"], "acme/m002")],
 }
@@ -191,7 +206,7 @@ def test_tool_fits_the_result_ceiling(worst, name):
     for result in SCENARIOS[name](worst):
         size = budget.result_chars(result)
         assert size <= budget.MCP_RESULT_MAX_CHARS, f"{name}: {size} characters"
-        errors = " ".join(result.get("errors", [])) if isinstance(result, dict) else ""
+        errors = " ".join(str(e) for e in result.get("errors", [])) if isinstance(result, dict) else ""
         assert "budget" not in errors, f"{name}: {errors[:200]}"
 
 

@@ -894,6 +894,24 @@ def test_corpus_fits_the_result_ceiling_with_every_part_counted(conn, monkeypatc
     assert clipped == [hub]
 
 
+def test_staging_reports_as_many_errors_as_fit_and_counts_them_all(tmp_path, monkeypatch):
+    monkeypatch.setenv("MEMAI_HOME", str(tmp_path))
+    bad = [{"kind": "retag", "target_uid": f"{n:016x}", "payload": {"tags": "kiln"},
+            "rationale": "why"} for n in range(800)]
+    result = server.optimize_stage(bad, note="every target is missing")
+    assert result["staged"] == 0 and result["errors_total"] == 800
+    assert 0 < len(result["errors"]) < 800
+    assert budget.result_chars(result) <= budget.MCP_RESULT_MAX_CHARS
+
+
+def test_staging_lists_every_error_when_they_fit(tmp_path, monkeypatch):
+    monkeypatch.setenv("MEMAI_HOME", str(tmp_path))
+    bad = [{"kind": "retag", "target_uid": "0000000000000001", "payload": {"tags": "kiln"},
+            "rationale": "why"}]
+    result = server.optimize_stage(bad)
+    assert len(result["errors"]) == 1 and "errors_total" not in result
+
+
 def test_the_scan_tells_a_caller_where_a_clipped_page_continues():
     doc = " ".join(server.optimize_scan.__doc__.split())
     assert "`relations_truncated` means the page's first memory has more edges than fit" in doc
