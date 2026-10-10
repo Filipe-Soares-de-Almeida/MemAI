@@ -15,6 +15,9 @@ MEMORY_TYPES: tuple[str, ...] = tuple(_MEMORY["TYPES"])
 CONFIDENCES: tuple[str, ...] = tuple(_MEMORY["CONFIDENCES"])
 PINS: tuple[str, ...] = tuple(_MEMORY["PINS"])
 TITLE_MAX: int = _MEMORY["TITLE_MAX"]
+TAGS_MAX: int = _MEMORY["TAGS_MAX"]
+SOURCE_REF_MAX: int = _MEMORY["SOURCE_REF_MAX"]
+DOMAIN_MAX: int = _MEMORY["DOMAIN_MAX"]
 DOMAIN_SEP: str = _MEMORY["DOMAIN_SEP"]
 
 TASK_STATES: tuple[str, ...] = tuple(_TASK["STATES"])

@@ -48,6 +48,7 @@ from memai import (
     autostart,
     brief,
     budget,
+    contract,
     diagram_svg,
     hook_install,
     lite,
@@ -267,18 +268,21 @@ characters; a name that needs more is summarizing the body.""",
 domain: the subject this belongs to, as a path from the outermost
 scope in ('acme/x100/p200'). File it as deep as the fact is specific
 -- a note about one routine goes on the routine, and still comes back
-when someone asks about the module or the product above it.""",
+when someone asks about the module or the product above it.""" + f"""
+At most {contract.DOMAIN_MAX} characters.""",
     "also": """\
 also: other domain paths this belongs to, comma-separated: the subjects
 that cut across the tree `domain` sits in, such as the end-to-end flow
 a routine is one step of. Every read scoped to one of them returns it.
-A path `domain` already sits under is dropped as redundant.""",
+A path `domain` already sits under is dropped as redundant.""" + f"""
+At most {contract.DOMAIN_MAX} characters each.""",
     "tags": """\
 tags: comma-separated keywords and synonyms. Retrieval is BM25 over
 content, tags and domain paths, and tags weigh second only to the body,
 so they make a memory findable by words its own text never uses: the
 identifier, the error string, the plain phrasing someone will type. A
-memory with none is reachable only by quoting itself.""",
+memory with none is reachable only by quoting itself.""" + f"""
+At most {contract.TAGS_MAX} characters.""",
     "session": """\
 session: groups what one conversation writes. Leave it empty to use
 this server process's own stamp.""",
@@ -291,7 +295,8 @@ a date nobody meant is worse than none.""",
     "source_ref": """\
 source_ref: what the fact came FROM -- a path, a URL, a table name --
 so a later pass can check the claim against the thing itself instead
-of inferring what to check from the wording.""",
+of inferring what to check from the wording.""" + f"""
+At most {contract.SOURCE_REF_MAX} characters.""",
 }
 
 _PARAM_LINE = re.compile(r"^([ \t]*)@param (\w+)[ \t]*$", re.M)
@@ -2165,6 +2170,10 @@ def edit_memory(uid: str, new_content: str = "", note: str = "", mode: str = "re
     if not (new_content.strip() or source_ref.strip() or title.strip() or tags.strip()
             or goal.strip()):
         return _errors(["nothing to change: pass new_content, source_ref, title, tags or goal"])
+    for field, value, limit in (("tags", tags, store_sections.TAGS_MAX),
+                                ("source_ref", source_ref, store_sections.SOURCE_REF_MAX)):
+        if error := store_sections.length_error(field, value, limit):
+            return _errors([error])
     changed = []
     with connection.connect() as conn:
         if goal.strip():
