@@ -24,6 +24,11 @@ def result_chars(result) -> int:
     return len(text_of(result))
 
 
+def item_chars(item) -> int:
+    """What `item` adds, separator included, to a list held directly in a dict result."""
+    return len(text_of({"records": [item]})) - len(text_of({"records": []})) + 2
+
+
 def _offset(value) -> int:
     if isinstance(value, bool) or not isinstance(value, int) or value < 0:
         raise ValueError(f"offset must be a whole number of 0 or more, got {value!r}")
@@ -39,7 +44,7 @@ def page(records: list, offset: int, max_chars: int = PAGE_MAX_CHARS) -> tuple[l
     taken: list = []
     size = len(text_of({"records": []}))
     for record in records[start:]:
-        cost = len(text_of({"records": [record]})) - len(text_of({"records": []})) + 2
+        cost = item_chars(record)
         if taken and size + cost > max_chars:
             break
         taken.append(record)

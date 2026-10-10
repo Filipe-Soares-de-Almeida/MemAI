@@ -116,7 +116,10 @@ sub-skill. Read each source once; nothing below is read twice.
      constants): the list [[memai-confidence]] checks against live facts;
    - `truncated: true` → page on with `offset = offset + count`. `full=True`
      returns whole bodies (expensive); `include_archived=True` only when the
-     question is about what was already archived.
+     question is about what was already archived;
+   - `relations_truncated: true` → the page's first memory has more edges
+     than fit; `get_relations(uid)` lists them all. `stats.by_domain` names
+     the largest domains and `stats.domains` counts every one.
 5. **The state of the work a checkpoint anchors.** [[memai-checkpoints]]
    decides keep/archive against whether that work is still **live** or already
    **closed**, and the store does not know which. That state comes from
