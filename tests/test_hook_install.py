@@ -12,6 +12,13 @@ import memai
 from memai import hook, hook_install, server
 
 
+@pytest.fixture(autouse=True)
+def scratch_home(tmp_path, monkeypatch):
+    """A MEMAI_HOME of its own, so the server's notes never read the release
+    cache a hook wrote on the machine running the suite."""
+    monkeypatch.setenv("MEMAI_HOME", str(tmp_path / "home"))
+
+
 @pytest.fixture
 def settings(tmp_path):
     return tmp_path / "settings.json"
