@@ -689,7 +689,7 @@ always published, `diagrams` and `curation` only when named (or under the
 | Reading | | group |
 |---|---|---|
 | `pulse(domain, offset)` | Warm-up: `{project, latest_checkpoint (+ relations), must_read (the `categories` list), pinned, read_next, scope}` — the `scope` census includes `stale` | core |
-| `must_read(domain, type, limit, offset, pinned)` | Without `type`: `{"categories": [{"type", "count"}, ...]}`, one per category with something waiting. With `type`: one page of headers (`uid`, `title`, `domain`, `est_tokens`; a task adds `progress` and `doing`) and `next_offset`; `pinned=true` lists only the pins of that type. An unknown `type` is an error | core |
+| `must_read(domain, type, limit, offset, pinned)` | Without `type`: `{"categories": [{"type", "count"}, ...]}`, one per category with something waiting. With `type`: one page of headers (`uid`, `title`, `domain`, `tags`, `est_tokens`; a task adds `progress` and `doing`) and `next_offset`, the page ending early at the size budget; `pinned=true` lists only the pins of that type. An unknown `type` is an error | core |
 | `search(query, domain, type, limit)` | BM25, annotated with `match_source`/`fts_rank` | core |
 | `recall(query, domain, limit)` | Relevance-ranked recall of `note()`d knowledge (`search` scoped to `type='note'`) | core |
 | `list_by_domain(domain, type, limit, subtree, status)` | Recency-ordered, scoped to a path and its subdomains; `status` is `active` (default), `archived` or `all`, and a task row carries `state` and `progress` | core |
