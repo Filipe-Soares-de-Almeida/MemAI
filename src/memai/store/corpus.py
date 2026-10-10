@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
-import json
 import re
 import sqlite3
 
-from memai import guard
+from memai import budget, guard
 from memai.lite import DOMAIN_SEP, split_domain
 from memai.store.domains import domain_scope_clause, parse_domains
 from memai.store.health import _due_clause, today_iso
@@ -21,11 +20,17 @@ LEAK_SCAN_CAP = 40
 CORPUS_SNIPPET_LEN = 120
 CORPUS_TAGS_LEN = 100
 CORPUS_ANCHORS_CAP = 5
-# Per-page ceiling on the serialized listing (compact-JSON chars). Hosts cap output near 25k tokens
-# and dense JSON runs ~3 chars/token; 28k keeps the full response near 12k tokens.
+# Per-page ceiling on the listing and the relations touching it, measured as sent. Hosts cap output
+# near 25k tokens and dense JSON runs ~3 chars/token; 28k keeps the full response near 12k tokens.
 CORPUS_CHAR_BUDGET = 28_000
 # A full=True body longer than this is cut; get_memory(uid, content_offset=...) reads the rest.
 CORPUS_FULL_LEN = 8_000
+# stats.by_domain lists this many of the largest domains; stats.domains counts them all.
+CORPUS_DOMAINS_CAP = 150
+DOMAIN_HINT_CAP = 40
+# What `count`, `truncated` and `relations_truncated` can still add once the empty response has
+# been measured.
+_PAGE_SLACK = 48
 
 # Verifiable anchors an agent can go check against live facts: URLs,
 # file paths, table/field-style identifiers and SNAKE_CASE constants.
@@ -268,9 +273,13 @@ def _corpus_entry(r: sqlite3.Row, *, include_archived: bool, full: bool, today: 
 
 def _corpus_page(
     conn: sqlite3.Connection, where_sql: str, params: list, *, limit: int, offset: int,
-    include_archived: bool, full: bool, today: str,
-) -> list[dict]:
-    """The listing: `limit` rows from `offset`, ended early once it reaches CORPUS_CHAR_BUDGET."""
+    include_archived: bool, full: bool, today: str, room: int,
+) -> tuple[list[dict], list[dict], bool]:
+    """The listing, the relations touching it, and whether any of those were left out.
+
+    `limit` rows from `offset`, ended before the row whose entry and new edges would take the two
+    past `room` characters as sent. The first row always goes in, its edges while they fit.
+    """
     rows = conn.execute(
         f"""SELECT uid, type, domain, also_domains, session, tags, content, status,
                    confidence, superseded_by, created_at, updated_at,
@@ -279,32 +288,38 @@ def _corpus_page(
             ORDER BY created_at DESC LIMIT ? OFFSET ?""",
         [*params, limit, offset],
     ).fetchall()
-    mems = []
-    budget_used = 0
+    usage = usage_for(conn, [r["uid"] for r in rows])
+    rels = [dict(r) for r in conn.execute(
+        "SELECT id, from_uid, to_uid, relation_type FROM relations").fetchall()]
+    touching: dict[str, list[dict]] = {}
+    for e in rels:
+        touching.setdefault(e["from_uid"], []).append(e)
+        touching.setdefault(e["to_uid"], []).append(e)
+    mems: list[dict] = []
+    listed: set[int] = set()
+    used = 0
+    clipped = False
     for r in rows:
         m = _corpus_entry(r, include_archived=include_archived, full=full, today=today)
-        mems.append(m)
-        budget_used += len(json.dumps(m, ensure_ascii=False))
-        if budget_used >= CORPUS_CHAR_BUDGET:
-            break
-    return mems
-
-
-def _attach_recalls(conn: sqlite3.Connection, mems: list[dict], uids: set[str]) -> None:
-    # What each one has been worth, omitted when zero like every default here; a memory with no
-    # `recalls` is the interesting case.
-    usage = usage_for(conn, uids)
-    for m in mems:
+        # What each one has been worth, omitted when zero like every default here; a memory with
+        # no `recalls` is the interesting case.
         u = usage.get(m["uid"])
         if u:
             m["recalls"], m["last_recall"] = u["recalls"], u["last_recall"][:19]
-
-
-def _corpus_edges(conn: sqlite3.Connection, uids: set[str]) -> list[dict]:
-    rels = conn.execute(
-        "SELECT id, from_uid, to_uid, relation_type FROM relations"
-    ).fetchall()
-    return [dict(r) for r in rels if r["from_uid"] in uids or r["to_uid"] in uids]
+        new = {e["id"]: budget.item_chars(e) for e in touching.get(m["uid"], [])
+               if e["id"] not in listed}
+        cost = budget.item_chars(m)
+        if mems and used + cost + sum(new.values()) > room:
+            break
+        mems.append(m)
+        used += cost
+        for eid, chars in new.items():
+            if used + chars > room:
+                clipped = True
+                break
+            listed.add(eid)
+            used += chars
+    return mems, [e for e in rels if e["id"] in listed], clipped
 
 
 def _corpus_stats(conn: sqlite3.Connection, where_sql: str, params: list, today: str) -> dict:
@@ -365,7 +380,7 @@ def _corpus_hints(
 def optimization_corpus(
     conn: sqlite3.Connection, *, domain: str = "", type: str = "",
     since: str = "", include_archived: bool = False, limit: int = 500,
-    offset: int = 0, full: bool = False, subtree: bool = True,
+    offset: int = 0, full: bool = False, subtree: bool = True, extra: dict | None = None,
 ) -> dict:
     """Compact whole-corpus dump for an agent to reason over in one call.
 
@@ -390,11 +405,18 @@ def optimization_corpus(
         at all (get_memory has it)
       - anchors come as one space-joined string, capped at
         CORPUS_ANCHORS_CAP
-    Beyond `limit`, a page also ends early when the serialized listing
-    reaches CORPUS_CHAR_BUDGET -- the guarantee is that ONE response
-    always fits an MCP host's output cap, whatever the store looks like.
-    A `stats` block aggregates the filtered corpus regardless of limit,
-    `domain_hints` clusters likely-variant domain strings,
+    Beyond `limit`, a page also ends early when the listing and the relations
+    touching it reach CORPUS_CHAR_BUDGET, or whatever the rest of the
+    response and the caller's `extra` fields leave of
+    budget.MCP_RESULT_MAX_CHARS, both measured as sent -- the guarantee is
+    that ONE response always fits an MCP host's output cap, whatever the
+    store looks like. A page's first memory is listed with as many of its
+    edges as fit, and `relations_truncated: true` says some were left out:
+    get_relations(uid) lists them all. A `stats` block aggregates the
+    filtered corpus regardless of limit, its `by_domain` naming the
+    CORPUS_DOMAINS_CAP largest domains and `domains` counting them all,
+    `domain_hints` clusters likely-variant domain strings (at most
+    DOMAIN_HINT_CAP),
     `domain_nesting` proposes a path for each flat domain that already
     spells a hierarchy out (see _nesting_hints -- the raw material for
     `redomain` suggestions), `leaked_calls` lists the rows carrying a tool
@@ -415,26 +437,33 @@ def optimization_corpus(
         conn, domain=domain, type=type, since=since,
         include_archived=include_archived, subtree=subtree)
     today = today_iso()
-    mems = _corpus_page(conn, where_sql, params, limit=limit, offset=offset,
-                        include_archived=include_archived, full=full, today=today)
-    uids = {m["uid"] for m in mems}
-    _attach_recalls(conn, mems, uids)
-    edges = _corpus_edges(conn, uids)
     stats = _corpus_stats(conn, where_sql, params, today)
     hints, nesting = _corpus_hints(conn, stats["by_domain"], since, base_where_sql, base_params)
 
     # Leaked calls over the scan's own window, not the page: pagination would hide findings.
     leaked, leaked_total = _leak_findings(conn, where_sql, params)
     stats["leaked_calls"] = leaked_total
+    stats["domains"] = len(stats["by_domain"])
+    stats["by_domain"] = dict(list(stats["by_domain"].items())[:CORPUS_DOMAINS_CAP])
 
-    return {
-        "memories": mems,
-        "relations": edges,
-        "count": len(mems),
+    response = {
+        "memories": [],
+        "relations": [],
+        "count": 0,
         "offset": offset,
-        "truncated": offset + len(mems) < stats["total"],
+        "truncated": False,
         "stats": stats,
-        "domain_hints": hints,
+        "domain_hints": hints[:DOMAIN_HINT_CAP],
         "domain_nesting": nesting,
         "leaked_calls": leaked,
+        **(extra or {}),
     }
+    room = budget.MCP_RESULT_MAX_CHARS - budget.result_chars(response) - _PAGE_SLACK
+    mems, edges, clipped = _corpus_page(conn, where_sql, params, limit=limit, offset=offset,
+                                        include_archived=include_archived, full=full,
+                                        today=today, room=min(room, CORPUS_CHAR_BUDGET))
+    response.update(memories=mems, relations=edges, count=len(mems),
+                    truncated=offset + len(mems) < stats["total"])
+    if clipped:
+        response["relations_truncated"] = True
+    return response

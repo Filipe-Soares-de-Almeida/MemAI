@@ -17,7 +17,7 @@ import pytest
 from starlette.testclient import TestClient
 
 from conftest import shaped, webui_constants
-from memai import lite, sections, tasks
+from memai import budget, lite, sections, server, tasks
 from memai.admin import shared
 from memai.admin.app import app as admin_app
 from memai.store import connection, dedup, memories, optimizer, relations, search
@@ -865,6 +865,50 @@ def test_corpus_char_budget_caps_a_page(conn, monkeypatch):
             break
         offset += page["count"]
     assert len(seen) == 20
+
+
+def test_corpus_fits_the_result_ceiling_with_every_part_counted(conn, monkeypatch):
+    """The listing and its relations get what the stats, the hints and the
+    caller's own fields leave of the ceiling, and paging still reaches every row."""
+    monkeypatch.setattr(budget, "MCP_RESULT_MAX_CHARS", 6000)
+    hub = _mk(conn, content="the hub every spoke relates to", domain="acme/hub")
+    for i in range(40):
+        spoke = _mk(conn, content=f"spoke {i} of the hub, with some padding text",
+                    domain=f"acme/spoke{i:02d}")
+        relations.add_relation(conn, hub, spoke, "relates_to")
+    extra = {"dedup_hints": [{"a": hub, "b": hub, "ratio": 0.9, "method": "shingle"}] * 10}
+    seen, offset, clipped = set(), 0, []
+    while True:
+        page = store_corpus.optimization_corpus(conn, offset=offset, extra=extra)
+        assert budget.result_chars(page) <= 6000
+        assert page["dedup_hints"] == extra["dedup_hints"]
+        uids = {m["uid"] for m in page["memories"]}
+        assert uids and not seen & uids
+        seen |= uids
+        if page.get("relations_truncated"):
+            clipped.append(page["memories"][0]["uid"])
+        if not page["truncated"]:
+            break
+        offset += page["count"]
+    assert len(seen) == 41
+    assert clipped == [hub]
+
+
+def test_the_scan_tells_a_caller_where_a_clipped_page_continues():
+    doc = " ".join(server.optimize_scan.__doc__.split())
+    assert "`relations_truncated` means the page's first memory has more edges than fit" in doc
+    assert "get_relations(uid) lists them all" in doc
+    assert "stats.domains counts every one" in doc
+
+
+def test_corpus_lists_the_largest_domains_and_counts_them_all(conn, monkeypatch):
+    monkeypatch.setattr(store_corpus, "CORPUS_DOMAINS_CAP", 2)
+    for domain, n in (("acme/kiln", 3), ("acme/wick", 2), ("acme/glass", 1)):
+        for i in range(n):
+            _mk(conn, content=f"{domain} fact {i}", domain=domain)
+    stats = store_corpus.optimization_corpus(conn)["stats"]
+    assert stats["by_domain"] == {"acme/kiln": 3, "acme/wick": 2}
+    assert stats["domains"] == 3
 
 
 def test_corpus_pages_with_offset(conn):
