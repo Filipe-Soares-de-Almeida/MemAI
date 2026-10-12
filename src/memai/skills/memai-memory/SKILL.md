@@ -226,6 +226,10 @@ When the session-start hook fires, or when resuming work:
 
 1. **`pulse(domain)`** — the state inherited by a scope, as
    `{project, latest_checkpoint, must_read, pinned, read_next, scope}`:
+   - **`overdue`** — present only when a checkpoint in scope stayed open past
+     the age limit set in the dashboard. Its `alert` is for the user: relay
+     it. memai refuses new writes under each listed checkpoint until it is
+     settled ([§5](#5-session-end--pause)), and `read_next` puts that first.
    - **`latest_checkpoint`** — by `created_at DESC`, never by similarity,
      returned **in full** with its **relations** attached. It is the only body
      a pulse carries.
@@ -399,6 +403,9 @@ both if they are genuinely different facts.
 - `set_confidence(uid, unverified|confirmed|contradicted)` once evidence settles a
   claim. A `contradicted` memory sorts last in search and drops out of the notes,
   pitfalls and handoffs `must_read` lists and of the checkpoint `pulse` returns.
+  Now and then any result carries `confidence_reminder`: memories still
+  unverified past the span set in the dashboard, the call's domain first.
+  Settle the ones this session's evidence reaches; it refuses nothing.
 - `link_memories(from_uid, to_uid, relation_type, note)` creates a typed edge
   (`supersedes`, `relates_to`, `contradicts`, `links_to`); `get_relations(uid)`
   lists them.
@@ -591,10 +598,25 @@ needs to know. Work that stays unfinished and has no task yet is a `task`, not
 a line in a checkpoint.
 
 - **`checkpoint(title, intent, established, pursuing, open_questions, session,
-  domain, also, tags)`** — where the work stands, so the next session picks up the
+  domain, also, tags, supersedes)`** — where the work stands, so the next session picks up the
   right bearing via `pulse`. Fields are **free-length**, but a checkpoint is
   read **for bearing, not as an archive**: keep it a readable summary and do
   not dump detail into it.
+
+**A domain holds one active checkpoint.** While one is filed at the same
+path, `checkpoint()` is refused and lists it under `checkpoints`. Read it with
+`get_memory(uid)` and decide whether its work is done:
+
+- **Done** → `forget(uid, reason=...)`, then write the new one.
+- **Not done** → carry what still holds into the new fields and pass
+  `supersedes='<uid>'`: the old one is archived as superseded by the new one,
+  with a `supersedes` edge between them.
+
+A checkpoint that stays open past the age limit set in the dashboard is
+**overdue**: memai refuses every new write filed at its domain or below
+(`note`, `anti_pattern`, `reasoning`, `task`, `diagram`, `checkpoint`) and
+returns the `overdue` block until it is archived or superseded the same way.
+Tell the user when one turns up.
 
 If something large has to be remembered, do not force it into the checkpoint:
 
@@ -688,7 +710,7 @@ always published, `diagrams` and `curation` only when named (or under the
 
 | Reading | | group |
 |---|---|---|
-| `pulse(domain, offset)` | Warm-up: `{project, latest_checkpoint (+ relations), must_read (the `categories` list), pinned, read_next, scope}` — the `scope` census includes `stale` | core |
+| `pulse(domain, offset)` | Warm-up: `{project, latest_checkpoint (+ relations), must_read (the `categories` list), pinned, read_next, scope}`, plus `overdue` for checkpoints past the age limit — the `scope` census includes `stale` | core |
 | `must_read(domain, type, limit, offset, pinned)` | Without `type`: `{"categories": [{"type", "count"}, ...]}`, one per category with something waiting. With `type`: one page of headers (`uid`, `title`, `domain`, `tags`, `est_tokens`; a task adds `progress` and `doing`) and `next_offset`, the page ending early at the size budget; `pinned=true` lists only the pins of that type. An unknown `type` is an error | core |
 | `search(query, domain, type, limit)` | BM25, annotated with `match_source`/`fts_rank` | core |
 | `recall(query, domain, limit)` | Relevance-ranked recall of `note()`d knowledge (`search` scoped to `type='note'`) | core |
@@ -706,7 +728,7 @@ always published, `diagrams` and `curation` only when named (or under the
 | `note(title, content, domain, also, tags, session, review_after, source_ref)` | Timeless knowledge → `type='note'` | core |
 | `reasoning(title, hypothesis, reasoning, result, revised_belief, next_time, domain, also, tags, session, review_after, source_ref)` | A reasoning trace → `type='reasoning'` | core |
 | `anti_pattern(title, pattern, why_wrong, instead, domain, also, tags, session, review_after, source_ref)` | A pitfall → `type='anti_pattern'` (counted by `pulse`, listed by `must_read`) | core |
-| `checkpoint(title, intent, established, pursuing, open_questions, session, domain, also, tags)` | Where the work stands → `type='checkpoint'` (summary, not an archive) | core |
+| `checkpoint(title, intent, established, pursuing, open_questions, session, domain, also, tags, supersedes)` | Where the work stands → `type='checkpoint'` (summary, not an archive); one active per domain, `supersedes` archives the one it replaces | core |
 | `task(title, goal, items, domain, also, tags, session)` | A goal and a checklist, one item per line → `type='task'` | core |
 | `task_item(uid, item, state, comment, related, text, delete)` | One item, by id: its state (`todo` \| `doing` \| `done` \| `dropped`), a comment on it, memories linked to it, its text; or its deletion; the last close archives the task | core |
 | `task_add(uid, items)` | Append items to a task, one per line; a closed task reopens | core |
