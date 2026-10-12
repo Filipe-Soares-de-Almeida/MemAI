@@ -63,10 +63,10 @@ def test_an_archived_twin_is_not_a_collision(store):
 def test_consecutive_checkpoints_are_a_timeline_not_a_copy(store):
     """They share a skeleton by design; firing on every one would train the
     field to be ignored."""
-    server.checkpoint("fixture title", intent="ship the retry path", established="a", pursuing="b",
-                      open_questions="c", domain="acme/x100")
+    first = server.checkpoint("fixture title", intent="ship the retry path", established="a",
+                              pursuing="b", open_questions="c", domain="acme/x100")["uid"]
     res = server.checkpoint("fixture title", intent="ship the retry path", established="a2", pursuing="b",
-                            open_questions="c", domain="acme/x100")
+                            open_questions="c", domain="acme/x100", supersedes=first)
     assert "similar" not in res
 
 
