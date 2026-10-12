@@ -118,6 +118,13 @@ stored.
 
 ## 4. Recognising a superseded trail
 
+`checkpoint()` keeps **one active checkpoint per domain**: it refuses a second
+and archives the one named in `supersedes`. A trail of several in one domain
+therefore reaches the store some other way (an import, a dashboard edit), and
+one checkpoint past the dashboard's age limit is **overdue**: `pulse` and
+`must_read` list it under `overdue`, and memai refuses new writes under its
+domain until it is archived or superseded. Triage those first.
+
 Several checkpoints on the same domain in one session (`20260810T1423-1f4c`),
 narrating the same progression: the **last** by `created_at DESC` usually holds
 everything the earlier ones held and more. Confirm by reading the bodies with

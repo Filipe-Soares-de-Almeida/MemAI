@@ -190,7 +190,12 @@ def test_config_writes_one_setting_without_restating_the_other(client):
                     "warden_enabled": settings.WARDEN_ENABLED_DEFAULT,
                     "warden_minutes": lite.WARDEN_MINUTES_DEFAULT,
                     "task_ask_enabled": settings.TASK_ASK_ENABLED_DEFAULT,
-                    "task_ask_minutes": lite.TASK_ASK_MINUTES_DEFAULT}
+                    "task_ask_minutes": lite.TASK_ASK_MINUTES_DEFAULT,
+                    "checkpoint_block_enabled": settings.CHECKPOINT_BLOCK_ENABLED_DEFAULT,
+                    "checkpoint_days": settings.CHECKPOINT_DAYS_DEFAULT,
+                    "confidence_ask_enabled": settings.CONFIDENCE_ASK_ENABLED_DEFAULT,
+                    "confidence_ask_minutes": settings.CONFIDENCE_ASK_MINUTES_DEFAULT,
+                    "unverified_days": settings.UNVERIFIED_DAYS_DEFAULT}
 
 
 def test_config_rejects_an_empty_payload(client):

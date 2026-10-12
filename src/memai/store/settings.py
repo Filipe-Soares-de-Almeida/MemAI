@@ -141,3 +141,111 @@ def set_task_ask_minutes(conn: sqlite3.Connection, minutes: object) -> int:
         raise ValueError(f"task_ask_minutes must be between {low} and {high}")
     _set_meta(conn, TASK_ASK_MINUTES_KEY, str(value))
     return value
+
+
+def _flag(conn: sqlite3.Connection, key: str, default: bool) -> bool:
+    value = _get_meta(conn, key)
+    return default if value is None else value == "1"
+
+
+def _set_flag(conn: sqlite3.Connection, key: str, enabled: object) -> bool:
+    """Persist a switch. Accepts a bool or the strings a form sends."""
+    if isinstance(enabled, str):
+        enabled = enabled.strip().lower() not in ("", "0", "false", "off", "no")
+    _set_meta(conn, key, "1" if enabled else "0")
+    return bool(enabled)
+
+
+def _whole(conn: sqlite3.Connection, key: str, default: int, bounds: tuple[int, int]) -> int:
+    try:
+        value = int(_get_meta(conn, key) or "")
+    except ValueError:
+        return default
+    low, high = bounds
+    return value if low <= value <= high else default
+
+
+def _set_whole(conn: sqlite3.Connection, key: str, value: object, bounds: tuple[int, int],
+               unit: str) -> int:
+    low, high = bounds
+    try:
+        number = int(str(value).strip())
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{key} must be a whole number of {unit} "
+                         f"between {low} and {high}") from exc
+    if not low <= number <= high:
+        raise ValueError(f"{key} must be between {low} and {high}")
+    _set_meta(conn, key, str(number))
+    return number
+
+
+CHECKPOINT_BLOCK_ENABLED_KEY = "checkpoint_block_enabled"
+CHECKPOINT_BLOCK_ENABLED_DEFAULT = True
+CHECKPOINT_DAYS_KEY = "checkpoint_days"
+CHECKPOINT_DAYS_DEFAULT = 14
+CHECKPOINT_DAYS_RANGE = (1, 365)
+
+
+def get_checkpoint_block_enabled(conn: sqlite3.Connection) -> bool:
+    """Whether a checkpoint past its age limit refuses new writes in its domain.
+
+    Off keeps the overview's symptom and drops the refusal and the alerts.
+    """
+    return _flag(conn, CHECKPOINT_BLOCK_ENABLED_KEY, CHECKPOINT_BLOCK_ENABLED_DEFAULT)
+
+
+def set_checkpoint_block_enabled(conn: sqlite3.Connection, enabled: object) -> bool:
+    return _set_flag(conn, CHECKPOINT_BLOCK_ENABLED_KEY, enabled)
+
+
+def get_checkpoint_days(conn: sqlite3.Connection) -> int:
+    """How many days a checkpoint may stay active before it counts as overdue."""
+    return _whole(conn, CHECKPOINT_DAYS_KEY, CHECKPOINT_DAYS_DEFAULT, CHECKPOINT_DAYS_RANGE)
+
+
+def set_checkpoint_days(conn: sqlite3.Connection, days: object) -> int:
+    return _set_whole(conn, CHECKPOINT_DAYS_KEY, days, CHECKPOINT_DAYS_RANGE, "days")
+
+
+CONFIDENCE_ASK_ENABLED_KEY = "confidence_ask_enabled"
+CONFIDENCE_ASK_ENABLED_DEFAULT = True
+UNVERIFIED_DAYS_KEY = "unverified_days"
+UNVERIFIED_DAYS_DEFAULT = 30
+UNVERIFIED_DAYS_RANGE = (1, 365)
+CONFIDENCE_ASK_MINUTES_KEY = "confidence_ask_minutes"
+CONFIDENCE_ASK_MINUTES_DEFAULT = 60
+CONFIDENCE_ASK_MINUTES_RANGE = (1, 480)
+
+
+def get_confidence_ask_enabled(conn: sqlite3.Connection) -> bool:
+    """Whether MCP results now and then list memories left unverified too long."""
+    return _flag(conn, CONFIDENCE_ASK_ENABLED_KEY, CONFIDENCE_ASK_ENABLED_DEFAULT)
+
+
+def set_confidence_ask_enabled(conn: sqlite3.Connection, enabled: object) -> bool:
+    return _set_flag(conn, CONFIDENCE_ASK_ENABLED_KEY, enabled)
+
+
+def get_unverified_days(conn: sqlite3.Connection) -> int:
+    """How many days a memory may stay unverified before it counts as stale.
+
+    One span for the overview's symptom, the freshness axis and the MCP
+    reminder, so the number the dashboard shows is the set the agent is
+    asked about.
+    """
+    return _whole(conn, UNVERIFIED_DAYS_KEY, UNVERIFIED_DAYS_DEFAULT, UNVERIFIED_DAYS_RANGE)
+
+
+def set_unverified_days(conn: sqlite3.Connection, days: object) -> int:
+    return _set_whole(conn, UNVERIFIED_DAYS_KEY, days, UNVERIFIED_DAYS_RANGE, "days")
+
+
+def get_confidence_ask_minutes(conn: sqlite3.Connection) -> int:
+    """How long one server process waits between two confidence reminders."""
+    return _whole(conn, CONFIDENCE_ASK_MINUTES_KEY, CONFIDENCE_ASK_MINUTES_DEFAULT,
+                  CONFIDENCE_ASK_MINUTES_RANGE)
+
+
+def set_confidence_ask_minutes(conn: sqlite3.Connection, minutes: object) -> int:
+    return _set_whole(conn, CONFIDENCE_ASK_MINUTES_KEY, minutes, CONFIDENCE_ASK_MINUTES_RANGE,
+                      "minutes")

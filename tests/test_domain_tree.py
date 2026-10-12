@@ -351,9 +351,9 @@ def test_pulse_returns_only_the_newest_checkpoint(monkeypatch, tmp_path):
     monkeypatch.setenv("MEMAI_HOME", str(tmp_path))
     for i in range(3):
         server.checkpoint("fixture title", intent=f"i{i}", established="e", pursuing="p",
-                          open_questions="q", domain="acme/x100")
+                          open_questions="q", domain=f"acme/x100/p{i}")
     p = server.pulse(domain="acme")
-    assert p["latest_checkpoint"]["domain"] == "acme/x100"
+    assert p["latest_checkpoint"]["domain"] == "acme/x100/p2"
     assert "i2" in p["latest_checkpoint"]["content"]
     assert p["scope"]["by_type"]["checkpoint"] == 3
 

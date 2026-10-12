@@ -39,6 +39,7 @@ import json
 import logging
 import os
 import re
+import time
 
 from mcp.server.mcpserver import MCPServer
 from mcp.types import Tool as McpTool
@@ -64,6 +65,7 @@ from memai.store import (
     domains,
     memories,
     optimizer,
+    overdue,
     paths,
     projects,
     relations,
@@ -362,9 +364,12 @@ def tool(group: str, hints: ToolAnnotations):
                 inspect.cleandoc(doc), inspect.signature(fn).parameters)
         fn.__doc__ = doc
 
+        signature = inspect.signature(fn)
+
         @functools.wraps(fn)
         def bounded(*args, **kwargs):
-            result = fn(*args, **kwargs)
+            domain = signature.bind_partial(*args, **kwargs).arguments.get("domain", "")
+            result = _with_confidence_reminder(fn(*args, **kwargs), domain)
             size = budget.result_chars(result)
             if size <= budget.MCP_RESULT_MAX_CHARS:
                 return result
@@ -567,6 +572,85 @@ def _write_result(conn, uid: str, warning: dict | None, also: str,
     return result
 
 
+OVERDUE_ALERT = (
+    "ALERT -- tell the user: {n} checkpoint(s) here stayed open past the {days}-day limit, "
+    "the oldest for {age} days. memai refuses new writes in their domains until each is "
+    "settled. For each one, get_memory(uid) and decide whether its work is done: if it "
+    "is, forget(uid, reason='...'); if not, write the bearing that still holds with "
+    "checkpoint(..., domain=<its domain>, supersedes='<uid>'), which archives it.")
+
+OVERDUE_SHOWN = 10
+
+
+def _overdue(conn, rows: list) -> dict:
+    """The `overdue` block of a result: the alert, the limit, and the checkpoints it names."""
+    days = settings.get_checkpoint_days(conn)
+    shown = [overdue.header(r) for r in rows[:OVERDUE_SHOWN]]
+    return {"alert": OVERDUE_ALERT.format(n=len(rows), days=days, age=shown[0]["age_days"]),
+            "days": days, "total": len(rows), "checkpoints": shown}
+
+
+def _blocked(conn, domain: str) -> dict | None:
+    """The refusal a write filed at `domain` gets while an overdue checkpoint covers it."""
+    rows = overdue.blocking_checkpoints(conn, domain)
+    if not rows:
+        return None
+    return {**_errors([f"refused: '{domain}' sits under a checkpoint past its age limit; "
+                       "nothing was written. Settle it as `overdue.alert` says, then "
+                       "repeat this call."]),
+            "overdue": _overdue(conn, rows)}
+
+
+CONFIDENCE_REMINDER_SHOWN = 5
+
+CONFIDENCE_HINT = (
+    "these stayed unverified for over {days} days ({total} in all). Where this session's "
+    "evidence -- the code, a run, a source -- settles one, set_confidence(uid, "
+    "'confirmed'|'contradicted'); leave the rest. Nothing is refused for them.")
+
+# project -> the time.monotonic() before which this process attaches no reminder; also how
+# seldom a switched-off reminder rereads its switch, since every check opens the store
+_NEXT_REMINDER: dict[str, float] = {}
+REMINDER_RECHECK_SECONDS = 60
+
+
+def _with_confidence_reminder(result, domain):
+    """`result` with the memories left unverified past the limit, now and then.
+
+    At most once per interval per server process and project, so a session
+    meets it sporadically rather than on every call. A refusal is left
+    alone: the agent has that to deal with first.
+    """
+    if not isinstance(result, dict) or result.get("ok") is False:
+        return result
+    project = paths.active_project()
+    now = time.monotonic()
+    if now < _NEXT_REMINDER.get(project, 0.0):
+        return result
+    domain = domain if isinstance(domain, str) else ""
+    with connection.connect() as conn:
+        if not settings.get_confidence_ask_enabled(conn):
+            _NEXT_REMINDER[project] = now + REMINDER_RECHECK_SECONDS
+            return result
+        interval = settings.get_confidence_ask_minutes(conn) * 60
+        total, rows = overdue.unverified_past_limit(
+            conn, domain=domain, limit=CONFIDENCE_REMINDER_SHOWN)
+        if not total and domain:
+            total, rows = overdue.unverified_past_limit(conn, limit=CONFIDENCE_REMINDER_SHOWN)
+        days = settings.get_unverified_days(conn)
+    if not total:
+        _NEXT_REMINDER[project] = now + interval
+        return result
+    reminded = {**result, "confidence_reminder": {
+        "hint": CONFIDENCE_HINT.format(days=days, total=total),
+        "memories": [overdue.header(r, since="updated_at") for r in rows]}}
+    # a result already near the ceiling goes out bare, and the next call carries the reminder
+    if budget.result_chars(reminded) > budget.MCP_RESULT_MAX_CHARS:
+        return result
+    _NEXT_REMINDER[project] = now + interval
+    return reminded
+
+
 @tool("core", ADD)
 def note(title: str, content: str, domain: str = "", also: str = "", tags: str = "",
          session: str = "", review_after: str = "", source_ref: str = "") -> dict:
@@ -601,6 +685,8 @@ def note(title: str, content: str, domain: str = "", also: str = "", tags: str =
     """
     with connection.connect() as conn:
         domain, warning = _coerce_domain(conn, domain)
+        if refusal := _blocked(conn, domain):
+            return refusal
         uid = memories.insert_memory(conn, type=TYPE_NOTE, content=content, title=title,
                                domain=domain, also=also, session=session or SESSION,
                                tags=tags, review_after=review_after,
@@ -619,6 +705,7 @@ def checkpoint(
     domain: str = "",
     also: str = "",
     tags: str = "",
+    supersedes: str = "",
 ) -> dict:
     """Snapshot current working state (intent/established/pursuing/open_questions).
 
@@ -630,6 +717,16 @@ def checkpoint(
     link_memories(); pulse() returns the latest checkpoint IN FULL, so
     every session pays for whatever was parked in these fields. Stored as
     type='checkpoint'.
+
+    A domain holds ONE active checkpoint. While one is already filed at
+    `domain`, the call is refused and nothing is written: the refusal
+    lists it under `checkpoints`. Read it with get_memory(uid) and decide
+    whether its work is done. Done: forget(uid, reason='...'), then call
+    again. Not done: carry what still holds into these fields and call
+    again with supersedes='<uid>', which archives it as superseded by the
+    new one. A checkpoint past the age limit set in the dashboard refuses
+    every write under its domain the same way, flagged `overdue`, until
+    it is settled.
 
     @param title
 
@@ -649,17 +746,75 @@ def checkpoint(
     @param also
 
     @param tags
+
+    supersedes: the active checkpoints this one replaces, comma-separated
+    uids: every one already filed at `domain`, and every overdue one above
+    it that a refusal named. Each is archived with this one as its
+    successor.
     """
     content = sections.render(TYPE_CHECKPOINT, {
         "intent": intent, "established": established,
         "pursuing": pursuing, "open_questions": open_questions})
+    replaced = list(dict.fromkeys(u.strip() for u in supersedes.split(",") if u.strip()))
     with connection.connect() as conn:
         domain, warning = _coerce_domain(conn, domain)
+        if errors := _supersede_errors(conn, replaced):
+            return _errors(errors)
+        if refusal := _checkpoint_refusal(conn, domain, set(replaced)):
+            return refusal
         uid = memories.insert_memory(
             conn, type=TYPE_CHECKPOINT, content=content, title=title,
             domain=domain, also=also, session=session or SESSION, tags=tags,
         )
-        return _write_result(conn, uid, warning, also, tags)
+        for old in replaced:
+            memories.set_status(conn, old, "archived", superseded_by=uid,
+                                note=f"archived: superseded by checkpoint {uid}")
+            relations.add_relation(conn, uid, old, "supersedes")
+        result = _write_result(conn, uid, warning, also, tags)
+        if replaced:
+            result["superseded"] = replaced
+        return result
+
+
+def _supersede_errors(conn, uids: list[str]) -> list[str]:
+    """Why each uid in `supersedes` cannot be replaced: unknown, no checkpoint, or not active."""
+    errors = []
+    for uid in uids:
+        row = memories.get_memory(conn, uid)
+        if row is None:
+            errors.append(f"supersedes: no memory {uid}")
+        elif row["type"] != TYPE_CHECKPOINT:
+            errors.append(f"supersedes: {uid} is a {row['type']}, not a checkpoint")
+        elif row["status"] != "active":
+            errors.append(f"supersedes: {uid} is already {row['status']}")
+    return errors
+
+
+CHECKPOINT_REFUSAL = (
+    "refused: nothing was written. One domain keeps one active checkpoint -- two bearings "
+    "for one subject is how sessions end up working from different plans -- and each one "
+    "under `checkpoints` is still active. Read it with get_memory(uid) and decide whether "
+    "its work is done. Done: forget(uid, reason='...'). Not done: carry what still holds "
+    "into this checkpoint's fields and call checkpoint() again with supersedes='<uid>', "
+    "which archives it as superseded by the new one. One flagged `overdue` stayed open "
+    "past the age limit: tell the user.")
+
+
+def _checkpoint_refusal(conn, domain: str, replaced: set[str]) -> dict | None:
+    """The refusal a new checkpoint at `domain` gets, or None when nothing stands in its way.
+
+    In its way: an active checkpoint filed at the same path, and an overdue
+    one at the path or above it -- each unless `replaced` names it.
+    """
+    late = {r["uid"]: r for r in overdue.blocking_checkpoints(conn, domain)}
+    rows = {r["uid"]: r for r in overdue.checkpoints_in(conn, domain)} | late
+    standing = sorted((r for uid, r in rows.items() if uid not in replaced),
+                      key=lambda r: r["created_at"])
+    if not standing:
+        return None
+    return {**_errors([CHECKPOINT_REFUSAL]),
+            "checkpoints": [{**overdue.header(r), "overdue": r["uid"] in late}
+                            for r in standing]}
 
 
 @tool("core", ADD)
@@ -710,6 +865,8 @@ def anti_pattern(
         "pattern": pattern, "why_wrong": why_wrong, "instead": instead})
     with connection.connect() as conn:
         domain, warning = _coerce_domain(conn, domain)
+        if refusal := _blocked(conn, domain):
+            return refusal
         uid = memories.insert_memory(
             conn, type=TYPE_ANTI_PATTERN, content=content, title=title,
             domain=domain, also=also, session=session or SESSION, tags=tags,
@@ -770,6 +927,8 @@ def reasoning(
         "revised_belief": revised_belief, "next_time": next_time})
     with connection.connect() as conn:
         domain, warning = _coerce_domain(conn, domain)
+        if refusal := _blocked(conn, domain):
+            return refusal
         uid = memories.insert_memory(conn, type=TYPE_REASONING, content=content, title=title,
                                domain=domain, also=also, session=session or SESSION,
                                tags=tags,
@@ -822,6 +981,8 @@ def task(title: str, goal: str, items: str, domain: str = "", also: str = "",
     try:
         with connection.connect() as conn:
             domain, warning = _coerce_domain(conn, domain)
+            if refusal := _blocked(conn, domain):
+                return refusal
             lines = tasks.split_items(items)
             uid = tasks.create_task(conn, title=title, goal=goal, items=lines,
                                     domain=domain, also=also, tags=tags,
@@ -1123,6 +1284,8 @@ def diagram(
     """
     with connection.connect() as conn:
         domain, warning = _coerce_domain(conn, domain)
+        if refusal := _blocked(conn, domain):
+            return refusal
         uid, errors = diagram_persist.insert_diagram(
             conn, title=title, nodes=nodes, edges=edges, summary=summary,
             kind=kind, domain=domain, also=also, session=session or SESSION, tags=tags,
@@ -1823,6 +1986,10 @@ def must_read(domain: str = "", type: str = "", limit: int = 10, offset: int = 0
     Pending means: a task that is open; an active anti_pattern, handoff or
     note that is not contradicted; an active diagram.
 
+    `overdue`, present only when non-empty, lists the checkpoints in scope
+    that stayed open past the age limit, with an `alert` to relay to the
+    user: memai refuses new writes under each until it is settled.
+
     domain: covers its subdomains and what is cross-listed there; empty is
     the whole project. A pin is in scope when it is global, or when the
     memory's domain or one of its also paths is the asked domain or above
@@ -1843,21 +2010,25 @@ def must_read(domain: str = "", type: str = "", limit: int = 10, offset: int = 0
         return _errors([error])
     with connection.connect() as conn:
         if not type:
-            result = {"categories": pending_lists.counts(conn, domain)}
+            result: dict = {"categories": pending_lists.counts(conn, domain)}
             pins = pending_lists.pinned_counts(conn, domain)
             if pins:
                 result["pinned"] = pins
-            return result
-        try:
-            page = {"limit": int(limit), "offset": int(offset)}
-        except (TypeError, ValueError):
-            return _errors(["limit and offset must be a whole number, "
-                            f"got limit={limit!r} offset={offset!r}"])
-        result = pending_lists.headers(conn, domain, type, pinned=bool(pinned), **page)
-        _read(conn, result["items"])
+        else:
+            try:
+                page = {"limit": int(limit), "offset": int(offset)}
+            except (TypeError, ValueError):
+                return _errors(["limit and offset must be a whole number, "
+                                f"got limit={limit!r} offset={offset!r}"])
+            result = pending_lists.headers(conn, domain, type, pinned=bool(pinned), **page)
+            _read(conn, result["items"])
+        if late := overdue.alerting_checkpoints(conn, domain):
+            result["overdue"] = _overdue(conn, late)
     return result
 
 
+READ_NEXT_OVERDUE = ("Settle the checkpoints under `overdue` as its `alert` says, and tell "
+                     "the user about them; memai refuses new writes under each until then.")
 READ_NEXT_PINNED = ("Read every pinned memory: for each type in `pinned`, call "
                     "must_read({domain}type=<t>, pinned=true), then get_memory(uid) on each "
                     "one. Skip none.")
@@ -1867,13 +2038,15 @@ READ_NEXT_OTHERS = ("Scan the rest: for each {other}type in `must_read`, call "
                     "must_read({domain}type=<t>) and read the titles it lists.")
 
 
-def _read_next(domain: str, categories: list[dict], pinned: list[dict]) -> str:
-    """The reading order for what is pending and pinned, or "" when nothing is.
+def _read_next(domain: str, categories: list[dict], pinned: list[dict],
+               late: bool = False) -> str:
+    """The reading order for what is overdue, pending and pinned, or "" when nothing is.
 
     One step reads as a single sentence; several are numbered in the order to run them.
     """
     has_tasks = bool(categories) and categories[0]["type"] == TYPE_TASK
-    steps = [READ_NEXT_PINNED] if pinned else []
+    steps = [READ_NEXT_OVERDUE] if late else []
+    steps += [READ_NEXT_PINNED] if pinned else []
     steps += [READ_NEXT_TASKS] if has_tasks else []
     if len(categories) > has_tasks:
         steps.append(READ_NEXT_OTHERS)
@@ -1891,7 +2064,10 @@ def _read_next(domain: str, categories: list[dict], pinned: list[dict]) -> str:
 def pulse(domain: str = "", offset: int = 0) -> dict:
     """Session warm-up: the latest checkpoint, what is pending, and what to read next.
 
-    Returns {project, latest_checkpoint, must_read, pinned, read_next, scope}.
+    Returns {project, latest_checkpoint, must_read, pinned, read_next, scope},
+    plus `overdue` when a checkpoint in scope stayed open past the age
+    limit -- the same block must_read() carries, and read_next then puts
+    settling it first.
 
     latest_checkpoint is picked by created_at DESC, never by similarity --
     a similarity-ranked top-1 can return a stale checkpoint over a
@@ -1951,6 +2127,8 @@ def pulse(domain: str = "", offset: int = 0) -> dict:
                                               exclude_contradicted=True)
         categories = pending_lists.counts(conn, domain)
         pins = pending_lists.pinned_counts(conn, domain)
+        late = overdue.alerting_checkpoints(conn, domain)
+        late_block = _overdue(conn, late) if late else None
         checkpoint_dict = _row_to_dict(latest_checkpoint)
         if checkpoint_dict:
             # Returned whole up to one piece of a page, so its est_tokens is what this response
@@ -1967,10 +2145,11 @@ def pulse(domain: str = "", offset: int = 0) -> dict:
             _read(conn, [latest_checkpoint])
     return {
         "project": paths.active_project(),
+        **({"overdue": late_block} if late_block else {}),
         "latest_checkpoint": checkpoint_dict,
         "must_read": categories,
         "pinned": pins,
-        "read_next": _read_next(domain, categories, pins),
+        "read_next": _read_next(domain, categories, pins, bool(late)),
         "scope": {
             "domain": domain,
             "paths": census["paths"],
@@ -2294,6 +2473,11 @@ def set_confidence(uid: str, confidence: str) -> dict:
     and of the checkpoint pulse() returns, so a claim known to be wrong
     stops steering work while it stays readable; unverified and confirmed
     rank alike. To correct the text, edit_memory(); to retire it, forget().
+
+    Now and then a result of any memai tool carries `confidence_reminder`:
+    memories still unverified past the span set in the dashboard, those in
+    the call's domain first. Settle the ones this session's evidence
+    reaches; it refuses nothing.
 
     Returns {"ok": True}, {"ok": False} for an unknown uid, or an error for
     any other value.

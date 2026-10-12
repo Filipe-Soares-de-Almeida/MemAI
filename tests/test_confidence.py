@@ -61,7 +61,7 @@ def test_pulse_falls_through_to_a_sound_checkpoint(store):
     good = server.checkpoint("fixture title", intent="i", established="e", pursuing="p",
                              open_questions="q", domain="acme/x100")["uid"]
     bad = server.checkpoint("fixture title", intent="i2", established="e2", pursuing="p2",
-                            open_questions="q2", domain="acme/x100")["uid"]
+                            open_questions="q2", domain="acme/x100/p200")["uid"]
     server.set_confidence(bad, "contradicted")
     assert server.pulse("acme/x100")["latest_checkpoint"]["uid"] == good
 

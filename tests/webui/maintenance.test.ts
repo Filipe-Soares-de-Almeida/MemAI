@@ -51,7 +51,9 @@ const health = (extra: Record<string, unknown> = {}) => ({
 const archives = [{ name: 'Acme-2026-W30.zip', size: 300, mtime: ago(60), count: 1, raw: 800,
                     members: [{ name: 'Acme-20260721-101010.db', size: 800, mtime: ago(70) }] }];
 const config = { domain_case: '', svg_retention: '7d', warden_enabled: true, warden_minutes: 20,
-                 task_ask_enabled: false, task_ask_minutes: 60, sections: {} };
+                 task_ask_enabled: false, task_ask_minutes: 60, checkpoint_block_enabled: true,
+                 checkpoint_days: 30, confidence_ask_enabled: false, confidence_ask_minutes: 120,
+                 unverified_days: 60, sections: {} };
 
 type Call = { method: string; body?: Record<string, unknown> };
 type Answer = (path: string, call: Call) => unknown;
@@ -343,6 +345,20 @@ describe('the warden tab', () => {
     await press(view.querySelector('#wdOn'));
     await press(document.querySelector('.pick-pop [role="option"][data-v="off"]'));
     expect(posts('/api/config')[0].body).toEqual({ warden_enabled: false });
+  });
+
+  it('shows the checkpoint block and the confidence reminder as stored', async () => {
+    const view = await show('warden', store((path, call) => path === '/api/config' && call.method === 'POST'
+      ? { ...config, checkpoint_days: 7 } : undefined));
+    expect(view.querySelector('#cbOn')?.getAttribute('data-v')).toBe('on');
+    expect(view.querySelector('#cbDays')?.getAttribute('data-v')).toBe('30');
+    expect(view.querySelector('#caOn')?.getAttribute('data-v')).toBe('off');
+    expect(view.querySelector('#caDays')?.getAttribute('data-v')).toBe('60');
+    expect(view.querySelector('#caEvery')?.getAttribute('data-v')).toBe('120');
+
+    await press(view.querySelector('#cbDays'));
+    await press(document.querySelector('.pick-pop [role="option"][data-v="7"]'));
+    expect(posts('/api/config')[0].body).toEqual({ checkpoint_days: 7 });
   });
 });
 

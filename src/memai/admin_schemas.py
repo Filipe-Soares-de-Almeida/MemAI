@@ -33,6 +33,7 @@ class Symptom(TypedDict):
     share: float
     params: dict[str, str]
     of: NotRequired[int]
+    days: NotRequired[int]
 
 
 class DayCount(TypedDict):
@@ -544,6 +545,11 @@ class ConfigSaved(TypedDict):
     warden_minutes: int
     task_ask_enabled: bool
     task_ask_minutes: int
+    checkpoint_block_enabled: bool
+    checkpoint_days: int
+    confidence_ask_enabled: bool
+    confidence_ask_minutes: int
+    unverified_days: int
 
 
 class Config(ConfigSaved):

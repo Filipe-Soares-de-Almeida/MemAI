@@ -7,6 +7,7 @@ import sqlite3
 from datetime import date, datetime, timedelta
 
 from memai.lite import now_iso
+from memai.store.settings import get_checkpoint_days, get_unverified_days
 
 # `review_after` is the writer's estimate of when a claim stops being safe unchecked; a date, so
 # "what is overdue" is a comparison a warm-up can make without reading.
@@ -46,19 +47,21 @@ def _due_clause(at: str | None = None) -> tuple[str, list]:
     return "review_after <> '' AND review_after <= ?", [at or today_iso()]
 
 
-# How long a memory nobody has vetted may sit before it counts as stale.
-# Deliberately the same span the writing tools suggest for review_after.
-STALE_DAYS = 90
+def days_before(today: str, days: int) -> str:
+    """The instant `days` whole days before `today`, comparable with a stored timestamp."""
+    return (datetime.fromisoformat(today) - timedelta(days=days)).isoformat()
 
-# The health axes, each the share of ACTIVE memories satisfying its SQL (written out to be read):
-# curation (confirmed), connectivity, freshness (STALE_DAYS) and organization.
+
+# The health axes, each the share of ACTIVE memories satisfying its SQL: curation (confirmed),
+# connectivity, freshness (the unverified and checkpoint spans in settings) and organization.
 _HEALTH_AXES: tuple[tuple[str, str], ...] = (
     ("curation", "confidence = 'confirmed'"),
     ("connectivity",
      "uid IN (SELECT from_uid FROM relations UNION SELECT to_uid FROM relations)"),
     ("freshness",
      "(review_after = '' OR review_after > :today) "
-     "AND NOT (confidence = 'unverified' AND updated_at < :stale)"),
+     "AND NOT (confidence = 'unverified' AND updated_at < :stale) "
+     "AND NOT (type = 'checkpoint' AND created_at < :checkpoint)"),
     ("organization",
      "TRIM(title) <> '' AND TRIM(tags) <> '' AND TRIM(tags) <> type "
      "AND TRIM(domain) <> ''"),
@@ -73,7 +76,9 @@ def health_axes(conn: sqlite3.Connection, *, at: str | None = None) -> dict:
     it, and 0 would read as a store in trouble on the day it is created.
     """
     today = at or today_iso()
-    stale = (datetime.fromisoformat(today) - timedelta(days=STALE_DAYS)).isoformat()
+    spans = {"today": today,
+             "stale": days_before(today, get_unverified_days(conn)),
+             "checkpoint": days_before(today, get_checkpoint_days(conn))}
     active = conn.execute(
         "SELECT COUNT(*) FROM memories WHERE status = 'active'").fetchone()[0]
     axes = {}
@@ -83,7 +88,7 @@ def health_axes(conn: sqlite3.Connection, *, at: str | None = None) -> dict:
             continue
         met = conn.execute(
             f"SELECT COUNT(*) FROM memories WHERE status = 'active' AND ({clause})",
-            {"today": today, "stale": stale}).fetchone()[0]
+            spans).fetchone()[0]
         axes[name] = round(met * 100 / active)
     return {"score": round(sum(axes.values()) / len(axes)), "axes": axes, "active": active}
 

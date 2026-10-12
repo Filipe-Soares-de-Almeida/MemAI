@@ -16,7 +16,7 @@ from starlette.testclient import TestClient
 from memai import lite
 from memai.admin.app import app as admin_app
 from memai.admin.routes.overview import HEALTH_DELTA_DAYS
-from memai.store import connection, health, memories, paths, relations
+from memai.store import connection, health, memories, paths, relations, settings
 from memai.store.diagrams import persist as diagram_persist
 
 
@@ -82,7 +82,7 @@ def test_freshness_drops_on_an_overdue_review_and_on_a_stale_unverified(client):
     with connection.connect() as conn:
         _add(conn, confidence="confirmed")                       # fine
         _add(conn, confidence="confirmed", review_after="2020-01-01")   # overdue
-        _add(conn, confidence="unverified", created_at=_ago(health.STALE_DAYS + 5))
+        _add(conn, confidence="unverified", created_at=_ago(settings.UNVERIFIED_DAYS_DEFAULT + 5))
         _add(conn, confidence="unverified")                      # young enough
     axes = client.get("/api/overview").json()["health"]["axes"]
     assert axes["freshness"] == 50
@@ -159,7 +159,7 @@ def _symptom(data, key):
 def test_symptom_counts(client):
     with connection.connect() as conn:
         _add(conn, confidence="contradicted")
-        _add(conn, confidence="unverified", created_at=_ago(health.STALE_DAYS + 1))
+        _add(conn, confidence="unverified", created_at=_ago(settings.UNVERIFIED_DAYS_DEFAULT + 1))
         _add(conn, confidence="confirmed", review_after="2020-01-01")
         _add(conn, confidence="confirmed", title="")
     data = client.get("/api/overview").json()
@@ -235,7 +235,7 @@ def test_every_symptom_filter_lists_exactly_what_it_counted(client):
     """The number on the dashboard and the list its button opens are one set."""
     with connection.connect() as conn:
         _add(conn, confidence="contradicted")
-        _add(conn, confidence="unverified", created_at=_ago(health.STALE_DAYS + 1))
+        _add(conn, confidence="unverified", created_at=_ago(settings.UNVERIFIED_DAYS_DEFAULT + 1))
         _add(conn, confidence="confirmed", review_after="2020-01-01")
         _add(conn, confidence="confirmed", title="")
         a, b = _add(conn), _add(conn)

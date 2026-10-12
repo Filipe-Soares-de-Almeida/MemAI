@@ -6,7 +6,7 @@ export const PAGE = 50;
 
 /* Handed over by a Health symptom (admin._defect_clauses) and taken off by their chips; never
    offered as a filter of their own. */
-export const DEFECTS = ['linked', 'due', 'stale', 'untitled', 'untagged'] as const;
+export const DEFECTS = ['linked', 'due', 'stale', 'overdue', 'untitled', 'untagged'] as const;
 
 export interface Filters {
   q: string;
@@ -22,6 +22,7 @@ export interface Filters {
   linked: string;
   due: string;
   stale: string;
+  overdue: string;
   untitled: string;
   untagged: string;
   sort: string;
@@ -35,8 +36,8 @@ export function readFilters(params: URLSearchParams): Filters {
     q: get('q'), domain: get('domain'), type: get('type'),
     status: params.has('status') ? get('status') : 'active',
     confidence: get('confidence'), pin: get('pin'), task_state: get('task_state'), session: get('session'),
-    linked: get('linked'), due: get('due'), stale: get('stale'), untitled: get('untitled'),
-    untagged: get('untagged'),
+    linked: get('linked'), due: get('due'), stale: get('stale'), overdue: get('overdue'),
+    untitled: get('untitled'), untagged: get('untagged'),
     sort: get('sort') || 'created_at', dir: get('dir') || 'desc',
     page: parseInt(get('page') || '0', 10) || 0,
   };
@@ -48,7 +49,8 @@ export function listFilter(f: Filters): Record<string, string> {
     q: f.q, domain: f.domain, type: f.type, status: f.status, confidence: f.confidence, pin: f.pin,
     session: f.session, sort: f.sort, dir: f.dir,
     task_state: f.type === 'task' ? f.task_state : '',
-    linked: f.linked, due: f.due, stale: f.stale, untitled: f.untitled, untagged: f.untagged,
+    linked: f.linked, due: f.due, stale: f.stale, overdue: f.overdue, untitled: f.untitled,
+    untagged: f.untagged,
   };
 }
 
