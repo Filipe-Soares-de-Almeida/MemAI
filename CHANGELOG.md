@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.15.0](https://github.com/Filipe-Soares-de-Almeida/MemAI/compare/v0.14.0...v0.15.0) (2026-10-12)
+
+
+### ⚠ BREAKING CHANGES
+
+* **tasks:** the `items` of task() and task_add() and the `doing` of a must_read() task header are lists of {id, n} instead of lists of ids.
+
+### Features
+
+* **tasks:** task results carry each item's number beside its id, and an item is named to a person as item n of its task ([#107](https://github.com/Filipe-Soares-de-Almeida/MemAI/issues/107)) ([ae7a851](https://github.com/Filipe-Soares-de-Almeida/MemAI/commit/ae7a851a3072741d44ad821a5fe062ba34433a34))
+
 ## [0.14.0](https://github.com/Filipe-Soares-de-Almeida/MemAI/compare/v0.13.0...v0.14.0) (2026-10-12)
 
 
