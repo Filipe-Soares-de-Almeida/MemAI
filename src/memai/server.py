@@ -93,7 +93,10 @@ its own body; set_confidence(uid, 'confirmed'|'contradicted') closes it
 once the evidence turns up. must_read() says which memories wait to be read
 in a scope -- open tasks first (task() files one), then pitfalls, handoffs,
 notes and flows; work an open task with task_item() and it closes itself
-once every item is done or dropped. `pinned` in must_read() counts memories a
+once every item is done or dropped. An item's id and [[#id]] are for memai
+alone: to a person -- a reply, a file, a commit -- an item is item n of its
+task, named by the task's title, since nothing a person reads shows the id.
+`pinned` in must_read() counts memories a
 person marked as mandatory reading: list them with must_read(type=...,
 pinned=true) and open every one before acting.
 
@@ -255,9 +258,9 @@ _PARAM_TEXT: dict[str, dict[str, str]] = {}
 # replaced by the entry, at that line's indentation.
 PARAM_DOCS: dict[str, str] = {
     "cite_rule": """\
-Cite another item in free text as [[#id]], with the id task_read(part='items')
-lists; it reads back as the item's current number and label. A label -- a
-title or an item's text -- never carries one.""",
+Free text cites another item as [[#id]], which reads back as its current
+number and label; a label -- a title, an item's text -- never carries one.
+To a person, name it item n of its task.""",
     "offset": """\
 offset: where the page starts; `next_offset`, when present, starts the next.""",
     "title": """\
@@ -969,7 +972,7 @@ def task(title: str, goal: str, items: str, domain: str = "", also: str = "",
     Each is a short label, verb first, at most 80 characters: lists and
     every DEPENDS ON that names it show it whole, so its detail goes in the
     item's brief (task_note). Each gets an id, which task_item() takes
-    back; the result lists them in order.
+    back; the result lists them in order, with their numbers `n`.
 
     @param also
 
@@ -989,7 +992,7 @@ def task(title: str, goal: str, items: str, domain: str = "", also: str = "",
                                     domain=domain, also=also, tags=tags,
                                     session=session or SESSION)
             result = _write_result(conn, uid, warning, also, tags)
-            result["items"] = tasks.item_ids(conn, uid)
+            result["items"] = tasks.numbered(conn, uid, tasks.item_ids(conn, uid))
     except ValueError as exc:
         return _errors([str(exc)])
     return result
@@ -1026,6 +1029,8 @@ def task_item(uid: str, item: int, state: str = "", comment: str = "",
     Give at least one of text, state, comment and related, or delete. They
     apply together, or not at all.
 
+    The result names the item's number `n` and the task's `title`.
+
     @param cite_rule
     """
     edits = any(str(v).strip() for v in (text, state, comment, related))
@@ -1057,11 +1062,12 @@ def task_item(uid: str, item: int, state: str = "", comment: str = "",
             head = tasks.get_task(conn, uid)
             if head is None:
                 raise ValueError(f"no task {uid}")
-            current = next(i["state"] for i in head["items"] if i["id"] == item_id)
+            current = next(i for i in head["items"] if i["id"] == item_id)
+            row = memories.memory_row(conn, uid)
             result = {
-                "uid": uid, "item": item_id, "state": current,
-                "progress": tasks.progress(conn, uid), "task_state": head["state"],
-                "archived": memories.memory_row(conn, uid)["status"] == "archived",
+                "uid": uid, "item": item_id, "n": current["n"], "title": row["title"],
+                "state": current["state"], "progress": tasks.progress(conn, uid),
+                "task_state": head["state"], "archived": row["status"] == "archived",
             }
     except ValueError as exc:
         return _errors([str(exc)])
@@ -1077,8 +1083,8 @@ def task_add(uid: str, items: str) -> dict:
 
     @param cite_rule
 
-    Returns {"uid", "items", "progress", "task_state", "archived"}: the ids
-    the new items got, and the task as it stands.
+    Returns {"uid", "items", "progress", "task_state", "archived"}: the new
+    items' ids and numbers `n`, and the task as it stands.
 
     uid: the task.
 
@@ -1088,9 +1094,10 @@ def task_add(uid: str, items: str) -> dict:
     try:
         with connection.connect() as conn:
             added = tasks.add_items(conn, uid, tasks.split_items(items), session=SESSION)
+            numbered = tasks.numbered(conn, uid, added["ids"])
     except ValueError as exc:
         return _errors([str(exc)])
-    return {"uid": uid, "items": added["ids"], "progress": added["progress"],
+    return {"uid": uid, "items": numbered, "progress": added["progress"],
             "task_state": added["task_state"], "archived": added["archived"]}
 
 
@@ -1975,8 +1982,8 @@ def must_read(domain: str = "", type: str = "", limit: int = 10, offset: int = 0
     person pinned as mandatory reading -- when any pin is in scope. A pinned
     memory still counts in its category. With type: {"type", "total",
     "items", "next_offset"} -- one page of headers (uid, title, domain,
-    tags, est_tokens; a task adds `progress` {done, total} and `doing`, the
-    ids of its items in progress), newest first, a task by its latest item
+    tags, est_tokens; a task adds `progress` {done, total} and `doing`, its
+    items in progress as {id, n}), newest first, a task by its latest item
     update. Open a header with get_memory(uid). A page holds at most `limit`
     headers and ends early at the size budget; `next_offset` is absent on
     the last page.

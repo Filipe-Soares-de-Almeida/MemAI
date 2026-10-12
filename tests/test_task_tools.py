@@ -26,10 +26,15 @@ def _task(**over) -> dict:
     return server.task(**{**args, **over})
 
 
+def _ids(made: dict) -> list[int]:
+    return [i["id"] for i in made["items"]]
+
+
 def test_task_creates_and_reports_item_ids(store):
     result = _task()
     assert result["uid"]
-    assert result["items"] == [item_of(result["uid"], 1), item_of(result["uid"], 2)]
+    assert result["items"] == [{"id": item_of(result["uid"], 1), "n": 1},
+                               {"id": item_of(result["uid"], 2), "n": 2}]
     assert server.get_memory(result["uid"])["type"] == "task"
 
 
@@ -129,7 +134,7 @@ def test_closing_the_last_item_reports_archived(store):
 def test_task_add_and_task_comment(store):
     uid = _task()["uid"]
     added = server.task_add(uid, "ship the docs")
-    assert added["items"] == [item_of(uid, 3)]
+    assert added["items"] == [{"id": item_of(uid, 3), "n": 3}]
     assert added["progress"] == {"done": 0, "dropped": 0, "total": 3}
     assert added["task_state"] == "open" and added["archived"] is False
     comment = server.task_comment(uid, "blocked on review")
@@ -258,7 +263,7 @@ def _filler():
 
 def test_task_returns_the_item_ids_and_task_item_takes_one(store):
     made = _task()
-    first, second = made["items"]
+    first, second = _ids(made)
     assert isinstance(first, int) and second > first
     out = server.task_item(made["uid"], second, state="done")
     assert out["item"] == second and out["state"] == "done"
@@ -269,25 +274,25 @@ def test_a_shown_number_is_answered_with_the_id_at_that_position(store):
     made = _task()
     out = server.task_item(made["uid"], 2, state="done")
     assert out["ok"] is False
-    assert f"item 2 on the list is {made['items'][1]}" in out["errors"][0]
+    assert f"item 2 on the list is {_ids(made)[1]}" in out["errors"][0]
 
 
 def test_task_read_lists_ids_with_their_numbers(store):
     made = _task()
     page = server.task_read(made["uid"], "items")
-    assert [(r["id"], r["n"]) for r in page["records"]] == [(made["items"][0], 1), (made["items"][1], 2)]
+    assert [(r["id"], r["n"]) for r in page["records"]] == [(_ids(made)[0], 1), (_ids(made)[1], 2)]
 
 
 def test_a_delete_stands_alone_and_needs_no_expect(store):
     made = _task()
-    out = server.task_item(made["uid"], made["items"][0], delete=True)
+    out = server.task_item(made["uid"], _ids(made)[0], delete=True)
     assert out["deleted"] is True and "renumbered" not in out
     assert server.task_read(made["uid"], "items")["records"][0]["n"] == 1
 
 
 def test_task_note_takes_ids_and_depends_on_ids(store):
     made = _task()
-    a, b = made["items"]
+    a, b = _ids(made)
     out = server.task_note(made["uid"], title="Lexer", items=str(b), goal="g", context="c",
                            steps="s", pitfalls="p", done_when="d", depends_on=f"{a} (the spec)")
     assert "errors" not in out
@@ -304,7 +309,21 @@ def test_task_note_refuses_items_that_are_not_ids(store):
 
 def test_task_read_carries_what_a_mention_names(store):
     made = _task()
-    a, b = made["items"]
+    a, b = _ids(made)
     server.task_comment(made["uid"], f"after [[#{a}]]")
     page = server.task_read(made["uid"], "comments")
     assert page["refs"] == {str(a): {"n": 1, "text": "read the spec", "state": "todo"}}
+
+
+def test_every_item_result_carries_its_number_beside_its_id(store):
+    _filler()
+    made = _task()
+    first, second = _ids(made)
+    assert [i["n"] for i in made["items"]] == [1, 2] and first != 1
+    added = server.task_add(made["uid"], "ship the docs")
+    assert [i["n"] for i in added["items"]] == [3] and added["items"][0]["id"] != 3
+    out = server.task_item(made["uid"], second, state="doing")
+    assert (out["item"], out["n"], out["title"]) == (second, 2, "Ship the parser")
+    [header] = [h for h in server.must_read(domain="acme/parser", type="task")["items"]
+                if h["uid"] == made["uid"]]
+    assert header["doing"] == [{"id": second, "n": 2}]
