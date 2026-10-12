@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import sqlite3
-from datetime import date
+from datetime import UTC, datetime
 
 from memai.lite import DOMAIN_SEP, normalize_domain, split_domain
 from memai.store.domains import domain_scope_clause
-from memai.store.health import days_before, today_iso
+from memai.store.health import days_before
 from memai.store.settings import (
     get_checkpoint_block_enabled,
     get_checkpoint_days,
@@ -19,12 +19,19 @@ CHECKPOINT = "checkpoint"
 _HEADER = "uid, title, type, domain, created_at, updated_at"
 
 
-def header(row: sqlite3.Row, *, since: str = "created_at", today: str = "") -> dict:
+def span(days: int) -> str:
+    """A number of days as an alert says it: '1 day', '14 days'."""
+    return f"{days} day" if days == 1 else f"{days} days"
+
+
+def header(row: sqlite3.Row, *, since: str = "created_at") -> dict:
     """A row as the few fields an alert names it by, with its age in whole days."""
-    age = (date.fromisoformat(today or today_iso())
-           - date.fromisoformat(row[since][:10])).days
+    stamp = datetime.fromisoformat(row[since])
+    if stamp.tzinfo is None:
+        stamp = stamp.replace(tzinfo=UTC)
     return {"uid": row["uid"], "title": row["title"], "type": row["type"],
-            "domain": row["domain"], since: row[since], "age_days": age}
+            "domain": row["domain"], since: row[since],
+            "age_days": (datetime.now(UTC) - stamp).days}
 
 
 def checkpoints_in(conn: sqlite3.Connection, domain: str) -> list[sqlite3.Row]:
@@ -40,7 +47,7 @@ def overdue_checkpoints(conn: sqlite3.Connection, *, domain: str = "",
 
     Counted whether or not the block is on: the overview measures them either way.
     """
-    cutoff = days_before(at or today_iso(), get_checkpoint_days(conn))
+    cutoff = days_before(get_checkpoint_days(conn), at=at)
     where, params = "", []
     if normalize_domain(domain):
         where, params, _ = domain_scope_clause(conn, domain, alias="")
@@ -67,7 +74,7 @@ def blocking_checkpoints(conn: sqlite3.Connection, domain: str) -> list[sqlite3.
         return []
     parts = split_domain(domain)
     paths = [DOMAIN_SEP.join(parts[:n]) for n in range(len(parts) + 1)]
-    cutoff = days_before(today_iso(), get_checkpoint_days(conn))
+    cutoff = days_before(get_checkpoint_days(conn))
     marks = ", ".join("?" * len(paths))
     return conn.execute(
         f"SELECT {_HEADER} FROM memories WHERE type = ? AND status = 'active' "
@@ -81,7 +88,7 @@ def unverified_past_limit(conn: sqlite3.Connection, *, domain: str = "",
 
     The same rows the overview's stale symptom counts, narrowed to a scope.
     """
-    cutoff = days_before(today_iso(), get_unverified_days(conn))
+    cutoff = days_before(get_unverified_days(conn))
     where, params = "", []
     if normalize_domain(domain):
         where, params, _ = domain_scope_clause(conn, domain, alias="")

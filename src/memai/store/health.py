@@ -47,9 +47,13 @@ def _due_clause(at: str | None = None) -> tuple[str, list]:
     return "review_after <> '' AND review_after <= ?", [at or today_iso()]
 
 
-def days_before(today: str, days: int) -> str:
-    """The instant `days` whole days before `today`, comparable with a stored timestamp."""
-    return (datetime.fromisoformat(today) - timedelta(days=days)).isoformat()
+def days_before(days: int, *, at: str = "") -> str:
+    """The instant `days` days back from the current time, or from the start of the day `at`.
+
+    Comparable with a stored timestamp, and exact to the second, so a one-day
+    span counts what was written more than 24 hours ago.
+    """
+    return (datetime.fromisoformat(at or now_iso()) - timedelta(days=days)).isoformat()
 
 
 # The health axes, each the share of ACTIVE memories satisfying its SQL: curation (confirmed),
@@ -72,13 +76,12 @@ def health_axes(conn: sqlite3.Connection, *, at: str | None = None) -> dict:
     """The four axes and the index over them, each 0-100 over active memories.
 
     `at` is the day the spans are measured from (YYYY-MM-DD), defaulting to
-    today. An empty store scores 100 on every axis: nothing is wrong with
+    now. An empty store scores 100 on every axis: nothing is wrong with
     it, and 0 would read as a store in trouble on the day it is created.
     """
-    today = at or today_iso()
-    spans = {"today": today,
-             "stale": days_before(today, get_unverified_days(conn)),
-             "checkpoint": days_before(today, get_checkpoint_days(conn))}
+    spans = {"today": at or today_iso(),
+             "stale": days_before(get_unverified_days(conn), at=at or ""),
+             "checkpoint": days_before(get_checkpoint_days(conn), at=at or "")}
     active = conn.execute(
         "SELECT COUNT(*) FROM memories WHERE status = 'active'").fetchone()[0]
     axes = {}
