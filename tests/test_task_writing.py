@@ -62,7 +62,7 @@ def test_an_added_long_item_is_refused_the_same_way(conn):
     ("item 2", {"items": ["Draft the grammar", "Lex once i1 lands", "Wire the CLI"]}),
 ])
 def test_a_new_task_refuses_an_item_key_in_its_free_text(conn, field, given):
-    with pytest.raises(ValueError, match=rf"{field} cites i\d.*cited in free text as \[\[#id\]\]"):
+    with pytest.raises(ValueError, match=rf"{field} cites i\d.*cited in a task's free text as \[\[#id\]\]"):
         _task(conn, **given)
 
 
@@ -172,3 +172,10 @@ def test_task_says_the_title_and_the_items_are_short():
 def test_a_task_tool_says_items_are_cited_as_a_mention_token(name):
     text = _published(name)
     assert "[[#id]]" in text and "never carries one" in text
+    assert "To a person, name it item n of its task" in text
+
+
+def test_the_instructions_say_a_person_reads_an_item_as_its_number_in_its_task():
+    text = " ".join(server.INSTRUCTIONS.split())
+    assert "an item is item n of its task, named by the task's title" in text
+    assert "nothing a person reads shows the id" in text

@@ -102,7 +102,7 @@ def test_a_new_mention_of_a_deleted_item_is_refused(conn):
 
 def test_a_position_key_in_free_text_names_its_token(conn):
     uid, ids = _task(conn)
-    with pytest.raises(ValueError, match=rf"comment cites i2 \(\[\[#{ids[1]}\]\]\): an item is cited in free text as \[\[#id\]\]"):
+    with pytest.raises(ValueError, match=rf"comment cites i2 \(\[\[#{ids[1]}\]\]\): an item is cited in a task's free text as \[\[#id\]\]"):
         tasks.add_comment(conn, uid, "after i2")
 
 

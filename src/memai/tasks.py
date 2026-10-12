@@ -17,7 +17,7 @@ COMMENT_MAX = 2000
 
 _CITED_KEY_RE = re.compile(r"\bi([1-9][0-9]*)\b", re.I)
 
-CITE_RULE = "an item is cited in free text as [[#id]], never by its position"
+CITE_RULE = "an item is cited in a task's free text as [[#id]], never by its position"
 
 
 def _item_length_error(text: str) -> str | None:
@@ -244,6 +244,14 @@ def _items(conn: sqlite3.Connection, uid: str) -> list[dict]:
 def item_ids(conn: sqlite3.Connection, uid: str) -> list[int]:
     """The task's item ids in list order."""
     return [i["id"] for i in _items(conn, uid)]
+
+
+def numbered(conn: sqlite3.Connection, uid: str, ids: list[int]) -> list[dict]:
+    """Each of `ids`, in the order given, as {"id", "n"}: the item and its number on the list."""
+    if not ids:
+        return []
+    n_of = {i["id"]: i["n"] for i in _items(conn, uid)}
+    return [{"id": i, "n": n_of[i]} for i in ids]
 
 
 def progress(conn: sqlite3.Connection, uid: str) -> dict:
