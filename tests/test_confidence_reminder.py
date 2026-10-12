@@ -58,6 +58,15 @@ def test_it_comes_back_only_after_the_interval(clock):
     assert _reminded(server.list_domains())
 
 
+def test_a_one_day_span_names_a_day(clock):
+    with connection.connect() as conn:
+        settings.set_unverified_days(conn, 1)
+    old = _old(days=2)
+    res = server.list_domains()
+    assert _reminded(res) == [old]
+    assert "over 1 day (1 in all)" in res["confidence_reminder"]["hint"]
+
+
 def test_the_interval_is_the_configured_one(clock):
     _old()
     with connection.connect() as conn:

@@ -70,6 +70,14 @@ describe('the health view', () => {
     teardownView();
   });
 
+  it('says one day in the singular', async () => {
+    const view = await open({ '/api/overview': { symptoms: [
+      symptom('overdue', 'bad', 1, { type: 'checkpoint', overdue: '1', status: 'active' }, { days: 1 }),
+    ] } });
+    expect(view.querySelector('[data-sym="overdue"] .hx-sym-name')?.textContent).toBe('Checkpoints open past 1 day');
+    teardownView();
+  });
+
   it('opens exactly the set a symptom counted, with the server\'s own filter', async () => {
     const view = await open();
     button(view, '[data-sym="stale"] .hx-sym-go').click();

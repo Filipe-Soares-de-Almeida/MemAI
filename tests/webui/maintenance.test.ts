@@ -360,6 +360,17 @@ describe('the warden tab', () => {
     await press(document.querySelector('.pick-pop [role="option"][data-v="7"]'));
     expect(posts('/api/config')[0].body).toEqual({ checkpoint_days: 7 });
   });
+
+  it('offers a span of one and two days to both, one in the singular', async () => {
+    const view = await show('warden', store());
+    for (const id of ['#cbDays', '#caDays']) {
+      await press(view.querySelector(id));
+      const options = [...document.querySelectorAll('.pick-pop [role="option"]')].slice(0, 2);
+      expect(options.map(o => o.textContent?.trim())).toEqual(['1 day', '2 days']);
+      await press(document.querySelector('.pick-pop [role="option"][data-v="1"]'));
+    }
+    expect(posts('/api/config').map(p => p.body)).toEqual([{ checkpoint_days: 1 }, { unverified_days: 1 }]);
+  });
 });
 
 describe('the tab strip', () => {

@@ -51,9 +51,9 @@ def _defects(conn: sqlite3.Connection, today: str) -> dict[str, tuple[str, list]
     """
     return {
         "stale": ("confidence = 'unverified' AND updated_at < ?",
-                  [days_before(today, get_unverified_days(conn))]),
+                  [days_before(get_unverified_days(conn))]),
         "overdue": ("type = 'checkpoint' AND created_at < ?",
-                    [days_before(today, get_checkpoint_days(conn))]),
+                    [days_before(get_checkpoint_days(conn))]),
         "due": ("review_after <> '' AND review_after <= ?", [today]),
         "unlinked": ("uid NOT IN (SELECT from_uid FROM relations "
                      "UNION SELECT to_uid FROM relations)", []),

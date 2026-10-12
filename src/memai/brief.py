@@ -56,8 +56,8 @@ PIN_LINE = ("Pinned, read every one before acting: {said} -- "
             "must_read({domain}type=..., pinned=true), then get_memory(uid) each.")
 
 # Checkpoints past the age limit, the oldest few named; it rides in the tail, which is never cut.
-OVERDUE_LINE = ("ALERT, tell the user: {n} checkpoint(s) stayed open past the {days}-day "
-                "limit: {named}. memai refuses new writes under each until it is archived "
+OVERDUE_LINE = ("ALERT, tell the user: {n} checkpoint(s) stayed open longer than "
+                "{limit}: {named}. memai refuses new writes under each until it is archived "
                 "with forget(uid) or superseded with checkpoint(..., supersedes='<uid>'); "
                 "pulse() lists them under `overdue`.")
 OVERDUE_NAMED = 3
@@ -120,11 +120,12 @@ def overdue_line(conn, domain: str) -> str:
     if not rows:
         return ""
     named = ", ".join(
-        f"{h['uid']} [{h['domain'] or 'no domain'}] {h['age_days']} days"
+        f"{h['uid']} [{h['domain'] or 'no domain'}] {overdue.span(h['age_days'])}"
         for h in (overdue.header(r) for r in rows[:OVERDUE_NAMED]))
     if len(rows) > OVERDUE_NAMED:
         named += f", +{len(rows) - OVERDUE_NAMED} more"
-    return OVERDUE_LINE.format(n=len(rows), days=settings.get_checkpoint_days(conn), named=named)
+    return OVERDUE_LINE.format(n=len(rows), limit=overdue.span(settings.get_checkpoint_days(conn)),
+                               named=named)
 
 
 def session_brief(conn, *, domain: str = "", budget: int = DEFAULT_BUDGET,

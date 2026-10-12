@@ -573,8 +573,8 @@ def _write_result(conn, uid: str, warning: dict | None, also: str,
 
 
 OVERDUE_ALERT = (
-    "ALERT -- tell the user: {n} checkpoint(s) here stayed open past the {days}-day limit, "
-    "the oldest for {age} days. memai refuses new writes in their domains until each is "
+    "ALERT -- tell the user: {n} checkpoint(s) here stayed open longer than {limit}, "
+    "the oldest for {age}. memai refuses new writes in their domains until each is "
     "settled. For each one, get_memory(uid) and decide whether its work is done: if it "
     "is, forget(uid, reason='...'); if not, write the bearing that still holds with "
     "checkpoint(..., domain=<its domain>, supersedes='<uid>'), which archives it.")
@@ -586,7 +586,8 @@ def _overdue(conn, rows: list) -> dict:
     """The `overdue` block of a result: the alert, the limit, and the checkpoints it names."""
     days = settings.get_checkpoint_days(conn)
     shown = [overdue.header(r) for r in rows[:OVERDUE_SHOWN]]
-    return {"alert": OVERDUE_ALERT.format(n=len(rows), days=days, age=shown[0]["age_days"]),
+    return {"alert": OVERDUE_ALERT.format(n=len(rows), limit=overdue.span(days),
+                                          age=overdue.span(shown[0]["age_days"])),
             "days": days, "total": len(rows), "checkpoints": shown}
 
 
@@ -604,7 +605,7 @@ def _blocked(conn, domain: str) -> dict | None:
 CONFIDENCE_REMINDER_SHOWN = 5
 
 CONFIDENCE_HINT = (
-    "these stayed unverified for over {days} days ({total} in all). Where this session's "
+    "these stayed unverified for over {span} ({total} in all). Where this session's "
     "evidence -- the code, a run, a source -- settles one, set_confidence(uid, "
     "'confirmed'|'contradicted'); leave the rest. Nothing is refused for them.")
 
@@ -642,7 +643,7 @@ def _with_confidence_reminder(result, domain):
         _NEXT_REMINDER[project] = now + interval
         return result
     reminded = {**result, "confidence_reminder": {
-        "hint": CONFIDENCE_HINT.format(days=days, total=total),
+        "hint": CONFIDENCE_HINT.format(span=overdue.span(days), total=total),
         "memories": [overdue.header(r, since="updated_at") for r in rows]}}
     # a result already near the ceiling goes out bare, and the next call carries the reminder
     if budget.result_chars(reminded) > budget.MCP_RESULT_MAX_CHARS:
