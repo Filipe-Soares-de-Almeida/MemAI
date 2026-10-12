@@ -25,6 +25,7 @@ export interface Symptom {
   share: number;
   params: Record<string, string>;
   of?: number;
+  days?: number;
 }
 
 export interface DayCount {
@@ -544,6 +545,11 @@ export interface ConfigSaved {
   warden_minutes: number;
   task_ask_enabled: boolean;
   task_ask_minutes: number;
+  checkpoint_block_enabled: boolean;
+  checkpoint_days: number;
+  confidence_ask_enabled: boolean;
+  confidence_ask_minutes: number;
+  unverified_days: number;
 }
 
 export interface Config {
@@ -553,6 +559,11 @@ export interface Config {
   warden_minutes: number;
   task_ask_enabled: boolean;
   task_ask_minutes: number;
+  checkpoint_block_enabled: boolean;
+  checkpoint_days: number;
+  confidence_ask_enabled: boolean;
+  confidence_ask_minutes: number;
+  unverified_days: number;
   sections: Record<string, SectionSpec[]>;
 }
 

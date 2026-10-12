@@ -10,7 +10,7 @@ from starlette.routing import Route
 from memai import admin_schemas as schema
 from memai.admin.api import api
 from memai.admin.shared import _file_size, _summary
-from memai.store import connection, maintenance, paths, queries, search
+from memai.store import connection, maintenance, paths, queries, search, settings
 from memai.store import domains as store_domains
 from memai.store import health as store_health
 from memai.store.diagrams import persist as diagram_persist
@@ -24,6 +24,7 @@ HEALTH_DELTA_DAYS = 30
 # that opens the same rows. Ordered worst first, then by coverage.
 _SYMPTOMS: tuple[tuple[str, str, dict], ...] = (
     ("contradicted", "bad", {"confidence": "contradicted"}),
+    ("overdue", "bad", {"type": "checkpoint", "overdue": "1", "sort": "created_at", "dir": "asc"}),
     ("stale", "warn", {"stale": "1", "sort": "updated_at", "dir": "asc"}),
     ("due", "warn", {"due": "1"}),
     ("unlinked", "warn", {"linked": "no"}),
@@ -42,6 +43,9 @@ def _symptoms(conn: sqlite3.Connection, active: int) -> list[dict]:
     has been scanned.
     """
     counts = queries.symptom_counts(conn)
+    # the two symptoms measured against a span the dashboard sets, which their label states
+    days = {"stale": settings.get_unverified_days(conn),
+            "overdue": settings.get_checkpoint_days(conn)}
     out = []
     for key, severity, params in _SYMPTOMS:
         count = counts[key]
@@ -49,6 +53,7 @@ def _symptoms(conn: sqlite3.Connection, active: int) -> list[dict]:
             "key": key, "severity": severity, "count": count,
             "share": round(count / active, 4) if active else 0.0,
             "params": {"status": "active", **params},
+            **({"days": days[key]} if key in days else {}),
         })
     # A broken flow counts in diagrams, not memories: its own denominator, no share of the store.
     flows = diagram_persist.diagram_overview(conn)

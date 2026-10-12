@@ -5,13 +5,13 @@ from __future__ import annotations
 import sqlite3
 from collections.abc import Mapping
 from dataclasses import dataclass
-from datetime import datetime, timedelta
 
 from memai import contract
 from memai.store.domains import domain_scope_clause
-from memai.store.health import STALE_DAYS, today_iso
+from memai.store.health import days_before, today_iso
 from memai.store.memories import get_memory
 from memai.store.search import search_ranked
+from memai.store.settings import get_checkpoint_days, get_unverified_days
 
 # What a memory list may be ordered by. 'recalls' (memory_usage) is a way to look, not a verdict,
 # and retrieval never reads it (see the schema comment on memory_usage).
@@ -36,21 +36,24 @@ _DEFECT_PARAMS = {
     "unlinked": ("linked", "no"),
     "due": ("due", "1"),
     "stale": ("stale", "1"),
+    "overdue": ("overdue", "1"),
     "untitled": ("untitled", "1"),
     "untagged": ("untagged", "1"),
 }
 
 
-def _defects(today: str) -> dict[str, tuple[str, list]]:
+def _defects(conn: sqlite3.Connection, today: str) -> dict[str, tuple[str, list]]:
     """Each defect as an SQL predicate over one memory row, with its params.
 
     A health symptom counts with these and the memory list filters with
     them, so the number on the overview and the list its button opens are
     the same rows by construction.
     """
-    stale = (datetime.fromisoformat(today) - timedelta(days=STALE_DAYS)).isoformat()
     return {
-        "stale": ("confidence = 'unverified' AND updated_at < ?", [stale]),
+        "stale": ("confidence = 'unverified' AND updated_at < ?",
+                  [days_before(today, get_unverified_days(conn))]),
+        "overdue": ("type = 'checkpoint' AND created_at < ?",
+                    [days_before(today, get_checkpoint_days(conn))]),
         "due": ("review_after <> '' AND review_after <= ?", [today]),
         "unlinked": ("uid NOT IN (SELECT from_uid FROM relations "
                      "UNION SELECT to_uid FROM relations)", []),
@@ -60,8 +63,8 @@ def _defects(today: str) -> dict[str, tuple[str, list]]:
     }
 
 
-def _defect_where(defects: tuple[str, ...]) -> tuple[str, list]:
-    preds = _defects(today_iso())
+def _defect_where(conn: sqlite3.Connection, defects: tuple[str, ...]) -> tuple[str, list]:
+    preds = _defects(conn, today_iso())
     sql: list[str] = []
     params: list = []
     for key in defects:
@@ -138,7 +141,7 @@ def _search_page(conn: sqlite3.Connection, f: MemoryFilter) -> tuple[int, list]:
     if f.session:
         hits = [h for h in hits if h["session"] == f.session]
     if f.defects:
-        sql, params = _defect_where(f.defects)
+        sql, params = _defect_where(conn, f.defects)
         keep = {r["uid"] for r in conn.execute(
             "SELECT uid FROM memories WHERE 1=1 " + sql, params)}
         hits = [h for h in hits if h["uid"] in keep]
@@ -176,7 +179,7 @@ def _filtered_page(conn: sqlite3.Connection, f: MemoryFilter) -> tuple[int, list
         params.append(f.task_state)
     if f.pin:
         where.append(PIN_FILTERS[f.pin])
-    defects, defect_params = _defect_where(f.defects)
+    defects, defect_params = _defect_where(conn, f.defects)
     if defects:
         where.append(defects)
     params.extend(defect_params)
@@ -226,7 +229,7 @@ def count_active(conn: sqlite3.Connection, defect: str = "") -> int:
     if not defect:
         return conn.execute(
             "SELECT COUNT(*) FROM memories WHERE status = 'active'").fetchone()[0]
-    clause, params = _defects(today_iso())[defect]
+    clause, params = _defects(conn, today_iso())[defect]
     return conn.execute(
         f"SELECT COUNT(*) FROM memories WHERE status = 'active' AND ({clause})",
         params).fetchone()[0]
@@ -234,7 +237,7 @@ def count_active(conn: sqlite3.Connection, defect: str = "") -> int:
 
 def symptom_counts(conn: sqlite3.Connection) -> dict[str, int]:
     """Active memories per health symptom: 'contradicted', then each defect."""
-    preds = {"contradicted": (_CONTRADICTED, []), **_defects(today_iso())}
+    preds = {"contradicted": (_CONTRADICTED, []), **_defects(conn, today_iso())}
     return {
         key: conn.execute(
             f"SELECT COUNT(*) FROM memories WHERE status = 'active' AND ({clause})",
