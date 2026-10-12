@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.14.0](https://github.com/Filipe-Soares-de-Almeida/MemAI/compare/v0.13.0...v0.14.0) (2026-10-12)
+
+
+### Features
+
+* offer one- and two-day spans for the checkpoint block and the confidence reminder ([#105](https://github.com/Filipe-Soares-de-Almeida/MemAI/issues/105)) ([e82cf4e](https://github.com/Filipe-Soares-de-Almeida/MemAI/commit/e82cf4e847448c95faf669486d96f0c3b1ccc14d))
+
 ## [0.13.0](https://github.com/Filipe-Soares-de-Almeida/MemAI/compare/v0.12.0...v0.13.0) (2026-10-12)
 
 
