@@ -206,6 +206,25 @@ def test_the_limit_is_the_configured_one(store):
     assert WRITERS["note"]("acme/x100")["ok"] is False
 
 
+def _checkpoint_hours_ago(domain: str, hours: int) -> str:
+    stamp = (datetime.now(UTC) - timedelta(hours=hours)).isoformat()
+    with connection.connect() as conn:
+        return memories.insert_memory(
+            conn, type="checkpoint", content=shaped("checkpoint", "ship the old path"),
+            title="Old bearing", domain=domain, created_at=stamp)
+
+
+def test_a_one_day_limit_counts_hours_not_calendar_days(store):
+    with connection.connect() as conn:
+        settings.set_checkpoint_days(conn, 1)
+    _checkpoint_hours_ago("acme/x100", 23)
+    late = _checkpoint_hours_ago("acme/x200", 25)
+    assert "uid" in WRITERS["note"]("acme/x100")
+    res = WRITERS["note"]("acme/x200")
+    assert [c["uid"] for c in res["overdue"]["checkpoints"]] == [late]
+    assert "longer than 1 day, the oldest for 1 day." in res["overdue"]["alert"]
+
+
 def test_pulse_and_must_read_alert_and_put_settling_first(store):
     old = _old_checkpoint("acme/x100", days=20)
     p = server.pulse("acme")
@@ -257,6 +276,17 @@ def test_the_stale_symptom_follows_the_unverified_limit(client):
     client.post("/api/config", json={"unverified_days": 7})
     sym = _symptom(client.get("/api/overview").json(), "stale")
     assert (sym["count"], sym["days"]) == (1, 7)
+
+
+def test_a_one_day_unverified_span_counts_what_is_a_day_old(client):
+    client.post("/api/config", json={"unverified_days": 1})
+    with connection.connect() as conn:
+        for hours in (23, 25):
+            memories.insert_memory(
+                conn, type="note", content="a fact", title="Queue fact", domain="acme",
+                created_at=(datetime.now(UTC) - timedelta(hours=hours)).isoformat())
+    sym = _symptom(client.get("/api/overview").json(), "stale")
+    assert (sym["count"], sym["days"]) == (1, 1)
 
 
 def test_config_round_trips_the_new_settings(client):
