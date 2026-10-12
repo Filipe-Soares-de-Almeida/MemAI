@@ -15,8 +15,10 @@ const props = defineProps<{ symptoms: Symptom[]; active: number }>();
 
 const rows = computed(() => rankSymptoms(props.symptoms));
 
-/* the server's symptom keys name their catalog entries */
-const label = (s: Symptom, suffix = '') => t(`ov.sym.${s.key}${suffix}` as I18nKey);
+/* the server's symptom keys name their catalog entries; a symptom measured against a span the
+   dashboard sets carries it as `days` */
+const label = (s: Symptom, suffix = '') =>
+  t(`ov.sym.${s.key}${suffix}` as I18nKey, s.days === undefined ? undefined : { n: s.days });
 
 /* A symptom over flows or relation rows carries its own denominator and no share of the store. */
 const OF_LABEL: Partial<Record<string, I18nKey>> = { diagrams: 'ov.sym.ofFlows', orphans: 'ov.sym.ofRelations' };
