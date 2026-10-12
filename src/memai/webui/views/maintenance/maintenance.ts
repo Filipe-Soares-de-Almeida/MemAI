@@ -21,8 +21,8 @@ export const RECLAIM_WARN = 262144;
 export const RETENTION = ['1d', '7d', '30d', 'never'] as const;
 export const WARDEN_MINUTES = [5, 10, 20, 30, 60];
 /* Within the ranges store.settings accepts; each list holds that setting's default. */
-export const CHECKPOINT_DAYS = [3, 7, 14, 30, 60, 90];
-export const UNVERIFIED_DAYS = [7, 14, 30, 60, 90, 180];
+export const CHECKPOINT_DAYS = [1, 2, 3, 7, 14, 30, 60, 90];
+export const UNVERIFIED_DAYS = [1, 2, 7, 14, 30, 60, 90, 180];
 export const CONFIDENCE_MINUTES = [15, 30, 60, 120, 240];
 
 const DAY = 86400000;
