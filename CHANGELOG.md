@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.13.0](https://github.com/Filipe-Soares-de-Almeida/MemAI/compare/v0.12.0...v0.13.0) (2026-10-12)
+
+
+### Features
+
+* keep one checkpoint per domain, block writes under overdue ones and remind about unverified memories ([#103](https://github.com/Filipe-Soares-de-Almeida/MemAI/issues/103)) ([ae89105](https://github.com/Filipe-Soares-de-Almeida/MemAI/commit/ae89105951a8f1c306c5dc1a74500c20d59e8b8d))
+
 ## [0.12.0](https://github.com/Filipe-Soares-de-Almeida/MemAI/compare/v0.11.0...v0.12.0) (2026-10-10)
 
 
