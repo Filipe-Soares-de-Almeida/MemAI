@@ -139,7 +139,7 @@ def test_task_headers_carry_progress_and_doing(seeded):
     item = result["items"][0]
     assert item["uid"] == seeded["open"]
     assert item["progress"] == {"done": 0, "total": 2}
-    assert item["doing"] == [item_of(seeded["open"], 1)]
+    assert item["doing"] == [{"id": item_of(seeded["open"], 1), "n": 1}]
 
 
 def test_tasks_are_ordered_by_their_latest_item_update(store):

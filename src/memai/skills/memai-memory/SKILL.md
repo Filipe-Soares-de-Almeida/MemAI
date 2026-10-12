@@ -257,8 +257,8 @@ When the session-start hook fires, or when resuming work:
    `{"categories": [{"type", "count"}, ...]}`; with `type` (`task`, `anti_pattern`, `handoff`, `note` or `diagram`) it
    returns `{type, total, items, next_offset}`: one page of **headers** — `uid`,
    `title`, `domain`, `est_tokens` — newest first, a task by its latest item
-   update. A task header adds `progress` (`{done, total}`) and `doing`, the ids
-   of its items in progress. Open a header with `get_memory(uid)`;
+   update. A task header adds `progress` (`{done, total}`) and `doing`, its
+   items in progress as `{id, n}`. Open a header with `get_memory(uid)`;
    `next_offset` is absent on the last page and `limit` is at most 50.
    Without `type` the response adds `pinned` when a pin is in scope.
    `must_read(type, pinned=true)` lists only the pins of that type (it also
@@ -440,8 +440,9 @@ next agent guessing. The goal is **plain prose**, never `GOAL:` / `WHY:` /
 `CONTEXT:` labelled fields: a task is not a sectioned type like `checkpoint`,
 and copying their `LABEL: text` shape only makes it look like one. The labelled
 shape belongs to an item's brief (`task_note`). Each item has an **id**:
-`task()` and `task_add()` return them, `task_read(part='items')` lists them with
-`n`, the number the item shows on its list, and every tool takes the id. The
+`task()` and `task_add()` return each item as `{id, n}`, `n` being the number
+the item shows on its list, `task_read(part='items')` lists both, and every
+tool takes the id. The
 number is display only: it follows the order, and deleting an item moves no
 other id. An item that stops applying is `dropped`. The task's content is
 generated from the goal and the items (`[ ]` todo, `[~]` doing, `[x]` done,
@@ -471,6 +472,13 @@ Accepted: item   "Write the CSV exporter"
           depends_on  "4812 (the column mapping)"
 ```
 
+**To a person, an item is item `n` of its task.** A reply, a file in the
+repository, a commit or a pull request names the task by its title and the
+item by its number on the list, with its text when that helps: "item 2 of
+*Export the report as CSV*", never "item 4813". `[[#id]]` and the bare id are
+for memai alone; nothing a person reads shows the id. `task()`, `task_add()`,
+`task_item()` and `must_read()` carry `n` beside each id for this.
+
 Work it with:
 
 - **`task_item(uid, item, state, comment, related, text, delete)`** — `item`
@@ -478,14 +486,15 @@ Work it with:
   on it, link the memories it produced or depends on (`related`: comma-separated
   uids; an unknown uid refuses the whole call), and rename it with `text`: the
   item keeps its id, state, brief, comments and links. Give at least one; they
-  apply together or not at all. The result carries `progress`
-  (`{done, dropped, total}`), `task_state` and `archived`. A number that is not
+  apply together or not at all. The result carries the item's number `n`, the
+  task's `title`, `progress` (`{done, dropped, total}`), `task_state` and
+  `archived`. A number that is not
   an id of the task is refused, and the error names the id at that position.
   `delete=True` removes the item, alone in its call; no other item moves, and a
   `DEPENDS ON` that named it keeps its text, marked deleted. Delete a mistake or
   a duplicate; mark work decided against `dropped`, which keeps it.
 - **`task_add(uid, items)`** — append items, one per line, each a short label;
-  the result lists their ids.
+  the result lists each as `{id, n}`.
 - **`task_comment(uid, body, item)`** — a comment on the task, or on one item
   when `item` is its id. A comment never edits the content, so it carries
   what a checklist cannot: why an item is blocked, what a review said.

@@ -90,7 +90,7 @@ made = task(
     domain="acme/checkout/billing",
 )
 uid = made["uid"]
-charge, refunds, lookup = made["items"]          # the items' ids
+charge, refunds, lookup = (i["id"] for i in made["items"])  # each is {id, n}
 task_item(uid, charge, state="done", comment="Handler keys off the event id.")
 task_note(uid, title="Refund replay", items=str(refunds),
           goal="Replay a refund once, however often it arrives.",
@@ -105,6 +105,9 @@ What only makes sense inside the task — an item's brief, a rule several items
 share — is a task note, not a memory. A note on items is a brief: GOAL, CONTEXT,
 STEPS, PITFALLS, DONE WHEN and DEPENDS ON, with EXTRA INFO for anything else.
 Every tool names an item by its id; the number a list shows is only its place.
+A person never sees the id, so an agent names an item to one as item `n` of
+the task, and the results of `task`, `task_add`, `task_item` and `must_read`
+carry that number beside each id.
 Free text cites an item as `[[#id]]`, which reads back as the item's current
 number and label, and the dashboard inserts one when `#` is typed in a task's
 text. `task_item` also renames an
