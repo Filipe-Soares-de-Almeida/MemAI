@@ -25,6 +25,20 @@ def no_release_request(monkeypatch):
     monkeypatch.setattr(update, "_fetch", lambda timeout=update.TIMEOUT: {})
 
 
+@pytest.fixture(autouse=True)
+def no_confidence_reminder(request, monkeypatch):
+    """No MCP result carries the sporadic confidence reminder unless the test module asks.
+
+    It rides on whichever call comes first in a server process, so left on it
+    would land in some other test's exact result. A module that sets
+    `REMINDERS = True` gets it back.
+    """
+    if getattr(request.module, "REMINDERS", False):
+        return
+    from memai import server
+    monkeypatch.setattr(server, "_with_confidence_reminder", lambda result, domain: result)
+
+
 def shaped(type_: str, text: str) -> str:
     """A body of `type_` that reads back into its fields, carrying `text`.
 

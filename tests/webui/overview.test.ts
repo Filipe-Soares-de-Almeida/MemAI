@@ -20,7 +20,7 @@ const overview = (over = {}) => ({
   symptoms: [
     symptom('untagged', 'info', 40, { tags: 'none' }),
     symptom('contradicted', 'bad', 0, { confidence: 'contradicted' }),
-    symptom('stale', 'warn', 30, { stale: '1', status: 'active' }),
+    symptom('stale', 'warn', 30, { stale: '1', status: 'active' }, { days: 30 }),
     symptom('orphans', 'warn', 4, {}, { of: 900 }),
     symptom('diagrams', 'bad', 2, { defect: '1' }, { of: 7 }),
   ],
@@ -55,6 +55,18 @@ describe('the health view', () => {
     expect(button(view, '[data-sym="contradicted"] .hx-sym-go').disabled).toBe(true);
     expect(view.querySelector('[data-sym="untagged"] .hx-sym-share')?.textContent).toBe('20.0%');
     expect(view.querySelector('[data-sym="orphans"] .hx-sym-share')?.textContent).toBe('4 of 900');
+    teardownView();
+  });
+
+  it('names the span a symptom is measured against', async () => {
+    const view = await open({ '/api/overview': { symptoms: [
+      symptom('overdue', 'bad', 2, { type: 'checkpoint', overdue: '1', status: 'active' }, { days: 14 }),
+      symptom('stale', 'warn', 30, { stale: '1', status: 'active' }, { days: 45 }),
+    ] } });
+    expect(view.querySelector('[data-sym="overdue"] .hx-sym-name')?.textContent).toBe('Checkpoints open past 14 days');
+    expect(view.querySelector('[data-sym="stale"] .hx-sym-name')?.textContent).toBe('Unverified for over 45 days');
+    button(view, '[data-sym="overdue"] .hx-sym-go').click();
+    expect(hashParams()).toEqual({ type: 'checkpoint', overdue: '1', status: 'active' });
     teardownView();
   });
 

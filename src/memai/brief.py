@@ -1,8 +1,9 @@
 """The store as a few hundred words, for a reader that has not asked yet.
 
 session_brief renders what the store holds -- its size, active domains, the
-latest checkpoint, one line counting what is pending per category, one counting
-what is pinned -- kept with the call to action, so the budget never drops it --
+latest checkpoint, one line counting what is pending per category, the checkpoints
+past their age limit and one line counting what is pinned -- these two kept with
+the call to action, so the budget never drops them --
 and ends with the instruction to call must_read() and open the subject with pulse(domain)
 before working, spelling out what the store's own casing policy means for the
 path that instruction asks for. The SessionStart hook emits it (memai.hook);
@@ -16,7 +17,7 @@ that was empty.
 from __future__ import annotations
 
 from memai import pending
-from memai.store import domains, memories, search
+from memai.store import domains, memories, overdue, search, settings
 
 # What a warm-up may cost: paid once per session, small next to a context window.
 DEFAULT_BUDGET = 2400
@@ -53,6 +54,13 @@ WORK_EACH = "Call must_read(type=...) for each category before acting."
 # The pin line: counts only, the headers come from must_read(..., pinned=true).
 PIN_LINE = ("Pinned, read every one before acting: {said} -- "
             "must_read({domain}type=..., pinned=true), then get_memory(uid) each.")
+
+# Checkpoints past the age limit, the oldest few named; it rides in the tail, which is never cut.
+OVERDUE_LINE = ("ALERT, tell the user: {n} checkpoint(s) stayed open past the {days}-day "
+                "limit: {named}. memai refuses new writes under each until it is archived "
+                "with forget(uid) or superseded with checkpoint(..., supersedes='<uid>'); "
+                "pulse() lists them under `overdue`.")
+OVERDUE_NAMED = 3
 
 # The tail of every brief: _fit reserves its room first, so it is never trimmed. {casing} comes
 # from the store's active policy.
@@ -106,6 +114,19 @@ def pin_line(conn, domain: str) -> str:
     return PIN_LINE.format(said=_said(found), domain=f"'{domain}', " if domain else "")
 
 
+def overdue_line(conn, domain: str) -> str:
+    """The checkpoints in scope past the age limit as one sentence, or "" when none is."""
+    rows = overdue.alerting_checkpoints(conn, domain)
+    if not rows:
+        return ""
+    named = ", ".join(
+        f"{h['uid']} [{h['domain'] or 'no domain'}] {h['age_days']} days"
+        for h in (overdue.header(r) for r in rows[:OVERDUE_NAMED]))
+    if len(rows) > OVERDUE_NAMED:
+        named += f", +{len(rows) - OVERDUE_NAMED} more"
+    return OVERDUE_LINE.format(n=len(rows), days=settings.get_checkpoint_days(conn), named=named)
+
+
 def session_brief(conn, *, domain: str = "", budget: int = DEFAULT_BUDGET,
                   project: str = "") -> str:
     """What is already known, for a session that has not started working.
@@ -139,7 +160,8 @@ def session_brief(conn, *, domain: str = "", budget: int = DEFAULT_BUDGET,
     if line:
         parts.append(line)
 
-    tail = "\n".join(p for p in (pin_line(conn, domain), call_to_action(conn)) if p)
+    tail = "\n".join(p for p in (overdue_line(conn, domain), pin_line(conn, domain),
+                                  call_to_action(conn)) if p)
     return _fit(parts, budget, tail=tail)
 
 

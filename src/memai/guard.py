@@ -68,7 +68,7 @@ WATCHED: dict[str, tuple[str, ...]] = {
 OPTIONAL: dict[str, tuple[str, ...]] = {
     "note": ("domain", "also", "tags", "session", "review_after", "source_ref"),
     "reasoning": ("domain", "also", "tags", "session", "review_after", "source_ref"),
-    "checkpoint": ("session", "domain", "also", "tags"),
+    "checkpoint": ("session", "domain", "also", "tags", "supersedes"),
     "anti_pattern": ("domain", "also", "tags", "session", "review_after", "source_ref"),
     "task": ("domain", "also", "tags", "session"),
     "task_item": ("state", "comment", "related", "text", "delete"),
