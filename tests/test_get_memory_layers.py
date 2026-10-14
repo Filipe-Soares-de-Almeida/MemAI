@@ -95,7 +95,7 @@ BRIEF_ARGS = dict(goal="lex the config", context="ASCII input", steps="write the
 def test_task_read_and_task_note_round_trip(store):
     uid = _task()
     made = server.task_note(uid, title="Lexer rules", items=str(item_of(uid, 2)), **BRIEF_ARGS)
-    assert made["note_id"] and made["items"] == [item_of(uid, 2)]
+    assert made["note_id"] and made["items"] == [{"id": item_of(uid, 2), "n": 2}]
     body = server.task_read(uid, "notes", item=item_of(uid, 2))["records"][0]["body"]
     assert body.startswith("GOAL: lex the config\nCONTEXT: ASCII input")
     assert server.task_note(uid, note_id=made["note_id"], pitfalls="tabs and CRLF").get("ok") is not False

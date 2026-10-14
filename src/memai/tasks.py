@@ -155,9 +155,9 @@ def create_task(
     Raises ValueError on an empty or over-limit input, before anything is written.
     """
     title, goal, items = _validated(title, goal, items)
-    # the items have no ids until they are inserted, so the first content numbers them by
-    # position; it is what insert_memory's leak check reads
-    drafted = [{"id": n, "state": "todo", "text": text} for n, text in enumerate(items, start=1)]
+    # the items have no ids until they are inserted, so the first content carries none; it is
+    # what insert_memory's leak check reads
+    drafted = [{"state": "todo", "text": text} for text in items]
     uid = memories.insert_memory(
         conn, type=memories.TASK_TYPE, content=task_items.render(goal, drafted), title=title,
         domain=domain, also=also, session=session, tags=tags,
@@ -378,7 +378,7 @@ def rename_item(conn: sqlite3.Connection, uid: str, item: int, text: str, *, ses
             "UPDATE task_items SET text = ?, updated_at = ?, updated_session = ? WHERE id = ?",
             (text, lite.now_iso(), session, item_id),
         )
-        _regenerate(conn, uid, f"item {item_id} renamed: {row['text']} -> {text}", record_edit=True)
+        _regenerate(conn, uid, f"item {row['n']} renamed: {row['text']} -> {text}", record_edit=True)
     return {"uid": uid, "item": item_id, "text": text, "changed": changed, **_outcome(conn, uid)}
 
 
@@ -435,11 +435,11 @@ def delete_item(conn: sqlite3.Connection, uid: str, item: int, *, session: str =
     for table in ("task_note_items", "task_comments", "task_item_links"):
         conn.execute(f"DELETE FROM {table} WHERE item_id = ?", (item_id,))
     conn.execute("DELETE FROM task_items WHERE id = ?", (item_id,))
-    _regenerate(conn, uid, f"item {item_id} deleted: {gone['text']}", record_edit=True, leaked_ok=True)
+    _regenerate(conn, uid, f"item {gone['n']} deleted: {gone['text']}", record_edit=True, leaked_ok=True)
     state = conn.execute("SELECT state FROM tasks WHERE memory_uid = ?", (uid,)).fetchone()["state"]
     if state == "open":
         _settle(conn, uid)
-    return {"uid": uid, "item": item_id, **_outcome(conn, uid)}
+    return {"uid": uid, "item": item_id, "n": gone["n"], **_outcome(conn, uid)}
 
 
 def set_goal(conn: sqlite3.Connection, uid: str, goal: str, *, note: str = "") -> None:
@@ -946,8 +946,13 @@ def read_part(conn: sqlite3.Connection, uid: str, part: str, item: int = 0,
         raise ValueError("part='links' needs an item")
     records = _records(conn, uid, part, item_id)
     rows, nxt = budget.page(records, offset)
+    n_of = {i["id"]: i["n"] for i in _items(conn, uid)}
+    if part == "notes":
+        rows = [{**r, "items": [{"id": i, "n": n_of[i]} for i in r["items"]]} for r in rows]
     out = {"uid": uid, "part": part, "item": item_id or 0, "total": len(records),
            "offset": offset, "records": rows}
+    if item_id:
+        out["n"] = n_of[item_id]
     if part in ("notes", "comments") and (found := refs(conn, uid, [r["body"] for r in rows])):
         out["refs"] = found
     if nxt is not None:

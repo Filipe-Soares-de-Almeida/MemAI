@@ -89,7 +89,7 @@ def test_the_migration_drops_item_seq_and_writes_content_by_id(tmp_path):
         cols = {r[1] for r in conn.execute("PRAGMA table_info(tasks)")}
         assert "item_seq" not in cols
         ids = tasks.item_ids(conn, uid)
-        assert f"[ ] {ids[0]} step i1" in memories.get_memory(conn, uid)["content"]
+        assert f"[ ] 1. step i1 (id {ids[0]})" in memories.get_memory(conn, uid)["content"]
 
 
 def test_the_migration_keeps_the_task_updated_stamp(tmp_path):

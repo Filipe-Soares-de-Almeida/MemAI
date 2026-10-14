@@ -43,7 +43,7 @@ def test_the_content_is_rendered_from_goal_and_items(conn):
     uid = _make(conn)
     a, b = tasks.item_ids(conn, uid)
     assert memories.get_memory(conn, uid)["content"] == (
-        f"GOAL: Parse every config file\n[ ] {a} read the spec\n[ ] {b} write the lexer"
+        f"GOAL: Parse every config file\n[ ] 1. read the spec (id {a})\n[ ] 2. write the lexer (id {b})"
     )
 
 
@@ -54,7 +54,13 @@ def test_render_uses_one_mark_per_state():
         {"id": 13, "text": "c", "state": "done"},
         {"id": 14, "text": "d", "state": "dropped"},
     ]
-    assert task_items.render("g", items) == "GOAL: g\n[ ] 11 a\n[~] 12 b\n[x] 13 c\n[-] 14 d"
+    assert task_items.render("g", items) == (
+        "GOAL: g\n[ ] 1. a (id 11)\n[~] 2. b (id 12)\n[x] 3. c (id 13)\n[-] 4. d (id 14)")
+
+
+def test_render_shows_no_id_before_an_item_has_one():
+    items = [{"text": "a", "state": "todo"}, {"text": "b", "state": "todo"}]
+    assert task_items.render("g", items) == "GOAL: g\n[ ] 1. a\n[ ] 2. b"
 
 
 def test_the_content_is_searchable(conn):
@@ -170,7 +176,7 @@ def test_marking_an_item_regenerates_the_content_without_an_edit(conn):
     assert result["item"] == first and result["state"] == "doing" and result["changed"] is True
     assert result["progress"] == {"done": 0, "dropped": 0, "total": 2}
     assert result["task_state"] == "open" and result["archived"] is False
-    assert memories.get_memory(conn, uid)["content"].splitlines()[1] == f"[~] {first} read the spec"
+    assert memories.get_memory(conn, uid)["content"].splitlines()[1] == f"[~] 1. read the spec (id {first})"
     assert _notes(conn, uid) == []
 
 
@@ -218,7 +224,7 @@ def test_adding_an_item_reopens_a_completed_task(conn):
     assert result["ids"] == [item_at(conn, uid, 3)] and result["task_state"] == "open"
     assert result["archived"] is False and result["progress"]["total"] == 3
     assert memories.get_memory(conn, uid)["status"] == "active"
-    assert memories.get_memory(conn, uid)["content"].splitlines()[-1] == f"[ ] {added} ship it"
+    assert memories.get_memory(conn, uid)["content"].splitlines()[-1] == f"[ ] 3. ship it (id {added})"
     notes = _notes(conn, uid)
     assert f"item {added} added" not in notes and notes[-1] == "reopened"
 
@@ -695,8 +701,9 @@ def test_delete_item_removes_the_item_its_comments_and_its_links(conn):
     assert [link["uid"] for i in task["items"] for link in i["links"]] == [note]
     assert [c["body"] for c in task["comments"]] == ["about the parser", "about the whole task"]
     assert memories.get_memory(conn, uid)["content"] == (
-        f"GOAL: Parse every config file\n[ ] {first} read the spec\n[ ] {third} write the parser")
-    assert _notes(conn, uid) == [f"item {second} deleted: write the lexer"]
+        f"GOAL: Parse every config file\n[ ] 1. read the spec (id {first})\n"
+        f"[ ] 2. write the parser (id {third})")
+    assert _notes(conn, uid) == ["item 2 deleted: write the lexer"]
 
 
 def test_the_only_item_cannot_be_deleted(conn):
@@ -808,3 +815,19 @@ def test_a_refusal_after_the_rows_changed_rolls_them_back(tmp_path, monkeypatch)
         task = tasks.get_task(c, uid)
         assert [i["n"] for i in task["items"]] == [1, 2, 3]
         assert len(task["items"][2]["links"]) == 1 and len(task["comments"]) == 1
+
+
+def test_content_written_in_another_format_is_rewritten_once_on_open(tmp_path):
+    path = tmp_path / "other.db"
+    with connection.connect(path) as conn:
+        uid = tasks.create_task(conn, title="Ship the lantern", goal="Light the bench",
+                                items=["solder the header"])
+        [first] = tasks.item_ids(conn, uid)
+        stamp = memories.get_memory(conn, uid)["updated_at"]
+        memories.set_generated_content(conn, uid, f"GOAL: Light the bench\n[ ] {first} solder the header",
+                                       touch=False)
+        conn.execute("DELETE FROM meta WHERE key = 'task_content_format'")
+    with connection.connect(path) as conn:
+        row = memories.get_memory(conn, uid)
+        assert row["content"] == f"GOAL: Light the bench\n[ ] 1. solder the header (id {first})"
+        assert row["updated_at"] == stamp

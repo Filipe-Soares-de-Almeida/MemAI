@@ -93,10 +93,11 @@ its own body; set_confidence(uid, 'confirmed'|'contradicted') closes it
 once the evidence turns up. must_read() says which memories wait to be read
 in a scope -- open tasks first (task() files one), then pitfalls, handoffs,
 notes and flows; work an open task with task_item() and it closes itself
-once every item is done or dropped. An item's id and [[#id]] are for memai
-alone: to a person -- a reply, a file, a commit -- an item is item n of its
-task, named by the task's title, since nothing a person reads shows the id.
-`pinned` in must_read() counts memories a
+once every item is done or dropped. A person never sees an item's id, and
+reads a task's goal, comments and notes in the dashboard: there an item is
+[[#id]], shown as its number, and anywhere else -- a reply, a file, a
+commit -- it is item n of its task, named by the task's title. A bare id is
+written nowhere. `pinned` in must_read() counts memories a
 person marked as mandatory reading: list them with must_read(type=...,
 pinned=true) and open every one before acting.
 
@@ -258,9 +259,9 @@ _PARAM_TEXT: dict[str, dict[str, str]] = {}
 # replaced by the entry, at that line's indentation.
 PARAM_DOCS: dict[str, str] = {
     "cite_rule": """\
-Free text cites another item as [[#id]], which reads back as its current
-number and label; a label -- a title, an item's text -- never carries one.
-To a person, name it item n of its task.""",
+Free text cites another item only as [[#id]], which reads back as its
+current number and label; a label -- a title, an item's text -- never
+carries one. To a person, name it item n of its task.""",
     "offset": """\
 offset: where the page starts; `next_offset`, when present, starts the next.""",
     "title": """\
@@ -944,6 +945,17 @@ def _errors(errors: list[str]) -> dict:
     return {"ok": False, "errors": errors}
 
 
+ITEM_FOOT_NOTE = (
+    "An item's id is for memai calls only. Whatever a person reads -- a reply, a file, a "
+    "commit -- names an item by its number n, as item n of its task; a task's own text cites "
+    "it as [[#id]], which the dashboard shows as that number.")
+
+
+def _foot_noted(result: dict) -> dict:
+    """A task result with the foot note on naming items; an error passes as it is."""
+    return result if result.get("ok") is False else {**result, "foot_note": ITEM_FOOT_NOTE}
+
+
 @tool("core", ADD)
 def task(title: str, goal: str, items: str, domain: str = "", also: str = "",
          tags: str = "", session: str = "") -> dict:
@@ -971,8 +983,8 @@ def task(title: str, goal: str, items: str, domain: str = "", also: str = "",
     items: one checklist item per line, blank lines ignored, at most 50.
     Each is a short label, verb first, at most 80 characters: lists and
     every DEPENDS ON that names it show it whole, so its detail goes in the
-    item's brief (task_note). Each gets an id, which task_item() takes
-    back; the result lists them in order, with their numbers `n`.
+    item's brief (task_note). Each gets an id for task_item(); the result
+    lists them in order, each as {id, n}.
 
     @param also
 
@@ -995,7 +1007,7 @@ def task(title: str, goal: str, items: str, domain: str = "", also: str = "",
             result["items"] = tasks.numbered(conn, uid, tasks.item_ids(conn, uid))
     except ValueError as exc:
         return _errors([str(exc)])
-    return result
+    return _foot_noted(result)
 
 
 @tool("core", REWRITE)
@@ -1042,7 +1054,7 @@ def task_item(uid: str, item: int, state: str = "", comment: str = "",
                 out = tasks.delete_item(conn, uid, item, session=SESSION)
         except ValueError as exc:
             return _errors([str(exc)])
-        return {**out, "deleted": True}
+        return _foot_noted({**out, "deleted": True})
     if not edits:
         return _errors(["give at least one of text, state, comment and related, or delete"])
     try:
@@ -1071,7 +1083,7 @@ def task_item(uid: str, item: int, state: str = "", comment: str = "",
             }
     except ValueError as exc:
         return _errors([str(exc)])
-    return result
+    return _foot_noted(result)
 
 
 @tool("core", ADD)
@@ -1084,7 +1096,7 @@ def task_add(uid: str, items: str) -> dict:
     @param cite_rule
 
     Returns {"uid", "items", "progress", "task_state", "archived"}: the new
-    items' ids and numbers `n`, and the task as it stands.
+    items as {id, n}, and the task as it stands.
 
     uid: the task.
 
@@ -1097,8 +1109,8 @@ def task_add(uid: str, items: str) -> dict:
             numbered = tasks.numbered(conn, uid, added["ids"])
     except ValueError as exc:
         return _errors([str(exc)])
-    return {"uid": uid, "items": numbered, "progress": added["progress"],
-            "task_state": added["task_state"], "archived": added["archived"]}
+    return _foot_noted({"uid": uid, "items": numbered, "progress": added["progress"],
+                        "task_state": added["task_state"], "archived": added["archived"]})
 
 
 @tool("core", ADD)
@@ -1108,12 +1120,12 @@ def task_comment(uid: str, body: str, item: int = 0) -> dict:
     A comment never edits the task's content, so it carries what the
     checklist cannot: why an item is blocked, what a review said. Text an
     item is worked from -- its brief, a rule several items share -- is a
-    task_note(); a comment that goes with a change of state rides on
-    task_item(), in its `comment`.
+    task_note(); a comment that goes with a change of state goes in
+    task_item()'s `comment`.
 
     @param cite_rule
 
-    Returns {"uid", "comment_id"}.
+    Returns {"uid", "comment_id"}, plus `item` and `n` on an item.
 
     uid: the task.
 
@@ -1124,9 +1136,12 @@ def task_comment(uid: str, body: str, item: int = 0) -> dict:
     try:
         with connection.connect() as conn:
             comment_id = tasks.add_comment(conn, uid, body, item=item, session=SESSION)
+            result = {"uid": uid, "comment_id": comment_id}
+            if item:
+                result.update(item=item, n=tasks.numbered(conn, uid, [item])[0]["n"])
     except ValueError as exc:
         return _errors([str(exc)])
-    return {"uid": uid, "comment_id": comment_id}
+    return _foot_noted(result)
 
 
 @tool("core", READ)
@@ -1142,14 +1157,14 @@ def task_read(uid: str, part: str, item: int = 0, offset: int = 0) -> dict:
     item's; a page that mentions items carries `refs`, what each [[#id]]
     names) or `links` (the memories linked to `item`).
 
-    item: the item's id, for an item's notes, comments or links; 0, the
-    default, is the task's own.
+    item: the item's id, for its notes, comments or links (the page adds its
+    `n`); 0, the default, is the task's own.
 
     @param offset
     """
     try:
         with connection.connect() as conn:
-            return tasks.read_part(conn, uid, part, item, offset)
+            return _foot_noted(tasks.read_part(conn, uid, part, item, offset))
     except ValueError as exc:
         return _errors([str(exc)])
 
@@ -1210,17 +1225,17 @@ def task_note(uid: str, title: str = "", body: str = "", items: str = "", note_i
         with connection.connect() as conn:
             if delete:
                 tasks.delete_note(conn, uid, note_id)
-                return {"uid": uid, "note_id": note_id, "deleted": True}
+                return _foot_noted({"uid": uid, "note_id": note_id, "deleted": True})
             if note_id:
                 tasks.edit_note(conn, uid, note_id, title=title, body=body,
                                 items=ids if items.strip() else None, brief=brief)
             else:
                 note_id = tasks.add_note(conn, uid, title=title, body=body, items=ids,
                                          brief=brief, session=SESSION)
-            on = tasks.note(conn, uid, note_id)["items"]
+            on = tasks.numbered(conn, uid, tasks.note(conn, uid, note_id)["items"])
     except ValueError as exc:
         return _errors([str(exc)])
-    return {"uid": uid, "note_id": note_id, "items": on}
+    return _foot_noted({"uid": uid, "note_id": note_id, "items": on})
 
 
 @tool("diagrams", ADD)
@@ -2032,7 +2047,7 @@ def must_read(domain: str = "", type: str = "", limit: int = 10, offset: int = 0
             _read(conn, result["items"])
         if late := overdue.alerting_checkpoints(conn, domain):
             result["overdue"] = _overdue(conn, late)
-    return result
+    return _foot_noted(result) if type == "task" else result
 
 
 READ_NEXT_OVERDUE = ("Settle the checkpoints under `overdue` as its `alert` says, and tell "
@@ -2281,6 +2296,7 @@ def get_memory(uid: str, edits_offset: int = -1, content_offset: int = -1) -> di
                 head["next"] = {p: f"task_read(uid='{uid}', part='{p}')"
                                 for p in ("items", "notes", "comments")}
                 result["task"] = head
+                result["foot_note"] = ITEM_FOOT_NOTE
     except ValueError as exc:
         return _errors([str(exc)])
     if "content" in result:
