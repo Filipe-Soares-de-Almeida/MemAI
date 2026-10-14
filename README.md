@@ -106,8 +106,9 @@ share — is a task note, not a memory. A note on items is a brief: GOAL, CONTEX
 STEPS, PITFALLS, DONE WHEN and DEPENDS ON, with EXTRA INFO for anything else.
 Every tool names an item by its id; the number a list shows is only its place.
 A person never sees the id, so an agent names an item to one as item `n` of
-the task, and the results of `task`, `task_add`, `task_item` and `must_read`
-carry that number beside each id.
+the task: the task's content lists each item as its number, text and id, every
+task result carries `n` beside each id it names, and a `foot_note` on each
+restates the rule.
 Free text cites an item as `[[#id]]`, which reads back as the item's current
 number and label, and the dashboard inserts one when `#` is typed in a task's
 text. `task_item` also renames an

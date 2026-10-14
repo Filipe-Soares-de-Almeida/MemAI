@@ -446,8 +446,9 @@ tool takes the id. The
 number is display only: it follows the order, and deleting an item moves no
 other id. An item that stops applying is `dropped`. The task's content is
 generated from the goal and the items (`[ ]` todo, `[~]` doing, `[x]` done,
-`[-]` dropped, then the id); a goal edit and an item deletion enter the edit
-history.
+`[-]` dropped, then the number, the text and the id, as in
+`[ ] 2. Write the CSV exporter (id 4813)`); a goal edit and an item deletion
+enter the edit history, which names the item by its number.
 
 **Write it so it reads back.** The server refuses a write that breaks these:
 
@@ -472,12 +473,14 @@ Accepted: item   "Write the CSV exporter"
           depends_on  "4812 (the column mapping)"
 ```
 
-**To a person, an item is item `n` of its task.** A reply, a file in the
-repository, a commit or a pull request names the task by its title and the
-item by its number on the list, with its text when that helps: "item 2 of
-*Export the report as CSV*", never "item 4813". `[[#id]]` and the bare id are
-for memai alone; nothing a person reads shows the id. `task()`, `task_add()`,
-`task_item()` and `must_read()` carry `n` beside each id for this.
+**A person never sees an item's id.** The dashboard shows a task's goal,
+comments and notes to a person, so that text cites an item as `[[#id]]`, which
+the dashboard shows as the item's number and text, never a bare id ("item
+4813", "4813 waits for review"). A reply, a file in the repository, a commit or
+a pull request names the task by its title and the item by its number on the
+list, with its text when that helps: "item 2 of *Export the report as CSV*",
+never "item 4813". Every task result carries `n` beside each id it names, and a
+`foot_note` that restates this.
 
 Work it with:
 

@@ -33,10 +33,10 @@ def test_items_carry_their_id_and_their_position(conn):
     assert ids == sorted(ids)
 
 
-def test_the_content_names_each_item_by_id(conn):
+def test_the_content_names_each_item_by_number_and_id(conn):
     uid, ids = _four(conn)
     lines = memories.get_memory(conn, uid)["content"].splitlines()
-    assert lines[1] == f"[ ] {ids[0]} solder the header"
+    assert lines[1] == f"[ ] 1. solder the header (id {ids[0]})"
 
 
 def test_deleting_an_item_moves_no_other_item(conn):
@@ -82,10 +82,10 @@ def test_another_tasks_item_is_refused(conn):
         tasks.set_item_state(conn, uid, others[0], "done")
 
 
-def test_the_deletion_enters_the_edit_history_by_id(conn):
+def test_the_deletion_enters_the_edit_history_by_number(conn):
     uid, ids = _four(conn)
     tasks.delete_item(conn, uid, ids[1])
-    assert memories.get_edit_history(conn, uid)[-1]["note"] == f"item {ids[1]} deleted: flash the board"
+    assert memories.get_edit_history(conn, uid)[-1]["note"] == "item 2 deleted: flash the board"
 
 
 def test_a_brief_is_stored_without_depends_and_read_with_it(conn):

@@ -297,7 +297,7 @@ def test_task_note_takes_ids_and_depends_on_ids(store):
                            steps="s", pitfalls="p", done_when="d", depends_on=f"{a} (the spec)")
     assert "errors" not in out
     note = server.task_read(made["uid"], "notes", item=b)["records"][0]
-    assert note["items"] == [b] and f"DEPENDS ON: [[#{a}]] (the spec)" in note["body"]
+    assert note["items"] == [{"id": b, "n": 2}] and f"DEPENDS ON: [[#{a}]] (the spec)" in note["body"]
 
 
 def test_task_note_refuses_items_that_are_not_ids(store):
@@ -327,3 +327,32 @@ def test_every_item_result_carries_its_number_beside_its_id(store):
     [header] = [h for h in server.must_read(domain="acme/parser", type="task")["items"]
                 if h["uid"] == made["uid"]]
     assert header["doing"] == [{"id": second, "n": 2}]
+
+
+def test_reads_and_writes_on_one_item_carry_its_number(store):
+    _filler()
+    made = _task()
+    first, second = _ids(made)
+    comment = server.task_comment(made["uid"], "the lexer waits on the spec", item=second)
+    assert (comment["item"], comment["n"]) == (second, 2)
+    page = server.task_read(made["uid"], "comments", item=second)
+    assert (page["item"], page["n"]) == (second, 2)
+    note = server.task_note(made["uid"], title="Lexer", items=str(second), goal="g", context="c",
+                            steps="s", pitfalls="p", done_when="d", depends_on="none")
+    assert note["items"] == [{"id": second, "n": 2}]
+    [record] = server.task_read(made["uid"], "notes", item=second)["records"]
+    assert record["items"] == [{"id": second, "n": 2}]
+    gone = server.task_item(made["uid"], first, delete=True)
+    assert (gone["item"], gone["n"]) == (first, 1)
+
+
+def test_every_task_result_carries_the_foot_note_and_an_error_does_not(store):
+    made = _task()
+    uid, first = made["uid"], _ids(made)[0]
+    results = [made, server.task_add(uid, "ship the docs"),
+               server.task_item(uid, first, state="doing"), server.task_comment(uid, "plain words"),
+               server.task_read(uid, "items"), server.task_note(uid, title="Rule", body="keep it pure"),
+               server.must_read(domain="acme/parser", type="task"), server.get_memory(uid)]
+    assert [r.get("foot_note") for r in results] == [server.ITEM_FOOT_NOTE] * len(results)
+    assert "foot_note" not in server.task_item(uid, 999999, state="done")
+    assert "foot_note" not in server.must_read(domain="acme/parser", type="note")
