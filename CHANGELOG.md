@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.16.0](https://github.com/Filipe-Soares-de-Almeida/MemAI/compare/v0.15.0...v0.16.0) (2026-10-14)
+
+
+### ⚠ BREAKING CHANGES
+
+* **tasks:** the `items` of task_note() and of a note read with task_read() are lists of {id, n} instead of lists of ids, and a task's content lines read "[ ] n. text (id N)" instead of "[ ] N text".
+
+### Features
+
+* **tasks:** a task's content and every task result name each item by its number beside its id ([#109](https://github.com/Filipe-Soares-de-Almeida/MemAI/issues/109)) ([7e674f5](https://github.com/Filipe-Soares-de-Almeida/MemAI/commit/7e674f505be3316ba81c8394a2058d9f659179a7))
+
 ## [0.15.0](https://github.com/Filipe-Soares-de-Almeida/MemAI/compare/v0.14.0...v0.15.0) (2026-10-12)
 
 
