@@ -110,7 +110,7 @@ def test_item_changes_record_no_edit_but_a_delete_and_a_goal_edit_do(conn, uid):
     assert memories.get_edit_history(conn, uid) == []
     tasks.delete_item(conn, uid, item_at(conn, uid, 4))
     assert len(memories.get_edit_history(conn, uid)) == 1
-    assert f"[x] {item_at(conn, uid, 1)} read the spec" in memories.get_memory(conn, uid)["content"]
+    assert f"[x] 1. read the spec (id {item_at(conn, uid, 1)})" in memories.get_memory(conn, uid)["content"]
     tasks.set_goal(conn, uid, "Parse every config file fast")
     assert len(memories.get_edit_history(conn, uid)) == 2
 

@@ -348,6 +348,13 @@ def _ensure_columns(conn: sqlite3.Connection) -> None:
             conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
 
 
+def _ensure_task_format(conn: sqlite3.Connection) -> None:
+    # imported here: task_items reaches store.memories, which imports this module
+    from memai.store import task_items
+
+    task_items.ensure_format(conn)
+
+
 def _repair_task_states(conn: sqlite3.Connection) -> None:
     """Cancel an open task whose memory is not active.
 
@@ -500,6 +507,7 @@ def connect(db_path: Path | None = None, *, project: str | None = None):
     _ensure_diagram_titles(conn)
     _repair_task_states(conn)
     migrate_item_ids(conn, path)
+    _ensure_task_format(conn)
     conn.executescript(ITEM_INDEXES)
     try:
         yield conn

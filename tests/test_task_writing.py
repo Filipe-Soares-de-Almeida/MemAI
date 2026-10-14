@@ -172,10 +172,19 @@ def test_task_says_the_title_and_the_items_are_short():
 def test_a_task_tool_says_items_are_cited_as_a_mention_token(name):
     text = _published(name)
     assert "[[#id]]" in text and "never carries one" in text
+    assert "cites another item only as [[#id]]" in text
     assert "To a person, name it item n of its task" in text
 
 
 def test_the_instructions_say_a_person_reads_an_item_as_its_number_in_its_task():
     text = " ".join(server.INSTRUCTIONS.split())
-    assert "an item is item n of its task, named by the task's title" in text
-    assert "nothing a person reads shows the id" in text
+    assert "reads a task's goal, comments and notes in the dashboard: there an item is [[#id]]" in text
+    assert "it is item n of its task, named by the task's title" in text
+    assert "A bare id is written nowhere" in text
+
+
+def test_a_tool_on_one_item_says_its_number_comes_back():
+    assert "plus `item` and `n` on an item" in _published("task_comment")
+    assert "(the page adds its `n`)" in _published("task_read")
+    assert "each as {id, n}" in _published("task")
+    assert "the new items as {id, n}" in _published("task_add")
