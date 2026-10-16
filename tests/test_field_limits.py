@@ -6,6 +6,8 @@ dashboard's meta editor and the curation kinds -- while a restore writes back wh
 
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 from starlette.testclient import TestClient
 
@@ -104,13 +106,40 @@ def test_a_restore_writes_back_a_value_past_the_limit(conn):
 # ------------------------------------------------------------- the tools
 
 def test_the_writing_tools_refuse_a_field_past_the_limit(store):
-    with pytest.raises(ValueError, match=str(sections.TAGS_MAX)):
-        server.note(title="Kiln firing", content="a fact", tags=_tags(sections.TAGS_MAX + 1))
-    with pytest.raises(ValueError, match=str(sections.DOMAIN_MAX)):
-        server.note(title="Kiln firing", content="a fact", domain=_path(sections.DOMAIN_MAX + 1))
+    res = server.note(title="Kiln firing", content="a fact", tags=_tags(sections.TAGS_MAX + 1))
+    assert res["ok"] is False and str(sections.TAGS_MAX) in res["errors"][0]
+    res = server.note(title="Kiln firing", content="a fact", domain=_path(sections.DOMAIN_MAX + 1))
+    assert res["ok"] is False and str(sections.DOMAIN_MAX) in res["errors"][0]
     res = server.task("Fire the kiln", "the batch is fired", "load\nfire",
                       domain=_path(sections.DOMAIN_MAX + 1))
     assert res["ok"] is False and str(sections.DOMAIN_MAX) in res["errors"][0]
+
+
+LONG_TITLE = "t" * (sections.TITLE_MAX + 1)
+TITLE_REFUSAL = f"title is {sections.TITLE_MAX + 1} characters; the limit is {sections.TITLE_MAX}"
+
+
+@pytest.mark.parametrize("write", [
+    lambda: server.note(title=LONG_TITLE, content="a fact", domain="acme/kiln"),
+    lambda: server.anti_pattern(title=LONG_TITLE, pattern="fire it cold", why_wrong="it cracks",
+                                instead="preheat it", domain="acme/kiln"),
+    lambda: server.reasoning(title=LONG_TITLE, hypothesis="cold firing holds",
+                             reasoning="fired two batches", result="both cracked",
+                             revised_belief="it does not hold", next_time="preheat",
+                             domain="acme/kiln"),
+    lambda: server.checkpoint(title=LONG_TITLE, intent="fire the batch", established="loaded",
+                              pursuing="fire it", open_questions="none", domain="acme/kiln"),
+], ids=["note", "anti_pattern", "reasoning", "checkpoint"])
+def test_a_writer_names_the_field_past_its_limit_and_writes_nothing(store, write):
+    assert write() == {"ok": False, "errors": [TITLE_REFUSAL]}
+    assert server.list_by_domain("acme/kiln")["results"] == []
+
+
+def test_a_refusal_reaches_the_mcp_client_with_its_own_text(store):
+    result = asyncio.run(server.mcp.call_tool(
+        "note", {"title": LONG_TITLE, "content": "a fact", "domain": "acme/kiln"}))
+    assert not result.is_error
+    assert TITLE_REFUSAL in result.content[0].text
 
 
 def test_edit_memory_refuses_tags_or_a_source_past_the_limit(store):
