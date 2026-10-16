@@ -42,6 +42,10 @@ RELEASES_PAGE = f"https://github.com/{REPO}/releases/latest"
 PER_PAGE = 20
 RELEASES_API = f"https://api.github.com/repos/{REPO}/releases?per_page={PER_PAGE}"
 
+# Bytes read from one answer at most. Each release carries its author, assets and reactions
+# besides its notes, several KB apiece, and an answer cut short does not parse.
+MAX_BYTES = 1 << 20
+
 CACHE_NAME = "update.json"
 
 # Where the chosen window is kept: beside the cache, in the home, so it holds
@@ -173,7 +177,7 @@ def _fetch(timeout: float = TIMEOUT) -> dict:
     })
     try:
         with urllib.request.urlopen(request, timeout=timeout) as response:  # noqa: S310 - literal https URL
-            payload = json.loads(response.read(1 << 16).decode("utf-8", "replace"))
+            payload = json.loads(response.read(MAX_BYTES).decode("utf-8", "replace"))
     except Exception:  # noqa: BLE001 - deliberate: see the module docstring
         return {}
     if not isinstance(payload, list):

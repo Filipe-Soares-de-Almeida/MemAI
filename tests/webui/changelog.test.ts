@@ -67,6 +67,20 @@ describe('the releases view', () => {
     teardownView();
   });
 
+  it('says the last check failed, dated as a try, instead of calling the version up to date', async () => {
+    const view = await open(updateState({ failed: true, checked_at: new Date().toISOString() }));
+    const line = view.querySelector('.rl-versions.is-current .rl-checked')?.textContent;
+    expect(line).toBe(`${en['rls.checkFailed']} · ${en['rls.triedNow']}`);
+    teardownView();
+  });
+
+  it('calls a version up to date once a check came back with nothing newer', async () => {
+    const view = await open(updateState({ checked_at: new Date().toISOString() }));
+    const line = view.querySelector('.rl-versions.is-current .rl-checked')?.textContent;
+    expect(line).toBe(`${en['rls.upToDate']} · ${en['rls.checkedNow']}`);
+    teardownView();
+  });
+
   it('keeps Check now off, and says why, while the release check is switched off', async () => {
     const view = await open(updateState({ enabled: false }));
     const button = view.querySelector('#rlCheck') as HTMLButtonElement;

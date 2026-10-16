@@ -35,13 +35,15 @@ const everyItems = computed(() => {
   return hours.map(n => ({ value: String(n), label: hoursLabel(n) }));
 });
 
-/* "No newer release" and "nobody looked" are different answers, so an off or unrun check says so. */
+/* "No newer release" and "nobody looked" are different answers, so an off or unrun check says so,
+   and a check that did not come back is dated as a try. */
 const checkedText = computed(() => {
   const s = state.value;
   if (!s.enabled) return t('rls.checkOff');
   if (!s.checked_at) return t('rls.checkNever');
-  if (Date.now() - new Date(s.checked_at).getTime() < 60000) return t('rls.checkedNow');
-  return t('rls.checked', { ago: fmtAgo(s.checked_at) });
+  const now = Date.now() - new Date(s.checked_at).getTime() < 60000;
+  if (s.failed) return now ? t('rls.triedNow') : t('rls.tried', { ago: fmtAgo(s.checked_at) });
+  return now ? t('rls.checkedNow') : t('rls.checked', { ago: fmtAgo(s.checked_at) });
 });
 
 async function checkNow() {
@@ -85,7 +87,7 @@ const groupTitle = (group: ReleaseSection) =>
           <span class="rl-v-num">{{ bare(state.current) }}</span>
           <span class="rl-v-label">{{ t('rls.installed') }}</span>
         </div>
-        <p class="rl-checked">{{ t('rls.upToDate') }} · {{ checkedText }}</p>
+        <p class="rl-checked">{{ state.failed ? t('rls.checkFailed') : t('rls.upToDate') }} · {{ checkedText }}</p>
       </div>
       <div v-else class="rl-versions">
         <div class="rl-v">
