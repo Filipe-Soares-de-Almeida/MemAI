@@ -79,13 +79,14 @@ _REAL_FETCH = update._fetch
 
 
 class _Response:
-    """What urlopen hands back, as much of it as _fetch touches."""
+    """What urlopen hands back, as much of it as _fetch touches. `read(n)`
+    stops at n bytes, as the real response does."""
 
     def __init__(self, payload):
         self._body = json.dumps(payload).encode("utf-8")
 
     def read(self, limit: int = -1) -> bytes:
-        return self._body
+        return self._body if limit is None or limit < 0 else self._body[:limit]
 
     def __enter__(self):
         return self
@@ -389,6 +390,20 @@ def test_the_payload_is_read_by_version_without_drafts_or_pre_releases(monkeypat
     assert [r["version"] for r in found["releases"]] == ["v0.10.0", "v0.9.0"]
     assert found["latest"] == "v0.10.0"
     assert found["releases"][0]["published_at"] == "2026-03-01"
+
+
+def test_a_full_page_of_releases_is_read_whole(monkeypatch):
+    """A page of PER_PAGE releases, each the several KB the API sends, comes
+    back with every release on it."""
+    padding = "x" * 6000
+    _github(monkeypatch, [
+        {"tag_name": f"v0.{n}.0", "html_url": f"https://example.com/{n}",
+         "published_at": "2026-02-01T10:00:00Z", "body": "notes",
+         "author": {"bio": padding}}
+        for n in range(update.PER_PAGE)])
+    found = _REAL_FETCH()
+    assert len(found["releases"]) == update.PER_PAGE
+    assert found["latest"] == f"v0.{update.PER_PAGE - 1}.0"
 
 
 def test_a_payload_of_another_shape_reads_as_no_answer(monkeypatch):
