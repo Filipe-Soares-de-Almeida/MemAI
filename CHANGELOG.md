@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.16.1](https://github.com/Filipe-Soares-de-Almeida/MemAI/compare/v0.16.0...v0.16.1) (2026-10-16)
+
+
+### Bug Fixes
+
+* **server:** a tool's ValueError reaches the caller as its own text, not the SDK's generic error ([#114](https://github.com/Filipe-Soares-de-Almeida/MemAI/issues/114)) ([200813c](https://github.com/Filipe-Soares-de-Almeida/MemAI/commit/200813cd15f1e2a76b589ad5d09b5d2d6729ce84))
+
 ## [0.16.0](https://github.com/Filipe-Soares-de-Almeida/MemAI/compare/v0.15.0...v0.16.0) (2026-10-14)
 
 
