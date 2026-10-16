@@ -17,7 +17,7 @@ dependencies = [
 [project.optional-dependencies]
 # starlette.testclient wants httpx2; without it the import falls back to
 # httpx and warns.
-dev = ["pytest>=9.1,<10", "httpx2>=2.12,<3", "ruff>=0.16,<0.17", "pyright>=1.1.414,<1.2"]
+dev = ["pytest>=9.1,<10", "httpx2>=2.12,<3", "ruff>=0.16,<0.18", "pyright>=1.1.414,<1.2"]
 
 [project.scripts]
 memai-mcp = "memai.server:main"
