@@ -42,9 +42,8 @@ RELEASES_PAGE = f"https://github.com/{REPO}/releases/latest"
 PER_PAGE = 20
 RELEASES_API = f"https://api.github.com/repos/{REPO}/releases?per_page={PER_PAGE}"
 
-# Bytes read from one answer at most. Each release in the API's payload carries
-# its author, assets and reactions besides its notes -- several KB apiece -- and
-# an answer cut short does not parse, so it reads as no answer.
+# Bytes read from one answer at most. Each release carries its author, assets and reactions
+# besides its notes, several KB apiece, and an answer cut short does not parse.
 MAX_BYTES = 1 << 20
 
 CACHE_NAME = "update.json"
