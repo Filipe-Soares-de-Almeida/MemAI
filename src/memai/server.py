@@ -353,9 +353,10 @@ DISCARD = _hints(read_only=False, destructive=True, idempotent=True)
 def tool(group: str, hints: ToolAnnotations):
     """Register a tool with the MCP server when its group is active.
 
-    Always returns the function, wrapped so a result over the output
-    ceiling becomes an error, so the module-level name stays callable from
-    the admin surface and the tests whether or not the schema was published.
+    Always returns the function, wrapped so a ValueError and a result over
+    the output ceiling come back as {"ok": False, "errors": [...]}, so the
+    module-level name stays callable from the admin surface and the tests
+    whether or not the schema was published.
     The published description is the docstring with its shared parameter text
     expanded, its indentation removed and its parameter paragraphs moved into
     the input schema; `hints`, what a call does to the store, is published as
@@ -373,7 +374,12 @@ def tool(group: str, hints: ToolAnnotations):
         @functools.wraps(fn)
         def bounded(*args, **kwargs):
             domain = signature.bind_partial(*args, **kwargs).arguments.get("domain", "")
-            result = _with_confidence_reminder(fn(*args, **kwargs), domain)
+            try:
+                result = fn(*args, **kwargs)
+            except ValueError as exc:
+                # the SDK masks any raised exception but ToolError as "Error executing tool <name>"
+                result = _errors([str(exc)])
+            result = _with_confidence_reminder(result, domain)
             size = budget.result_chars(result)
             if size <= budget.MCP_RESULT_MAX_CHARS:
                 return result
