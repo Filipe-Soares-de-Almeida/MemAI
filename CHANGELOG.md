@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.16.2](https://github.com/Filipe-Soares-de-Almeida/MemAI/compare/v0.16.1...v0.16.2) (2026-10-16)
+
+
+### Bug Fixes
+
+* read the whole releases page and stop calling a failed check up to date ([#116](https://github.com/Filipe-Soares-de-Almeida/MemAI/issues/116)) ([2f720c6](https://github.com/Filipe-Soares-de-Almeida/MemAI/commit/2f720c6f586be2c37174092b5444b995e4fed924))
+
 ## [0.16.1](https://github.com/Filipe-Soares-de-Almeida/MemAI/compare/v0.16.0...v0.16.1) (2026-10-16)
 
 
