@@ -169,7 +169,7 @@ emits and how to turn the warden off.
 | host | the file it reads | how to write it |
 |---|---|---|
 | Claude Code CLI — `claude` in a terminal | `~/.claude.json`, top-level `mcpServers` | `claude mcp add --scope user memai <command>` |
-| Claude desktop app — Chat and the Code tab | Windows: `%APPDATA%\Claude\claude_desktop_config.json`<br>macOS: `~/Library/Application Support/Claude/claude_desktop_config.json` | edit the file, or Settings → Developer → Edit configuration |
+| Claude desktop app — Chat and the Code tab | Windows: `%LOCALAPPDATA%\Claude-Data\<install>\claude_desktop_config.json` for the packaged app, `%APPDATA%\Claude\claude_desktop_config.json` otherwise<br>macOS: `~/Library/Application Support/Claude/claude_desktop_config.json` | Settings → Developer → Edit configuration, which opens the file the app reads |
 
 <details>
 <summary><b>Install details</b> — the config block, the PATH trap, and the Windows batch files</summary>
