@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.16.3](https://github.com/Filipe-Soares-de-Almeida/MemAI/compare/v0.16.2...v0.16.3) (2026-10-26)
+
+
+### Documentation
+
+* name the folder the Windows desktop app reads its MCP config from ([#120](https://github.com/Filipe-Soares-de-Almeida/MemAI/issues/120)) ([c41a5d0](https://github.com/Filipe-Soares-de-Almeida/MemAI/commit/c41a5d014ed0185df3020f056b446aa70debdc57))
+
 ## [0.16.2](https://github.com/Filipe-Soares-de-Almeida/MemAI/compare/v0.16.1...v0.16.2) (2026-10-16)
 
 
