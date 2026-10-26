@@ -155,11 +155,26 @@ about the other.
 | host | the file it reads |
 |---|---|
 | Claude Code CLI — `claude` in a terminal | `~/.claude.json`, top-level `mcpServers` |
-| Claude desktop app — Chat and the Code tab | Windows: `%APPDATA%\Claude\claude_desktop_config.json`<br>macOS: `~/Library/Application Support/Claude/claude_desktop_config.json` |
+| Claude desktop app — Chat and the Code tab | Windows: `%LOCALAPPDATA%\Claude-Data\<install>\claude_desktop_config.json` or `%APPDATA%\Claude\claude_desktop_config.json` — see below<br>macOS: `~/Library/Application Support/Claude/claude_desktop_config.json` |
 
 Register in whichever the user actually uses; register in both if they use
 both. Do not report the install as done after writing only one, and do not
 infer from one file's contents what the other holds — open the file.
+
+**On Windows, find the desktop app's file before writing it.** The packaged
+app keeps its data in one folder per install under `%LOCALAPPDATA%\Claude-Data\`;
+other installs keep it in `%APPDATA%\Claude\`. Both folders can exist on the
+same machine, each with a `claude_desktop_config.json`, and the one the app
+does not use is still valid JSON that takes an edit and is never read. The file
+in use is:
+
+- the one Settings → Developer → Edit configuration opens;
+- the one whose `mcpServers` match the local servers the app lists under
+  Settings → Connectors;
+- the one in the folder that holds a `lockfile` while the app is running.
+
+When these do not single out one file, do not write: ask the user for the
+path Edit configuration opens.
 
 **Name the server `memai`.** A host builds its tool names out of it —
 `mcp__memai__search` — and the bundled warden's tool list matches those names
@@ -172,7 +187,7 @@ For the Claude Code CLI, `claude mcp add` writes the entry:
 claude mcp add --scope user memai "<absolute path to memai-mcp>"
 ```
 
-For the desktop app, edit its file directly and restart the app.
+For the desktop app, quit it, edit its file directly, and start it again.
 
 **Use the absolute path to the executable in the venv.** A bare `memai-mcp`
 resolves only if that venv's `Scripts\` (`bin/` off Windows) is on the PATH of
