@@ -48,6 +48,20 @@ async function key(target: HTMLElement, k: string, mods: KeyboardEventInit = {})
   await flush();
 }
 
+/* Enter as a browser delivers it: unless the keydown was prevented, its keypress goes to whatever
+   holds focus by then, and a focused button takes that as a click. happy-dom does neither. */
+async function enter(field: HTMLElement) {
+  const down = new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true });
+  field.dispatchEvent(down);
+  if (!down.defaultPrevented && document.activeElement instanceof HTMLButtonElement) document.activeElement.click();
+  await flush();
+}
+
+const tick = async (view: HTMLElement, ...at: number[]) => {
+  for (const i of at) (rows(view)[i].querySelector('input') as HTMLElement).click();
+  await flush();
+};
+
 const labels = (root: Element) => [...root.querySelectorAll('.tb-field .mg-label')].map(l => l.textContent);
 
 describe('the memory list filters', () => {
@@ -226,6 +240,46 @@ describe('the memory inspector', () => {
     await flush();
     const sent = calls.find(c => c.path === '/api/memories/purge');
     expect(sent?.body).toEqual({ uids: ['feedc0de00000001', 'feedc0de00000004'], confirm: 'DELETE 2' });
+    teardownView();
+  });
+
+  it('archives once when Enter confirms the reason, and asks once', async () => {
+    const bodies: unknown[] = [];
+    const view = await show({}, (path, call) => {
+      if (path === '/api/bulk') { bodies.push(call.body); return { ok: true, affected: 2 }; }
+      return undefined;
+    });
+    await tick(view, 0, 1);
+    const archive = view.querySelector('[data-act="archive"]') as HTMLButtonElement;
+    archive.focus();
+    archive.click();
+    await flush();
+    const reason = document.querySelector('.modal [data-in]') as HTMLInputElement;
+    reason.value = 'superseded';
+    reason.dispatchEvent(new Event('input'));
+    await enter(reason);
+    await flush();
+    expect(bodies).toEqual([{ action: 'archive', reason: 'superseded', uids: ['feedc0de00000001', 'feedc0de00000002'] }]);
+    expect(document.querySelectorAll('.modal')).toHaveLength(0);
+    teardownView();
+  });
+
+  it('opens one archive dialog however often the button is pressed while it is open', async () => {
+    const view = await show();
+    await tick(view, 2);
+    const archive = view.querySelector('[data-act="archive"]') as HTMLButtonElement;
+    archive.click();
+    archive.click();
+    await flush();
+    expect(document.querySelectorAll('.modal')).toHaveLength(1);
+    (document.querySelector('.modal [data-x]') as HTMLElement).click();
+    await flush();
+    expect(document.querySelectorAll('.modal')).toHaveLength(0);
+    archive.click();
+    await flush();
+    expect(document.querySelectorAll('.modal')).toHaveLength(1);
+    (document.querySelector('.modal [data-x]') as HTMLElement).click();
+    await flush();
     teardownView();
   });
 

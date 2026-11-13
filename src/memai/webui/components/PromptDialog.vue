@@ -15,13 +15,14 @@ const field = ref<HTMLInputElement | null>(null);
 onMounted(() => field.value?.focus());
 </script>
 
-<!-- title and body are markup the caller built, with its values escaped. -->
+<!-- title and body are markup the caller built, with its values escaped.
+     Enter is prevented: closing hands focus back to the opener, which would take its keypress as a click. -->
 <template>
   <AppModal :title="title" :head-html="title" @close="emit('done', null)">
     <div v-if="body" v-html="body"></div>
     <div class="field"><label>{{ label }}</label>
       <input ref="field" v-model="text" type="text" data-in :placeholder="placeholder"
-             @keydown.enter="emit('done', text)"></div>
+             @keydown.enter.prevent="emit('done', text)"></div>
     <template #foot>
       <button class="btn" data-x @click="emit('done', null)">{{ t('common.cancel') }}</button>
       <button class="btn" :class="danger ? 'btn-danger' : 'btn-solid'" data-ok

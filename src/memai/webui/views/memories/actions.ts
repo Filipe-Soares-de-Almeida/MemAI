@@ -59,7 +59,20 @@ export type Act = 'archive' | 'restore' | 'project' | 'purge';
 
 const moveToProject = moveToProjectModal as (opts: { uids: string[] }) => Promise<boolean>;
 
+/* Held from the press to the end of the act's request, so the selection is acted on once. */
+let acting = false;
+
 export async function runAct(act: Act, picked: MemoryRow[]): Promise<void> {
+  if (acting) return;
+  acting = true;
+  try {
+    await perform(act, picked);
+  } finally {
+    acting = false;
+  }
+}
+
+async function perform(act: Act, picked: MemoryRow[]): Promise<void> {
   const uids = picked.map(m => m.uid);
   if (act === 'project') {
     if (await moveToProject({ uids })) refreshBehind();

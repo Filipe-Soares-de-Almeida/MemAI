@@ -92,7 +92,7 @@ function ok() {
       </label>
       <input ref="nameBox" v-model="label" type="text" id="archName" class="arch-field" autocomplete="off"
              spellcheck="false" :maxlength="ZIP_NAME_MAX" :placeholder="t('mn.arch.namePh')"
-             :aria-label="t('mn.arch.name')" :hidden="way !== 'name'" @keydown.enter="ok">
+             :aria-label="t('mn.arch.name')" :hidden="way !== 'name'" @keydown.enter.prevent="ok">
       <select v-model="into" id="archInto" class="arch-field" :aria-label="t('mn.arch.existing')"
               :hidden="way !== 'existing'">
         <option v-for="z in zips" :key="z" :value="z">{{ zipLabel(z, project) }}</option>
