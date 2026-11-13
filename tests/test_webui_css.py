@@ -141,3 +141,17 @@ def test_the_graph_view_reserves_no_strip_because_its_canvas_never_scrolls_the_p
 
 def test_a_dependency_reason_is_centred_on_its_chip_whatever_the_mark(css):
     assert re.search(r"\.tk-dep, \.tk-dep-none \{[^}]*align-items: center;", css)
+
+
+# --------------------------------------------------------------- dialogs
+
+def test_a_dialog_body_never_grows_wider_than_its_dialog(css):
+    body = re.search(r"^\.modal-body \{([^}]*)\}", css, re.M).group(1)
+    assert "grid-template-columns: minmax(0, 1fr)" in body
+
+
+def test_a_long_selection_scrolls_inside_its_dialog(css):
+    box = re.search(r"^\.bulk-list \{([^}]*)\}", css, re.M).group(1)
+    assert re.search(r"max-height: min\(\d+vh, [\d.]+rem\);", box)
+    assert "overflow-y: auto" in box
+    assert re.search(r"^\.bulk-list li \{[^}]*text-overflow: ellipsis; white-space: nowrap;", css, re.M)

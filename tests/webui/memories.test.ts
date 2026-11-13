@@ -231,6 +231,8 @@ describe('the memory inspector', () => {
     await flush();
     const ok = document.querySelector('.modal [data-ok]') as HTMLButtonElement;
     expect(ok.disabled).toBe(true);
+    expect([...document.querySelectorAll('.modal .bulk-list li')].map(li => li.textContent))
+      .toEqual(['Lantern 1', 'Lantern 4']);
     const phrase = document.querySelector('.modal [data-phrase]') as HTMLInputElement;
     phrase.value = 'DELETE 2';
     phrase.dispatchEvent(new Event('input'));
@@ -278,6 +280,21 @@ describe('the memory inspector', () => {
     archive.click();
     await flush();
     expect(document.querySelectorAll('.modal')).toHaveLength(1);
+    (document.querySelector('.modal [data-x]') as HTMLElement).click();
+    await flush();
+    teardownView();
+  });
+
+  it('lists every memory it is about to archive', async () => {
+    const view = await show();
+    (view.querySelector('#memAll') as HTMLInputElement).click();
+    await flush();
+    (view.querySelector('[data-bn-all]') as HTMLButtonElement).click();
+    await flush();
+    (view.querySelector('[data-act="archive"]') as HTMLButtonElement).click();
+    await flush();
+    const listed = [...document.querySelectorAll('.modal .bulk-list li')].map(li => li.textContent);
+    expect(listed).toEqual(ALL.map(m => m.title));
     (document.querySelector('.modal [data-x]') as HTMLElement).click();
     await flush();
     teardownView();
