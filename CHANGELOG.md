@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.16.4](https://github.com/Filipe-Soares-de-Almeida/MemAI/compare/v0.16.3...v0.16.4) (2026-11-13)
+
+
+### Bug Fixes
+
+* confirm a bulk archive once, keep it on screen, and quote spaced paths ([#1](https://github.com/Filipe-Soares-de-Almeida/MemAI/issues/1)) ([95eaf74](https://github.com/Filipe-Soares-de-Almeida/MemAI/commit/95eaf74fb8806c1353039f7bb981b0540832d78f))
+
 ## [0.16.3](https://github.com/Filipe-Soares-de-Almeida/MemAI/compare/v0.16.2...v0.16.3) (2026-11-01)
 
 
