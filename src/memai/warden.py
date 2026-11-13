@@ -24,7 +24,7 @@ import tempfile
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from memai import lite
+from memai import lite, shell
 
 # Clock skew allowed between an agent file and a session start. An install into a running session
 # is minutes old and must fall outside it. See `loaded`.
@@ -267,7 +267,7 @@ def request(session_id: str, transcript: str = "", since: str = "") -> str:
     means the warden has not run in this session and should read the turns
     it can still see rather than the whole file.
     """
-    where = f" Transcript: {transcript}." if transcript else ""
+    where = f" Transcript: {shell.quote(transcript)}." if transcript else ""
     start = (f" Read the turns after {since}." if since else
              " It has not run in this session yet; read the recent turns.")
     return (

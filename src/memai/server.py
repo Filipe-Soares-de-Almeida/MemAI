@@ -55,6 +55,7 @@ from memai import (
     lite,
     portable,
     sections,
+    shell,
     tasks,
     update,
 )
@@ -141,11 +142,6 @@ are copied over, and any file either has to overwrite is backed up first. Add
 `--check` to report the state without writing anything."""
 
 
-def _quoted(command: str) -> str:
-    """A command a shell reads as one word."""
-    return f'"{command}"' if " " in command else command
-
-
 def _stale_note(command: str) -> str:
     """INSTALL_STALE for what hook_install.stale() reports, or "" when the
     installation is current."""
@@ -192,7 +188,7 @@ def _instructions() -> str:
     """
     notes: list[str] = []
     try:
-        command = _quoted(hook_install.hook_command())
+        command = shell.quote(hook_install.hook_command())
         notes.append(_stale_note(command)
                      if hook_install.registered(hook_install.user_settings_path())
                      else HOOKS_MISSING.format(command=command))

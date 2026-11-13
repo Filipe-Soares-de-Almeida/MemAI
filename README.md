@@ -150,7 +150,7 @@ hooks put the store in front of an agent that did not ask for it, and the
 bundled skills and subagent teach it what to do with them:
 
 ```sh
-claude mcp add --scope user memai C:\path\to\MemAI\.venv\Scripts\memai-mcp.exe
+claude mcp add --scope user memai "C:\path\to\MemAI\.venv\Scripts\memai-mcp.exe"
 
 memai-hook install            # the four hook events
 memai-hook install --skills   # the bundled skills

@@ -33,7 +33,9 @@ same states per event and per skill.
 
 The command is written with forward slashes on every platform: a hook of
 `type: command` is handed to a shell, and a POSIX shell reads the
-backslashes of a Windows path as escapes.
+backslashes of a Windows path as escapes. For the same reason its path is
+written in double quotes when the shell would split it, at a space or
+anywhere else (see memai.shell).
 """
 
 from __future__ import annotations
@@ -46,7 +48,7 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-from memai import __version__, guard
+from memai import __version__, guard, shell
 
 # CLI event -> the host event that fires it.
 EVENTS = {
@@ -125,7 +127,7 @@ def hook_command() -> str:
 
 
 def _entry(command: str, event: str) -> dict:
-    entry = {"hooks": [{"type": "command", "command": f"{command} {event}",
+    entry = {"hooks": [{"type": "command", "command": f"{shell.quote(command)} {event}",
                         "timeout": TIMEOUTS.get(event, TIMEOUT)}]}
     matcher = MATCHERS.get(EVENTS[event])
     return {"matcher": matcher, **entry} if matcher else entry
@@ -213,7 +215,7 @@ def install(path: Path, *, command: str | None = None, write: bool = True) -> st
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(merged, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     lines.append(f"registered {', '.join(changed)} in {path}")
-    lines.append(f"command: {command} <event>")
+    lines.append(f"command: {shell.quote(command)} <event>")
     lines.append("Restart the host (or open a new session) for a SessionStart hook to fire.")
     return "\n".join(lines)
 
@@ -613,9 +615,10 @@ def event_state(path: Path, *, command: str | None = None) -> dict[str, str]:
 
     `current` for the entry an install would write; `outdated` when it fires
     that same command through an entry an install would rewrite -- another
-    timeout, another type; `elsewhere` for another memai-hook that is still
-    on disk; `broken` when the command it fires does not exist;
-    `missing` when nothing in the file fires memai for that event.
+    timeout, another type, its path bare where a shell splits it;
+    `elsewhere` for another memai-hook that is still on disk; `broken` when
+    the command it fires does not exist; `missing` when nothing in the file
+    fires memai for that event.
     """
     command = command or hook_command()
     groups = _groups(path)
@@ -625,9 +628,9 @@ def event_state(path: Path, *, command: str | None = None) -> dict[str, str]:
         if group is None:
             state[host_event] = "missing"
             continue
-        got = str(group["hooks"][0].get("command", ""))
-        if got != f"{command} {event}":
-            state[host_event] = "elsewhere" if Path(_exe(got, event)).exists() else "broken"
+        exe = _exe(str(group["hooks"][0].get("command", "")), event)
+        if exe != command:
+            state[host_event] = "elsewhere" if Path(exe).exists() else "broken"
         else:
             state[host_event] = "current" if group == _entry(command, event) else "outdated"
     return state
