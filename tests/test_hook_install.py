@@ -9,7 +9,10 @@ import json
 import pytest
 
 import memai
-from memai import hook, hook_install, server
+from memai import hook, hook_install, server, shell
+
+# A memai-hook in a folder whose name holds a space, which a shell splits a bare path at.
+SPACED = "C:/path/to/Mem AI/.venv/Scripts/memai-hook.exe"
 
 
 @pytest.fixture(autouse=True)
@@ -65,6 +68,17 @@ def test_a_windows_path_is_written_with_forward_slashes(settings):
     """The registered command carries no backslash on any platform."""
     _run("--settings", str(settings))
     assert "\\" not in _hooks(settings)["Stop"][0]["hooks"][0]["command"]
+
+
+def test_a_command_with_a_space_is_registered_in_double_quotes(settings):
+    """A host hands every entry to a shell."""
+    hook_install.install(settings, command=SPACED)
+    for event, host_event in hook_install.EVENTS.items():
+        assert _hooks(settings)[host_event][0]["hooks"][0]["command"] == f'"{SPACED}" {event}'
+
+
+def test_the_install_report_spells_the_command_as_it_registered_it(settings):
+    assert f'command: "{SPACED}" <event>' in hook_install.install(settings, command=SPACED)
 
 
 def test_running_it_twice_registers_the_hooks_once(settings, capsys):
@@ -351,6 +365,16 @@ def test_check_reports_a_registration_of_another_command(settings, capsys):
 
 # ---------------------------------------- telling the server it went out of date
 
+def _hook_in(folder, tmp_path, monkeypatch):
+    command = folder / "memai-hook"
+    folder.mkdir(parents=True, exist_ok=True)
+    command.write_text("", encoding="utf-8")
+    user = tmp_path / "user" / "settings.json"
+    monkeypatch.setattr(hook_install, "user_settings_path", lambda: user)
+    monkeypatch.setattr(hook_install, "hook_command", lambda: command.as_posix())
+    return user, command.as_posix()
+
+
 @pytest.fixture
 def installed(tmp_path, monkeypatch):
     """A user settings file under tmp_path, and a `memai-hook` that exists
@@ -358,12 +382,13 @@ def installed(tmp_path, monkeypatch):
 
     Returns the path and that command; nothing is registered yet.
     """
-    command = tmp_path / "memai-hook"
-    command.write_text("", encoding="utf-8")
-    user = tmp_path / "user" / "settings.json"
-    monkeypatch.setattr(hook_install, "user_settings_path", lambda: user)
-    monkeypatch.setattr(hook_install, "hook_command", lambda: command.as_posix())
-    return user, command.as_posix()
+    return _hook_in(tmp_path, tmp_path, monkeypatch)
+
+
+@pytest.fixture
+def spaced(tmp_path, monkeypatch):
+    """`installed`, with the `memai-hook` in a folder whose name holds a space."""
+    return _hook_in(tmp_path / "Mem AI", tmp_path, monkeypatch)
 
 
 def _drop(path, *host_events) -> None:
@@ -382,6 +407,38 @@ def _untime(path) -> None:
         for hook_entry in groups[0]["hooks"]:
             hook_entry.pop("timeout", None)
     path.write_text(json.dumps(settings), encoding="utf-8")
+
+
+def _bare(path, command) -> None:
+    """Every registration with `command` written bare, which a shell splits at its space."""
+    settings = hook_install.read_settings(path)
+    for groups in settings["hooks"].values():
+        for hook_entry in groups[0]["hooks"]:
+            hook_entry["command"] = hook_entry["command"].replace(f'"{command}"', command)
+    path.write_text(json.dumps(settings), encoding="utf-8")
+
+
+def test_a_bare_registration_with_a_space_is_outdated_until_an_install_quotes_it(spaced):
+    user, command = spaced
+    hook_install.install(user)
+    _bare(user, command)
+    assert hook_install.stale()["outdated"] == list(hook_install.EVENTS.values())
+    hook_install.install(user)
+    assert set(hook_install.event_state(user).values()) == {"current"}
+
+
+def test_the_server_quotes_a_command_with_a_space_in_every_install_it_asks_for(spaced, bundled, agents):
+    user, command = spaced
+    hook_install.install(user)
+    hook_install.install_skills(hook_install.skills_dir(user))
+    hook_install.install_agents(hook_install.agents_dir(user))
+    _drop(user, "Stop")
+    (bundled / "zeta-queue-drain" / "SKILL.md").write_text("drain it twice\n", encoding="utf-8")
+    (agents / "acme-cache-warden.md").write_text("---\nname: acme-cache-warden\n"
+                                                 "description: watches harder\n---\n", encoding="utf-8")
+    text = server._instructions()
+    for args in ("install", "install --skills", "install --agents"):
+        assert f'  "{command}" {args}\n' in f"{text}\n"
 
 
 def test_stale_names_the_events_the_settings_do_not_register(installed):
@@ -450,7 +507,7 @@ def test_the_server_asks_for_an_install_when_an_event_is_missing(installed, bund
     text = server._instructions()
     assert "part of the installation" in text
     assert "PreCompact, Stop: not registered" in text
-    assert f"  {command} install" in text
+    assert f"  {shell.quote(command)} install" in text
 
 
 def test_the_server_names_the_skills_install_for_a_stale_skill(installed, bundled):
@@ -460,7 +517,7 @@ def test_the_server_names_the_skills_install_for_a_stale_skill(installed, bundle
     (bundled / "zeta-queue-drain" / "SKILL.md").write_text("drain it twice\n", encoding="utf-8")
     text = server._instructions()
     assert "an update is waiting" in text and "zeta-queue-drain" in text
-    assert f"  {command} install --skills" in text
+    assert f"  {shell.quote(command)} install --skills" in text
 
 
 def test_the_server_says_nothing_when_the_installation_is_current(installed, bundled):

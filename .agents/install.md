@@ -72,8 +72,8 @@ that works:
 A machine with neither Node nor access to GitHub gets the zip by hand: download
 `memai-webui-<version>.zip` and `memai-webui-<version>.zip.sha256` from the
 release whose version `src/memai/__init__.py` names, put both in one folder,
-and run `install.bat --webui-zip C:\path\to\memai-webui-<version>.zip`
-(elsewhere `.venv/bin/python tools/install-webui.py --zip <path>`). A zip
+and run `install.bat --webui-zip "C:\path\to\memai-webui-<version>.zip"`
+(elsewhere `.venv/bin/python tools/install-webui.py --zip "<path>"`). A zip
 whose checksum does not match is refused. A checkout ahead of its last release
 has no asset; it keeps whatever `dist/` holds.
 

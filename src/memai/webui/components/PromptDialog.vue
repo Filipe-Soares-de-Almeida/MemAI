@@ -1,13 +1,14 @@
 <script setup lang="ts">
-/* Asks for one line of text: `done` reports it, or null for Cancel or a close. Enter submits. */
+/* Asks for one line of text: `done` reports it, or null for Cancel or a close. Enter submits.
+   `items` lists what the act touches, one line each, in a box that scrolls past a few. */
 import { onMounted, ref } from 'vue';
 import AppModal from './AppModal.vue';
 import { t } from '../i18n.ts';
 
 const props = withDefaults(defineProps<{
-  title: string; body?: string; label: string; placeholder?: string; value?: string;
+  title: string; body?: string; items?: string[]; label: string; placeholder?: string; value?: string;
   okLabel?: string; danger?: boolean;
-}>(), { body: '', placeholder: '', value: '', okLabel: () => t('common.confirm'), danger: false });
+}>(), { body: '', items: () => [], placeholder: '', value: '', okLabel: () => t('common.confirm'), danger: false });
 const emit = defineEmits<{ done: [value: string | null] }>();
 
 const text = ref(props.value);
@@ -15,13 +16,17 @@ const field = ref<HTMLInputElement | null>(null);
 onMounted(() => field.value?.focus());
 </script>
 
-<!-- title and body are markup the caller built, with its values escaped. -->
+<!-- title and body are markup the caller built, with its values escaped; items are plain text.
+     Enter is prevented: closing hands focus back to the opener, which would take its keypress as a click. -->
 <template>
   <AppModal :title="title" :head-html="title" @close="emit('done', null)">
     <div v-if="body" v-html="body"></div>
+    <ul v-if="items.length" class="bulk-list" data-items>
+      <li v-for="(item, i) in items" :key="i" :title="item">{{ item }}</li>
+    </ul>
     <div class="field"><label>{{ label }}</label>
       <input ref="field" v-model="text" type="text" data-in :placeholder="placeholder"
-             @keydown.enter="emit('done', text)"></div>
+             @keydown.enter.prevent="emit('done', text)"></div>
     <template #foot>
       <button class="btn" data-x @click="emit('done', null)">{{ t('common.cancel') }}</button>
       <button class="btn" :class="danger ? 'btn-danger' : 'btn-solid'" data-ok

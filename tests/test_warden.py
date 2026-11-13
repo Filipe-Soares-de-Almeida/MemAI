@@ -149,6 +149,12 @@ def test_the_request_names_the_agent_the_transcript_and_the_start(store):
     assert "2026-08-28T10:00:00+00:00" in text
 
 
+def test_the_request_quotes_a_transcript_path_a_shell_would_split(store):
+    """The warden reads the transcript with a shell one-liner."""
+    text = warden.request("session-1", transcript="C:/path/to/Mem AI/session.jsonl")
+    assert 'Transcript: "C:/path/to/Mem AI/session.jsonl".' in text
+
+
 def test_the_request_says_so_when_the_warden_has_not_run_yet(store):
     """An empty `since` is a first run, not a start of the epoch."""
     text = warden.request("session-1", transcript="/tmp/a.jsonl")

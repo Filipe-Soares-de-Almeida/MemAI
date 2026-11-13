@@ -53,9 +53,9 @@ export function openDialog(component, props = {}) {
 export const confirmModal = ({ title, body, okLabel, danger = false }) =>
   openDialog(ConfirmDialog, { title, body, okLabel, danger });
 
-export const promptModal = ({ title, body = '', label, placeholder = '', value = '', okLabel,
-                              danger = false }) =>
-  openDialog(PromptDialog, { title, body, label, placeholder, value, okLabel, danger });
+export const promptModal = ({ title, body = '', items = /** @type {string[]} */ ([]), label, placeholder = '',
+                              value = '', okLabel, danger = false }) =>
+  openDialog(PromptDialog, { title, body, items, label, placeholder, value, okLabel, danger });
 
 /* The button stays disabled until the field holds `phrase` exactly. */
 export const typedConfirmModal = ({ title, bodyHTML = '', phrase, okLabel }) =>

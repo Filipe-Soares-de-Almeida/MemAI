@@ -40,7 +40,7 @@ async function purge(picked: MemoryRow[]): Promise<void> {
       <p class="${active ? 'dz-warn' : 'dz-hint'}">${active
         ? t('bulk.purge.active', { n: active })
         : t('bulk.purge.allArchived', { n: uids.length })}</p>
-      <ul class="dz-list">${titles}</ul>
+      <ul class="bulk-list">${titles}</ul>
       ${rest > 0 ? `<div class="dz-hint">${t('bulk.purge.more', { n: rest })}</div>` : ''}
       <div class="dz-hint">${t('bulk.purge.final')}</div>`,
     phrase,
@@ -59,7 +59,20 @@ export type Act = 'archive' | 'restore' | 'project' | 'purge';
 
 const moveToProject = moveToProjectModal as (opts: { uids: string[] }) => Promise<boolean>;
 
+/* Held from the press to the end of the act's request, so the selection is acted on once. */
+let acting = false;
+
 export async function runAct(act: Act, picked: MemoryRow[]): Promise<void> {
+  if (acting) return;
+  acting = true;
+  try {
+    await perform(act, picked);
+  } finally {
+    acting = false;
+  }
+}
+
+async function perform(act: Act, picked: MemoryRow[]): Promise<void> {
   const uids = picked.map(m => m.uid);
   if (act === 'project') {
     if (await moveToProject({ uids })) refreshBehind();
@@ -70,6 +83,7 @@ export async function runAct(act: Act, picked: MemoryRow[]): Promise<void> {
   if (act === 'archive') {
     const given = await promptModal({
       title: t('bulk.archive.title'), body: t('bulk.archive.body', { n: uids.length }),
+      items: picked.map(m => m.title || m.content),
       label: t('bulk.reason.label'), okLabel: t('common.archive'), danger: true });
     if (given === null) return;
     reason = given;
