@@ -1,10 +1,11 @@
-"""Creating, deleting and listing projects, each of which opens the store it names."""
+"""Creating, renaming, deleting and listing projects, each of which opens the store it names."""
 
 from __future__ import annotations
 
 from pathlib import Path
 
 from memai.lite import home
+from memai.store.backups import backup_name, backup_to, backups_dir
 from memai.store.connection import connect
 from memai.store.paths import (
     GENERAL_FILE,
@@ -17,6 +18,7 @@ from memai.store.paths import (
     project_name,
     project_name_error,
     project_path,
+    set_active_project,
 )
 
 
@@ -32,11 +34,16 @@ def create_project(name: str) -> Path:
     return path
 
 
-def delete_project(name: str) -> None:
-    """Remove a project that holds no memory and is not the active one.
+def _sidecars(path: Path) -> list[Path]:
+    return [path.with_name(path.name + suffix) for suffix in ("", "-wal", "-shm")]
 
-    GENERAL_PROJECT is never removed. The WAL and shared-memory files go with
-    the database.
+
+def delete_project(name: str, *, force: bool = False) -> Path | None:
+    """Remove a project that is not the active one.
+
+    GENERAL_PROJECT is never removed. Without `force` the project must hold no
+    memory; with it, a copy is taken into the project's backups folder first
+    and its path returned. The WAL and shared-memory files go with the database.
     """
     name = project_name(name)
     if name == GENERAL_PROJECT:
@@ -46,13 +53,60 @@ def delete_project(name: str) -> None:
     path = project_path(name)
     with connect(path) as conn:
         held = conn.execute("SELECT COUNT(*) FROM memories").fetchone()[0]
+    kept = None
     if held:
-        raise ValueError(f"project '{name}' holds {held} memories; move them out first")
-    for suffix in ("", "-wal", "-shm"):
+        if not force:
+            raise ValueError(f"project '{name}' holds {held} memories; move them out first")
+        kept = backup_to(backups_dir(name) / backup_name(name, "deleted"), project=name)
+    for side in _sidecars(path):
         try:
-            path.with_name(path.name + suffix).unlink()
+            side.unlink()
         except FileNotFoundError:
             pass
+    return kept
+
+
+def rename_project(name: str, new_name: str) -> str:
+    """Give a project another name, keeping its memories, backups and active status.
+
+    GENERAL_PROJECT keeps its name. A name that differs only in case from the
+    project's own is allowed; one that matches another project is refused.
+    """
+    name = project_name(name)
+    new_name = _checked_project(new_name)
+    if name == GENERAL_PROJECT:
+        raise ValueError("the General project cannot be renamed")
+    if _same_project(new_name, GENERAL_PROJECT):
+        raise ValueError(f"project '{new_name}' already exists")
+    taken = find_project(new_name)
+    if taken is not None and not _same_project(taken, name):
+        raise ValueError(f"project '{taken}' already exists")
+    if new_name == name:
+        return name
+    was_active = name == active_project()
+    old_path = project_path(name)
+    new_path = old_path.with_name(f"{new_name}.db")
+    with connect(old_path):
+        pass
+    old_shelf = backups_dir(name)
+    new_shelf = old_shelf.with_name(new_name)
+    try:
+        for src in _sidecars(old_path):
+            if src.exists():
+                src.replace(new_path.with_name(new_path.name + src.name[len(old_path.name):]))
+        if new_shelf.exists() and not _same_project(new_shelf.name, name):
+            for item in old_shelf.iterdir():
+                if not (new_shelf / item.name).exists():
+                    item.replace(new_shelf / item.name)
+            if not any(old_shelf.iterdir()):
+                old_shelf.rmdir()
+        else:
+            old_shelf.replace(new_shelf)
+    except OSError as exc:
+        raise ValueError(f"project '{name}' is in use and cannot be renamed now: {exc}") from exc
+    if was_active:
+        set_active_project(new_name)
+    return new_name
 
 
 def list_projects(*, counts: bool = False) -> list[dict]:

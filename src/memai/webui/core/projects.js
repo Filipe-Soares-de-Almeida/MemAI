@@ -1,8 +1,10 @@
-/* The project switch in the app bar and the move-to-project dialog. A switch re-runs the route,
-   which re-reads the new project; it is refused while a dialog is open. */
+/* The project switch in the app bar, the rename/delete dialog and the move-to-project dialog. A
+   switch re-runs the route, which re-reads the new project; it is refused while a dialog is open. */
 
 import { $, esc, fmtInt, debounce } from './dom.ts';
-import { toast, failed, modalOpen, openModal, closeModal, promptModal } from './ui.js';
+import {
+  toast, failed, modalOpen, openModal, closeModal, promptModal, confirmModal, typedConfirmModal,
+} from './ui.js';
 import { pickerFor, pickerValue, setPickerValue, wirePicker, fixedItems } from './pick.js';
 import { route } from './router.ts';
 import { t } from '../i18n.ts';
@@ -11,6 +13,7 @@ import * as client from '../api/client.ts';
 /* The row that is an action rather than a project. A project name is a file
    name, and no file name may carry this character. */
 const NEW = '*new';
+const MANAGE = '*manage';
 
 let active = '';
 let rows = [];
@@ -23,7 +26,8 @@ const projectItem = p => ({
   title: t('project.count', { name: p.name, n: fmtInt(p.memories) }),
 });
 const newItem = () => ({ value: NEW, label: t('project.new'), cls: 'pick-new' });
-const items = () => [...rows.map(projectItem), newItem()];
+const manageItem = () => ({ value: MANAGE, label: t('project.manage'), cls: 'pick-new pick-manage' });
+const items = () => [...rows.map(projectItem), newItem(), manageItem()];
 
 export async function mountProjectPicker() {
   if (!$('#projectHost')) return;
@@ -53,6 +57,7 @@ async function pick(value) {
   if (value === active) return;
   if (modalOpen()) { revert(); toast(t('project.busy'), 'bad'); return; }
   if (value === NEW) { revert(); await create(); return; }
+  if (value === MANAGE) { revert(); await manage(); return; }
   try {
     const r = await client.projects.activate({ name: value });
     active = r.active;
@@ -78,6 +83,80 @@ async function create() {
 /* Every view fetches what it shows, so re-rendering reads the newly active project. */
 function reread() {
   route();
+}
+
+/* ─── renaming and deleting: the list closes while an action runs, so no two scrims stack, and
+   comes back after it. */
+
+async function manage() {
+  let data;
+  try { data = await client.projects.list(); }
+  catch (err) { failed('err.project', err); return; }
+  const row = p => {
+    const locked = p.general;
+    const delTitle = p.active ? t('project.delete.active') : '';
+    return `
+      <li class="proj-row${locked ? ' proj-general' : ''}" data-name="${esc(p.name)}">
+        <span class="proj-name">${labelOf(p)}</span>
+        <span class="proj-n">${t('project.memories', { n: fmtInt(p.memories) })}</span>
+        <button class="btn btn-ghost btn-sm" data-act="rename"${locked ? ' disabled' : ''}
+                aria-label="${esc(t('project.rename.aria', { name: p.name }))}">${t('project.rename')}</button>
+        <button class="btn btn-danger btn-sm" data-act="delete"${locked ? ' hidden' : ''}
+                ${p.active ? 'disabled' : ''} title="${esc(delTitle)}"
+                aria-label="${esc(t('project.delete.aria', { name: p.name }))}">${t('project.delete')}</button>
+      </li>`;
+  };
+  const m = openModal({
+    title: t('project.manage.title'),
+    bodyHTML: `<p class="hint">${t('project.manage.body')}</p>
+               <ul class="proj-list">${data.projects.map(row).join('')}</ul>`,
+    footHTML: `<button class="btn" data-x>${t('common.close')}</button>`,
+  });
+  m.querySelector('[data-x]').onclick = closeModal;
+  m.querySelectorAll('.proj-row [data-act]').forEach(btn => {
+    btn.onclick = async () => {
+      const name = btn.closest('.proj-row').dataset.name;
+      closeModal();
+      if (btn.dataset.act === 'rename') await rename(name);
+      else await remove(name, data.projects.find(p => p.name === name));
+      manage();
+    };
+  });
+}
+
+async function rename(name) {
+  const next = await promptModal({
+    title: t('project.rename.title', { name: esc(name) }), body: t('project.rename.body'),
+    label: t('project.create.label'), value: name, okLabel: t('project.rename.ok'),
+  });
+  if (next === null || next.trim() === name) return;
+  try {
+    const data = await client.projects.rename(name, { name: next.trim() });
+    paint(data);
+    toast(t('project.renamed', { from: esc(name), to: esc(data.name) }), 'ok');
+  } catch (err) { failed('err.project', err); }
+}
+
+async function remove(name, project) {
+  const n = project ? project.memories : 0;
+  const ok = n
+    ? await typedConfirmModal({
+      title: t('project.delete.title', { name: esc(name) }),
+      bodyHTML: t('project.delete.bodyFull', { name: esc(name), n: fmtInt(n) }),
+      phrase: name, okLabel: t('project.delete.ok'),
+    })
+    : await confirmModal({
+      title: t('project.delete.title', { name: esc(name) }),
+      body: t('project.delete.body', { name: esc(name) }),
+      okLabel: t('project.delete.ok'), danger: true,
+    });
+  if (!ok) return;
+  try {
+    const data = await client.projects.delete(name, { force: n > 0 });
+    paint(data);
+    toast(t('project.deleted', { name: esc(name) }), 'ok',
+          data.backup ? { detail: t('project.deleted.backup', { name: data.backup }) } : {});
+  } catch (err) { failed('err.project', err); }
 }
 
 /* ─── moving memories to another project, from a selection or a subtree: a dry run shows what

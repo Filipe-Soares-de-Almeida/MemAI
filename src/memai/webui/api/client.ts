@@ -121,7 +121,10 @@ export const projects = {
   create: (body: Body) => post<T.ProjectCreated>('/api/projects', body),
   activate: (body: Body) => post<T.ProjectActivated>('/api/projects/active', body),
   move: (body: Body) => post<T.ProjectMove>('/api/projects/move', body),
-  delete: (name: string) => remove<T.ProjectDeleted>(`/api/projects/${seg(name)}`),
+  rename: (name: string, body: Body) =>
+    post<T.ProjectRenamed>(`/api/projects/${seg(name)}/rename`, body),
+  delete: (name: string, body?: Body) =>
+    remove<T.ProjectDeleted>(`/api/projects/${seg(name)}`, body),
 };
 
 export const optimization = {

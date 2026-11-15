@@ -258,3 +258,65 @@ def test_the_brief_names_the_project_it_read(home):
         memories.insert_memory(conn, type="note", content="a fact", domain="acme/x100")
         assert "1 memories in project 'Acme'." in brief.session_brief(conn, project="Acme")
         assert "1 memories in the whole store." in brief.session_brief(conn)
+
+
+def test_renaming_a_project_moves_its_file_backups_and_active_mark(home):
+    projects.create_project("Acme")
+    paths.set_active_project("Acme")
+    with connection.connect() as conn:
+        memories.insert_memory(conn, type="note", content="kept", domain="acme")
+    (backups.backups_dir("Acme") / "Acme-1.db").write_bytes(b"x")
+    assert projects.rename_project("acme", "Globex") == "Globex"
+    assert paths.active_project() == "Globex"
+    assert not (home / "projects" / "Acme.db").exists()
+    assert (backups.backups_dir("Globex") / "Acme-1.db").exists()
+    assert not (home / "backups" / "Acme").exists()
+    rows = {r["name"]: r for r in projects.list_projects(counts=True)}
+    assert rows["Globex"]["memories"] == 1 and "Acme" not in rows
+
+
+def test_renaming_refuses_general_a_taken_name_and_a_bad_one(home):
+    projects.create_project("Acme")
+    projects.create_project("Globex")
+    with pytest.raises(ValueError, match="General"):
+        projects.rename_project("General", "Other")
+    with pytest.raises(ValueError, match="already exists"):
+        projects.rename_project("Acme", "globex")
+    with pytest.raises(ValueError, match="already exists"):
+        projects.rename_project("Acme", "general")
+    with pytest.raises(ValueError, match="no project named"):
+        projects.rename_project("zeta", "Other")
+    with pytest.raises(ValueError, match="device name"):
+        projects.rename_project("Acme", "con")
+
+
+def test_renaming_may_only_change_the_case(home):
+    projects.create_project("acme")
+    assert projects.rename_project("acme", "Acme") == "Acme"
+    assert [r["name"] for r in projects.list_projects()] == ["General", "Acme"]
+
+
+def test_force_deleting_a_project_keeps_a_copy_of_what_it_held(home):
+    projects.create_project("Acme")
+    with connection.connect(project="Acme") as conn:
+        memories.insert_memory(conn, type="note", content="kept", domain="acme")
+    with pytest.raises(ValueError, match="holds 1"):
+        projects.delete_project("Acme")
+    kept = projects.delete_project("Acme", force=True)
+    assert kept is not None and kept.exists() and kept.parent == home / "backups" / "Acme"
+    assert not (home / "projects" / "Acme.db").exists()
+
+
+def test_the_dashboard_renames_and_force_deletes_a_project(client, home):
+    client.post("/api/projects", json={"name": "Acme", "activate": True})
+    renamed = client.post("/api/projects/Acme/rename", json={"name": " Globex "}).json()
+    assert renamed["name"] == "Globex" and renamed["active"] == "Globex"
+    assert client.post("/api/projects/Globex/rename", json={"name": "a*b"}).status_code == 400
+    assert client.post("/api/projects/General/rename", json={"name": "Other"}).status_code == 400
+    with connection.connect() as conn:
+        memories.insert_memory(conn, type="note", content="kept", domain="x")
+    client.post("/api/projects/active", json={"name": "General"})
+    assert client.delete("/api/projects/Globex").status_code == 400
+    gone = client.request("DELETE", "/api/projects/Globex", json={"force": True}).json()
+    assert gone["backup"].startswith("Globex-deleted-")
+    assert [p["name"] for p in gone["projects"]] == ["General"]

@@ -83,8 +83,14 @@ class ProjectCreated(Projects):
     name: str
 
 
+class ProjectRenamed(Projects):
+    ok: Literal[True]
+    name: str
+
+
 class ProjectDeleted(Projects):
     ok: Literal[True]
+    backup: str
 
 
 class ProjectActivated(TypedDict):

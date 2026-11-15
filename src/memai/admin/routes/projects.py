@@ -1,4 +1,4 @@
-"""Projects: list, create, switch to and delete them, and move memories between them."""
+"""Projects: list, create, rename, switch to and delete them, and move memories between them."""
 
 from __future__ import annotations
 
@@ -35,10 +35,19 @@ def project_activate(request, payload) -> schema.ProjectActivated:
     return {"ok": True, "active": paths.set_active_project(name)}
 
 
+def project_rename(request, payload) -> schema.ProjectRenamed:
+    """Give the project another name; the active one stays active under it."""
+    name = str(payload.get("name") or "").strip()
+    store_projects.rename_project(request.path_params["name"], name)
+    return {"ok": True, "name": name, **projects(request, payload)}
+
+
 def project_delete(request, payload) -> schema.ProjectDeleted:
-    """Remove an empty, inactive project. Refuses anything else -- see db.delete_project."""
-    store_projects.delete_project(request.path_params["name"])
-    return {"ok": True, **projects(request, payload)}
+    """Remove an inactive project. Without `force` it must also be empty; with it, the
+    memories go after a backup, whose file name comes back as `backup`."""
+    kept = store_projects.delete_project(request.path_params["name"],
+                                         force=bool(payload.get("force")))
+    return {"ok": True, "backup": kept.name if kept else "", **projects(request, payload)}
 
 
 def project_move(request, payload) -> schema.ProjectMove:
@@ -64,5 +73,6 @@ ROUTES = [
     Route("/api/projects", api(project_create), methods=["POST"]),
     Route("/api/projects/active", api(project_activate), methods=["POST"]),
     Route("/api/projects/move", api(project_move), methods=["POST"]),
+    Route("/api/projects/{name}/rename", api(project_rename), methods=["POST"]),
     Route("/api/projects/{name}", api(project_delete), methods=["DELETE"]),
 ]
