@@ -398,6 +398,22 @@ kbd {
 }
 .warn-line { color: var(--warn); }
 
+/* the rename/delete dialog: a project per row, its actions at the end */
+.proj-list { list-style: none; margin: var(--sp-3) 0 0; padding: 0; }
+.proj-row {
+  display: flex; align-items: center; gap: var(--sp-2);
+  padding: var(--sp-2) 0; border-top: 1px solid var(--line-soft);
+}
+.proj-row:first-child { border-top: 0; }
+.proj-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.proj-general .btn { visibility: hidden; }
+.proj-n { color: var(--ink-3); font-size: var(--fs-sm); font-variant-numeric: tabular-nums; }
+@media (max-width: 480px) {
+  .proj-row { flex-wrap: wrap; }
+  .proj-name { flex-basis: 100%; }
+  .proj-n { flex: 1; }
+}
+
 /* ── buttons & inputs ────────────────────────────────────────────────── */
 
 .btn {
@@ -3320,6 +3336,7 @@ input.pick-q:focus { box-shadow: inset 0 -2px 0 var(--accent); }
   margin-top: var(--sp-1); padding-top: var(--sp-2);
   border-top: 1px solid var(--line-soft);
 }
+.pick-quiet .pick-row.pick-manage { margin-top: 0; padding-top: 0; border-top: 0; }
 .pick-quiet .pick-row.pick-new .pick-label {
   font-family: var(--font-ui); color: var(--ink-3);
 }

@@ -75,10 +75,18 @@ export interface ProjectCreated {
   name: string;
 }
 
+export interface ProjectRenamed {
+  active: string;
+  projects: Record<string, unknown>[];
+  ok: true;
+  name: string;
+}
+
 export interface ProjectDeleted {
   active: string;
   projects: Record<string, unknown>[];
   ok: true;
+  backup: string;
 }
 
 export interface ProjectActivated {
