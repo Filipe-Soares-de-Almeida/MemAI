@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.17.0](https://github.com/Filipe-Soares-de-Almeida/MemAI/compare/v0.16.4...v0.17.0) (2026-11-15)
+
+
+### Features
+
+* **webui:** rename and delete projects from the project switcher ([#3](https://github.com/Filipe-Soares-de-Almeida/MemAI/issues/3)) ([adc0306](https://github.com/Filipe-Soares-de-Almeida/MemAI/commit/adc0306663721879e886f6868442af8ada45cf18))
+
 ## [0.16.4](https://github.com/Filipe-Soares-de-Almeida/MemAI/compare/v0.16.3...v0.16.4) (2026-11-13)
 
 
